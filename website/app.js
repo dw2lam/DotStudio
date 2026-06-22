@@ -101,6 +101,8 @@
       gameboy:  [["dither", "Dither", 1, 5, 0.5, 2]],
       scanlines:[["cell", "Line Size", 1.5, 5, 0.5, 2.2]],
       vhs:      [["amount", "Amount", 0, 2, 0.05, 1]],
+      starfield:[["speed", "Speed", 0.2, 2.5, 0.1, 1.1], ["count", "Stars", 80, 400, 10, 240], ["warp", "Warp", 0, 1, 0.05, 0.45]],
+      blackhole:[["mass", "Mass", 0.15, 0.8, 0.05, 0.4], ["brightness", "Brightness", 1, 9, 0.5, 5], ["speed", "Speed", 0, 2.5, 0.1, 1], ["stars", "Stars", 0, 2, 0.1, 1], ["disk", "Disk Size", 0.6, 1.5, 0.05, 1]],
     };
     let cur = "ascii", params = {};
 

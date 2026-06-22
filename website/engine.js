@@ -402,13 +402,15 @@
       const img = octx.createImageData(BW, BH), data = img.data;
       const mass = P.mass || 0.4, brightness = P.brightness || 5;
       const rot = (P.rot == null ? -8.7 : P.rot), diskScale = P.disk || 1;
+      const speed = (P.speed == null ? 1 : P.speed), starsAmt = (P.stars == null ? 1 : P.stars);
+      const ts = t * speed;
       const rs = mass * 2, innerR = 4.1 * diskScale, outerR = 14.5 * diskScale;
-      const ct = t * 0.06;
-      const cam = [Math.sin(ct) * 20, -2.5, -Math.cos(ct) * 20];
+      const ct = ts * 0.025;
+      const cam = [Math.sin(ct) * 20, -2.2 + 0.9 * Math.sin(ts * 0.018), -Math.cos(ct) * 20];
       const fwd = v3norm([-cam[0], -cam[1], -cam[2]]);
       const right = v3norm(v3cross([0, 1, 0], fwd));
       const up = v3cross(fwd, right);
-      const aspect = c.w / c.h, cyc = t % 5, rotSign = Math.sign(rot);
+      const aspect = c.w / c.h, cyc = ts % 5, rotSign = Math.sign(rot);
       let i = 0;
       for (let y = 0; y < BH; y++) for (let x = 0; x < BW; x++) {
         let px = ((x + 0.5) / BW - 0.5) * 2, py = -((y + 0.5) / BH - 0.5) * 2; px *= aspect;
@@ -446,7 +448,7 @@
         }
         if (!captured && alpha < 0.99) {
           const h = Math.sin(rd[0] * 173.1 + rd[1] * 311.7 + rd[2] * 97.3) * 43758.5;
-          const star = (h - Math.floor(h)) > 0.991 ? 0.9 * (1 - alpha) : 0;
+          const star = (h - Math.floor(h)) > (1 - 0.009 * starsAmt) ? 0.9 * (1 - alpha) * starsAmt : 0;
           aR += star; aG += star; aB += star;
         }
         data[i++] = acesCh(aR) * 255; data[i++] = acesCh(aG) * 255; data[i++] = acesCh(aB) * 255; data[i++] = 255;
@@ -455,8 +457,10 @@
       const ctx = c.ctx;
       ctx.fillStyle = "#000"; ctx.fillRect(0, 0, c.w, c.h);
       ctx.imageSmoothingEnabled = true;
+      // bloom: two blur radii added, then the sharp image on top
       ctx.globalCompositeOperation = "lighter";
-      ctx.filter = "blur(7px)"; ctx.drawImage(off, 0, 0, c.w, c.h);
+      ctx.filter = "blur(14px)"; ctx.drawImage(off, 0, 0, c.w, c.h);
+      ctx.filter = "blur(5px)"; ctx.drawImage(off, 0, 0, c.w, c.h);
       ctx.filter = "none"; ctx.globalCompositeOperation = "source-over";
       ctx.drawImage(off, 0, 0, c.w, c.h);
     }},
