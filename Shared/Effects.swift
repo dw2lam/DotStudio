@@ -33,7 +33,7 @@ enum EffectKind: String, Codable, CaseIterable {
     case pixelate, posterize, phosphor, scanlines, grain, vignette
     // cool pack
     case kaleidoscope, chromaticShift, bloom, hexMosaic, mirror, glitchBlocks
-    case gameboy, neonEdges, fisheye, swirl, ripple, toon, thermal, truchet, ledPanel, nes8bit, starfield, universe
+    case gameboy, neonEdges, fisheye, swirl, ripple, toon, thermal, truchet, ledPanel, nes8bit, starfield, universe, blackhole
 
     var displayName: String {
         switch self {
@@ -76,6 +76,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .nes8bit: return "NES 8-Bit"
         case .starfield: return "Starfield"
         case .universe: return "Universe"
+        case .blackhole: return "Black Hole"
         }
     }
 
@@ -86,7 +87,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .contour, .edge, .crosshatch, .wave: return .lines
         case .vhs, .scanlines, .grain, .pixelSort: return .glitch
         case .threshold, .posterize, .phosphor, .vignette: return .color
-        case .noiseField, .voronoi, .starfield, .universe: return .generative
+        case .noiseField, .voronoi, .starfield, .universe, .blackhole: return .generative
         case .hexMosaic, .ledPanel, .truchet: return .dotsDither
         case .gameboy, .bloom, .thermal, .toon, .nes8bit: return .color
         case .neonEdges: return .lines
@@ -126,6 +127,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .nes8bit:   return 36
         case .starfield: return 37
         case .universe:  return 39
+        case .blackhole: return 40
         case .edge:      return 12
         case .crosshatch:return 13
         case .contour:   return 14
@@ -218,7 +220,12 @@ enum EffectKind: String, Codable, CaseIterable {
         case .universe:  return [ParamSpec("earth", "Earth Size", 0.1, 0.45, def: 0.26),
                                  ParamSpec("spin", "Earth Spin", 0, 3, def: 0.5),
                                  ParamSpec("stars", "Stars", 3, 30, def: 10),
-                                 ParamSpec("planets", "Planet Speed", 0, 3, def: 1)]
+                                 ParamSpec("planets", "Planet Speed", 0, 3, def: 1),
+                                 ParamSpec("orbits", "Orbit Lines", 0, 1, def: 1, toggle: true)]
+        case .blackhole: return [ParamSpec("mass", "Mass", 0.15, 0.8, def: 0.4),
+                                 ParamSpec("brightness", "Brightness", 1, 10, def: 5),
+                                 ParamSpec("rot", "Rotation", -15, 15, def: -8.7),
+                                 ParamSpec("disk", "Disk Size", 0.5, 1.6, def: 1)]
         }
     }
 
@@ -230,7 +237,7 @@ enum EffectKind: String, Codable, CaseIterable {
 
     var defaultColorA: RGBA? {
         switch self {
-        case .dither, .threshold, .dots, .wave, .edge, .ascii, .matrix, .neonEdges, .starfield, .universe: return .black
+        case .dither, .threshold, .dots, .wave, .edge, .ascii, .matrix, .neonEdges, .starfield, .universe, .blackhole: return .black
         case .halftone, .crosshatch: return .paper
         case .contour, .truchet: return .ink
         default: return nil
@@ -302,6 +309,7 @@ extension EffectInstance {
         case .nes8bit:   u.p0 = .init(g("cell"), g("scan"), g("sat"), 0)
         case .starfield: u.p0 = .init(g("speed"), g("density"), g("warp"), g("size"))
         case .universe:  u.p0 = .init(g("earth"), g("spin"), g("stars"), g("planets"))
+        case .blackhole: u.p0 = .init(g("mass"), g("brightness"), g("rot"), g("disk"))
         }
     }
 }
