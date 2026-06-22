@@ -160,6 +160,9 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
                             constant FXUniforms& u [[buffer(0)]],
                             texture2d<float> src   [[texture(0)]],
                             texture2d<float> glyphs[[texture(1)]],
+                            texture2d<float> earthDay   [[texture(2)]],
+                            texture2d<float> earthNight [[texture(3)]],
+                            texture2d_array<float> planetTex [[texture(4)]],
                             sampler samp           [[sampler(0)]])
 {
     float2 uv  = in.uv;
@@ -656,7 +659,7 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         return float4(mix(u.colorA.rgb, u.colorB.rgb, acc), 1.0);
     }
 
-    case 39: { // UNIVERSE — real-time day/night Earth + orbiting planets + stars.
+    case 39: { // UNIVERSE — textured day/night Earth + textured orbiting planets + stars.
                // p0=(earthSize,spin,starDensity,planetSpeed) p1.xyz=sun(view) p2.x=userLon
         float aspect = res.x / res.y;
         float2 sc = (uv - 0.5) * float2(aspect, 1.0);
@@ -664,6 +667,9 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         float spin = u.p0.y;
         float starD = max(u.p0.z, 1.0);
         float pSpeed = u.p0.w;
+        float3 sun = normalize(u.p1.xyz);
+        bool haveTex = earthDay.get_width() > 4;
+        const float INV2PI = 0.1591549, INVPI = 0.3183099;
         float3 col = float3(0.0);
 
         // ---- starfield backdrop (slowly rotating) ----
@@ -676,58 +682,91 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
                 float2 cell = floor(g), f = fract(g) - 0.5;
                 float2 j = (hash22(cell + float(L) * 17.0) - 0.5) * 0.8;
                 float star = smoothstep(0.06, 0.0, length(f - j));
-                col += star * (0.25 + 0.75 * hash21(cell + float(L) * 3.0)) * 0.55;
+                col += star * (0.25 + 0.75 * hash21(cell + float(L) * 3.0)) * 0.5;
             }
         }
 
-        // ---- orbiting planets (decorative orrery, drawn behind Earth) ----
-        for (int i = 0; i < 5; ++i) {
-            float orad = earthR + 0.10 + float(i) * 0.072;
-            float spd = (5.0 - float(i)) * 0.12 * pSpeed;
-            float ph = hash21(float2(float(i), 7.0)) * 6.2831853;
-            float a = t * spd * 0.1 + ph;
-            float2 pp = float2(cos(a) * orad, sin(a) * orad * 0.42);
+        float psz[8]   = {0.10, 0.16, 0.12, 0.32, 0.27, 0.20, 0.19, 0.09};
+        float pspin[8] = {0.06, 0.04, 0.07, 0.10, 0.09, 0.05, 0.05, 0.08};
+
+        // ---- faint orbit rings ----
+        for (int i = 0; i < 8; ++i) {
+            float orad = earthR + 0.09 + float(i) * 0.052;
             float ringp = length(float2(sc.x / orad, sc.y / (orad * 0.42)));
-            col += float3(0.10, 0.22, 0.40) * smoothstep(0.012, 0.0, abs(ringp - 1.0)) * 0.20;
-            float psz = 0.010 + 0.006 * hash21(float2(float(i), 3.0));
-            float3 pcol = (i == 0) ? float3(0.6, 0.6, 0.62) : (i == 1) ? float3(0.9, 0.8, 0.55)
-                        : (i == 2) ? float3(0.85, 0.35, 0.2) : (i == 3) ? float3(0.8, 0.65, 0.45)
-                        : float3(0.85, 0.75, 0.5);
-            col = mix(col, pcol, smoothstep(psz, psz * 0.6, length(sc - pp)));
+            col += float3(0.10, 0.2, 0.38) * smoothstep(0.010, 0.0, abs(ringp - 1.0)) * 0.16;
         }
 
-        // ---- Earth ----
-        float r = length(sc);
-        float3 sun = normalize(u.p1.xyz);
-        if (r < earthR) {
-            float3 N; N.xy = sc / earthR;
-            N.z = sqrt(max(0.0, 1.0 - dot(N.xy, N.xy)));
-            float ea = u.p2.x + t * spin * 0.05;          // continent rotation
-            float cs = cos(ea), sn = sin(ea);
-            float3 Nw = float3(cs * N.x + sn * N.z, N.y, -sn * N.x + cs * N.z);
-            float lat = asin(clamp(Nw.y, -1.0, 1.0));
-            float lon = atan2(Nw.x, Nw.z);
-            float2 luv = float2(lon, lat);
-            float land = fbm(luv * 1.7 + 3.0);
-            float isLand = smoothstep(0.52, 0.57, land);
-            float3 ocean = float3(0.03, 0.16, 0.33);
-            float3 landc = mix(float3(0.10, 0.34, 0.16), float3(0.42, 0.38, 0.24), fbm(luv * 6.0));
-            float3 surf = mix(ocean, landc, isLand);
-            float ndl = dot(N, sun);                       // sun is in view space
-            float day = smoothstep(-0.12, 0.18, ndl);
-            float lights = isLand * smoothstep(0.5, 0.62, fbm(luv * 16.0)) * (1.0 - day);
-            float3 nightc = surf * 0.05 + float3(1.0, 0.82, 0.45) * lights * 0.9;
-            float3 dayc = surf * (0.35 + 0.75 * max(ndl, 0.0));
-            float3 ec = mix(nightc, dayc, day);
-            ec *= mix(0.55, 1.0, N.z);                     // limb darkening
-            ec += float3(0.35, 0.6, 1.0) * smoothstep(0.78, 1.0, 1.0 - N.z) * 0.45 * day; // atmo rim
-            col = ec;
-        } else {
-            float glow = smoothstep(earthR * 1.28, earthR, r);
-            float side = smoothstep(-0.2, 0.4, dot(normalize(float3(sc, 0.0)), sun));
-            col += float3(0.2, 0.45, 0.95) * glow * (0.25 + 0.5 * side);
+        // Planets are drawn in two passes (behind Earth, then in front).
+        for (int pass2 = 0; pass2 < 2; ++pass2) {
+            for (int i = 0; i < 8; ++i) {
+                float orad = earthR + 0.09 + float(i) * 0.052;
+                float spd = (8.0 - float(i)) * 0.05 * pSpeed;
+                float ph = hash21(float2(float(i), 7.0)) * 6.2831853;
+                float a = t * spd * 0.1 + ph;
+                bool front = sin(a) > 0.0;
+                if ((pass2 == 0 && front) || (pass2 == 1 && !front)) continue;
+                float2 pp = float2(cos(a) * orad, sin(a) * orad * 0.42);
+                float pr = earthR * psz[i];
+
+                if (i == 4) {  // Saturn rings (drawn before the body)
+                    float2 rl = (sc - pp) / float2(pr * 2.3, pr * 2.3 * 0.36);
+                    float rr = length(rl);
+                    float ring = smoothstep(1.0, 0.93, rr) * smoothstep(0.62, 0.68, rr);
+                    ring *= 1.0 - 0.7 * smoothstep(0.80, 0.815, rr) * smoothstep(0.86, 0.845, rr);
+                    col = mix(col, float3(0.80, 0.72, 0.52), ring * 0.75);
+                }
+
+                float2 lp = (sc - pp) / pr;
+                float r2 = dot(lp, lp);
+                if (r2 < 1.0) {
+                    float3 n; n.xy = lp; n.z = sqrt(1.0 - r2);
+                    float aa = t * pspin[i];
+                    float cs = cos(aa), sn = sin(aa);
+                    float3 nw = float3(cs * n.x + sn * n.z, n.y, -sn * n.x + cs * n.z);
+                    float lat = asin(clamp(nw.y, -1.0, 1.0));
+                    float lon = atan2(nw.x, nw.z);
+                    float2 tuv = float2(lon * INV2PI + 0.5, 0.5 - lat * INVPI);
+                    float3 base = haveTex ? planetTex.sample(samp, tuv, i).rgb : float3(0.6, 0.55, 0.5);
+                    float lit = max(dot(n, sun), 0.0) * 0.92 + 0.08;
+                    col = mix(col, base * lit, smoothstep(1.0, 0.9, r2));
+                }
+            }
+
+            if (pass2 == 0) {  // ---- Earth (between behind- and front-planets) ----
+                float r = length(sc);
+                if (r < earthR) {
+                    float3 N; N.xy = sc / earthR;
+                    N.z = sqrt(max(0.0, 1.0 - dot(N.xy, N.xy)));
+                    float ea = u.p2.x + t * spin * 0.05;
+                    float cs = cos(ea), sn = sin(ea);
+                    float3 Nw = float3(cs * N.x + sn * N.z, N.y, -sn * N.x + cs * N.z);
+                    float lat = asin(clamp(Nw.y, -1.0, 1.0));
+                    float lon = atan2(Nw.x, Nw.z);
+                    float2 tuv = float2(lon * INV2PI + 0.5, 0.5 - lat * INVPI);
+                    float ndl = dot(N, sun);
+                    float day = smoothstep(-0.10, 0.18, ndl);
+                    float3 dayC, nightC;
+                    if (haveTex) {
+                        dayC = earthDay.sample(samp, tuv).rgb;
+                        nightC = earthNight.sample(samp, tuv).rgb;
+                    } else {
+                        float land = fbm(float2(lon, lat) * 1.7 + 3.0);
+                        float il = smoothstep(0.52, 0.57, land);
+                        dayC = mix(float3(0.03, 0.16, 0.33), float3(0.10, 0.34, 0.16), il);
+                        nightC = dayC * 0.05;
+                    }
+                    float3 ec = mix(nightC * 1.3, dayC * (0.3 + 0.8 * max(ndl, 0.0)), day);
+                    ec *= mix(0.5, 1.0, N.z);                               // limb darkening
+                    ec += float3(0.35, 0.6, 1.0) * smoothstep(0.8, 1.0, 1.0 - N.z) * 0.4 * day; // atmosphere
+                    col = ec;
+                } else {
+                    float glow = smoothstep(earthR * 1.3, earthR, r);
+                    float side = smoothstep(-0.2, 0.4, dot(normalize(float3(sc, 0.001)), sun));
+                    col += float3(0.2, 0.45, 0.95) * glow * (0.2 + 0.5 * side);
+                }
+            }
         }
-        return float4(mix(u.colorA.rgb, col, 1.0), 1.0);
+        return float4(col, 1.0);
     }
 
     case 38: { // BLIT — crisp nearest upscale of a precomputed dither grid
