@@ -13,3 +13,4 @@ DerivedData/
 website/.gstack/
 website/.vercel/
 node_modules/
+.gstack/
