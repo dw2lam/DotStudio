@@ -1,0 +1,62 @@
+name: DotStudio
+options:
+  bundleIdPrefix: com.davidlam
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGNING_REQUIRED: "YES"
+    CODE_SIGNING_ALLOWED: "YES"
+    ENABLE_HARDENED_RUNTIME: "NO"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""
+    MTL_FAST_MATH: "YES"
+
+targets:
+  DotStudioSaver:
+    type: bundle
+    platform: macOS
+    sources:
+      - Saver
+      - Shared
+    settings:
+      base:
+        PRODUCT_NAME: DotStudio
+        PRODUCT_MODULE_NAME: DotStudioSaver
+        PRODUCT_BUNDLE_IDENTIFIER: com.davidlam.DotStudio.Saver
+        WRAPPER_EXTENSION: saver
+        INFOPLIST_FILE: Saver/Info.plist
+        GENERATE_INFOPLIST_FILE: "NO"
+        SWIFT_OBJC_BRIDGING_HEADER: Shared/Bridging.h
+        SKIP_INSTALL: "YES"
+
+  DotStudio:
+    type: application
+    platform: macOS
+    sources:
+      - App
+      - Shared
+    dependencies:
+      - target: DotStudioSaver
+        embed: true
+        codeSign: true
+        copy:
+          destination: resources
+    settings:
+      base:
+        PRODUCT_NAME: DotStudio
+        PRODUCT_BUNDLE_IDENTIFIER: com.davidlam.DotStudio
+        SWIFT_OBJC_BRIDGING_HEADER: Shared/Bridging.h
+        GENERATE_INFOPLIST_FILE: "YES"
+        ENABLE_APP_SANDBOX: "NO"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.graphics-design"
+        INFOPLIST_KEY_NSHumanReadableCopyright: "DotStudio"
+        INFOPLIST_KEY_CFBundleDisplayName: DotStudio
+        MARKETING_VERSION: "1.0"

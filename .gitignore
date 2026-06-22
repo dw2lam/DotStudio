@@ -1,0 +1,10 @@
+# Build output
+build/
+DerivedData/
+*.xcodeproj/
+
+# Generated / local
+.DS_Store
+*.dmg
+*.xcuserstate
+.swiftpm/
