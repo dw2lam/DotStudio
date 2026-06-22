@@ -12,6 +12,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private let sampler: MTLSamplerState
     private let glyphs: MTLTexture?
     private let dummy: MTLTexture
+    private let planetTex: PlanetTextures
 
     private var texA: MTLTexture?
     private var texB: MTLTexture?
@@ -71,6 +72,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         sampler = device.makeSamplerState(descriptor: sd)!
 
         glyphs = GlyphAtlas.make(device: device)
+        planetTex = PlanetTextures(device: device, queue: queue)
 
         let dd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: pixelFormat, width: 1, height: 1, mipmapped: false)
         dd.usage = [.shaderRead, .renderTarget]
@@ -215,6 +217,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             enc.setFragmentBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
             enc.setFragmentTexture(fragInput, index: 0)
             enc.setFragmentTexture(glyphs ?? dummy, index: 1)
+            enc.setFragmentTexture(planetTex.earthDay, index: 2)
+            enc.setFragmentTexture(planetTex.earthNight, index: 3)
+            enc.setFragmentTexture(planetTex.planets, index: 4)
             enc.setFragmentSamplerState(sampler, index: 0)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             enc.endEncoding()

@@ -123,3 +123,7 @@ no reinstalling, no System Settings. Everything renders through a single Metal Ã
 
 Inspired by [grain.rad](https://grainrad.com) and [ditherit.com](https://ditherit.com).
 Built with SwiftUI + Metal.
+
+Earth and planet maps in the **Universe** screensaver are from
+[Solar System Scope](https://www.solarsystemscope.com/textures/) â€” licensed
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
