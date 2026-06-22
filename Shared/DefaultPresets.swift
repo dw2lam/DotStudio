@@ -47,14 +47,17 @@ enum DefaultPresets {
             Preset(name: "Crosshatch",
                    effects: [fx(.crosshatch, ["spacing": 6], a: .paper, b: .ink)]),
 
-            Preset(name: "Clustered Print",
-                   effects: [fx(.dither, ["mode": 3, "cell": 2, "mono": 1], a: .paper, b: .ink)]),
+            Preset(name: "Floyd–Steinberg",
+                   effects: [fx(.dither, ["algo": 4, "cell": 2, "mono": 1], a: .paper, b: .ink)]),
 
-            Preset(name: "8-Bit",
-                   effects: [fx(.dither, ["mode": 2, "cell": 2, "levels": 3, "mono": 0])]),
+            Preset(name: "Atkinson",
+                   effects: [fx(.dither, ["algo": 5, "cell": 2, "mono": 1], a: .black, b: .crtGreen)]),
 
-            Preset(name: "Noise Dither",
-                   effects: [fx(.dither, ["mode": 4, "cell": 1, "mono": 1], a: .black, b: .amber)]),
+            Preset(name: "Riemersma",
+                   effects: [fx(.dither, ["algo": 16, "cell": 2, "mono": 1], a: .navy, b: .amber)]),
+
+            Preset(name: "Blue Noise",
+                   effects: [fx(.dither, ["algo": 3, "cell": 1, "mono": 1], a: .black, b: .cyan)]),
         ]
         var lib = Library()
         // A textured default source so dither/halftone styles have structure to chew on.
@@ -107,6 +110,14 @@ enum DefaultPresets {
                    effects: [fx(.kaleidoscope, ["seg": 6, "spin": 1.2]),
                              fx(.thermal, ["gain": 1]),
                              fx(.swirl, ["amount": 4, "spin": 0.6])]),
+            Preset(name: "Super NES",
+                   effects: [fx(.nes8bit, ["cell": 6, "scan": 0.3, "sat": 1.35])]),
+            Preset(name: "Starfield",
+                   effects: [fx(.starfield, ["speed": 1, "density": 12, "warp": 0.35, "size": 1],
+                                a: .black, b: .white)]),
+            Preset(name: "Hyperspace",
+                   effects: [fx(.starfield, ["speed": 2.2, "density": 16, "warp": 0.9, "size": 1.2],
+                                a: RGBA(0.02, 0.03, 0.08), b: .cyan)]),
         ]
     }
 }
