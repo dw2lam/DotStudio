@@ -32,6 +32,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private var source = SourceSpec()
     private var media: MediaSource?
     private let store: SharedStore
+    var location: (lat: Double, lon: Double)?      // resolved device location (Universe marker)
 
     init?(pixelFormat: MTLPixelFormat, store: SharedStore) {
         guard let device = MTLCreateSystemDefaultDevice(),
@@ -208,9 +209,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             } else {
                 inst!.pack(into: &u)
                 if inst!.kind == .universe {
-                    let a = MetalRenderer.astro()
+                    let a = MetalRenderer.astro(location: location)
                     u.p1 = simd_float4(a.sun.x, a.sun.y, a.sun.z, 0)
-                    u.p2 = simd_float4(a.userLon, 0, 0, 0)
+                    u.p2 = simd_float4(a.userLon, a.userLat, a.hasLoc ? 1 : 0, 0)
                 }
             }
 
@@ -230,7 +231,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     /// Live sun direction (view space) + the user's longitude, from the wall clock and
     /// the Mac's time zone — no Location permission needed.
-    static func astro() -> (sun: simd_float3, userLon: Float) {
+    static func astro(location: (lat: Double, lon: Double)?) -> (sun: simd_float3, userLon: Float, userLat: Float, hasLoc: Bool) {
         let now = Date()
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "UTC")!
@@ -239,10 +240,13 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let doy = Double(cal.ordinality(of: .day, in: .year, for: now) ?? 1)
         let decl = 23.44 * .pi / 180.0 * sin(2.0 * .pi * (284.0 + doy) / 365.0)   // solar declination
         let subLon = (12.0 - utcH) * 15.0 * .pi / 180.0                            // subsolar longitude
-        let userLon = Double(TimeZone.current.secondsFromGMT()) / 3600.0 * 15.0 * .pi / 180.0
+        // Longitude from the resolved location, else from the Mac's time zone.
+        let userLonDeg = location?.lon ?? (Double(TimeZone.current.secondsFromGMT()) / 3600.0 * 15.0)
+        let userLon = userLonDeg * .pi / 180.0
+        let userLat = (location?.lat ?? 0.0) * .pi / 180.0
         let rel = subLon - userLon
         let sun = simd_float3(Float(cos(decl) * sin(rel)), Float(sin(decl)), Float(cos(decl) * cos(rel)))
-        return (sun, Float(userLon))
+        return (sun, Float(userLon), Float(userLat), location != nil)
     }
 
     // MARK: Serial dither (compute)

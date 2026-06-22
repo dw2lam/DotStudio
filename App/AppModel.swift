@@ -17,6 +17,23 @@ final class AppModel: ObservableObject {
         }
         selectedID = library.activeID ?? library.presets.first?.id
         store.save(library)
+        resolveLocation()
+    }
+
+    var locationTuple: (lat: Double, lon: Double)? {
+        if let la = library.locationLat, let lo = library.locationLon { return (la, lo) }
+        return nil
+    }
+
+    /// Resolve the device location once (IP geolocation) and cache it in the library.
+    private func resolveLocation() {
+        guard library.locationLat == nil else { return }
+        LocationFetcher.fetch { [weak self] lat, lon in
+            guard let self = self else { return }
+            self.library.locationLat = lat
+            self.library.locationLon = lon
+            self.store.save(self.library)
+        }
     }
 
     /// Promote any old per-style source up to the shared global source.

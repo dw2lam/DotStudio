@@ -64,6 +64,9 @@ final class DotSaverView: ScreenSaverView {
         if changed {
             activeID = active.id
             lastModified = mod
+            if let la = lib.locationLat, let lo = lib.locationLon {
+                renderer?.location = (la, lo)
+            }
             renderer?.apply(active, source: lib.source)
             animationTimeInterval = 1.0 / Double(max(active.fps, 1))
         }

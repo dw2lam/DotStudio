@@ -6,6 +6,7 @@ import MetalKit
 struct MetalPreview: NSViewRepresentable {
     let preset: Preset
     let source: SourceSpec
+    let location: (lat: Double, lon: Double)?
     let store: SharedStore
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -20,6 +21,7 @@ struct MetalPreview: NSViewRepresentable {
         if let r = MetalRenderer(pixelFormat: view.colorPixelFormat, store: store) {
             view.device = r.device
             view.delegate = r
+            r.location = location
             r.apply(preset, source: source)
             context.coordinator.renderer = r
         }
@@ -28,6 +30,7 @@ struct MetalPreview: NSViewRepresentable {
     }
 
     func updateNSView(_ view: MTKView, context: Context) {
+        context.coordinator.renderer?.location = location
         context.coordinator.renderer?.apply(preset, source: source)
         view.preferredFramesPerSecond = preset.fps
     }

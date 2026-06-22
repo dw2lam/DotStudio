@@ -126,6 +126,7 @@ struct ContentView: View {
                 VStack(spacing: 0) {
                     MetalPreview(preset: model.presetBinding(id).wrappedValue,
                                  source: model.library.source,
+                                 location: model.locationTuple,
                                  store: model.store)
                         .aspectRatio(16.0/9.0, contentMode: .fit)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)

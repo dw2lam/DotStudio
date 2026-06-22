@@ -8,6 +8,8 @@ enum Shots {
         let store = SharedStore(role: .app)
         let lib = store.load() ?? DefaultPresets.makeLibrary()
         guard let renderer = MetalRenderer(pixelFormat: .bgra8Unorm, store: store) else { exit(1) }
+        if let la = lib.locationLat, let lo = lib.locationLon { renderer.location = (la, lo) }
+        else { renderer.location = (37.77, -122.42) }   // demo marker (San Francisco)
         let fm = FileManager.default
         try? fm.createDirectory(atPath: outDir, withIntermediateDirectories: true)
 
