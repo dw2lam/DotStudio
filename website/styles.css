@@ -194,9 +194,15 @@ h1, h2, h3, h4 { line-height: 1.04; letter-spacing: -0.02em; font-weight: 700; m
 .flow-scan { position: absolute; inset: 0; pointer-events: none; opacity: 0.5; mix-blend-mode: overlay;
   background: repeating-linear-gradient(0deg, rgba(0,0,0,0.18) 0 1px, transparent 1px 3px); }
 
-/* minimal caption HUD, lower-left */
-.flow-cap { position: absolute; left: clamp(20px,5vw,64px); bottom: clamp(26px,6vh,58px); margin: 0;
-  display: flex; align-items: flex-end; gap: 18px; z-index: 3; text-shadow: 0 2px 20px rgba(0,0,0,0.75); }
+/* minimal caption HUD, lower-left — frosted plate so text stays legible over the field */
+.flow-cap { position: absolute; left: clamp(16px,5vw,52px); bottom: clamp(22px,6vh,52px); margin: 0;
+  display: flex; align-items: flex-end; gap: 16px; z-index: 3;
+  padding: 13px 20px 12px; border-radius: 13px;
+  background: linear-gradient(180deg, rgba(6,9,16,0.40), rgba(3,5,10,0.62));
+  backdrop-filter: blur(18px) saturate(125%); -webkit-backdrop-filter: blur(18px) saturate(125%);
+  border: 1px solid rgba(130,180,160,0.16);
+  box-shadow: 0 18px 54px -20px rgba(0,0,0,0.9);
+  text-shadow: 0 1px 12px rgba(0,0,0,0.7); }
 .flow-count { font-family: var(--mono); font-size: 0.78rem; color: var(--mut); display: flex; align-items: baseline; gap: 5px; }
 .flow-count b { font-size: clamp(2rem,7vw,2.7rem); font-weight: 700; line-height: 1; color: var(--green);
   letter-spacing: -0.02em; }
