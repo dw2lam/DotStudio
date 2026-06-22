@@ -63,4 +63,6 @@ struct Library: Codable, Equatable {
     var source: SourceSpec = SourceSpec()
     var activeID: UUID?
     var version: Int = 2
+    var locationLat: Double?     // resolved device location (for the Universe marker)
+    var locationLon: Double?
 }

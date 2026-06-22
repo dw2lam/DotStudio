@@ -686,7 +686,7 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
             }
         }
 
-        float psz[8]   = {0.10, 0.16, 0.12, 0.32, 0.27, 0.20, 0.19, 0.09};
+        float psz[8]   = {0.055, 0.085, 0.065, 0.15, 0.13, 0.10, 0.095, 0.05};
         float pspin[8] = {0.06, 0.04, 0.07, 0.10, 0.09, 0.05, 0.05, 0.08};
 
         // ---- faint orbit rings ----
@@ -719,7 +719,7 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
                 float2 lp = (sc - pp) / pr;
                 float r2 = dot(lp, lp);
                 if (r2 < 1.0) {
-                    float3 n; n.xy = lp; n.z = sqrt(1.0 - r2);
+                    float3 n; n.x = lp.x; n.y = -lp.y; n.z = sqrt(1.0 - r2);
                     float aa = t * pspin[i];
                     float cs = cos(aa), sn = sin(aa);
                     float3 nw = float3(cs * n.x + sn * n.z, n.y, -sn * n.x + cs * n.z);
@@ -727,15 +727,23 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
                     float lon = atan2(nw.x, nw.z);
                     float2 tuv = float2(lon * INV2PI + 0.5, 0.5 - lat * INVPI);
                     float3 base = haveTex ? planetTex.sample(samp, tuv, i).rgb : float3(0.6, 0.55, 0.5);
-                    float lit = max(dot(n, sun), 0.0) * 0.92 + 0.08;
-                    col = mix(col, base * lit, smoothstep(1.0, 0.9, r2));
+                    // rotational graticule (lines every 30°)
+                    float sp = 0.5235988;
+                    float dLat = abs(fract(lat / sp + 0.5) - 0.5) * sp;
+                    float dLon = abs(fract(lon / sp + 0.5) - 0.5) * sp;
+                    float grid = max(1.0 - smoothstep(0.0, fwidth(lat) * 1.5 + 1e-4, dLat),
+                                     (1.0 - smoothstep(0.0, fwidth(lon) * 1.5 + 1e-4, dLon)) * clamp(cos(lat) * 1.3, 0.0, 1.0));
+                    base = mix(base, float3(0.75, 0.85, 0.95), grid * 0.18);
+                    float lit = smoothstep(-0.18, 0.28, dot(n, sun)) * 0.92 + 0.12;  // soft terminator
+                    lit *= mix(0.72, 1.0, n.z);                                       // limb darkening
+                    col = mix(col, base * lit, smoothstep(1.0, 0.88, r2));
                 }
             }
 
             if (pass2 == 0) {  // ---- Earth (between behind- and front-planets) ----
                 float r = length(sc);
                 if (r < earthR) {
-                    float3 N; N.xy = sc / earthR;
+                    float3 N; N.x = sc.x / earthR; N.y = -sc.y / earthR;
                     N.z = sqrt(max(0.0, 1.0 - dot(N.xy, N.xy)));
                     float ea = u.p2.x + t * spin * 0.05;
                     float cs = cos(ea), sn = sin(ea);
@@ -744,7 +752,7 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
                     float lon = atan2(Nw.x, Nw.z);
                     float2 tuv = float2(lon * INV2PI + 0.5, 0.5 - lat * INVPI);
                     float ndl = dot(N, sun);
-                    float day = smoothstep(-0.10, 0.18, ndl);
+                    float day = smoothstep(-0.08, 0.22, ndl);
                     float3 dayC, nightC;
                     if (haveTex) {
                         dayC = earthDay.sample(samp, tuv).rgb;
@@ -755,9 +763,30 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
                         dayC = mix(float3(0.03, 0.16, 0.33), float3(0.10, 0.34, 0.16), il);
                         nightC = dayC * 0.05;
                     }
-                    float3 ec = mix(nightC * 1.3, dayC * (0.3 + 0.8 * max(ndl, 0.0)), day);
-                    ec *= mix(0.5, 1.0, N.z);                               // limb darkening
-                    ec += float3(0.35, 0.6, 1.0) * smoothstep(0.8, 1.0, 1.0 - N.z) * 0.4 * day; // atmosphere
+                    float3 dayLit = dayC * (0.7 + 0.7 * max(ndl, 0.0));     // brighter day
+                    float3 nightLit = nightC * 2.6 + dayC * 0.10;           // city lights + earthshine
+                    float3 ec = mix(nightLit, dayLit, day);
+                    ec += dayC * 0.22 * N.z;                                // camera fill — keeps the globe readable
+                    // rotational graticule
+                    float sp = 0.5235988;
+                    float dLat = abs(fract(lat / sp + 0.5) - 0.5) * sp;
+                    float dLon = abs(fract(lon / sp + 0.5) - 0.5) * sp;
+                    float grid = max(1.0 - smoothstep(0.0, fwidth(lat) * 1.5 + 1e-4, dLat),
+                                     (1.0 - smoothstep(0.0, fwidth(lon) * 1.5 + 1e-4, dLon)) * clamp(cos(lat) * 1.3, 0.0, 1.0));
+                    ec += float3(0.3, 0.55, 0.75) * grid * 0.22;
+                    ec *= mix(0.78, 1.0, N.z);                              // gentle limb darkening
+                    ec += float3(0.35, 0.6, 1.0) * smoothstep(0.78, 1.0, 1.0 - N.z) * 0.55 * max(day, 0.35); // atmosphere
+                    // ---- GPS location marker (green pulse) ----
+                    if (u.p2.z > 0.5) {
+                        float dlon = atan2(sin(lon - u.p2.x), cos(lon - u.p2.x));
+                        float md = length(float2(dlon * cos(u.p2.y), lat - u.p2.y));
+                        float pulse = 0.5 + 0.5 * sin(t * 3.2);
+                        float dot_ = smoothstep(0.06, 0.0, md);
+                        float ring = smoothstep(0.115, 0.085, md) * smoothstep(0.06, 0.09, md);
+                        float3 green = float3(0.25, 1.0, 0.4);
+                        ec = mix(ec, green, clamp(dot_ + ring * (0.4 + 0.6 * pulse), 0.0, 1.0));
+                        ec += green * smoothstep(0.16, 0.0, md) * pulse * 0.35;   // soft glow
+                    }
                     col = ec;
                 } else {
                     float glow = smoothstep(earthR * 1.3, earthR, r);
