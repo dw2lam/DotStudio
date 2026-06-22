@@ -371,7 +371,8 @@ h1, h2, h3, h4 { line-height: 1.04; letter-spacing: -0.02em; font-weight: 700; m
      so the nowrap chip row can't widen the column past the viewport */
   .hero { grid-template-columns: minmax(0,1fr); grid-template-areas: "lead" "stage" "body";
     row-gap: 20px; padding-top: clamp(104px,22vw,128px); }
-  .hero-lead h1 { margin-bottom: 0; }
+  .hero-lead h1 { margin-bottom: 12px; }
+  .hero-lead .lede { margin-bottom: 0; }
   .hero-lead, .hero-body, .hero-stage, .lab-stage, .lab-panel { min-width: 0; }
   .lab { grid-template-columns: minmax(0,1fr); }
   .lab-stage { position: static; }
