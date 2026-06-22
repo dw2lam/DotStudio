@@ -175,43 +175,87 @@ h1, h2, h3, h4 { line-height: 1.04; letter-spacing: -0.02em; font-weight: 700; m
 .feed-arrow { color: var(--green); font-size: 1.1rem; }
 .feed-out { font-size: 0.82rem; color: var(--green); letter-spacing: 0.02em; }
 
-/* --------------------------- exhibition grid ---------------------------- */
-.gallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
-.art { grid-column: span 1; border: 1px solid var(--line); border-radius: var(--r-lg);
-  background: linear-gradient(170deg, rgba(18,24,40,0.6), rgba(8,11,20,0.6)); overflow: hidden;
-  transition: transform .25s, border-color .25s, box-shadow .25s; }
-.art-wide { grid-column: span 2; }
-.art:hover { transform: translateY(-4px); border-color: var(--line-2);
-  box-shadow: 0 24px 60px -28px rgba(0,0,0,0.9), 0 0 0 1px rgba(70,255,160,0.18); }
-.art-canvas { aspect-ratio: 16 / 10; background: #05080f; position: relative; overflow: hidden; }
-.art-wide .art-canvas { aspect-ratio: 33 / 10; }
-.art-canvas canvas { display: block; width: 100%; height: 100%; }
-.art-canvas::after { content: ""; position: absolute; inset: 0; pointer-events: none;
-  background: repeating-linear-gradient(0deg, rgba(0,0,0,0.16) 0 1px, transparent 1px 3px); opacity: 0.4; }
-.art figcaption { display: flex; flex-direction: column; gap: 1px; padding: 13px 15px; position: relative; }
-.art figcaption::before { content: ""; position: absolute; left: 15px; top: 0; width: 14px; height: 2px; background: var(--green); }
-.a-name { font-size: 1.02rem; font-weight: 600; padding-top: 6px; }
-.a-cat { font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mut); }
-.a-recipe { font-family: var(--mono); font-size: 0.72rem; color: var(--green); opacity: 0.55; transition: opacity .25s; margin-top: 5px; }
-.art:hover .a-recipe { opacity: 0.95; }
+/* ========================= the gallery walk ============================= */
+.walk { position: relative; }
+.room-head { max-width: 660px; margin: 0 auto clamp(8px,2vw,28px); text-align: center; }
+.room-label { display: inline-flex; align-items: center; gap: 13px; font-family: var(--mono);
+  font-size: 0.72rem; letter-spacing: 0.2em; text-transform: uppercase; color: var(--green); margin-bottom: 18px; }
+.room-label::before, .room-label::after { content: ""; width: 34px; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--line-2)); }
+.room-label::after { background: linear-gradient(90deg, var(--line-2), transparent); }
+.room-head h2 { font-size: clamp(2rem,5vw,3.4rem); margin-bottom: 14px; }
+.room-head p { color: var(--ink-soft); font-size: 1.02rem; }
+
+/* one framed piece on the wall, art + plate alternating sides */
+.piece { display: grid; grid-template-columns: 1.5fr 0.9fr; gap: clamp(28px,5vw,72px);
+  align-items: center; min-height: min(86vh, 760px); padding: clamp(20px,4vw,48px) 0; }
+.piece:nth-child(even) { grid-template-columns: 0.9fr 1.5fr; }
+.piece:nth-child(even) .piece-art { order: 2; }
+.piece:nth-child(even) .piece-plate { order: 1; }
+
+.piece-art { margin: 0; }
+.frame-big { aspect-ratio: 16 / 11; padding: 14px; will-change: transform; }
+.frame-big canvas { border-radius: 3px; }
+
+/* the museum plate */
+.piece-plate { position: relative; max-width: 370px; }
+.piece:nth-child(odd) .piece-plate { padding-left: 6px; }
+.plate-no { display: block; font-family: var(--mono); font-size: 0.78rem; letter-spacing: 0.16em;
+  color: var(--mut); margin-bottom: 14px; }
+.plate-no::before { content: ""; display: inline-block; width: 24px; height: 1px; background: var(--green);
+  vertical-align: middle; margin-right: 11px; box-shadow: 0 0 8px rgba(70,255,160,0.6); }
+.plate-title { font-size: clamp(1.5rem,3vw,2.15rem); margin-bottom: 13px; letter-spacing: -0.025em; }
+.plate-medium { display: block; font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--green); opacity: 0.82; margin-bottom: 17px; }
+.plate-note { color: var(--ink-soft); font-size: 0.99rem; line-height: 1.66; max-width: 42ch; margin: 0; }
+
+/* reveal: art rises + scales + un-blurs; plate slides from its outer side, staggered */
+.piece-art.reveal { transform: translateY(48px) scale(0.955); filter: blur(9px);
+  transition: opacity .85s cubic-bezier(.2,.7,.2,1), transform .85s cubic-bezier(.2,.7,.2,1), filter .85s; }
+.piece-art.reveal.in { transform: none; filter: none; }
+.piece:nth-child(odd) .piece-plate.reveal { transform: translateY(26px) translateX(28px); }
+.piece:nth-child(even) .piece-plate.reveal { transform: translateY(26px) translateX(-28px); }
+.piece-plate.reveal { transition: opacity .8s ease, transform .8s cubic-bezier(.2,.7,.2,1); transition-delay: .12s; }
+.piece-plate.reveal.in { transform: none; }
+
+/* floor-guide rail (fixed, shows only while walking the wall) */
+.floor-rail { position: fixed; left: clamp(16px, calc((100vw - var(--maxw)) / 2 - 58px), 104px);
+  top: 50%; transform: translateY(-50%);
+  z-index: 30; display: flex; flex-direction: column; gap: 15px;
+  opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .45s ease; }
+.floor-rail.show { opacity: 1; visibility: visible; pointer-events: auto; }
+.floor-rail a { display: flex; align-items: center; gap: 11px; color: var(--mut);
+  font-family: var(--mono); font-size: 0.7rem; }
+.floor-rail i { width: 8px; height: 8px; border-radius: 50%; border: 1px solid var(--line-2);
+  flex: 0 0 auto; transition: .25s; }
+.floor-rail b { font-weight: 500; letter-spacing: 0.12em; transition: color .25s; }
+.floor-rail em { font-style: normal; max-width: 0; overflow: hidden; white-space: nowrap; opacity: 0;
+  color: var(--ink-soft); transition: max-width .32s ease, opacity .32s ease; }
+.floor-rail a:hover { color: var(--ink-soft); }
+.floor-rail a:hover em { max-width: 140px; opacity: 1; }
+.floor-rail a.on i { background: var(--green); border-color: var(--green); box-shadow: 0 0 12px rgba(70,255,160,0.65); }
+.floor-rail a.on b { color: var(--green); }
 
 /* ----------------------------- collection ------------------------------- */
 .section-collection { max-width: 100%; padding-left: 0; padding-right: 0; }
 .section-collection .section-head { max-width: 660px; margin-left: auto; margin-right: auto;
   padding-left: var(--pad); padding-right: var(--pad); }
 .filmstrip { display: flex; gap: 16px; overflow-x: auto; scroll-snap-type: x mandatory;
-  padding: 6px var(--pad) 20px; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+  padding: 6px var(--pad) 20px; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent;
+  counter-reset: plate; }
 .filmstrip::-webkit-scrollbar { height: 8px; }
 .filmstrip::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 100px; }
-.print { flex: 0 0 auto; width: clamp(240px, 34vw, 360px); scroll-snap-align: center;
+.print { flex: 0 0 auto; width: clamp(240px, 34vw, 360px); scroll-snap-align: center; counter-increment: plate;
   border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; background: #0a0e18;
-  transition: transform .25s, box-shadow .25s, border-color .25s; }
+  transition: transform .25s, box-shadow .25s, border-color .25s; position: relative; }
 .print:hover { transform: translateY(-4px) scale(1.012); border-color: var(--line-2);
   box-shadow: 0 24px 60px -26px rgba(0,0,0,0.9); }
 .print img { aspect-ratio: 16 / 10; object-fit: cover; width: 100%;
   filter: saturate(1.05) contrast(1.04); }
-.print figcaption { display: flex; flex-direction: column; gap: 2px; padding: 11px 14px;
+.print figcaption { display: flex; flex-direction: column; gap: 2px; padding: 11px 14px; position: relative;
   border-top: 1px solid var(--line); }
+.print figcaption::after { content: "PL." counter(plate, decimal-leading-zero); position: absolute;
+  top: 12px; right: 14px; font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.1em; color: var(--mut-2); }
 .print figcaption b { font-weight: 600; font-size: 0.94rem; }
 .print figcaption span { font-family: var(--mono); font-size: 0.68rem; color: var(--mut); }
 .strip-hint { text-align: right; max-width: var(--maxw); margin: 4px auto 0; padding: 0 var(--pad);
@@ -331,14 +375,20 @@ h1, h2, h3, h4 { line-height: 1.04; letter-spacing: -0.02em; font-weight: 700; m
 .reveal.in { opacity: 1; transform: none; }
 
 /* ----------------------------- responsive ------------------------------- */
+/* rail only when the page gutter is wide enough to hold it clear of content */
+@media (max-width: 1299px) { .floor-rail { display: none; } }
+
 @media (max-width: 920px) {
   .hero { grid-template-columns: 1fr; padding-top: clamp(104px,22vw,128px); }
   .hero-stage { order: -1; }
   .lab { grid-template-columns: 1fr; }
   .lab-stage { position: static; }
-  .gallery { grid-template-columns: repeat(2, 1fr); }
-  .art-wide { grid-column: span 2; }
-  .art-wide .art-canvas { aspect-ratio: 16/8; }
+  .piece, .piece:nth-child(even) { grid-template-columns: 1fr; gap: 22px; min-height: 0;
+    padding: 30px 0; }
+  .piece:nth-child(even) .piece-art, .piece:nth-child(even) .piece-plate { order: 0; }
+  .piece-plate { max-width: none; }
+  .piece:nth-child(odd) .piece-plate.reveal,
+  .piece:nth-child(even) .piece-plate.reveal { transform: translateY(24px); }
   .steps, .catalog { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 640px) {
@@ -350,9 +400,7 @@ h1, h2, h3, h4 { line-height: 1.04; letter-spacing: -0.02em; font-weight: 700; m
   .nav-burger { display: flex; }
   body.nav-open .nav-burger span:first-child { transform: translateY(3px) rotate(45deg); }
   body.nav-open .nav-burger span:last-child { transform: translateY(-3px) rotate(-45deg); }
-  .gallery { grid-template-columns: 1fr; }
-  .art, .art-wide { grid-column: span 1; }
-  .art-wide .art-canvas { aspect-ratio: 16/10; }
+  .frame-big { aspect-ratio: 16/11; }
   .lab-grid { grid-template-columns: repeat(2, 1fr); }
   .steps, .catalog { grid-template-columns: 1fr; }
   .feed { gap: 10px; }
@@ -363,4 +411,6 @@ h1, h2, h3, h4 { line-height: 1.04; letter-spacing: -0.02em; font-weight: 700; m
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .001ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
   .reveal { opacity: 1; transform: none; transition: none; }
+  .piece-art.reveal { filter: none; }
+  .frame-big { transform: none !important; }
 }

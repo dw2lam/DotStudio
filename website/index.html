@@ -102,59 +102,120 @@
   <span class="feed-out">get a screensaver</span>
 </section>
 
-<!-- ======================= THE EXHIBITION (live) ======================= -->
-<section id="exhibit" class="section">
-  <div class="section-head reveal">
-    <span class="kick">The exhibition · live</span>
+<!-- ======================= EXHIBITION I — the gallery wall (live) ======================= -->
+<section id="exhibit" class="section walk">
+  <nav class="floor-rail" aria-label="Exhibition guide">
+    <a href="#p01"><i></i><b>01</b><em>Halftone</em></a>
+    <a href="#p02"><i></i><b>02</b><em>ASCII</em></a>
+    <a href="#p03"><i></i><b>03</b><em>Matrix Rain</em></a>
+    <a href="#p04"><i></i><b>04</b><em>Dithering</em></a>
+    <a href="#p05"><i></i><b>05</b><em>Thermal</em></a>
+    <a href="#p06"><i></i><b>06</b><em>Neon Edges</em></a>
+    <a href="#p07"><i></i><b>07</b><em>Voronoi</em></a>
+  </nav>
+
+  <div class="room-head reveal">
+    <span class="room-label">Exhibition&nbsp;I · live renders</span>
     <h2>Walk the wall.</h2>
-    <p>Thirty-six effects ship in the box. Here are nine of them, each rendering the same drifting gradient in real time — no video, no GIFs, just the same engine that powers the app running in your browser.</p>
+    <p>Seven of the thirty-six effects, each resolving the same drifting gradient in real time — no video, no loops. Just the engine that powers the app, painting as you scroll.</p>
   </div>
 
-  <div class="gallery reveal">
-    <!-- tile factory: each is a live canvas + museum placard -->
-    <figure class="art">
-      <div class="art-canvas"><canvas data-dot data-effect="halftone" data-role="tile" data-params='{"cell":9}'></canvas></div>
-      <figcaption><span class="a-name">Halftone</span><span class="a-cat">Dots &amp; Dither</span><span class="a-recipe">cell 9 · angle 0.4</span></figcaption>
+  <article class="piece" id="p01">
+    <figure class="piece-art reveal">
+      <div class="frame frame-big"><canvas data-dot data-effect="halftone" data-role="tile" data-params='{"cell":10}'></canvas>
+        <div class="frame-scan" aria-hidden="true"></div><span class="frame-tag">live</span></div>
     </figure>
-    <figure class="art">
-      <div class="art-canvas"><canvas data-dot data-effect="ascii" data-role="tile" data-params='{"cell":11,"color":1}'></canvas></div>
-      <figcaption><span class="a-name">ASCII</span><span class="a-cat">Glyphs</span><span class="a-recipe">cell 11 · source color</span></figcaption>
+    <aside class="piece-plate reveal">
+      <span class="plate-no">No. 01</span>
+      <h3 class="plate-title">Halftone</h3>
+      <span class="plate-medium">Dots &amp; Dither · screen 0.4 · real-time canvas</span>
+      <p class="plate-note">A gradient resolved into ink dots that swell toward the light — the studio's signature, and the shape of the app's own icon.</p>
+    </aside>
+  </article>
+
+  <article class="piece" id="p02">
+    <figure class="piece-art reveal">
+      <div class="frame frame-big"><canvas data-dot data-effect="ascii" data-role="tile" data-params='{"cell":11,"color":1}'></canvas>
+        <div class="frame-scan" aria-hidden="true"></div><span class="frame-tag">live</span></div>
     </figure>
-    <figure class="art">
-      <div class="art-canvas"><canvas data-dot data-effect="matrix" data-role="tile" data-params='{"cell":13,"reveal":1}'></canvas></div>
-      <figcaption><span class="a-name">Matrix Rain</span><span class="a-cat">Glyphs</span><span class="a-recipe">cell 13 · reveal source</span></figcaption>
+    <aside class="piece-plate reveal">
+      <span class="plate-no">No. 02</span>
+      <h3 class="plate-title">ASCII</h3>
+      <span class="plate-medium">Glyphs · cell 11 · source colour</span>
+      <p class="plate-note">Every cell re-typed as the character closest to its brightness. The picture, read back to you one glyph at a time.</p>
+    </aside>
+  </article>
+
+  <article class="piece" id="p03">
+    <figure class="piece-art reveal">
+      <div class="frame frame-big"><canvas data-dot data-effect="matrix" data-role="tile" data-params='{"cell":13,"reveal":1}'></canvas>
+        <div class="frame-scan" aria-hidden="true"></div><span class="frame-tag">live</span></div>
     </figure>
-    <figure class="art art-wide">
-      <div class="art-canvas"><canvas data-dot data-effect="thermal" data-role="tile" data-params='{"gain":1.1}'></canvas></div>
-      <figcaption><span class="a-name">Thermal</span><span class="a-cat">Color</span><span class="a-recipe">gain 1.1</span></figcaption>
+    <aside class="piece-plate reveal">
+      <span class="plate-no">No. 03</span>
+      <h3 class="plate-title">Matrix Rain</h3>
+      <span class="plate-medium">Glyphs · falling columns · reveal source</span>
+      <p class="plate-note">Source luminance, disclosed one falling column at a time. Turn away and it keeps raining without you.</p>
+    </aside>
+  </article>
+
+  <article class="piece" id="p04">
+    <figure class="piece-art reveal">
+      <div class="frame frame-big"><canvas data-dot data-effect="dither" data-role="tile" data-params='{"cell":2,"mono":1}'></canvas>
+        <div class="frame-scan" aria-hidden="true"></div><span class="frame-tag">live</span></div>
     </figure>
-    <figure class="art">
-      <div class="art-canvas"><canvas data-dot data-effect="dither" data-role="tile" data-params='{"cell":2,"mono":1}'></canvas></div>
-      <figcaption><span class="a-name">Dithering</span><span class="a-cat">Dots &amp; Dither</span><span class="a-recipe">Bayer · mono · cell 2</span></figcaption>
+    <aside class="piece-plate reveal">
+      <span class="plate-no">No. 04</span>
+      <h3 class="plate-title">Dithering</h3>
+      <span class="plate-medium">Dots &amp; Dither · Bayer 4×4 · two colours</span>
+      <p class="plate-note">Two colours and an ordered threshold, conspiring to look like a thousand. Pure navy and phosphor green.</p>
+    </aside>
+  </article>
+
+  <article class="piece" id="p05">
+    <figure class="piece-art reveal">
+      <div class="frame frame-big"><canvas data-dot data-effect="thermal" data-role="tile" data-params='{"gain":1.1}'></canvas>
+        <div class="frame-scan" aria-hidden="true"></div><span class="frame-tag">live</span></div>
     </figure>
-    <figure class="art">
-      <div class="art-canvas"><canvas data-dot data-effect="neon" data-role="tile" data-params='{"gain":3.5}'></canvas></div>
-      <figcaption><span class="a-name">Neon Edges</span><span class="a-cat">Lines &amp; Edges</span><span class="a-recipe">glow 3.5</span></figcaption>
+    <aside class="piece-plate reveal">
+      <span class="plate-no">No. 05</span>
+      <h3 class="plate-title">Thermal</h3>
+      <span class="plate-medium">Color · infrared remap · gain 1.1</span>
+      <p class="plate-note">Brightness remapped to heat. The same drifting field, seen through an infrared eye — violet cold, white hot.</p>
+    </aside>
+  </article>
+
+  <article class="piece" id="p06">
+    <figure class="piece-art reveal">
+      <div class="frame frame-big"><canvas data-dot data-effect="neon" data-role="tile" data-params='{"gain":3.5}'></canvas>
+        <div class="frame-scan" aria-hidden="true"></div><span class="frame-tag">live</span></div>
     </figure>
-    <figure class="art">
-      <div class="art-canvas"><canvas data-dot data-effect="dots" data-role="tile" data-params='{"cell":13}'></canvas></div>
-      <figcaption><span class="a-name">Dots</span><span class="a-cat">Dots &amp; Dither</span><span class="a-recipe">grid 13 · keep color</span></figcaption>
+    <aside class="piece-plate reveal">
+      <span class="plate-no">No. 06</span>
+      <h3 class="plate-title">Neon Edges</h3>
+      <span class="plate-medium">Lines &amp; Edges · gradient magnitude · glow 3.5</span>
+      <p class="plate-note">Only the edges of the gradient survive, traced in glowing wire and bloomed back into the dark.</p>
+    </aside>
+  </article>
+
+  <article class="piece" id="p07">
+    <figure class="piece-art reveal">
+      <div class="frame frame-big"><canvas data-dot data-effect="voronoi" data-role="tile" data-params='{"count":30}'></canvas>
+        <div class="frame-scan" aria-hidden="true"></div><span class="frame-tag">live</span></div>
     </figure>
-    <figure class="art">
-      <div class="art-canvas"><canvas data-dot data-effect="voronoi" data-role="tile" data-params='{"count":30}'></canvas></div>
-      <figcaption><span class="a-name">Voronoi</span><span class="a-cat">Generative</span><span class="a-recipe">density 30</span></figcaption>
-    </figure>
-    <figure class="art art-wide">
-      <div class="art-canvas"><canvas data-dot data-effect="hex" data-role="tile" data-params='{"cell":20}'></canvas></div>
-      <figcaption><span class="a-name">Hex Mosaic</span><span class="a-cat">Dots &amp; Dither</span><span class="a-recipe">cell 20</span></figcaption>
-    </figure>
-  </div>
+    <aside class="piece-plate reveal">
+      <span class="plate-no">No. 07</span>
+      <h3 class="plate-title">Voronoi</h3>
+      <span class="plate-medium">Generative · 30 cells · live</span>
+      <p class="plate-note">The plane shattered into cells, each tinted by the light beneath its slowly drifting seed.</p>
+    </aside>
+  </article>
 </section>
 
 <!-- ======================= THE COLLECTION (real renders) ======================= -->
 <section id="collection" class="section section-collection">
   <div class="section-head reveal">
-    <span class="kick">The collection · shipped presets</span>
+    <span class="kick">Exhibition II · the print room</span>
     <h2>Prints from the app.</h2>
     <p>Every frame below is a real export from DotStudio — one of the screensavers that come pre-installed. Drag a gradient, image or clip underneath and the same look paints over it.</p>
   </div>
