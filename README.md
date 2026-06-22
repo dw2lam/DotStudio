@@ -96,7 +96,7 @@ cp -R build/Build/Products/Release/DotStudio.app /Applications/
 - **Glitch** — VHS, Scanlines, Grain, Chromatic Shift, Glitch Blocks, Pixel Sort
 - **Color** — Threshold, Posterize, Phosphor, Vignette, Game Boy, **NES 8-Bit**, Bloom, Thermal, Toon
 - **Warp & Mirror** — Kaleidoscope, Mirror, Fisheye, Swirl, Ripple
-- **Generative** — Noise Field, Voronoi, **Starfield**
+- **Generative** — Noise Field, Voronoi, **Starfield**, **Universe** (real-time day/night Earth, planets & stars)
 
 > Error-diffusion and Riemersma dithers run on a GPU compute kernel; the rest are single-pass fragment shaders.
 

@@ -205,6 +205,11 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 u.p0 = simd_float4(Float(gridW), Float(gridH), 0, 0)
             } else {
                 inst!.pack(into: &u)
+                if inst!.kind == .universe {
+                    let a = MetalRenderer.astro()
+                    u.p1 = simd_float4(a.sun.x, a.sun.y, a.sun.z, 0)
+                    u.p2 = simd_float4(a.userLon, 0, 0, 0)
+                }
             }
 
             enc.setFragmentBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
@@ -214,6 +219,25 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             enc.endEncoding()
         }
+    }
+
+    // MARK: Astronomy (Universe effect)
+
+    /// Live sun direction (view space) + the user's longitude, from the wall clock and
+    /// the Mac's time zone — no Location permission needed.
+    static func astro() -> (sun: simd_float3, userLon: Float) {
+        let now = Date()
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        let c = cal.dateComponents([.hour, .minute, .second], from: now)
+        let utcH = Double(c.hour ?? 0) + Double(c.minute ?? 0) / 60.0 + Double(c.second ?? 0) / 3600.0
+        let doy = Double(cal.ordinality(of: .day, in: .year, for: now) ?? 1)
+        let decl = 23.44 * .pi / 180.0 * sin(2.0 * .pi * (284.0 + doy) / 365.0)   // solar declination
+        let subLon = (12.0 - utcH) * 15.0 * .pi / 180.0                            // subsolar longitude
+        let userLon = Double(TimeZone.current.secondsFromGMT()) / 3600.0 * 15.0 * .pi / 180.0
+        let rel = subLon - userLon
+        let sun = simd_float3(Float(cos(decl) * sin(rel)), Float(sin(decl)), Float(cos(decl) * cos(rel)))
+        return (sun, Float(userLon))
     }
 
     // MARK: Serial dither (compute)

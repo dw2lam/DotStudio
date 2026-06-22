@@ -118,6 +118,9 @@ enum DefaultPresets {
             Preset(name: "Hyperspace",
                    effects: [fx(.starfield, ["speed": 2.2, "density": 16, "warp": 0.9, "size": 1.2],
                                 a: RGBA(0.02, 0.03, 0.08), b: .cyan)]),
+            Preset(name: "Universe",
+                   effects: [fx(.universe, ["earth": 0.27, "spin": 0.5, "stars": 10, "planets": 1],
+                                a: .black)]),
         ]
     }
 }

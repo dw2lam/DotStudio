@@ -49,6 +49,12 @@ static inline float vnoise(float2 p) {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
+static inline float fbm(float2 p) {
+    float a = 0.5, f = 0.0;
+    for (int i = 0; i < 5; ++i) { f += a * vnoise(p); p *= 2.02; a *= 0.5; }
+    return f;
+}
+
 // Ordered dither matrices, normalized to [-0.5, 0.5].
 constant float bayer2[4] = {
     0.0/4-0.5, 2.0/4-0.5,
@@ -648,6 +654,80 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         }
         acc = clamp(acc, 0.0, 1.0);
         return float4(mix(u.colorA.rgb, u.colorB.rgb, acc), 1.0);
+    }
+
+    case 39: { // UNIVERSE — real-time day/night Earth + orbiting planets + stars.
+               // p0=(earthSize,spin,starDensity,planetSpeed) p1.xyz=sun(view) p2.x=userLon
+        float aspect = res.x / res.y;
+        float2 sc = (uv - 0.5) * float2(aspect, 1.0);
+        float earthR = max(u.p0.x, 0.05);
+        float spin = u.p0.y;
+        float starD = max(u.p0.z, 1.0);
+        float pSpeed = u.p0.w;
+        float3 col = float3(0.0);
+
+        // ---- starfield backdrop (slowly rotating) ----
+        {
+            float ca = cos(t * 0.008), sa = sin(t * 0.008);
+            float2 q = float2(ca * sc.x - sa * sc.y, sa * sc.x + ca * sc.y);
+            for (int L = 0; L < 3; ++L) {
+                float s = starD * (2.0 + float(L) * 2.5);
+                float2 g = q * s;
+                float2 cell = floor(g), f = fract(g) - 0.5;
+                float2 j = (hash22(cell + float(L) * 17.0) - 0.5) * 0.8;
+                float star = smoothstep(0.06, 0.0, length(f - j));
+                col += star * (0.25 + 0.75 * hash21(cell + float(L) * 3.0)) * 0.55;
+            }
+        }
+
+        // ---- orbiting planets (decorative orrery, drawn behind Earth) ----
+        for (int i = 0; i < 5; ++i) {
+            float orad = earthR + 0.10 + float(i) * 0.072;
+            float spd = (5.0 - float(i)) * 0.12 * pSpeed;
+            float ph = hash21(float2(float(i), 7.0)) * 6.2831853;
+            float a = t * spd * 0.1 + ph;
+            float2 pp = float2(cos(a) * orad, sin(a) * orad * 0.42);
+            float ringp = length(float2(sc.x / orad, sc.y / (orad * 0.42)));
+            col += float3(0.10, 0.22, 0.40) * smoothstep(0.012, 0.0, abs(ringp - 1.0)) * 0.20;
+            float psz = 0.010 + 0.006 * hash21(float2(float(i), 3.0));
+            float3 pcol = (i == 0) ? float3(0.6, 0.6, 0.62) : (i == 1) ? float3(0.9, 0.8, 0.55)
+                        : (i == 2) ? float3(0.85, 0.35, 0.2) : (i == 3) ? float3(0.8, 0.65, 0.45)
+                        : float3(0.85, 0.75, 0.5);
+            col = mix(col, pcol, smoothstep(psz, psz * 0.6, length(sc - pp)));
+        }
+
+        // ---- Earth ----
+        float r = length(sc);
+        float3 sun = normalize(u.p1.xyz);
+        if (r < earthR) {
+            float3 N; N.xy = sc / earthR;
+            N.z = sqrt(max(0.0, 1.0 - dot(N.xy, N.xy)));
+            float ea = u.p2.x + t * spin * 0.05;          // continent rotation
+            float cs = cos(ea), sn = sin(ea);
+            float3 Nw = float3(cs * N.x + sn * N.z, N.y, -sn * N.x + cs * N.z);
+            float lat = asin(clamp(Nw.y, -1.0, 1.0));
+            float lon = atan2(Nw.x, Nw.z);
+            float2 luv = float2(lon, lat);
+            float land = fbm(luv * 1.7 + 3.0);
+            float isLand = smoothstep(0.52, 0.57, land);
+            float3 ocean = float3(0.03, 0.16, 0.33);
+            float3 landc = mix(float3(0.10, 0.34, 0.16), float3(0.42, 0.38, 0.24), fbm(luv * 6.0));
+            float3 surf = mix(ocean, landc, isLand);
+            float ndl = dot(N, sun);                       // sun is in view space
+            float day = smoothstep(-0.12, 0.18, ndl);
+            float lights = isLand * smoothstep(0.5, 0.62, fbm(luv * 16.0)) * (1.0 - day);
+            float3 nightc = surf * 0.05 + float3(1.0, 0.82, 0.45) * lights * 0.9;
+            float3 dayc = surf * (0.35 + 0.75 * max(ndl, 0.0));
+            float3 ec = mix(nightc, dayc, day);
+            ec *= mix(0.55, 1.0, N.z);                     // limb darkening
+            ec += float3(0.35, 0.6, 1.0) * smoothstep(0.78, 1.0, 1.0 - N.z) * 0.45 * day; // atmo rim
+            col = ec;
+        } else {
+            float glow = smoothstep(earthR * 1.28, earthR, r);
+            float side = smoothstep(-0.2, 0.4, dot(normalize(float3(sc, 0.0)), sun));
+            col += float3(0.2, 0.45, 0.95) * glow * (0.25 + 0.5 * side);
+        }
+        return float4(mix(u.colorA.rgb, col, 1.0), 1.0);
     }
 
     case 38: { // BLIT — crisp nearest upscale of a precomputed dither grid
