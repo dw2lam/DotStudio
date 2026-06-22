@@ -217,13 +217,15 @@ enum EffectKind: String, Codable, CaseIterable {
                                  ParamSpec("density", "Density", 4, 40, def: 12),
                                  ParamSpec("warp", "Warp", 0, 1, def: 0.3),
                                  ParamSpec("size", "Star Size", 0.3, 3, def: 1)]
-        case .universe:  return [ParamSpec("earth", "Earth Size", 0.1, 0.45, def: 0.26),
-                                 ParamSpec("spin", "Earth Spin", 0, 3, def: 0.5),
-                                 ParamSpec("stars", "Stars", 3, 30, def: 10),
+        case .universe:  return [ParamSpec("scale", "Scale", 0.5, 1.6, def: 1.0),
+                                 ParamSpec("speed", "Speed", 0, 3, def: 1),
+                                 ParamSpec("stars", "Stars", 0, 2, def: 1),
                                  ParamSpec("planets", "Planet Speed", 0, 3, def: 1),
                                  ParamSpec("orbits", "Orbit Lines", 0, 1, def: 1, toggle: true)]
         case .blackhole: return [ParamSpec("mass", "Mass", 0.15, 0.8, def: 0.4),
                                  ParamSpec("brightness", "Brightness", 1, 10, def: 5),
+                                 ParamSpec("speed", "Speed", 0, 3, def: 1),
+                                 ParamSpec("stars", "Stars", 0, 3, def: 1),
                                  ParamSpec("rot", "Rotation", -15, 15, def: -8.7),
                                  ParamSpec("disk", "Disk Size", 0.5, 1.6, def: 1)]
         }
@@ -308,8 +310,9 @@ extension EffectInstance {
         case .ledPanel:  u.p0 = .init(g("cell"), g("gap"), 0, 0)
         case .nes8bit:   u.p0 = .init(g("cell"), g("scan"), g("sat"), 0)
         case .starfield: u.p0 = .init(g("speed"), g("density"), g("warp"), g("size"))
-        case .universe:  u.p0 = .init(g("earth"), g("spin"), g("stars"), g("planets"))
+        case .universe:  u.p0 = .init(g("scale"), g("speed"), g("stars"), g("planets"))
         case .blackhole: u.p0 = .init(g("mass"), g("brightness"), g("rot"), g("disk"))
+                         u.p1 = .init(g("speed"), g("stars"), 0, 0)
         }
     }
 }
