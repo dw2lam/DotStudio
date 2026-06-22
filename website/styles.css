@@ -363,31 +363,73 @@ h1, h2, h3, h4 { line-height: 1.04; letter-spacing: -0.02em; font-weight: 700; m
 
 /* ----------------------------- responsive ------------------------------- */
 @media (max-width: 920px) {
-  .hero { grid-template-columns: 1fr; padding-top: clamp(104px,22vw,128px); }
+  /* minmax(0,1fr) + min-width:0 so nowrap/scroll children can't blow the column out */
+  .hero { grid-template-columns: minmax(0,1fr); padding-top: clamp(104px,22vw,128px); }
   .hero-stage { order: -1; }
-  .lab { grid-template-columns: 1fr; }
+  .hero-copy, .hero-stage, .lab-stage, .lab-panel { min-width: 0; }
+  .lab { grid-template-columns: minmax(0,1fr); }
   .lab-stage { position: static; }
   .steps, .catalog { grid-template-columns: 1fr 1fr; }
 }
+
+/* ---- phone: purpose-built mobile layouts, not shrunk desktop ---- */
 @media (max-width: 640px) {
-  .nav-links { position: fixed; inset: 56px 0 auto 0; flex-direction: column; gap: 0;
-    background: rgba(6,8,15,0.96); backdrop-filter: blur(16px); border-bottom: 1px solid var(--line);
-    padding: 8px var(--pad) 20px; transform: translateY(-130%); transition: transform .3s; }
+  /* tighter vertical rhythm so sections don't feel like empty canyons */
+  .section { padding-top: clamp(56px, 14vw, 84px); }
+  .feed { margin-top: 44px; }
+
+  /* slide-down nav menu */
+  .nav { padding: 11px var(--pad); }
+  .nav-links { position: fixed; inset: 54px 0 auto 0; flex-direction: column; gap: 0;
+    background: rgba(6,8,15,0.97); backdrop-filter: blur(16px); border-bottom: 1px solid var(--line);
+    padding: 6px var(--pad) 18px; transform: translateY(-130%); transition: transform .3s; }
   body.nav-open .nav-links { transform: none; }
-  .nav-links a { padding: 13px 0; font-size: 0.92rem; border-bottom: 1px solid var(--line); }
+  .nav-links a { padding: 15px 2px; font-size: 1rem; border-bottom: 1px solid var(--line); }
   .nav-burger { display: flex; }
   body.nav-open .nav-burger span:first-child { transform: translateY(3px) rotate(45deg); }
   body.nav-open .nav-burger span:last-child { transform: translateY(-3px) rotate(-45deg); }
-  .flow-track { height: 220vh; }
-  .flow-cap { gap: 13px; left: 18px; bottom: 22px; }
-  .flow-ticks { right: 14px; gap: 7px; }
+
+  /* hero: compact stage, then message; full-width CTAs */
+  .hero { padding-top: 90px; gap: 20px; }
+  .hero h1 { font-size: clamp(2.1rem, 9.5vw, 2.9rem); }
+  .lede { font-size: 1rem; margin-bottom: 22px; }
+  .hero-actions { flex-direction: column; align-items: stretch; gap: 10px; }
+  .hero-actions .btn { width: 100%; justify-content: center; padding: 14px 18px; }
+  .placard { padding: 11px 14px; }
+  .placard-sub { display: none; }                 /* drop verbose subline on phones */
+  /* effect chips become one swipeable row instead of 3 wrapping rows */
+  .fx-switch { flex-wrap: nowrap; overflow-x: auto; gap: 8px; padding-bottom: 6px; min-width: 0;
+    scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; scrollbar-width: none;
+    margin: 0 calc(-1 * var(--pad)); padding-left: var(--pad); padding-right: var(--pad); }
+  .fx-switch::-webkit-scrollbar { display: none; }
+  .fx-chip { flex: 0 0 auto; padding: 10px 15px; scroll-snap-align: start; }
+
+  /* flow */
+  .flow-track { height: 210vh; }
+  .flow-cap { gap: 13px; left: 16px; bottom: 18px; }
+  .flow-ticks { right: 12px; gap: 7px; }
   .flow-ticks i { height: 20px; }
   .flow-ticks i.on { height: 27px; }
+
+  /* print room: one print in focus, peek the next */
+  .print { width: min(80vw, 320px); }
+
+  /* lab: larger, thumb-friendly controls */
+  .lab-panel { padding: 17px; gap: 18px; }
   .lab-grid { grid-template-columns: repeat(2, 1fr); }
+  .lab-src, .lab-fx { padding: 12px 10px; }
+  .lab-field input[type=range] { height: 5px; }
+  .lab-field input[type=range]::-webkit-slider-thumb { width: 19px; height: 19px; }
+
   .steps, .catalog { grid-template-columns: 1fr; }
-  .feed { gap: 10px; }
   .feed-arrow, .feed-out { display: none; }
   .footer-base { flex-direction: column; gap: 6px; }
+}
+
+/* ---- very small phones ---- */
+@media (max-width: 380px) {
+  :root { --pad: 18px; }
+  .btn-sm { padding: 8px 11px; font-size: 0.74rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {
