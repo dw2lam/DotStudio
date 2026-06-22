@@ -119,7 +119,11 @@ h1, h2, h3, h4 { line-height: 1.04; letter-spacing: -0.02em; font-weight: 700; m
 
 /* ------------------------------- hero ---------------------------------- */
 .hero { max-width: var(--maxw); margin: 0 auto; padding: clamp(116px,16vw,168px) var(--pad) 0;
-  display: grid; grid-template-columns: 1fr 1.04fr; gap: clamp(28px,4vw,60px); align-items: center; }
+  display: grid; grid-template-columns: 1fr 1.04fr; grid-template-areas: "lead stage" "body stage";
+  column-gap: clamp(28px,4vw,60px); row-gap: 0; align-items: center; }
+.hero-lead { grid-area: lead; }
+.hero-body { grid-area: body; min-width: 0; }
+.hero-stage { grid-area: stage; }
 .eyebrow { display: inline-flex; align-items: center; gap: 9px; font-family: var(--mono); font-size: 0.78rem;
   letter-spacing: 0.02em; color: var(--ink-soft); padding: 6px 12px; border: 1px solid var(--line);
   border-radius: 100px; background: rgba(255,255,255,0.02); margin-bottom: 22px; }
@@ -363,10 +367,12 @@ h1, h2, h3, h4 { line-height: 1.04; letter-spacing: -0.02em; font-weight: 700; m
 
 /* ----------------------------- responsive ------------------------------- */
 @media (max-width: 920px) {
-  /* minmax(0,1fr) + min-width:0 so nowrap/scroll children can't blow the column out */
-  .hero { grid-template-columns: minmax(0,1fr); padding-top: clamp(104px,22vw,128px); }
-  .hero-stage { order: -1; }
-  .hero-copy, .hero-stage, .lab-stage, .lab-panel { min-width: 0; }
+  /* mobile order: header -> live preview -> details. minmax(0,1fr)+min-width:0
+     so the nowrap chip row can't widen the column past the viewport */
+  .hero { grid-template-columns: minmax(0,1fr); grid-template-areas: "lead" "stage" "body";
+    row-gap: 20px; padding-top: clamp(104px,22vw,128px); }
+  .hero-lead h1 { margin-bottom: 0; }
+  .hero-lead, .hero-body, .hero-stage, .lab-stage, .lab-panel { min-width: 0; }
   .lab { grid-template-columns: minmax(0,1fr); }
   .lab-stage { position: static; }
   .steps, .catalog { grid-template-columns: 1fr 1fr; }
