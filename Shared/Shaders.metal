@@ -681,9 +681,10 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
             float2 fd = f - jit;
             fd -= rd * dot(fd, rd) * warp;                  // streak along radial dir
             float d = length(fd);
-            float star = smoothstep(0.06 * sz, 0.0, d);
+            float r = 0.05 * sz;
+            float star = smoothstep(r, r * 0.28, d);        // tight core (crisper, no cell seams)
             float b = hash21(cell + fi * 31.0);
-            acc += star * fade * (0.35 + 0.65 * b);
+            acc += star * fade * (0.55 + 0.55 * b);
         }
         acc = clamp(acc, 0.0, 1.0);
         return float4(mix(u.colorA.rgb, u.colorB.rgb, acc), 1.0);
@@ -789,6 +790,7 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         float diskScale = max(u.p0.w, 0.3);
         float speed = max(u.p1.x, 0.0);
         float starsAmt = max(u.p1.y, 0.0);
+        float angle = clamp(u.p1.z, 0.03, 1.45);   // viewing elevation: low = edge-on, high = top-down
         float ts = t * speed;
         float rs = mass * 2.0;
         float innerR = 4.1 * diskScale, outerR = 14.5 * diskScale;
@@ -797,9 +799,10 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         const float edgeIn = 0.18, edgeOut = 0.5, lensing = 2.4, dopplerStr = 1.0, stepSize = 1.0;
 
         float2 sp = (uv - 0.5) * 2.0; sp.y = -sp.y; sp.x *= res.x / res.y;
-        // gentle slow orbit with a subtle vertical drift (no fast tumble)
+        // gentle slow azimuth orbit at the chosen elevation angle (no fast tumble)
+        float ce = cos(angle), se = sin(angle);
         float ct = ts * 0.025;
-        float3 camPos = float3(sin(ct) * 20.0, -2.2 + 0.9 * sin(ts * 0.018), -cos(ct) * 20.0);
+        float3 camPos = float3(sin(ct) * 20.0 * ce, -se * 20.0, -cos(ct) * 20.0 * ce);
         float3 fwd = normalize(-camPos);
         float3 right = normalize(cross(float3(0, 1, 0), fwd));
         float3 cup = cross(fwd, right);
@@ -832,6 +835,8 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
                     float beta = (1.0 / sqrt(hitR / innerR)) * 0.3;
                     float dopp = 1.0 / (1.0 - beta * dot(velDir, rayDir));
                     dc *= clamp(pow(dopp, 3.0 * dopplerStr), 0.1, 5.0);
+                    float dlum = dot(dc, float3(0.3, 0.59, 0.11));
+                    dc = mix(dc, float3(dlum, dlum * 0.9, dlum * 0.74), 0.4);   // softer, warmer palette
                     float edge = smoothstep(0.0, edgeIn, normR) * smoothstep(1.0, 1.0 - edgeOut, normR);
                     float cyc = fmod(ts, turbCycle);
                     float blend = cyc / turbCycle;
