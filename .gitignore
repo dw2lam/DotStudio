@@ -8,3 +8,8 @@ DerivedData/
 *.dmg
 *.xcuserstate
 .swiftpm/
+
+# Website (local tooling)
+website/.gstack/
+website/.vercel/
+node_modules/

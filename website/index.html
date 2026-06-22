@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DotStudio — turn any art into a Mac screensaver</title>
+<meta name="description" content="DotStudio is a macOS studio that runs gradients, images and video through dither, ASCII, halftone, VHS and 30+ live effects — then installs the result as a real Mac screensaver." />
+<meta property="og:title" content="DotStudio — art → live Mac screensaver" />
+<meta property="og:description" content="Dither, ASCII, halftone, matrix, thermal, VHS and more. Feed it a gradient, image or video; install the look as a screensaver. Native, local, free." />
+<meta property="og:image" content="assets/gallery/Thermal-Cam.png" />
+<meta name="theme-color" content="#070a14" />
+<link rel="icon" type="image/png" href="assets/icon.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<!-- textured darkroom backdrop -->
+<div class="backdrop" aria-hidden="true">
+  <div class="bd-glow bd-a"></div>
+  <div class="bd-glow bd-b"></div>
+  <div class="bd-halftone"></div>
+  <div class="bd-scan"></div>
+  <div class="bd-grain"></div>
+</div>
+
+<!-- nav -->
+<header class="nav" id="nav">
+  <a class="brand" href="#top" aria-label="DotStudio home">
+    <img src="assets/icon.png" alt="" class="brand-icon" />
+    <span class="brand-name">Dot<b>Studio</b></span>
+  </a>
+  <nav class="nav-links" aria-label="Primary">
+    <a href="#exhibit">Effects</a>
+    <a href="#collection">Gallery</a>
+    <a href="#lab">The Lab</a>
+    <a href="#how">Install</a>
+  </nav>
+  <div class="nav-right">
+    <a class="btn btn-ghost btn-sm" href="https://github.com/dw2lam/dotstudio" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+      GitHub
+    </a>
+    <button class="nav-burger" aria-label="Menu"><span></span><span></span></button>
+  </div>
+</header>
+
+<main id="top">
+
+<!-- ======================= HERO ======================= -->
+<section class="hero">
+  <div class="hero-copy reveal">
+    <div class="eyebrow"><span class="dot-live"></span> v<span data-latest-version>1.0.0</span> · macOS · free &amp; open source</div>
+    <h1>Turn anything<br/>into a <span class="grad-word">screensaver</span>.</h1>
+    <p class="lede">DotStudio is a tiny macOS studio that runs gradients, images and video through <b>dither</b>, <b>ASCII</b>, <b>halftone</b>, <b>matrix</b>, <b>VHS</b> and 30&#8209;plus live effects — then installs the result as a real Mac screensaver. The picture above is rendering right now, in your browser.</p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" data-download-latest href="https://github.com/dw2lam/dotstudio/releases/latest" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 1a1 1 0 0 1 1 1v7.59l2.3-2.3a1 1 0 0 1 1.4 1.42l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.42L7 9.59V2a1 1 0 0 1 1-1Z"/><path d="M3 13a1 1 0 0 1 1 1h8a1 1 0 1 1 0 2H3a1 1 0 0 1-1-1v-1a1 1 0 0 1 1 0Z"/></svg>
+        <span data-download-label>Download v1.0.0</span>
+      </a>
+      <a class="btn btn-ghost" href="https://github.com/dw2lam/dotstudio" target="_blank" rel="noopener">View source</a>
+    </div>
+    <div class="hero-meta">macOS 14+ · Apple Silicon &amp; Intel · No account · No telemetry</div>
+  </div>
+
+  <!-- the live exhibit: one shared engine, switchable effect -->
+  <figure class="hero-stage reveal">
+    <div class="frame">
+      <canvas id="heroCanvas" data-dot data-effect="ascii" data-source="aurora" data-role="hero" aria-label="Live effect preview"></canvas>
+      <div class="frame-scan" aria-hidden="true"></div>
+      <span class="frame-tag">live · 60fps · canvas</span>
+    </div>
+    <figcaption class="placard">
+      <span class="placard-no">NOW SHOWING</span>
+      <span class="placard-name" data-hero-fx>ASCII</span>
+      <span class="placard-sub">source: gradient · rendered in real time</span>
+    </figcaption>
+    <div class="fx-switch" role="group" aria-label="Switch effect">
+      <button class="fx-chip on" data-fx="ascii">ASCII</button>
+      <button class="fx-chip" data-fx="halftone">Halftone</button>
+      <button class="fx-chip" data-fx="matrix">Matrix</button>
+      <button class="fx-chip" data-fx="thermal">Thermal</button>
+      <button class="fx-chip" data-fx="neon">Neon</button>
+      <button class="fx-chip" data-fx="dither">Dither</button>
+      <button class="fx-chip" data-fx="voronoi">Voronoi</button>
+    </div>
+  </figure>
+</section>
+
+<!-- ======================= FEED STRIP ======================= -->
+<section class="feed reveal">
+  <span class="feed-lead">Feed it</span>
+  <div class="feed-items">
+    <span class="feed-pill"><svg viewBox="0 0 20 20" width="16" aria-hidden="true"><defs><linearGradient id="fg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0d1229"/><stop offset="1" stop-color="#46ffa0"/></linearGradient></defs><rect x="2" y="2" width="16" height="16" rx="4" fill="url(#fg1)"/></svg> Gradients</span>
+    <span class="feed-pill"><svg viewBox="0 0 20 20" width="16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2"/><circle cx="7" cy="8" r="1.6"/><path d="M3 14l4-3 3 2 4-4 3 3"/></svg> Images</span>
+    <span class="feed-pill"><svg viewBox="0 0 20 20" width="16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="2.5" y="4.5" width="11" height="11" rx="2"/><path d="M14 8l3.5-2v8L14 12z"/></svg> Video</span>
+    <span class="feed-pill feed-mut">your own art</span>
+  </div>
+  <span class="feed-arrow" aria-hidden="true">→</span>
+  <span class="feed-out">get a screensaver</span>
+</section>
+
+<!-- ======================= THE EXHIBITION (live) ======================= -->
+<section id="exhibit" class="section">
+  <div class="section-head reveal">
+    <span class="kick">The exhibition · live</span>
+    <h2>Walk the wall.</h2>
+    <p>Thirty-six effects ship in the box. Here are nine of them, each rendering the same drifting gradient in real time — no video, no GIFs, just the same engine that powers the app running in your browser.</p>
+  </div>
+
+  <div class="gallery reveal">
+    <!-- tile factory: each is a live canvas + museum placard -->
+    <figure class="art">
+      <div class="art-canvas"><canvas data-dot data-effect="halftone" data-role="tile" data-params='{"cell":9}'></canvas></div>
+      <figcaption><span class="a-name">Halftone</span><span class="a-cat">Dots &amp; Dither</span><span class="a-recipe">cell 9 · angle 0.4</span></figcaption>
+    </figure>
+    <figure class="art">
+      <div class="art-canvas"><canvas data-dot data-effect="ascii" data-role="tile" data-params='{"cell":11,"color":1}'></canvas></div>
+      <figcaption><span class="a-name">ASCII</span><span class="a-cat">Glyphs</span><span class="a-recipe">cell 11 · source color</span></figcaption>
+    </figure>
+    <figure class="art">
+      <div class="art-canvas"><canvas data-dot data-effect="matrix" data-role="tile" data-params='{"cell":13,"reveal":1}'></canvas></div>
+      <figcaption><span class="a-name">Matrix Rain</span><span class="a-cat">Glyphs</span><span class="a-recipe">cell 13 · reveal source</span></figcaption>
+    </figure>
+    <figure class="art art-wide">
+      <div class="art-canvas"><canvas data-dot data-effect="thermal" data-role="tile" data-params='{"gain":1.1}'></canvas></div>
+      <figcaption><span class="a-name">Thermal</span><span class="a-cat">Color</span><span class="a-recipe">gain 1.1</span></figcaption>
+    </figure>
+    <figure class="art">
+      <div class="art-canvas"><canvas data-dot data-effect="dither" data-role="tile" data-params='{"cell":2,"mono":1}'></canvas></div>
+      <figcaption><span class="a-name">Dithering</span><span class="a-cat">Dots &amp; Dither</span><span class="a-recipe">Bayer · mono · cell 2</span></figcaption>
+    </figure>
+    <figure class="art">
+      <div class="art-canvas"><canvas data-dot data-effect="neon" data-role="tile" data-params='{"gain":3.5}'></canvas></div>
+      <figcaption><span class="a-name">Neon Edges</span><span class="a-cat">Lines &amp; Edges</span><span class="a-recipe">glow 3.5</span></figcaption>
+    </figure>
+    <figure class="art">
+      <div class="art-canvas"><canvas data-dot data-effect="dots" data-role="tile" data-params='{"cell":13}'></canvas></div>
+      <figcaption><span class="a-name">Dots</span><span class="a-cat">Dots &amp; Dither</span><span class="a-recipe">grid 13 · keep color</span></figcaption>
+    </figure>
+    <figure class="art">
+      <div class="art-canvas"><canvas data-dot data-effect="voronoi" data-role="tile" data-params='{"count":30}'></canvas></div>
+      <figcaption><span class="a-name">Voronoi</span><span class="a-cat">Generative</span><span class="a-recipe">density 30</span></figcaption>
+    </figure>
+    <figure class="art art-wide">
+      <div class="art-canvas"><canvas data-dot data-effect="hex" data-role="tile" data-params='{"cell":20}'></canvas></div>
+      <figcaption><span class="a-name">Hex Mosaic</span><span class="a-cat">Dots &amp; Dither</span><span class="a-recipe">cell 20</span></figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ======================= THE COLLECTION (real renders) ======================= -->
+<section id="collection" class="section section-collection">
+  <div class="section-head reveal">
+    <span class="kick">The collection · shipped presets</span>
+    <h2>Prints from the app.</h2>
+    <p>Every frame below is a real export from DotStudio — one of the screensavers that come pre-installed. Drag a gradient, image or clip underneath and the same look paints over it.</p>
+  </div>
+
+  <div class="filmstrip reveal" id="filmstrip">
+    <figure class="print"><img src="assets/gallery/Green-Phosphor.png" alt="Green Phosphor preset" loading="lazy" />
+      <figcaption><b>Green Phosphor</b><span>dither · mono · scanlines</span></figcaption></figure>
+    <figure class="print"><img src="assets/gallery/Matrix-Rain.png" alt="Matrix Rain preset" loading="lazy" />
+      <figcaption><b>Matrix Rain</b><span>matrix · reveal source</span></figcaption></figure>
+    <figure class="print"><img src="assets/gallery/Thermal-Cam.png" alt="Thermal Cam preset" loading="lazy" />
+      <figcaption><b>Thermal Cam</b><span>noise field · thermal</span></figcaption></figure>
+    <figure class="print"><img src="assets/gallery/Neon-Wire.png" alt="Neon Wire preset" loading="lazy" />
+      <figcaption><b>Neon Wire</b><span>noise field · neon edges</span></figcaption></figure>
+    <figure class="print"><img src="assets/gallery/Kaleidoscope.png" alt="Kaleidoscope preset" loading="lazy" />
+      <figcaption><b>Kaleidoscope</b><span>noise field · 8 segments</span></figcaption></figure>
+    <figure class="print"><img src="assets/gallery/Data-Glitch.png" alt="Data Glitch preset" loading="lazy" />
+      <figcaption><b>Data Glitch</b><span>glitch · chroma · scanlines</span></figcaption></figure>
+    <figure class="print"><img src="assets/gallery/ASCII.png" alt="ASCII preset" loading="lazy" />
+      <figcaption><b>ASCII</b><span>cell 12 · source color</span></figcaption></figure>
+    <figure class="print"><img src="assets/gallery/Halftone.png" alt="Halftone preset" loading="lazy" />
+      <figcaption><b>Halftone</b><span>cell 9 · screen angle</span></figcaption></figure>
+    <figure class="print"><img src="assets/gallery/VHS.png" alt="VHS preset" loading="lazy" />
+      <figcaption><b>VHS</b><span>tracking · scanlines</span></figcaption></figure>
+    <figure class="print"><img src="assets/gallery/Game-Boy.png" alt="Game Boy preset" loading="lazy" />
+      <figcaption><b>Game Boy</b><span>4-tone · ordered dither</span></figcaption></figure>
+    <figure class="print"><img src="assets/gallery/Hex-Grid.png" alt="Hex Grid preset" loading="lazy" />
+      <figcaption><b>Hex Grid</b><span>hex mosaic · posterize</span></figcaption></figure>
+    <figure class="print"><img src="assets/gallery/Voronoi.png" alt="Voronoi preset" loading="lazy" />
+      <figcaption><b>Voronoi</b><span>density 30 · posterize</span></figcaption></figure>
+  </div>
+  <div class="strip-hint reveal" aria-hidden="true">scroll →</div>
+</section>
+
+<!-- ======================= THE LAB (interactive) ======================= -->
+<section id="lab" class="section">
+  <div class="section-head reveal">
+    <span class="kick">The lab · try it now</span>
+    <h2>Develop your own.</h2>
+    <p>This is the app's core loop, on the page. Pick a source, choose an effect, drag the dials — the panel re-renders live. When you like it, the real app saves it as a screensaver and pins it to your desktop.</p>
+  </div>
+
+  <div class="lab reveal">
+    <div class="lab-stage">
+      <div class="frame frame-lab">
+        <canvas id="labCanvas" data-dot data-effect="ascii" data-source="aurora" data-role="hero" aria-label="Interactive effect preview"></canvas>
+        <div class="frame-scan" aria-hidden="true"></div>
+        <span class="frame-tag" data-lab-effect>ASCII</span>
+      </div>
+      <div class="lab-readout" id="labReadout">fx ascii · src aurora</div>
+    </div>
+
+    <div class="lab-panel">
+      <div class="lab-block">
+        <span class="lab-h">Source</span>
+        <div class="lab-row">
+          <button class="lab-src on" data-src="aurora">Aurora gradient</button>
+          <button class="lab-src" data-src="swirl">Swirl field</button>
+        </div>
+      </div>
+      <div class="lab-block">
+        <span class="lab-h">Effect</span>
+        <div class="lab-row lab-grid">
+          <button class="lab-fx on" data-fx="ascii">ASCII</button>
+          <button class="lab-fx" data-fx="halftone">Halftone</button>
+          <button class="lab-fx" data-fx="dither">Dither</button>
+          <button class="lab-fx" data-fx="dots">Dots</button>
+          <button class="lab-fx" data-fx="matrix">Matrix</button>
+          <button class="lab-fx" data-fx="thermal">Thermal</button>
+          <button class="lab-fx" data-fx="neon">Neon</button>
+          <button class="lab-fx" data-fx="voronoi">Voronoi</button>
+          <button class="lab-fx" data-fx="hex">Hex</button>
+          <button class="lab-fx" data-fx="gameboy">Game Boy</button>
+          <button class="lab-fx" data-fx="scanlines">Phosphor</button>
+          <button class="lab-fx" data-fx="vhs">VHS</button>
+        </div>
+      </div>
+      <div class="lab-block">
+        <span class="lab-h">Dials</span>
+        <div id="labSliders" class="lab-sliders"></div>
+      </div>
+      <a class="btn btn-primary btn-sm lab-cta" data-download-latest href="https://github.com/dw2lam/dotstudio/releases/latest" target="_blank" rel="noopener">Make it a screensaver →</a>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= HOW IT WORKS ======================= -->
+<section id="how" class="section section-how">
+  <div class="section-head reveal">
+    <span class="kick">From canvas to lock screen</span>
+    <h2>Three steps to a living desktop.</h2>
+  </div>
+  <div class="steps reveal">
+    <article class="step">
+      <span class="step-no">01</span>
+      <h3>Feed it a source</h3>
+      <p>Start from a built-in gradient, drop in any image, or point it at a video. The source is shared by every style, so one picture can wear a dozen looks.</p>
+    </article>
+    <article class="step">
+      <span class="step-no">02</span>
+      <h3>Stack &amp; tune effects</h3>
+      <p>Add effects to a stack — they apply top to bottom. Dither into halftone into scanlines. Drag the dials, swap the palette, watch it move. Save it as a named screensaver.</p>
+    </article>
+    <article class="step">
+      <span class="step-no">03</span>
+      <h3>Install it</h3>
+      <p>One click copies a real <code>.saver</code> into your Screen&nbsp;Savers folder and opens Wallpaper settings. Pick “DotStudio” once — after that you switch screensavers right inside the app.</p>
+    </article>
+  </div>
+</section>
+
+<!-- ======================= FULL EFFECTS INDEX ======================= -->
+<section id="effects-index" class="section">
+  <div class="section-head reveal">
+    <span class="kick">The full catalog</span>
+    <h2>Thirty-six ways to look.</h2>
+    <p>Every effect, grouped the way the app groups them. Stack as many as you like.</p>
+  </div>
+
+  <div class="catalog reveal">
+    <div class="cat-col">
+      <h4>Dots &amp; Dither</h4>
+      <ul><li>Dithering</li><li>Halftone</li><li>Dots</li><li>Pixelate</li><li>Blockify</li><li>Hex Mosaic</li><li>LED Panel</li><li>Truchet</li></ul>
+    </div>
+    <div class="cat-col">
+      <h4>Glyphs</h4>
+      <ul><li>ASCII</li><li>Matrix Rain</li></ul>
+      <h4>Generative</h4>
+      <ul><li>Noise Field</li><li>Voronoi</li></ul>
+    </div>
+    <div class="cat-col">
+      <h4>Lines &amp; Edges</h4>
+      <ul><li>Contour</li><li>Edge Detection</li><li>Crosshatch</li><li>Wave Lines</li><li>Neon Edges</li></ul>
+    </div>
+    <div class="cat-col">
+      <h4>Glitch</h4>
+      <ul><li>VHS</li><li>Scanlines</li><li>Grain</li><li>Pixel Sort</li><li>Chromatic Shift</li><li>Glitch Blocks</li></ul>
+    </div>
+    <div class="cat-col">
+      <h4>Color</h4>
+      <ul><li>Threshold</li><li>Posterize</li><li>Phosphor</li><li>Vignette</li><li>Game Boy</li><li>Bloom</li><li>Thermal</li><li>Toon</li></ul>
+    </div>
+    <div class="cat-col">
+      <h4>Warp &amp; Mirror</h4>
+      <ul><li>Kaleidoscope</li><li>Mirror</li><li>Fisheye</li><li>Swirl</li><li>Ripple</li></ul>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= DOWNLOAD ======================= -->
+<section id="download" class="section download">
+  <div class="dl-card reveal">
+    <div class="dl-mark"><img src="assets/icon.png" alt="DotStudio icon" /></div>
+    <h2>Get DotStudio</h2>
+    <p class="dl-sub">Download the latest build, drop it in Applications, and turn your desktop into a gallery that never repeats.</p>
+    <a class="btn btn-primary btn-lg" data-download-latest href="https://github.com/dw2lam/dotstudio/releases/latest" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 1a1 1 0 0 1 1 1v7.59l2.3-2.3a1 1 0 0 1 1.4 1.42l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.42L7 9.59V2a1 1 0 0 1 1-1Z"/><path d="M3 13a1 1 0 0 1 1 1h8a1 1 0 1 1 0 2H3a1 1 0 0 1-1-1v-1a1 1 0 0 1 1 0Z"/></svg>
+      <span data-download-label>Download v1.0.0</span>
+    </a>
+    <div class="dl-meta">
+      <span data-release-meta>Latest release · v1.0.0</span>
+      <span class="sep">·</span>
+      <a href="https://github.com/dw2lam/dotstudio/releases" target="_blank" rel="noopener">All releases</a>
+    </div>
+    <p class="dl-note">Unsigned for now: if macOS blocks the first launch, right-click <b>DotStudio.app → Open</b>. macOS 14+.</p>
+  </div>
+</section>
+
+</main>
+
+<!-- footer -->
+<footer class="footer">
+  <div class="footer-inner reveal">
+    <div class="f-brand">
+      <img src="assets/icon.png" alt="" />
+      <div>
+        <div class="f-name">DotStudio</div>
+        <div class="f-tag">Any art → a living Mac screensaver.</div>
+      </div>
+    </div>
+    <div class="f-links">
+      <a href="https://github.com/dw2lam/dotstudio" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/dw2lam/dotstudio/releases" target="_blank" rel="noopener">Releases</a>
+      <a href="#exhibit">Effects</a>
+      <a href="#lab">The Lab</a>
+    </div>
+  </div>
+  <div class="footer-base">
+    <span>Native · local-first · open source · macOS 14+</span>
+    <span>© <span data-year>2026</span> DotStudio</span>
+  </div>
+</footer>
+
+<script src="engine.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

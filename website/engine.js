@@ -1,0 +1,493 @@
+/* ============================================================================
+   DotStudio — in-browser effects engine
+   A small real-time renderer that mirrors the macOS app's effects so the whole
+   site IS the product. One animated "source" field is fed through canvas
+   shaders: dither, ASCII, halftone, dots, matrix, scanlines, VHS, voronoi,
+   thermal, Game Boy and neon edges.
+
+   Pixel-grade effects (dither / gameboy / thermal / scanlines / vhs / voronoi)
+   render into a tiny offscreen ImageData buffer and scale up crisp — fast.
+   Vector effects (halftone / dots / ascii / matrix / neon) draw shapes & glyphs
+   directly because their cells are large.
+============================================================================ */
+(function (global) {
+  "use strict";
+
+  const REDUCE = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ----------------------------- math + color ----------------------------- */
+  const clamp = (x, a = 0, b = 1) => (x < a ? a : x > b ? b : x);
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const smooth = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0)); return t * t * (3 - 2 * t); };
+  const TAU = Math.PI * 2;
+
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  // brand aurora ramp: deep navy → indigo → teal → cyan → CRT green → mint
+  const BRAND = [
+    [0.00, [6, 9, 19]],
+    [0.26, [17, 23, 60]],
+    [0.48, [13, 78, 116]],
+    [0.66, [20, 152, 162]],
+    [0.81, [51, 230, 255]],
+    [0.92, [78, 255, 150]],
+    [1.00, [201, 255, 222]],
+  ];
+  const THERMAL = [
+    [0.00, [3, 2, 12]],
+    [0.18, [38, 9, 74]],
+    [0.40, [120, 20, 120]],
+    [0.58, [221, 40, 70]],
+    [0.74, [255, 110, 22]],
+    [0.88, [255, 201, 44]],
+    [1.00, [255, 255, 232]],
+  ];
+  // Game Boy DMG 4-tone
+  const GB = [[15, 56, 15], [48, 98, 48], [139, 172, 15], [155, 188, 15]];
+
+  function ramp(stops, t) {
+    t = clamp(t);
+    for (let i = 1; i < stops.length; i++) {
+      if (t <= stops[i][0]) {
+        const a = stops[i - 1], b = stops[i];
+        const k = (t - a[0]) / (b[0] - a[0]);
+        return [
+          lerp(a[1][0], b[1][0], k),
+          lerp(a[1][1], b[1][1], k),
+          lerp(a[1][2], b[1][2], k),
+        ];
+      }
+    }
+    return stops[stops.length - 1][1].slice();
+  }
+  const brand = (t) => ramp(BRAND, t);
+  const thermal = (t) => ramp(THERMAL, t);
+
+  function hexRgb(h) {
+    h = h.replace("#", "");
+    if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+    return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+  }
+  const rgbStr = (c) => `rgb(${c[0] | 0},${c[1] | 0},${c[2] | 0})`;
+
+  /* ------------------------------- sources -------------------------------- */
+  // Each source returns luminance L in [0,1] for normalized (u,v) at time t(sec).
+  const SOURCES = {
+    // domain-warped metaballs drifting over a breathing diagonal ramp
+    aurora(u, v, t) {
+      const s = t * 0.06;
+      const wx = u + 0.07 * Math.sin(v * 3.1 + s * 6.0);
+      const wy = v + 0.07 * Math.cos(u * 3.0 - s * 5.0);
+      const well = (cx, cy, r) => {
+        const dx = wx - cx, dy = wy - cy;
+        return Math.exp(-(dx * dx + dy * dy) / (r * r));
+      };
+      let m = 0;
+      m += 1.00 * well(0.30 + 0.18 * Math.sin(s * 1.7), 0.42 + 0.16 * Math.cos(s * 1.3), 0.33);
+      m += 0.85 * well(0.72 + 0.16 * Math.cos(s * 1.1 + 1.0), 0.60 + 0.18 * Math.sin(s * 1.6 + 0.5), 0.29);
+      m += 0.66 * well(0.52 + 0.22 * Math.sin(s * 0.9 + 2.0), 0.30 + 0.20 * Math.sin(s * 1.9 + 1.5), 0.25);
+      const grad = 0.5 + 0.5 * Math.sin((u * 1.2 - v * 0.9 + s * 2.0) * Math.PI);
+      return clamp(0.12 + 0.66 * m + 0.24 * grad);
+    },
+    // tighter swirl for warp-style looks
+    swirl(u, v, t) {
+      const cx = u - 0.5, cy = v - 0.5;
+      const r = Math.hypot(cx, cy);
+      const a = Math.atan2(cy, cx) + r * 6.0 - t * 0.4;
+      return clamp(0.5 + 0.5 * Math.sin(a * 3.0) * (1 - r) + 0.25 * Math.sin(r * 14 - t));
+    },
+  };
+
+  /* ----------------------------- glyph ramps ------------------------------ */
+  const ASCII_RAMP = " .:-=+*o#%@".split("");
+  const ASCII_FINE = " .'`^\",:Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$".split("");
+  const KATA = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾅﾆﾇﾐﾑﾒ0123456789Z:.=*+-".split("");
+
+  /* --------------------------- effect renderers --------------------------- */
+  // Vector effects draw on the main ctx. Pixel effects fill c.buf ImageData.
+  const EFFECTS = {
+
+    /* ---- PIXEL effects (write into low-res buffer) ---- */
+    dither: { pixel: true, cell: 2.4, paint(c, P) {
+      const { bw, bh, data, t } = c.px();
+      const fg = hexRgb(P.fg || "#46ffa0"), bg = hexRgb(P.bg || "#0a0f1e");
+      const BAYER = [0,8,2,10, 12,4,14,6, 3,11,1,9, 15,7,13,5];
+      const levels = P.levels || 2;
+      const mono = P.mono !== 0;
+      let i = 0;
+      for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+        const L = c.src(x / bw, y / bh, t);
+        const thr = (BAYER[(x & 3) + (y & 3) * 4] + 0.5) / 16;
+        let r, g, b;
+        if (mono) {
+          const on = L > thr;
+          r = on ? fg[0] : bg[0]; g = on ? fg[1] : bg[1]; b = on ? fg[2] : bg[2];
+        } else {
+          const q = Math.floor(clamp(L + (thr - 0.5) / levels) * (levels - 1) + 0.5) / (levels - 1);
+          const col = brand(q); r = col[0]; g = col[1]; b = col[2];
+        }
+        data[i++] = r; data[i++] = g; data[i++] = b; data[i++] = 255;
+      }
+      c.flush();
+    }},
+
+    gameboy: { pixel: true, cell: 4.2, paint(c, P) {
+      const { bw, bh, data, t } = c.px();
+      const BAYER = [0,8,2,10, 12,4,14,6, 3,11,1,9, 15,7,13,5];
+      let i = 0;
+      for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+        const L = c.src(x / bw, y / bh, t);
+        const d = (BAYER[(x & 3) + (y & 3) * 4] + 0.5) / 16 - 0.5;
+        const idx = clamp(Math.floor((L + d / (P.dither || 2)) * 4), 0, 3) | 0;
+        const col = GB[idx];
+        data[i++] = col[0]; data[i++] = col[1]; data[i++] = col[2]; data[i++] = 255;
+      }
+      c.flush();
+    }},
+
+    thermal: { pixel: true, cell: 3.0, paint(c, P) {
+      const { bw, bh, data, t } = c.px();
+      const gain = P.gain || 1;
+      let i = 0;
+      for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+        const L = clamp(c.src(x / bw, y / bh, t) * gain);
+        const col = thermal(L);
+        data[i++] = col[0]; data[i++] = col[1]; data[i++] = col[2]; data[i++] = 255;
+      }
+      c.flush();
+    }},
+
+    scanlines: { pixel: true, cell: 2.2, paint(c, P) {
+      const { bw, bh, data, t } = c.px();
+      let i = 0;
+      for (let y = 0; y < bh; y++) {
+        const sl = 0.62 + 0.38 * (y % 3 === 0 ? 0 : 1);
+        for (let x = 0; x < bw; x++) {
+          const L = c.src(x / bw, y / bh, t);
+          const col = brand(clamp(L * 1.04));
+          data[i++] = col[0] * sl; data[i++] = col[1] * sl; data[i++] = col[2] * sl; data[i++] = 255;
+        }
+      }
+      c.flush();
+    }},
+
+    vhs: { pixel: true, cell: 2.4, paint(c, P) {
+      const { bw, bh, data, t } = c.px();
+      const amt = (P.amount == null ? 1 : P.amount);
+      const band = (Math.sin(t * 2.3) * 0.5 + 0.5);
+      let i = 0;
+      for (let y = 0; y < bh; y++) {
+        const yy = y / bh;
+        // rolling tracking band + horizontal jitter
+        const inBand = Math.abs(((yy + t * 0.18) % 1) - band) < 0.06 ? 1 : 0;
+        const jitter = (Math.sin(y * 0.7 + t * 9) * 0.012 + inBand * 0.05) * amt;
+        const sl = y % 2 === 0 ? 1 : 0.78;
+        for (let x = 0; x < bw; x++) {
+          const xx = x / bw + jitter;
+          const sh = 0.012 * amt;
+          const r = brand(c.src(xx + sh, yy, t))[0];
+          const g = brand(c.src(xx, yy, t))[1];
+          const b = brand(c.src(xx - sh, yy, t))[2];
+          const n = inBand ? 40 * Math.random() : 0;
+          data[i++] = clamp((r + n) * sl, 0, 255);
+          data[i++] = clamp((g + n) * sl, 0, 255);
+          data[i++] = clamp((b + n) * sl, 0, 255);
+          data[i++] = 255;
+        }
+      }
+      c.flush();
+    }},
+
+    voronoi: { pixel: true, cell: 3.4, paint(c, P) {
+      const { bw, bh, data, t } = c.px();
+      const seeds = c.seeds(P.count || 26);
+      let i = 0;
+      for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+        const u = x / bw, v = y / bh;
+        let d1 = 1e9, d2 = 1e9, hit = 0;
+        for (let s = 0; s < seeds.length; s++) {
+          const dx = u - seeds[s].x, dy = (v - seeds[s].y) * 1.0;
+          const d = dx * dx + dy * dy;
+          if (d < d1) { d2 = d1; d1 = d; hit = s; } else if (d < d2) d2 = d;
+        }
+        const edge = smooth(0.0, 0.0009, Math.sqrt(d2) - Math.sqrt(d1));
+        const L = c.src(seeds[hit].x, seeds[hit].y, t);
+        const col = brand(clamp(L * 0.9 + 0.1));
+        const e = 0.35 + 0.65 * edge;
+        data[i++] = col[0] * e; data[i++] = col[1] * e; data[i++] = col[2] * e; data[i++] = 255;
+      }
+      c.flush();
+    }},
+
+    /* ---- VECTOR effects (draw on main ctx) ---- */
+    halftone: { cell: 9, paint(c, P) {
+      const ctx = c.ctx, cell = c.cellPx(P.cell || 9), t = c.t();
+      const dotMax = cell * 0.62;
+      const fg = P.fg || "#46ffa0", bg = P.bg || "#070b16";
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, c.w, c.h);
+      ctx.fillStyle = fg;
+      const ang = P.angle != null ? P.angle : 0.4;
+      const ca = Math.cos(ang), sa = Math.sin(ang);
+      for (let y = cell / 2; y < c.h + cell; y += cell)
+        for (let x = cell / 2; x < c.w + cell; x += cell) {
+          // sample on a slightly rotated grid for the classic screen angle
+          const u = (x * ca - y * sa) / c.w, v = (x * sa + y * ca) / c.h;
+          const L = c.src(clamp(u), clamp(v), t);
+          const r = dotMax * Math.sqrt(clamp(L));
+          if (r < 0.3) continue;
+          ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
+        }
+    }},
+
+    dots: { cell: 12, paint(c, P) {
+      const ctx = c.ctx, cell = c.cellPx(P.cell || 12), t = c.t();
+      ctx.fillStyle = "#070b16"; ctx.fillRect(0, 0, c.w, c.h);
+      for (let y = cell / 2; y < c.h + cell; y += cell)
+        for (let x = cell / 2; x < c.w + cell; x += cell) {
+          const L = c.src(x / c.w, y / c.h, t);
+          const r = cell * 0.52 * clamp(L * 1.05);
+          if (r < 0.3) continue;
+          ctx.fillStyle = rgbStr(brand(clamp(L * 0.85 + 0.12)));
+          ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
+        }
+    }},
+
+    ascii: { cell: 12, paint(c, P) {
+      const ctx = c.ctx, cell = c.cellPx(P.cell || 12), t = c.t();
+      const set = P.fine ? ASCII_FINE : ASCII_RAMP;
+      ctx.fillStyle = "#05080f"; ctx.fillRect(0, 0, c.w, c.h);
+      ctx.font = `${(cell * 1.05) | 0}px ui-monospace, "SFMono-Regular", "JetBrains Mono", monospace`;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      const color = P.color !== 0;
+      if (!color) ctx.fillStyle = P.fg || "#46ffa0";
+      for (let y = cell / 2; y < c.h + cell / 2; y += cell)
+        for (let x = cell / 2; x < c.w + cell / 2; x += cell) {
+          const L = c.src(x / c.w, y / c.h, t);
+          const gi = clamp(Math.floor(L * (set.length - 1)), 0, set.length - 1);
+          const ch = set[gi];
+          if (ch === " ") continue;
+          if (color) ctx.fillStyle = rgbStr(brand(clamp(L * 0.8 + 0.2)));
+          ctx.fillText(ch, x, y + 0.5);
+        }
+    }},
+
+    matrix: { cell: 14, paint(c, P) {
+      const ctx = c.ctx, cell = c.cellPx(P.cell || 14), t = c.t();
+      const cols = Math.ceil(c.w / cell), rows = Math.ceil(c.h / cell);
+      const st = c.matrix(cols, rows, P.speed || 1);
+      // fade trails
+      ctx.fillStyle = "rgba(2,7,5,0.22)"; ctx.fillRect(0, 0, c.w, c.h);
+      ctx.font = `${(cell * 1.0) | 0}px ui-monospace, "JetBrains Mono", monospace`;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      const reveal = P.reveal !== 0;
+      for (let cx = 0; cx < cols; cx++) {
+        const head = st.drops[cx];
+        for (let k = 0; k < 14; k++) {
+          const cy = Math.floor(head) - k;
+          if (cy < 0 || cy >= rows) continue;
+          const x = cx * cell + cell / 2, y = cy * cell + cell / 2;
+          const L = reveal ? c.src(x / c.w, y / c.h, t) : 1;
+          if (reveal && L < 0.16) continue;
+          const ch = KATA[(st.seed[cx] + cy * 7 + (k === 0 ? (t * 6 | 0) : 0)) % KATA.length];
+          if (k === 0) ctx.fillStyle = "#daffe9";
+          else ctx.fillStyle = `rgba(${40 + 30 * L | 0},255,${120 + 60 * L | 0},${clamp(1 - k / 13) * (0.4 + 0.6 * L)})`;
+          ctx.fillText(ch, x, y);
+        }
+        st.drops[cx] += st.vel[cx];
+        if (st.drops[cx] - 14 > rows && Math.random() > 0.965) st.drops[cx] = 0;
+      }
+    }},
+
+    neon: { cell: 4, paint(c, P) {
+      const t = c.t();
+      const bw = Math.min(360, Math.ceil(c.w / c.cellPx(P.cell || 4)));
+      const bh = Math.ceil(bw * c.h / c.w);
+      const off = c.scratch(bw, bh), octx = off.getContext("2d");
+      const img = octx.createImageData(bw, bh), data = img.data;
+      const gain = P.gain || 3;
+      const du = 1 / bw, dv = 1 / bh;
+      let i = 0;
+      for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+        const u = x / bw, v = y / bh;
+        const L = c.src(u, v, t);
+        const gx = c.src(u + du, v, t) - L, gy = c.src(u, v + dv, t) - L;
+        const mag = clamp(Math.sqrt(gx * gx + gy * gy) * 26 * gain);
+        const e = smooth(0.12, 0.6, mag);
+        const col = brand(clamp(0.55 + 0.45 * L));
+        data[i++] = col[0] * e; data[i++] = col[1] * e; data[i++] = col[2] * e; data[i++] = 255;
+      }
+      octx.putImageData(img, 0, 0);
+      const ctx = c.ctx;
+      ctx.fillStyle = "#04060c"; ctx.fillRect(0, 0, c.w, c.h);
+      ctx.imageSmoothingEnabled = true;
+      ctx.globalCompositeOperation = "lighter";
+      ctx.filter = "blur(6px)"; ctx.drawImage(off, 0, 0, c.w, c.h);
+      ctx.filter = "none"; ctx.drawImage(off, 0, 0, c.w, c.h);
+      ctx.globalCompositeOperation = "source-over";
+    }},
+
+    hex: { cell: 18, paint(c, P) {
+      const ctx = c.ctx, t = c.t();
+      const R = c.cellPx(P.cell || 18) * 0.6;     // hex radius
+      const hw = Math.sqrt(3) * R, vh = 1.5 * R;
+      ctx.fillStyle = "#070b16"; ctx.fillRect(0, 0, c.w, c.h);
+      let row = 0;
+      for (let y = -R; y < c.h + R; y += vh, row++) {
+        const xoff = row % 2 ? hw / 2 : 0;
+        for (let x = -R + xoff; x < c.w + hw; x += hw) {
+          const L = c.src(clamp(x / c.w), clamp(y / c.h), t);
+          ctx.fillStyle = rgbStr(brand(clamp(L * 0.9 + 0.08)));
+          ctx.beginPath();
+          for (let a = 0; a < 6; a++) {
+            const ang = Math.PI / 180 * (60 * a - 30);
+            const px = x + R * 0.92 * Math.cos(ang), py = y + R * 0.92 * Math.sin(ang);
+            a ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+          }
+          ctx.closePath(); ctx.fill();
+        }
+      }
+    }},
+  };
+
+  const EFFECT_ORDER = ["ascii", "halftone", "dither", "matrix", "dots", "thermal", "neon", "voronoi", "hex", "gameboy", "scanlines", "vhs"];
+  const EFFECT_LABEL = {
+    ascii: "ASCII", halftone: "Halftone", dither: "Dithering", matrix: "Matrix Rain",
+    dots: "Dots", thermal: "Thermal", neon: "Neon Edges", voronoi: "Voronoi",
+    hex: "Hex Mosaic", gameboy: "Game Boy", scanlines: "Phosphor", vhs: "VHS",
+  };
+
+  /* --------------------------- canvas controller -------------------------- */
+  class DotCanvas {
+    constructor(el, opts = {}) {
+      this.canvas = el;
+      this.ctx = el.getContext("2d", { alpha: false });
+      this.effect = opts.effect || el.dataset.effect || "ascii";
+      this.sourceName = opts.source || el.dataset.source || "aurora";
+      this.params = opts.params || {};
+      this.staticFrame = !!opts.static || el.hasAttribute("data-static") || REDUCE;
+      this.fpsCap = opts.fps || (el.dataset.role === "tile" ? 30 : 60);
+      this._last = 0; this._t0 = 0; this.visible = false; this._state = {};
+      this.dpr = Math.min(2, global.devicePixelRatio || 1);
+      this.resize();
+      this._ro = new ResizeObserver(() => this.resize());
+      this._ro.observe(el);
+    }
+    resize() {
+      const r = this.canvas.getBoundingClientRect();
+      const w = Math.max(2, r.width), h = Math.max(2, r.height);
+      this.cssW = w; this.cssH = h;
+      this.w = Math.round(w * this.dpr); this.h = Math.round(h * this.dpr);
+      if (this.canvas.width !== this.w) this.canvas.width = this.w;
+      if (this.canvas.height !== this.h) this.canvas.height = this.h;
+      this._state = {};            // grids depend on size
+      if (this.staticFrame) this.render(0.6);
+    }
+    setEffect(name) {
+      if (name === this.effect) return;
+      this.effect = name; this._state = {};
+      this.ctx.clearRect(0, 0, this.w, this.h);
+      if (this.staticFrame) this.render(0.6);
+    }
+    setParams(p) { this.params = p; if (this.staticFrame) this.render(this._t || 0.6); }
+    setSource(name) { this.sourceName = name; this._state = {}; if (this.staticFrame) this.render(this._t || 0.6); }
+
+    /* helpers exposed to effects */
+    t() { return this._t; }
+    src(u, v, t) { return (SOURCES[this.sourceName] || SOURCES.aurora)(u, v, t); }
+    cellPx(cssCell) { return Math.max(2, cssCell * this.dpr); }
+    px() {
+      const def = EFFECTS[this.effect];
+      const cell = this.cellPx(this.params.cell || def.cell);
+      const bw = Math.min(420, Math.max(8, Math.round(this.w / cell)));
+      const bh = Math.max(6, Math.round(bw * this.h / this.w));
+      this._buf = this.scratch(bw, bh);
+      this._bctx = this._buf.getContext("2d");
+      this._img = this._bctx.createImageData(bw, bh);
+      return { bw, bh, data: this._img.data, t: this._t };
+    }
+    flush() {
+      this._bctx.putImageData(this._img, 0, 0);
+      this.ctx.imageSmoothingEnabled = false;
+      this.ctx.drawImage(this._buf, 0, 0, this.w, this.h);
+    }
+    scratch(w, h) {
+      let s = this._scratchEl;
+      if (!s) { s = this._scratchEl = document.createElement("canvas"); }
+      if (s.width !== w) s.width = w;
+      if (s.height !== h) s.height = h;
+      return s;
+    }
+    matrix(cols, rows, speed) {
+      let m = this._state.matrix;
+      if (!m || m.cols !== cols) {
+        const drops = [], vel = [], seed = [];
+        for (let i = 0; i < cols; i++) { drops.push(Math.random() * rows); vel.push((0.18 + Math.random() * 0.5) * speed); seed.push((Math.random() * 999) | 0); }
+        m = this._state.matrix = { cols, drops, vel, seed };
+      }
+      return m;
+    }
+    seeds(n) {
+      let s = this._state.seeds;
+      if (!s || s.length !== n) {
+        const rnd = mulberry32(1337 + n);
+        s = this._state.seeds = [];
+        for (let i = 0; i < n; i++) s.push({ bx: rnd(), by: rnd(), ax: 0.04 + rnd() * 0.07, ay: 0.04 + rnd() * 0.07, px: rnd() * TAU, py: rnd() * TAU, sp: 0.3 + rnd() * 0.5, x: 0, y: 0 });
+      }
+      const t = this._t;
+      for (const p of s) { p.x = p.bx + p.ax * Math.sin(t * p.sp + p.px); p.y = p.by + p.ay * Math.cos(t * p.sp * 0.9 + p.py); }
+      return s;
+    }
+
+    render(t) {
+      this._t = t;
+      const def = EFFECTS[this.effect] || EFFECTS.ascii;
+      // reset transient ctx state vector effects may set
+      this.ctx.globalCompositeOperation = "source-over";
+      this.ctx.filter = "none";
+      def.paint(this, this.params);
+    }
+    frame(now) {
+      if (this.staticFrame) return;
+      if (!this.visible) return;
+      const minDelta = 1000 / this.fpsCap;
+      if (now - this._last < minDelta) return;
+      this._last = now;
+      if (!this._t0) this._t0 = now;
+      this.render((now - this._t0) / 1000);
+    }
+  }
+
+  /* ------------------------------ global driver --------------------------- */
+  const all = [];
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach((e) => {
+      const c = e.target._dot;
+      if (!c) return;
+      c.visible = e.isIntersecting;
+    });
+  }, { rootMargin: "80px" });
+
+  let running = false;
+  function loop(now) {
+    for (const c of all) c.frame(now);
+    requestAnimationFrame(loop);
+  }
+  function register(el, opts) {
+    const c = new DotCanvas(el, opts);
+    el._dot = c; all.push(c); io.observe(el);
+    if (!running) { running = true; requestAnimationFrame(loop); }
+    return c;
+  }
+
+  global.DotEngine = {
+    register, EFFECTS, EFFECT_ORDER, EFFECT_LABEL, SOURCES, brand, thermal, rgbStr,
+    reduce: REDUCE,
+  };
+})(window);
