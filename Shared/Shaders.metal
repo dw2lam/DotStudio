@@ -55,6 +55,36 @@ static inline float fbm(float2 p) {
     return f;
 }
 
+// 3D value noise + fbm (for the black-hole accretion disk & nebula).
+static inline float hash31(float3 p) {
+    return fract(sin(dot(p, float3(127.1, 311.7, 74.7))) * 43758.5453);
+}
+static inline float noise3(float3 p) {
+    float3 i = floor(p), f = fract(p);
+    float3 u = f * f * (3.0 - 2.0 * f);
+    float a = hash31(i),               b = hash31(i + float3(1, 0, 0));
+    float c = hash31(i + float3(0, 1, 0)), d = hash31(i + float3(1, 1, 0));
+    float e = hash31(i + float3(0, 0, 1)), f2 = hash31(i + float3(1, 0, 1));
+    float g = hash31(i + float3(0, 1, 1)), h = hash31(i + float3(1, 1, 1));
+    return mix(mix(mix(a, b, u.x), mix(c, d, u.x), u.y),
+               mix(mix(e, f2, u.x), mix(g, h, u.x), u.y), u.z);
+}
+static inline float fbm3(float3 p, float lac, float pers) {
+    float v = 0.0, amp = 0.5;
+    for (int i = 0; i < 4; ++i) { v += noise3(p) * amp; p *= lac; amp *= pers; }
+    return v;
+}
+static inline float3 blackbody(float tempK) {
+    float t = clamp((tempK - 1000.0) / 9000.0, 0.0, 1.0);
+    float red = clamp(1.0 - (t - 0.8) * 2.0, 0.5, 1.0);
+    float green = smoothstep(0.0, 0.5, t) * (1.0 - max((t - 0.7) * 0.3, 0.0));
+    float blue = smoothstep(0.3, 1.0, t) * t;
+    return float3(red, green, blue);
+}
+static inline float3 aces(float3 x) {
+    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
+
 // Ordered dither matrices, normalized to [-0.5, 0.5].
 constant float bayer2[4] = {
     0.0/4-0.5, 2.0/4-0.5,
@@ -689,11 +719,14 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         float psz[8]   = {0.055, 0.085, 0.065, 0.15, 0.13, 0.10, 0.095, 0.05};
         float pspin[8] = {0.06, 0.04, 0.07, 0.10, 0.09, 0.05, 0.05, 0.08};
 
-        // ---- faint orbit rings ----
-        for (int i = 0; i < 8; ++i) {
-            float orad = earthR + 0.09 + float(i) * 0.052;
-            float ringp = length(float2(sc.x / orad, sc.y / (orad * 0.42)));
-            col += float3(0.10, 0.2, 0.38) * smoothstep(0.010, 0.0, abs(ringp - 1.0)) * 0.16;
+        // ---- orbital lines (the solar-system paths each planet travels) ----
+        if (u.p2.w > 0.5) {
+            for (int i = 0; i < 8; ++i) {
+                float orad = earthR + 0.09 + float(i) * 0.052;
+                float ringp = length(float2(sc.x / orad, sc.y / (orad * 0.42)));
+                float line = smoothstep(0.006, 0.0, abs(ringp - 1.0));
+                col += float3(0.35, 0.55, 0.85) * line * 0.5;
+            }
         }
 
         // Planets are drawn in two passes (behind Earth, then in front).
@@ -727,13 +760,6 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
                     float lon = atan2(nw.x, nw.z);
                     float2 tuv = float2(lon * INV2PI + 0.5, 0.5 - lat * INVPI);
                     float3 base = haveTex ? planetTex.sample(samp, tuv, i).rgb : float3(0.6, 0.55, 0.5);
-                    // rotational graticule (lines every 30°)
-                    float sp = 0.5235988;
-                    float dLat = abs(fract(lat / sp + 0.5) - 0.5) * sp;
-                    float dLon = abs(fract(lon / sp + 0.5) - 0.5) * sp;
-                    float grid = max(1.0 - smoothstep(0.0, fwidth(lat) * 1.5 + 1e-4, dLat),
-                                     (1.0 - smoothstep(0.0, fwidth(lon) * 1.5 + 1e-4, dLon)) * clamp(cos(lat) * 1.3, 0.0, 1.0));
-                    base = mix(base, float3(0.75, 0.85, 0.95), grid * 0.18);
                     float lit = smoothstep(-0.18, 0.28, dot(n, sun)) * 0.92 + 0.12;  // soft terminator
                     lit *= mix(0.72, 1.0, n.z);                                       // limb darkening
                     col = mix(col, base * lit, smoothstep(1.0, 0.88, r2));
@@ -767,25 +793,18 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
                     float3 nightLit = nightC * 2.6 + dayC * 0.10;           // city lights + earthshine
                     float3 ec = mix(nightLit, dayLit, day);
                     ec += dayC * 0.22 * N.z;                                // camera fill — keeps the globe readable
-                    // rotational graticule
-                    float sp = 0.5235988;
-                    float dLat = abs(fract(lat / sp + 0.5) - 0.5) * sp;
-                    float dLon = abs(fract(lon / sp + 0.5) - 0.5) * sp;
-                    float grid = max(1.0 - smoothstep(0.0, fwidth(lat) * 1.5 + 1e-4, dLat),
-                                     (1.0 - smoothstep(0.0, fwidth(lon) * 1.5 + 1e-4, dLon)) * clamp(cos(lat) * 1.3, 0.0, 1.0));
-                    ec += float3(0.3, 0.55, 0.75) * grid * 0.22;
                     ec *= mix(0.78, 1.0, N.z);                              // gentle limb darkening
                     ec += float3(0.35, 0.6, 1.0) * smoothstep(0.78, 1.0, 1.0 - N.z) * 0.55 * max(day, 0.35); // atmosphere
                     // ---- GPS location marker (green pulse) ----
                     if (u.p2.z > 0.5) {
                         float dlon = atan2(sin(lon - u.p2.x), cos(lon - u.p2.x));
                         float md = length(float2(dlon * cos(u.p2.y), lat - u.p2.y));
-                        float pulse = 0.5 + 0.5 * sin(t * 3.2);
-                        float dot_ = smoothstep(0.06, 0.0, md);
-                        float ring = smoothstep(0.115, 0.085, md) * smoothstep(0.06, 0.09, md);
-                        float3 green = float3(0.25, 1.0, 0.4);
-                        ec = mix(ec, green, clamp(dot_ + ring * (0.4 + 0.6 * pulse), 0.0, 1.0));
-                        ec += green * smoothstep(0.16, 0.0, md) * pulse * 0.35;   // soft glow
+                        float pulse = 0.5 + 0.5 * sin(t * 3.0);
+                        float3 green = float3(0.3, 1.0, 0.45);
+                        float dot_ = smoothstep(0.022, 0.0, md);
+                        float ring = smoothstep(0.05, 0.034, md) * smoothstep(0.026, 0.04, md);
+                        ec = mix(ec, green, clamp(dot_ * 0.85 + ring * (0.2 + 0.4 * pulse), 0.0, 1.0));
+                        ec += green * smoothstep(0.06, 0.0, md) * pulse * 0.14;   // subtle glow
                     }
                     col = ec;
                 } else {
@@ -796,6 +815,89 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
             }
         }
         return float4(col, 1.0);
+    }
+
+    case 40: { // BLACK HOLE — gravitational lensing + accretion disk raymarch
+        float mass = max(u.p0.x, 0.05);
+        float brightness = u.p0.y;
+        float rotSpeed = u.p0.z;
+        float diskScale = max(u.p0.w, 0.3);
+        float rs = mass * 2.0;
+        float innerR = 4.1 * diskScale, outerR = 14.5 * diskScale;
+        const float diskTemp = 49.78, tempFalloff = 5.22, turbScale = 1.81, turbStretch = 0.75;
+        const float turbSharp = 7.4, turbCycle = 5.0, turbLac = 2.5, turbPers = 0.8;
+        const float edgeIn = 0.18, edgeOut = 0.5, lensing = 2.4, dopplerStr = 1.0, stepSize = 1.0;
+
+        float2 sp = (uv - 0.5) * 2.0; sp.y = -sp.y; sp.x *= res.x / res.y;
+        float ct = t * 0.06;
+        float3 camPos = float3(sin(ct) * 20.0, -2.5, -cos(ct) * 20.0);
+        float3 fwd = normalize(-camPos);
+        float3 right = normalize(cross(float3(0, 1, 0), fwd));
+        float3 cup = cross(fwd, right);
+        float3 rayDir = normalize(fwd + right * sp.x + cup * sp.y);
+        float3 rayPos = camPos, prevPos = camPos;
+        float3 acc = float3(0.0);
+        float alpha = 0.0;
+        int state = 0;
+
+        for (int s = 0; s < 32; ++s) {
+            if (alpha > 0.99) break;
+            float r = length(rayPos);
+            if (r < rs * 1.01) { state = 2; break; }
+            if (r > 100.0) { state = 1; break; }
+            float3 toC = -rayPos / r;
+            rayDir = normalize(rayDir + toC * (rs / (r * r) * stepSize * lensing));
+            prevPos = rayPos;
+            rayPos += rayDir * stepSize;
+            if (prevPos.y * rayPos.y < 0.0) {
+                float tt = -prevPos.y / (rayPos.y - prevPos.y);
+                float3 hit = mix(prevPos, rayPos, tt);
+                float hitR = sqrt(hit.x * hit.x + hit.z * hit.z);
+                if (hitR > innerR && hitR < outerR) {
+                    float ang = atan2(hit.z, hit.x);
+                    float normR = clamp((hitR - innerR) / (outerR - innerR), 0.0, 1.0);
+                    float tf = pow(innerR / hitR, tempFalloff);
+                    float3 dc = blackbody(mix(1500.0, diskTemp * 1000.0, tf));
+                    float rotSign = sign(rotSpeed);
+                    float3 velDir = float3(-sin(ang) * rotSign, 0.0, cos(ang) * rotSign);
+                    float beta = (1.0 / sqrt(hitR / innerR)) * 0.3;
+                    float dopp = 1.0 / (1.0 - beta * dot(velDir, rayDir));
+                    dc *= clamp(pow(dopp, 3.0 * dopplerStr), 0.1, 5.0);
+                    float edge = smoothstep(0.0, edgeIn, normR) * smoothstep(1.0, 1.0 - edgeOut, normR);
+                    float cyc = fmod(t, turbCycle);
+                    float blend = cyc / turbCycle;
+                    float kp1 = cyc * rotSpeed / pow(hitR, 1.5);
+                    float kp2 = (cyc + turbCycle) * rotSpeed / pow(hitR, 1.5);
+                    float ra1 = ang + kp1, ra2 = ang + kp2;
+                    float3 nc1 = float3(hitR * turbScale, cos(ra1) / max(turbStretch, 0.1), sin(ra1) / max(turbStretch, 0.1));
+                    float3 nc2 = float3(hitR * turbScale, cos(ra2) / max(turbStretch, 0.1), sin(ra2) / max(turbStretch, 0.1));
+                    float tb = mix(fbm3(nc2, turbLac, turbPers), fbm3(nc1, turbLac, turbPers), blend);
+                    float opacity = pow(clamp(tb, 0.0, 1.0), turbSharp) * edge;
+                    float rem = 1.0 - alpha;
+                    acc += dc * brightness * opacity * rem;
+                    alpha += rem * opacity;
+                }
+            }
+        }
+
+        if (state != 2 && alpha < 0.99) {
+            float3 bg = float3(0.0);
+            float theta = atan2(rayDir.z, rayDir.x), phi = asin(clamp(rayDir.y, -1.0, 1.0));
+            float2 scd = float2(theta, phi) * 50.0;
+            float2 cell = floor(scd), cuv = fract(scd);
+            float sprob = step(0.9, hash21(cell));
+            float2 spos = hash22(cell + 42.0) * 0.8 + 0.1;
+            float dts = length(cuv - spos);
+            float bsv = hash21(cell + 100.0) * 0.03 + 0.012;
+            float si = (smoothstep(bsv, 0.0, dts) + smoothstep(bsv * 3.0, 0.0, dts) * 0.3) * sprob;
+            bg += mix(float3(0.8, 0.9, 1.0), float3(1.0, 0.95, 0.8), hash21(cell + 200.0)) * si * 0.7;
+            float n1 = fbm3(rayDir * 2.0, 2.0, 0.5) * 2.0 - 1.0;
+            bg += float3(0.027, 0.122, 0.267) * clamp(n1 + 0.5, 0.0, 1.0) * 0.06;
+            float n2 = fbm3(rayDir * 5.5, 2.0, 0.5) * 2.0 - 1.0;
+            bg += float3(0.004, 0.024, 0.082) * clamp(n2 + 0.05, 0.0, 1.0) * 0.22;
+            acc += bg * (1.0 - alpha);
+        }
+        return float4(aces(acc), 1.0);
     }
 
     case 38: { // BLIT — crisp nearest upscale of a precomputed dither grid

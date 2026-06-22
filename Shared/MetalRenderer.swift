@@ -211,7 +211,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 if inst!.kind == .universe {
                     let a = MetalRenderer.astro(location: location)
                     u.p1 = simd_float4(a.sun.x, a.sun.y, a.sun.z, 0)
-                    u.p2 = simd_float4(a.userLon, a.userLat, a.hasLoc ? 1 : 0, 0)
+                    let orbits: Float = (inst!.params["orbits"] ?? 1) > 0.5 ? 1 : 0
+                    u.p2 = simd_float4(a.userLon, a.userLat, a.hasLoc ? 1 : 0, orbits)
                 }
             }
 
