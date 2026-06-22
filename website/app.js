@@ -183,6 +183,8 @@
       { fx: "dither",   name: "Dithering",   medium: "Bayer 4×4 · two colours",      p: { cell: 3, mono: 1 } },
       { fx: "thermal",  name: "Thermal",     medium: "Color · infrared remap",       p: { gain: 1.15 } },
       { fx: "neon",     name: "Neon Edges",  medium: "Lines & Edges · glow",         p: { gain: 3.2 } },
+      { fx: "starfield",name: "Starfield",   medium: "Generative · warp speed",      p: { speed: 1.1, warp: 0.5 } },
+      { fx: "blackhole",name: "Black Hole",  medium: "Generative · gravitational lensing", p: { mass: 0.4, brightness: 5 } },
     ];
     const N = SEQ.length;
     const nameEl = sec.querySelector("[data-flow-name]");
