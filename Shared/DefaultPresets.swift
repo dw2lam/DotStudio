@@ -122,7 +122,7 @@ enum DefaultPresets {
                    effects: [fx(.universe, ["scale": 1.0, "speed": 1, "stars": 1, "planets": 1, "orbits": 1],
                                 a: .black)]),
             Preset(name: "Black Hole",
-                   effects: [fx(.blackhole, ["mass": 0.4, "brightness": 5, "speed": 1, "stars": 1, "rot": -8.7, "disk": 1],
+                   effects: [fx(.blackhole, ["angle": 0.22, "mass": 0.4, "brightness": 5, "speed": 1, "stars": 1, "rot": -8.7, "disk": 1],
                                 a: .black),
                              fx(.bloom, ["thr": 0.4, "inten": 1.0, "rad": 4.5])]),
         ]

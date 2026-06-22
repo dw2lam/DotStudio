@@ -222,7 +222,8 @@ enum EffectKind: String, Codable, CaseIterable {
                                  ParamSpec("stars", "Stars", 0, 2, def: 1),
                                  ParamSpec("planets", "Planet Speed", 0, 3, def: 1),
                                  ParamSpec("orbits", "Orbit Lines", 0, 1, def: 1, toggle: true)]
-        case .blackhole: return [ParamSpec("mass", "Mass", 0.15, 0.8, def: 0.4),
+        case .blackhole: return [ParamSpec("angle", "Angle", 0.05, 1.4, def: 0.22),
+                                 ParamSpec("mass", "Mass", 0.15, 0.8, def: 0.4),
                                  ParamSpec("brightness", "Brightness", 1, 10, def: 5),
                                  ParamSpec("speed", "Speed", 0, 3, def: 1),
                                  ParamSpec("stars", "Stars", 0, 3, def: 1),
@@ -312,7 +313,7 @@ extension EffectInstance {
         case .starfield: u.p0 = .init(g("speed"), g("density"), g("warp"), g("size"))
         case .universe:  u.p0 = .init(g("scale"), g("speed"), g("stars"), g("planets"))
         case .blackhole: u.p0 = .init(g("mass"), g("brightness"), g("rot"), g("disk"))
-                         u.p1 = .init(g("speed"), g("stars"), 0, 0)
+                         u.p1 = .init(g("speed"), g("stars"), g("angle"), 0)
         }
     }
 }

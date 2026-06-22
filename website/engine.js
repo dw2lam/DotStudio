@@ -403,10 +403,12 @@
       const mass = P.mass || 0.4, brightness = P.brightness || 5;
       const rot = (P.rot == null ? -8.7 : P.rot), diskScale = P.disk || 1;
       const speed = (P.speed == null ? 1 : P.speed), starsAmt = (P.stars == null ? 1 : P.stars);
+      const angle = clamp(P.angle == null ? 0.22 : P.angle, 0.03, 1.45);
+      const ce = Math.cos(angle), se = Math.sin(angle);
       const ts = t * speed;
       const rs = mass * 2, innerR = 4.1 * diskScale, outerR = 14.5 * diskScale;
       const ct = ts * 0.025;
-      const cam = [Math.sin(ct) * 20, -2.2 + 0.9 * Math.sin(ts * 0.018), -Math.cos(ct) * 20];
+      const cam = [Math.sin(ct) * 20 * ce, -se * 20, -Math.cos(ct) * 20 * ce];
       const fwd = v3norm([-cam[0], -cam[1], -cam[2]]);
       const right = v3norm(v3cross([0, 1, 0], fwd));
       const up = v3cross(fwd, right);
@@ -433,7 +435,9 @@
               const ang = Math.atan2(hz, hx);
               const nr = clamp((hr - innerR) / (outerR - innerR));
               const tf = Math.pow(innerR / hr, 5.22);
-              const dc = blackbodyCol(lerp(1500, 49780, tf));
+              const dc0 = blackbodyCol(lerp(1500, 49780, tf));
+              const dl = dc0[0] * 0.3 + dc0[1] * 0.59 + dc0[2] * 0.11;   // softer, warmer palette
+              const dc = [lerp(dc0[0], dl, 0.4), lerp(dc0[1], dl * 0.9, 0.4), lerp(dc0[2], dl * 0.74, 0.4)];
               const beta = (1 / Math.sqrt(hr / innerR)) * 0.3;
               const cosT = (-Math.sin(ang) * rotSign) * rd[0] + (Math.cos(ang) * rotSign) * rd[2];
               const dopp = Math.pow(clamp(1 / (1 - beta * cosT), 0.1, 5), 3);
