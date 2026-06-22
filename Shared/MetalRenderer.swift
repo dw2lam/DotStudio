@@ -17,6 +17,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private var texB: MTLTexture?
     private var drawableSize: CGSize = .zero
 
+    // Serial dither (error diffusion / Riemersma) compute resources.
+    private var computePSO: MTLComputePipelineState?
+    private var gridTex: MTLTexture?
+    private var errBuf: MTLBuffer?
+    private var gridW = 0, gridH = 0
+
     private var startTime: CFTimeInterval = CACurrentMediaTime()
     private var loggedFirstFrame = false
 
@@ -54,6 +60,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         desc.colorAttachments[0].pixelFormat = pixelFormat
         guard let pso = try? device.makeRenderPipelineState(descriptor: desc) else { return nil }
         pipeline = pso
+
+        if let cfn = library.makeFunction(name: "dither_serial") {
+            computePSO = try? device.makeComputePipelineState(function: cfn)
+        }
 
         let sd = MTLSamplerDescriptor()
         sd.minFilter = .linear; sd.magFilter = .linear
@@ -148,6 +158,16 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         for i in 0..<passCount {
             let isLast = (i == passCount - 1)
             let input: MTLTexture = (i == 0) ? (sourceTex ?? dummy) : pong[(i - 1) % 2]
+            let inst: EffectInstance? = (i == 0) ? nil : effects[i - 1]
+
+            // Serial dither (error diffusion / Riemersma) runs a compute pass first,
+            // producing a coarse grid that the blit pass (effect 38) upscales.
+            var fragInput = input
+            var serialBlit = false
+            if let inst = inst, isSerialDither(inst), let cpso = computePSO {
+                encodeSerialDither(cmd, pso: cpso, inst: inst, input: input, size: size)
+                if let g = gridTex { fragInput = g; serialBlit = true }
+            }
 
             let rpd: MTLRenderPassDescriptor
             if isLast {
@@ -166,7 +186,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             u.resolution = res
             u.time = time
             u.glyphCount = Int32(GlyphAtlas.count)
-            u.srcSize = simd_float2(Float(input.width), Float(input.height))
+            u.srcSize = simd_float2(Float(fragInput.width), Float(fragInput.height))
             u.fillMode = Int32(source.fillMode)
 
             if i == 0 {
@@ -180,17 +200,67 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                     u.srcSize = simd_float2(Float(sourceTex?.width ?? input.width),
                                             Float(sourceTex?.height ?? input.height))
                 }
+            } else if serialBlit {
+                u.effect = 38                      // upscale the precomputed dither grid
+                u.p0 = simd_float4(Float(gridW), Float(gridH), 0, 0)
             } else {
-                effects[i - 1].pack(into: &u)
+                inst!.pack(into: &u)
             }
 
             enc.setFragmentBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
-            enc.setFragmentTexture(input, index: 0)
+            enc.setFragmentTexture(fragInput, index: 0)
             enc.setFragmentTexture(glyphs ?? dummy, index: 1)
             enc.setFragmentSamplerState(sampler, index: 0)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             enc.endEncoding()
         }
+    }
+
+    // MARK: Serial dither (compute)
+
+    private func isSerialDither(_ inst: EffectInstance) -> Bool {
+        inst.kind == .dither && Int((inst.params["algo"] ?? 1).rounded()) >= 4
+    }
+
+    private func ensureGrid(_ w: Int, _ h: Int) {
+        if gridTex?.width == w, gridTex?.height == h, errBuf != nil { return }
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm,
+                                                         width: max(w, 1), height: max(h, 1), mipmapped: false)
+        d.usage = [.shaderRead, .shaderWrite]
+        d.storageMode = .private
+        gridTex = device.makeTexture(descriptor: d)
+        errBuf = device.makeBuffer(length: max(w * h, 1) * MemoryLayout<Float>.stride, options: .storageModePrivate)
+    }
+
+    private func encodeSerialDither(_ cmd: MTLCommandBuffer, pso: MTLComputePipelineState,
+                                    inst: EffectInstance, input: MTLTexture, size: CGSize) {
+        let cell = max(Double(inst.g("cell")), 1)
+        var gw = max(1, Int(size.width / cell))
+        var gh = max(1, Int(Double(gw) * size.height / max(size.width, 1)))
+        let maxCells = 130_000   // cap so the single-threaded serial scan stays fast
+        if gw * gh > maxCells {
+            let f = (Double(maxCells) / Double(gw * gh)).squareRoot()
+            gw = max(1, Int(Double(gw) * f)); gh = max(1, Int(Double(gh) * f))
+        }
+        ensureGrid(gw, gh)
+        guard let gridTex = gridTex, let errBuf = errBuf,
+              let enc = cmd.makeComputeCommandEncoder() else { return }
+        var u = FXUniforms()
+        u.resolution = simd_float2(Float(size.width), Float(size.height))
+        inst.pack(into: &u)                        // p0 = (cell, levels, mono, algo), colorA/B
+        let algo = Int((inst.params["algo"] ?? 4).rounded())
+        let kernelId = (algo == 16) ? 100 : (algo - 4)
+        u.p1 = simd_float4(Float(kernelId), Float(gw), Float(gh), 0)
+        enc.setComputePipelineState(pso)
+        enc.setBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
+        enc.setTexture(input, index: 0)
+        enc.setTexture(gridTex, index: 1)
+        enc.setBuffer(errBuf, offset: 0, index: 1)
+        enc.setSamplerState(sampler, index: 0)
+        enc.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1),
+                                 threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+        enc.endEncoding()
+        gridW = gw; gridH = gh
     }
 
     // MARK: Thumbnails (offscreen, one frame, synchronous)

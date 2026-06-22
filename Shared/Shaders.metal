@@ -78,6 +78,11 @@ constant float cluster4[16] = {
     15/16.-0.5,10/16.-0.5, 9/16.-0.5,14/16.-0.5
 };
 
+// Interleaved Gradient Noise — a cheap blue-noise-spectrum threshold in [-0.5,0.5].
+static inline float ign(float2 p) {
+    return fract(52.9829189 * fract(0.06711056 * p.x + 0.00583715 * p.y)) - 0.5;
+}
+
 // Threshold for a given dither algorithm at integer cell coords.
 static inline float ditherThreshold(int mode, int2 c) {
     switch (mode) {
@@ -88,6 +93,26 @@ static inline float ditherThreshold(int mode, int2 c) {
         default: return bayer4[(c.y & 3) * 4 + (c.x & 3)];       // Bayer 4x4
     }
 }
+
+// The classic NES (2C02) 64-entry palette, normalized.
+constant float3 NES[64] = {
+    float3(0.486,0.486,0.486), float3(0.0,0.0,0.988), float3(0.0,0.0,0.737), float3(0.267,0.157,0.737),
+    float3(0.580,0.0,0.518),   float3(0.659,0.0,0.125),float3(0.659,0.063,0.0), float3(0.533,0.078,0.0),
+    float3(0.314,0.188,0.0),   float3(0.0,0.471,0.0),  float3(0.0,0.408,0.0),   float3(0.0,0.345,0.0),
+    float3(0.0,0.251,0.345),   float3(0.0,0.0,0.0),    float3(0.0,0.0,0.0),     float3(0.0,0.0,0.0),
+    float3(0.737,0.737,0.737), float3(0.0,0.471,0.973),float3(0.0,0.345,0.973), float3(0.408,0.267,0.988),
+    float3(0.847,0.0,0.800),   float3(0.894,0.0,0.345), float3(0.973,0.220,0.0), float3(0.894,0.361,0.063),
+    float3(0.675,0.486,0.0),   float3(0.0,0.722,0.0),  float3(0.0,0.659,0.0),   float3(0.0,0.659,0.267),
+    float3(0.0,0.533,0.533),   float3(0.0,0.0,0.0),    float3(0.0,0.0,0.0),     float3(0.0,0.0,0.0),
+    float3(0.973,0.973,0.973), float3(0.235,0.737,0.988),float3(0.408,0.533,0.988),float3(0.596,0.471,0.973),
+    float3(0.973,0.471,0.973), float3(0.973,0.345,0.596),float3(0.973,0.471,0.345),float3(0.988,0.627,0.267),
+    float3(0.973,0.722,0.0),   float3(0.722,0.973,0.094),float3(0.345,0.847,0.329),float3(0.345,0.973,0.596),
+    float3(0.0,0.910,0.847),   float3(0.471,0.471,0.471),float3(0.0,0.0,0.0),    float3(0.0,0.0,0.0),
+    float3(0.988,0.988,0.988), float3(0.643,0.894,0.988),float3(0.722,0.722,0.973),float3(0.847,0.722,0.973),
+    float3(0.973,0.722,0.973), float3(0.973,0.643,0.753),float3(0.941,0.816,0.690),float3(0.988,0.878,0.659),
+    float3(0.973,0.847,0.471), float3(0.847,0.973,0.471),float3(0.722,0.973,0.722),float3(0.722,0.973,0.847),
+    float3(0.0,0.988,0.988),   float3(0.737,0.737,0.737),float3(0.0,0.0,0.0),    float3(0.0,0.0,0.0)
+};
 
 // Nearest hexagon center (grid units) for hex mosaic.
 static inline float2 hexCenter(float2 p) {
@@ -123,26 +148,6 @@ static inline float sobelMag(texture2d<float> tex, sampler s, float2 uv, float2 
     return length(float2(gx, gy));
 }
 
-// Map output uv to source uv honoring fill mode (cover / fit / stretch).
-static inline float2 coverUV(float2 uv, float2 outRes, float2 srcRes, int mode) {
-    if (mode == 2 || srcRes.x < 1.0 || srcRes.y < 1.0) return uv;       // stretch
-    float outA = outRes.x / outRes.y;
-    float srcA = srcRes.x / srcRes.y;
-    float2 s = float2(1.0);
-    bool cover = (mode == 1);
-    if ((srcA > outA) == cover) s.x = (cover ? outA / srcA : srcA / outA);
-    else                        s.y = (cover ? srcA / outA : outA / srcA);
-    // for fit we shrink, for cover we crop — invert handling:
-    if (cover) {
-        if (srcA > outA) s = float2(outA / srcA, 1.0);
-        else             s = float2(1.0, srcA / outA);
-    } else {
-        if (srcA > outA) s = float2(1.0, outA / srcA);
-        else             s = float2(srcA / outA, 1.0);
-    }
-    return (uv - 0.5) / s + 0.5;
-}
-
 // ---------------------------------------------------------------- fragment
 
 fragment float4 fx_fragment(VOut in [[stage_in]],
@@ -157,9 +162,26 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
     float  t   = u.time;
 
     // -------- source generators ----------------------------------------
-    if (u.effect == 0) {                   // passthrough / source-fit
-        float2 suv = coverUV(uv, res, u.srcSize, u.fillMode);
-        return src.sample(samp, suv);
+    if (u.effect == 0) {                   // image / video source with fill mode
+        int mode = u.fillMode;
+        if (mode == 2 || u.srcSize.x < 1.0 || u.srcSize.y < 1.0) {
+            return src.sample(samp, uv);   // stretch (or unknown size)
+        }
+        float outA = res.x / res.y;
+        float srcA = u.srcSize.x / u.srcSize.y;
+        if (mode == 1) {                   // COVER — fill the screen, crop overflow
+            float2 scale = (srcA > outA) ? float2(outA / srcA, 1.0)
+                                         : float2(1.0, srcA / outA);
+            return src.sample(samp, (uv - 0.5) * scale + 0.5);
+        } else {                           // FIT — contain whole image, letterbox bars
+            float2 scale = (srcA > outA) ? float2(1.0, outA / srcA)
+                                         : float2(srcA / outA, 1.0);
+            float2 suv = (uv - 0.5) / scale + 0.5;
+            if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) {
+                return float4(0.0, 0.0, 0.0, 1.0);
+            }
+            return src.sample(samp, suv);
+        }
     }
     if (u.effect == 1) {                   // gradient generator
         float ang = u.p0.x;
@@ -182,15 +204,16 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         return src.sample(samp, quv);
     }
 
-    case 3: {   // DITHER (ordered: Bayer 2/4/8, clustered, noise)
+    case 3: {   // DITHER — ordered (Bayer 2/4/8) or blue noise. Error-diffusion
+                // and Riemersma are handled by the serial compute kernel + blit (effect 38).
         float cell = max(u.p0.x, 1.0);                 // pixel size
         float levels = max(u.p0.y, 2.0);
         bool mono = u.p0.z > 0.5;
-        int mode = int(u.p0.w + 0.5);
+        int method = int(u.p0.w + 0.5);
         int2 cellPx = int2(floor(px / cell));
         float2 quv = (float2(cellPx) + 0.5) * cell / res;
         float3 c = src.sample(samp, quv).rgb;
-        float thr = ditherThreshold(mode, cellPx);
+        float thr = (method == 3) ? ign(float2(cellPx)) : ditherThreshold(method, cellPx);
         if (mono) {
             float v = luma(c) + thr / (levels - 1.0);
             float q = floor(v * (levels - 1.0) + 0.5) / (levels - 1.0);
@@ -577,7 +600,162 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         return float4(c * led * 1.25, 1.0);
     }
 
+    case 36: { // NES 8-BIT (snap to the NES palette, chunky pixels, soft scanline)
+        float cell = max(u.p0.x, 2.0);
+        float scan = u.p0.y;
+        float sat = max(u.p0.z, 0.0);
+        int2 cellPx = int2(floor(px / cell));
+        float2 quv = (float2(cellPx) + 0.5) * cell / res;
+        float3 c = src.sample(samp, quv).rgb;
+        // punch up saturation a touch before quantizing (NES look)
+        float l = luma(c);
+        c = clamp(mix(float3(l), c, sat), 0.0, 1.0);
+        float3 best = NES[0]; float bd = 1e9;
+        for (int i = 0; i < 64; ++i) {
+            float3 d = c - NES[i];
+            float dd = dot(d, d);
+            if (dd < bd) { bd = dd; best = NES[i]; }
+        }
+        // subtle CRT scanline on the pixel rows
+        float s = 1.0 - scan * (0.5 - 0.5 * cos(px.y / cell * 6.2831853));
+        return float4(best * s, 1.0);
+    }
+
+    case 37: { // STARFIELD — flying through adjustable stars (generative)
+        float speed = u.p0.x;
+        float density = max(u.p0.y, 1.0);
+        float warp = u.p0.z;
+        float sz = max(u.p0.w, 0.2);
+        float2 uv2 = (uv - 0.5) * float2(res.x / res.y, 1.0);
+        float2 rd = normalize(uv2 + 1e-5);
+        float3 acc = float3(0.0);
+        const int LAYERS = 18;
+        for (int i = 0; i < LAYERS; ++i) {
+            float fi = (float(i) + 0.5) / float(LAYERS);
+            float depth = fract(fi + t * speed * 0.08);     // 0..1, wraps (flying in)
+            float scale = mix(density * 2.0, density * 0.25, depth);
+            float fade = depth * (1.0 - depth) * 4.0;
+            float2 p = uv2 * scale + float2(fi * 91.7, fi * 47.3);
+            float2 cell = floor(p);
+            float2 f = fract(p) - 0.5;
+            float2 jit = (hash22(cell + fi * 71.0) - 0.5) * 0.7;
+            float2 fd = f - jit;
+            fd -= rd * dot(fd, rd) * warp;                  // streak along radial dir
+            float d = length(fd);
+            float star = smoothstep(0.06 * sz, 0.0, d);
+            float b = hash21(cell + fi * 31.0);
+            acc += star * fade * (0.35 + 0.65 * b);
+        }
+        acc = clamp(acc, 0.0, 1.0);
+        return float4(mix(u.colorA.rgb, u.colorB.rgb, acc), 1.0);
+    }
+
+    case 38: { // BLIT — crisp nearest upscale of a precomputed dither grid
+        float2 gridSize = u.p0.xy;
+        float2 g = (floor(uv * gridSize) + 0.5) / gridSize;
+        return src.sample(samp, g);
+    }
+
     default:
         return base;
+    }
+}
+
+// ---------------------------------------------------------------- serial dither
+
+// Distribute quantization error to a neighbour (with bounds check). Single-threaded,
+// so plain device memory is correct and faster than atomics.
+static inline void spread(device float* err, int x, int y, int W, int H, float e) {
+    if (x < 0 || x >= W || y < 0 || y >= H || e == 0.0) return;
+    err[y * W + x] += e;
+}
+
+// Serial error-diffusion + Riemersma dither on a coarse grid, single thread.
+// Kernel ids: 0 Floyd-Steinberg, 1 Atkinson, 2 Jarvis, 3 Stucki, 4 Burkes,
+// 5 Sierra3, 6 Sierra2, 7 Sierra-Lite, 8 Fan, 9 Shiau-Fan, 10 Shiau-Fan2,
+// 11 Simple2D, 100 Riemersma.
+kernel void dither_serial(texture2d<float, access::sample> inTex [[texture(0)]],
+                          texture2d<float, access::write>  outTex [[texture(1)]],
+                          device float* err [[buffer(1)]],
+                          constant FXUniforms& u [[buffer(0)]],
+                          sampler samp [[sampler(0)]],
+                          uint tid [[thread_position_in_grid]])
+{
+    if (tid != 0) return;
+    int W = int(u.p1.y + 0.5), H = int(u.p1.z + 0.5);
+    int kid = int(u.p1.x + 0.5);
+    float levels = max(u.p0.y, 2.0);
+    bool mono = u.p0.z > 0.5;
+    float3 cA = u.colorA.rgb, cB = u.colorB.rgb;
+
+    for (int i = 0; i < W * H; ++i) err[i] = 0.0;
+
+    // Traversal: raster for diffusion kernels, Hilbert order for Riemersma.
+    int total = W * H;
+    int side = 1; while (side < W || side < H) side <<= 1;   // power of two cover
+    bool riem = (kid == 100);
+    const int RN = 16;
+    float w[RN]; float wsum = 0.0;
+    for (int k = 0; k < RN; ++k) { w[k] = pow(1.0/16.0, float(RN-1-k)/float(RN-1)); wsum += w[k]; }
+    for (int k = 0; k < RN; ++k) w[k] /= wsum;
+    float histM[RN]; float3 histC[RN];
+    for (int k = 0; k < RN; ++k) { histM[k] = 0.0; histC[k] = float3(0.0); }
+
+    int count = riem ? side * side : total;
+    for (int idx = 0; idx < count; ++idx) {
+        int x, y;
+        if (riem) {
+            // Hilbert d -> (x,y)
+            int rx, ry, t = idx; x = 0; y = 0;
+            for (int s = 1; s < side; s <<= 1) {
+                rx = 1 & (t / 2); ry = 1 & (t ^ rx);
+                if (ry == 0) { if (rx == 1) { x = s - 1 - x; y = s - 1 - y; } int tmp = x; x = y; y = tmp; }
+                x += s * rx; y += s * ry; t /= 4;
+            }
+            if (x >= W || y >= H) continue;
+        } else {
+            y = idx / W; x = idx % W;
+        }
+
+        float2 uv = (float2(x, y) + 0.5) / float2(W, H);
+        float3 c = inTex.sample(samp, uv).rgb;
+
+        if (mono) {
+            float accM;
+            if (riem) { accM = 0.0; for (int k = 0; k < RN; ++k) accM += histM[k] * w[k]; }
+            else accM = err[y * W + x];
+            float v = dot(c, float3(0.299, 0.587, 0.114)) + accM;
+            float q = clamp(floor(v * (levels - 1.0) + 0.5) / (levels - 1.0), 0.0, 1.0);
+            float e = v - q;
+            outTex.write(float4(mix(cA, cB, q), 1.0), uint2(x, y));
+            if (riem) { for (int k = 0; k < RN-1; ++k) histM[k] = histM[k+1]; histM[RN-1] = e; }
+            else
+            switch (kid) {
+            case 0: spread(err,x+1,y,W,H,e*7.0/16); spread(err,x-1,y+1,W,H,e*3.0/16); spread(err,x,y+1,W,H,e*5.0/16); spread(err,x+1,y+1,W,H,e*1.0/16); break;
+            case 1: { float a=e/8.0; spread(err,x+1,y,W,H,a); spread(err,x+2,y,W,H,a); spread(err,x-1,y+1,W,H,a); spread(err,x,y+1,W,H,a); spread(err,x+1,y+1,W,H,a); spread(err,x,y+2,W,H,a);} break;
+            case 2: { float d=e/48.0; spread(err,x+1,y,W,H,d*7);spread(err,x+2,y,W,H,d*5);spread(err,x-2,y+1,W,H,d*3);spread(err,x-1,y+1,W,H,d*5);spread(err,x,y+1,W,H,d*7);spread(err,x+1,y+1,W,H,d*5);spread(err,x+2,y+1,W,H,d*3);spread(err,x-2,y+2,W,H,d*1);spread(err,x-1,y+2,W,H,d*3);spread(err,x,y+2,W,H,d*5);spread(err,x+1,y+2,W,H,d*3);spread(err,x+2,y+2,W,H,d*1);} break;
+            case 3: { float d=e/42.0; spread(err,x+1,y,W,H,d*8);spread(err,x+2,y,W,H,d*4);spread(err,x-2,y+1,W,H,d*2);spread(err,x-1,y+1,W,H,d*4);spread(err,x,y+1,W,H,d*8);spread(err,x+1,y+1,W,H,d*4);spread(err,x+2,y+1,W,H,d*2);spread(err,x-2,y+2,W,H,d*1);spread(err,x-1,y+2,W,H,d*2);spread(err,x,y+2,W,H,d*4);spread(err,x+1,y+2,W,H,d*2);spread(err,x+2,y+2,W,H,d*1);} break;
+            case 4: { float d=e/32.0; spread(err,x+1,y,W,H,d*8);spread(err,x+2,y,W,H,d*4);spread(err,x-2,y+1,W,H,d*2);spread(err,x-1,y+1,W,H,d*4);spread(err,x,y+1,W,H,d*8);spread(err,x+1,y+1,W,H,d*4);spread(err,x+2,y+1,W,H,d*2);} break;
+            case 5: { float d=e/32.0; spread(err,x+1,y,W,H,d*5);spread(err,x+2,y,W,H,d*3);spread(err,x-2,y+1,W,H,d*2);spread(err,x-1,y+1,W,H,d*4);spread(err,x,y+1,W,H,d*5);spread(err,x+1,y+1,W,H,d*4);spread(err,x+2,y+1,W,H,d*2);spread(err,x-1,y+2,W,H,d*2);spread(err,x,y+2,W,H,d*3);spread(err,x+1,y+2,W,H,d*2);} break;
+            case 6: { float d=e/16.0; spread(err,x+1,y,W,H,d*4);spread(err,x+2,y,W,H,d*3);spread(err,x-2,y+1,W,H,d*1);spread(err,x-1,y+1,W,H,d*2);spread(err,x,y+1,W,H,d*3);spread(err,x+1,y+1,W,H,d*2);spread(err,x+2,y+1,W,H,d*1);} break;
+            case 7: { float d=e/4.0; spread(err,x+1,y,W,H,d*2);spread(err,x-1,y+1,W,H,d*1);spread(err,x,y+1,W,H,d*1);} break;
+            case 8: { float d=e/16.0; spread(err,x+1,y,W,H,d*7);spread(err,x-1,y+1,W,H,d*1);spread(err,x,y+1,W,H,d*3);spread(err,x+1,y+1,W,H,d*5);} break;
+            case 9: { float d=e/16.0; spread(err,x+1,y,W,H,d*8);spread(err,x-2,y+1,W,H,d*1);spread(err,x-1,y+1,W,H,d*1);spread(err,x,y+1,W,H,d*2);spread(err,x+1,y+1,W,H,d*4);} break;
+            case 10:{ float d=e/16.0; spread(err,x+1,y,W,H,d*8);spread(err,x-3,y+1,W,H,d*1);spread(err,x-2,y+1,W,H,d*1);spread(err,x-1,y+1,W,H,d*2);spread(err,x,y+1,W,H,d*4);} break;
+            case 11:{ float d=e/2.0; spread(err,x+1,y,W,H,d);spread(err,x,y+1,W,H,d);} break;
+            case 100: spread(err,x+1,y,W,H,e*7.0/16); spread(err,x-1,y+1,W,H,e*3.0/16); spread(err,x,y+1,W,H,e*5.0/16); spread(err,x+1,y+1,W,H,e*1.0/16); break;
+            default: break;
+            }
+        } else {
+            float3 acc3;
+            if (riem) { acc3 = float3(0.0); for (int k = 0; k < RN; ++k) acc3 += histC[k] * w[k]; }
+            else acc3 = float3(err[y * W + x]);
+            float3 v = c + acc3;
+            float3 q = clamp(floor(v * (levels - 1.0) + 0.5) / (levels - 1.0), 0.0, 1.0);
+            float3 e3 = v - q;
+            outTex.write(float4(q, 1.0), uint2(x, y));
+            if (riem) { for (int k = 0; k < RN-1; ++k) histC[k] = histC[k+1]; histC[RN-1] = e3; }
+            else { float e = dot(e3, float3(0.333)); spread(err,x+1,y,W,H,e*7.0/16); spread(err,x-1,y+1,W,H,e*3.0/16); spread(err,x,y+1,W,H,e*5.0/16); spread(err,x+1,y+1,W,H,e*1.0/16); }
+        }
     }
 }

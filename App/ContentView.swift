@@ -149,9 +149,14 @@ struct ContentView: View {
     private func previewBar(id: UUID) -> some View {
         let binding = model.presetBinding(id)
         return HStack(spacing: 14) {
-            TextField("Name", text: binding.name).textFieldStyle(.roundedBorder).frame(width: 220)
+            TextField("Name", text: binding.name).textFieldStyle(.roundedBorder).frame(width: 200)
+            Button {
+                ScreensaverPreviewController.shared.present(
+                    preset: binding.wrappedValue, source: model.library.source, store: model.store)
+            } label: { Label("Preview", systemImage: "play.rectangle.fill") }
+                .help("Full-screen preview — move the mouse or press any key to exit")
             if id == model.library.activeID {
-                Label("Active", systemImage: "play.circle.fill").foregroundStyle(.green)
+                Label("Active", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
             } else {
                 Button { model.setActive(id) } label: { Label("Use as Screensaver", systemImage: "play.circle") }
             }
@@ -170,8 +175,13 @@ struct ContentView: View {
         ToolbarItemGroup(placement: .primaryAction) {
             if isInstalled {
                 Label("Installed", systemImage: "checkmark.seal.fill")
+                    .labelStyle(.titleAndIcon)
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.green)
+                    .padding(.horizontal, 9).padding(.vertical, 3)
+                    .background(Capsule().fill(Color.green.opacity(0.14)))
                     .help("DotStudio is installed in your Screen Savers folder")
+                    .padding(.trailing, 12)
             }
             Button {
                 confirmInstall = true
@@ -179,6 +189,7 @@ struct ContentView: View {
                 Label(isInstalled ? "Reinstall Screensaver" : "Install Screensaver",
                       systemImage: "square.and.arrow.down")
             }
+            .padding(.leading, 6)
 
             Button { Installer.openScreenSaverSettings() } label: {
                 Label("Wallpaper Settings", systemImage: "gearshape")

@@ -33,7 +33,7 @@ enum EffectKind: String, Codable, CaseIterable {
     case pixelate, posterize, phosphor, scanlines, grain, vignette
     // cool pack
     case kaleidoscope, chromaticShift, bloom, hexMosaic, mirror, glitchBlocks
-    case gameboy, neonEdges, fisheye, swirl, ripple, toon, thermal, truchet, ledPanel
+    case gameboy, neonEdges, fisheye, swirl, ripple, toon, thermal, truchet, ledPanel, nes8bit, starfield
 
     var displayName: String {
         switch self {
@@ -73,6 +73,8 @@ enum EffectKind: String, Codable, CaseIterable {
         case .thermal: return "Thermal"
         case .truchet: return "Truchet"
         case .ledPanel: return "LED Panel"
+        case .nes8bit: return "NES 8-Bit"
+        case .starfield: return "Starfield"
         }
     }
 
@@ -83,9 +85,9 @@ enum EffectKind: String, Codable, CaseIterable {
         case .contour, .edge, .crosshatch, .wave: return .lines
         case .vhs, .scanlines, .grain, .pixelSort: return .glitch
         case .threshold, .posterize, .phosphor, .vignette: return .color
-        case .noiseField, .voronoi: return .generative
+        case .noiseField, .voronoi, .starfield: return .generative
         case .hexMosaic, .ledPanel, .truchet: return .dotsDither
-        case .gameboy, .bloom, .thermal, .toon: return .color
+        case .gameboy, .bloom, .thermal, .toon, .nes8bit: return .color
         case .neonEdges: return .lines
         case .chromaticShift, .glitchBlocks: return .glitch
         case .kaleidoscope, .mirror, .fisheye, .swirl, .ripple: return .warp
@@ -120,6 +122,8 @@ enum EffectKind: String, Codable, CaseIterable {
         case .thermal:   return 33
         case .truchet:   return 34
         case .ledPanel:  return 35
+        case .nes8bit:   return 36
+        case .starfield: return 37
         case .edge:      return 12
         case .crosshatch:return 13
         case .contour:   return 14
@@ -136,8 +140,11 @@ enum EffectKind: String, Codable, CaseIterable {
         switch self {
         case .pixelate:  return [ParamSpec("cell", "Pixel Size", 2, 120, def: 12)]
         case .blockify:  return [ParamSpec("cell", "Block Size", 8, 200, def: 32)]
-        case .dither:    return [ParamSpec(menu: "mode", "Algorithm",
-                                            ["Bayer 2×2", "Bayer 4×4", "Bayer 8×8", "Clustered", "Noise"], def: 1),
+        case .dither:    return [ParamSpec(menu: "algo", "Algorithm",
+                                            ["Bayer 2×2", "Bayer 4×4", "Bayer 8×8", "Blue Noise",
+                                             "Floyd–Steinberg", "Atkinson", "Jarvis-Judice-Ninke", "Stucki",
+                                             "Burkes", "Sierra", "Sierra 2-Row", "Sierra Lite",
+                                             "Fan", "Shiau-Fan", "Shiau-Fan 2", "Simple 2D", "Riemersma"], def: 1),
                                  ParamSpec("cell", "Pixel Size", 1, 16, step: 1, def: 2),
                                  ParamSpec("levels", "Levels", 2, 8, step: 1, def: 2),
                                  ParamSpec("mono", "Monochrome", 0, 1, def: 1, toggle: true)]
@@ -199,6 +206,13 @@ enum EffectKind: String, Codable, CaseIterable {
         case .truchet:   return [ParamSpec("size", "Tile Size", 8, 60, def: 24)]
         case .ledPanel:  return [ParamSpec("cell", "Cell Size", 6, 40, def: 16),
                                  ParamSpec("gap", "Gap", 0, 0.3, def: 0.08)]
+        case .nes8bit:   return [ParamSpec("cell", "Pixel Size", 2, 40, def: 6),
+                                 ParamSpec("scan", "Scanlines", 0, 1, def: 0.25),
+                                 ParamSpec("sat", "Saturation", 0, 2, def: 1.25)]
+        case .starfield: return [ParamSpec("speed", "Speed", 0, 3, def: 1),
+                                 ParamSpec("density", "Density", 4, 40, def: 12),
+                                 ParamSpec("warp", "Warp", 0, 1, def: 0.3),
+                                 ParamSpec("size", "Star Size", 0.3, 3, def: 1)]
         }
     }
 
@@ -210,7 +224,7 @@ enum EffectKind: String, Codable, CaseIterable {
 
     var defaultColorA: RGBA? {
         switch self {
-        case .dither, .threshold, .dots, .wave, .edge, .ascii, .matrix, .neonEdges: return .black
+        case .dither, .threshold, .dots, .wave, .edge, .ascii, .matrix, .neonEdges, .starfield: return .black
         case .halftone, .crosshatch: return .paper
         case .contour, .truchet: return .ink
         default: return nil
@@ -218,7 +232,7 @@ enum EffectKind: String, Codable, CaseIterable {
     }
     var defaultColorB: RGBA? {
         switch self {
-        case .dither, .threshold, .dots: return .white
+        case .dither, .threshold, .dots, .starfield: return .white
         case .halftone, .crosshatch: return .ink
         case .contour: return .paper
         case .wave, .edge, .neonEdges, .truchet: return .cyan
@@ -245,7 +259,7 @@ extension EffectInstance {
 
         switch kind {
         case .pixelate, .blockify: u.p0.x = g("cell")
-        case .dither:    u.p0 = .init(g("cell"), g("levels"), g("mono"), g("mode"))
+        case .dither:    u.p0 = .init(g("cell"), g("levels"), g("mono"), g("algo"))
         case .halftone:  u.p0 = .init(g("cell"), g("angle"), 0, 0)
         case .dots:      u.p0 = .init(g("cell"), 0, g("blend"), 0)
         case .ascii:     u.p0 = .init(g("cell"), 0, g("color"), 0)
@@ -279,6 +293,8 @@ extension EffectInstance {
         case .thermal:   u.p0.x = g("gain")
         case .truchet:   u.p0.x = g("size")
         case .ledPanel:  u.p0 = .init(g("cell"), g("gap"), 0, 0)
+        case .nes8bit:   u.p0 = .init(g("cell"), g("scan"), g("sat"), 0)
+        case .starfield: u.p0 = .init(g("speed"), g("density"), g("warp"), g("size"))
         }
     }
 }

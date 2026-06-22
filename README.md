@@ -29,12 +29,15 @@ between styles entirely inside the app**. Pick a source once (a gradient, an ima
 then flip through 36 GPU effects to see it dithered, halftoned, turned into Matrix rain, and more.
 
 - **One install, infinite styles** — switch the active screensaver from the sidebar, no Settings trip
-- **36 real-time Metal effects** — the full [grain.rad](https://grainrad.com) set + multiple dither
-  algorithms ([ditherit.com](https://ditherit.com) style) + a "cool pack" (kaleidoscope, bloom, VHS, thermal…)
-- **Shared source** — one image / video / gradient feeds every style
+- **38 real-time Metal effects** — the full [grain.rad](https://grainrad.com) set, a complete dither
+  suite ([ditherit.com](https://ditherit.com) style: ordered, blue noise, 12 error-diffusion kernels,
+  Riemersma), a "cool pack" (kaleidoscope, bloom, VHS, thermal…), plus **NES 8-bit** and an
+  **adjustable starfield**
+- **Full-screen Preview** — one click to see the real screensaver, just like System Settings
+- **Shared source** — one image / video / gradient feeds every style, with cover / fit / stretch
 - **Live preview + per-effect controls** — reorder, toggle, and tune an effect stack
 - **Lightweight** — GPU shaders, capped frame rate, low CPU
-- **26 demo screensavers** included
+- **30+ demo screensavers** included
 
 ---
 
@@ -85,15 +88,17 @@ cp -R build/Build/Products/Release/DotStudio.app /Applications/
 | ![](docs/gallery/Game-Boy.png)<br>**Game Boy** | ![](docs/gallery/VHS.png)<br>**VHS** | ![](docs/gallery/Voronoi.png)<br>**Voronoi** |
 | ![](docs/gallery/Neon-Wire.png)<br>**Neon Edges** | ![](docs/gallery/Data-Glitch.png)<br>**Glitch Blocks** | ![](docs/gallery/Hex-Grid.png)<br>**Hex Mosaic** |
 
-### Full effect list (36)
+### Full effect list (38)
 
-- **Dots & Dither** — Dithering (Bayer 2×2/4×4/8×8, Clustered, Noise), Halftone, Dots, Pixelate, Blockify, Hex Mosaic, LED Panel, Truchet
+- **Dots & Dither** — Dithering (Bayer 2×2/4×4/8×8, Blue Noise, Floyd–Steinberg, Atkinson, Jarvis-Judice-Ninke, Stucki, Burkes, Sierra ×3, Fan, Shiau-Fan ×2, Simple 2D, **Riemersma**), Halftone, Dots, Pixelate, Blockify, Hex Mosaic, LED Panel, Truchet
 - **Glyphs** — ASCII, Matrix Rain
 - **Lines & Edges** — Edge Detection, Crosshatch, Contour, Wave Lines, Neon Edges
 - **Glitch** — VHS, Scanlines, Grain, Chromatic Shift, Glitch Blocks, Pixel Sort
-- **Color** — Threshold, Posterize, Phosphor, Vignette, Game Boy, Bloom, Thermal, Toon
+- **Color** — Threshold, Posterize, Phosphor, Vignette, Game Boy, **NES 8-Bit**, Bloom, Thermal, Toon
 - **Warp & Mirror** — Kaleidoscope, Mirror, Fisheye, Swirl, Ripple
-- **Generative** — Noise Field, Voronoi
+- **Generative** — Noise Field, Voronoi, **Starfield**
+
+> Error-diffusion and Riemersma dithers run on a GPU compute kernel; the rest are single-pass fragment shaders.
 
 ---
 
