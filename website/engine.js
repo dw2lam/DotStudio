@@ -70,6 +70,19 @@
   const brand = (t) => ramp(BRAND, t);
   const thermal = (t) => ramp(THERMAL, t);
 
+  /* ---- tiny 3-vector + tone helpers (for the black hole) ---- */
+  const v3len = (a) => Math.hypot(a[0], a[1], a[2]);
+  const v3norm = (a) => { const l = v3len(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+  const v3cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  function blackbodyCol(tk) {
+    const t = clamp((tk - 1000) / 9000);
+    const red = clamp(1 - (t - 0.8) * 2, 0.5, 1);
+    const green = smooth(0, 0.5, t) * (1 - Math.max((t - 0.7) * 0.3, 0));
+    const blue = smooth(0.3, 1, t) * t;
+    return [red, green, blue];
+  }
+  const acesCh = (v) => clamp((v * (2.51 * v + 0.03)) / (v * (2.43 * v + 0.59) + 0.14));
+
   function hexRgb(h) {
     h = h.replace("#", "");
     if (h.length === 3) h = h.split("").map((c) => c + c).join("");
@@ -354,13 +367,107 @@
         }
       }
     }},
+
+    /* ---- Starfield: flying through stars ---- */
+    starfield: { cell: 6, paint(c, P) {
+      const ctx = c.ctx, t = c.t();
+      const st = c.stars(P.count || 240);
+      ctx.fillStyle = "#04060c"; ctx.fillRect(0, 0, c.w, c.h);
+      const cx = c.w / 2, cy = c.h / 2, maxR = Math.hypot(cx, cy);
+      const speed = P.speed || 1, warp = (P.warp == null ? 0.45 : P.warp);
+      ctx.lineCap = "round";
+      for (const s of st) {
+        const z = (s.z + t * speed * 0.12) % 1;
+        const r = z * z * maxR * 1.08;
+        const x = cx + Math.cos(s.a) * r, y = cy + Math.sin(s.a) * r;
+        if (x < -12 || x > c.w + 12 || y < -12 || y > c.h + 12) continue;
+        const size = (0.5 + s.b * 1.7) * z * c.dpr;
+        ctx.globalAlpha = clamp(z * 1.5) * (0.45 + 0.55 * s.b);
+        if (warp > 0.05 && z > 0.28) {
+          const r2 = Math.max(0, r - warp * 46 * z * c.dpr);
+          ctx.strokeStyle = s.col; ctx.lineWidth = size;
+          ctx.beginPath(); ctx.moveTo(cx + Math.cos(s.a) * r2, cy + Math.sin(s.a) * r2); ctx.lineTo(x, y); ctx.stroke();
+        } else {
+          ctx.fillStyle = s.col; ctx.beginPath(); ctx.arc(x, y, size, 0, TAU); ctx.fill();
+        }
+      }
+      ctx.globalAlpha = 1;
+    }},
+
+    /* ---- Black Hole: gravitational lensing + accretion disk (low-res raymarch) ---- */
+    blackhole: { cell: 8, fps: 36, paint(c, P) {
+      const t = c.t();
+      const BW = 188, BH = Math.max(8, Math.round(BW * c.h / c.w));
+      const off = c.scratch(BW, BH), octx = off.getContext("2d");
+      const img = octx.createImageData(BW, BH), data = img.data;
+      const mass = P.mass || 0.4, brightness = P.brightness || 5;
+      const rot = (P.rot == null ? -8.7 : P.rot), diskScale = P.disk || 1;
+      const rs = mass * 2, innerR = 4.1 * diskScale, outerR = 14.5 * diskScale;
+      const ct = t * 0.06;
+      const cam = [Math.sin(ct) * 20, -2.5, -Math.cos(ct) * 20];
+      const fwd = v3norm([-cam[0], -cam[1], -cam[2]]);
+      const right = v3norm(v3cross([0, 1, 0], fwd));
+      const up = v3cross(fwd, right);
+      const aspect = c.w / c.h, cyc = t % 5, rotSign = Math.sign(rot);
+      let i = 0;
+      for (let y = 0; y < BH; y++) for (let x = 0; x < BW; x++) {
+        let px = ((x + 0.5) / BW - 0.5) * 2, py = -((y + 0.5) / BH - 0.5) * 2; px *= aspect;
+        let rd = v3norm([fwd[0] + right[0] * px + up[0] * py, fwd[1] + right[1] * px + up[1] * py, fwd[2] + right[2] * px + up[2] * py]);
+        let rp = cam.slice(), prev = cam.slice();
+        let aR = 0, aG = 0, aB = 0, alpha = 0, captured = 0;
+        for (let s = 0; s < 26; s++) {
+          if (alpha > 0.99) break;
+          const r = v3len(rp);
+          if (r < rs * 1.01) { captured = 1; break; }
+          if (r > 60) break;
+          const bend = rs / (r * r) * 2.4;
+          rd = v3norm([rd[0] - rp[0] / r * bend, rd[1] - rp[1] / r * bend, rd[2] - rp[2] / r * bend]);
+          prev = rp; rp = [rp[0] + rd[0], rp[1] + rd[1], rp[2] + rd[2]];
+          if (prev[1] * rp[1] < 0) {
+            const tt = -prev[1] / (rp[1] - prev[1]);
+            const hx = prev[0] + (rp[0] - prev[0]) * tt, hz = prev[2] + (rp[2] - prev[2]) * tt;
+            const hr = Math.hypot(hx, hz);
+            if (hr > innerR && hr < outerR) {
+              const ang = Math.atan2(hz, hx);
+              const nr = clamp((hr - innerR) / (outerR - innerR));
+              const tf = Math.pow(innerR / hr, 5.22);
+              const dc = blackbodyCol(lerp(1500, 49780, tf));
+              const beta = (1 / Math.sqrt(hr / innerR)) * 0.3;
+              const cosT = (-Math.sin(ang) * rotSign) * rd[0] + (Math.cos(ang) * rotSign) * rd[2];
+              const dopp = Math.pow(clamp(1 / (1 - beta * cosT), 0.1, 5), 3);
+              const edge = smooth(0, 0.18, nr) * smooth(1, 0.5, nr);
+              const ph = ang + cyc * rot / Math.pow(hr, 1.5);
+              const tb = 0.5 + 0.3 * Math.sin(hr * 2.1 + ph * 3) + 0.2 * Math.sin(ph * 5 + hr * 0.7 + t);
+              const op = Math.pow(clamp(tb), 3.4) * edge;
+              const rem = 1 - alpha, k = brightness * op * rem * dopp;
+              aR += dc[0] * k; aG += dc[1] * k; aB += dc[2] * k; alpha += rem * op;
+            }
+          }
+        }
+        if (!captured && alpha < 0.99) {
+          const h = Math.sin(rd[0] * 173.1 + rd[1] * 311.7 + rd[2] * 97.3) * 43758.5;
+          const star = (h - Math.floor(h)) > 0.991 ? 0.9 * (1 - alpha) : 0;
+          aR += star; aG += star; aB += star;
+        }
+        data[i++] = acesCh(aR) * 255; data[i++] = acesCh(aG) * 255; data[i++] = acesCh(aB) * 255; data[i++] = 255;
+      }
+      octx.putImageData(img, 0, 0);
+      const ctx = c.ctx;
+      ctx.fillStyle = "#000"; ctx.fillRect(0, 0, c.w, c.h);
+      ctx.imageSmoothingEnabled = true;
+      ctx.globalCompositeOperation = "lighter";
+      ctx.filter = "blur(7px)"; ctx.drawImage(off, 0, 0, c.w, c.h);
+      ctx.filter = "none"; ctx.globalCompositeOperation = "source-over";
+      ctx.drawImage(off, 0, 0, c.w, c.h);
+    }},
   };
 
-  const EFFECT_ORDER = ["ascii", "halftone", "dither", "matrix", "dots", "thermal", "neon", "voronoi", "hex", "gameboy", "scanlines", "vhs"];
+  const EFFECT_ORDER = ["ascii", "halftone", "dither", "matrix", "dots", "thermal", "neon", "voronoi", "hex", "gameboy", "scanlines", "vhs", "starfield", "blackhole"];
   const EFFECT_LABEL = {
     ascii: "ASCII", halftone: "Halftone", dither: "Dithering", matrix: "Matrix Rain",
     dots: "Dots", thermal: "Thermal", neon: "Neon Edges", voronoi: "Voronoi",
     hex: "Hex Mosaic", gameboy: "Game Boy", scanlines: "Phosphor", vhs: "VHS",
+    starfield: "Starfield", blackhole: "Black Hole",
   };
 
   /* --------------------------- canvas controller -------------------------- */
@@ -444,6 +551,19 @@
       for (const p of s) { p.x = p.bx + p.ax * Math.sin(t * p.sp + p.px); p.y = p.by + p.ay * Math.cos(t * p.sp * 0.9 + p.py); }
       return s;
     }
+    stars(n) {
+      let s = this._state.stars;
+      if (!s || s.length !== n) {
+        const rnd = mulberry32(7 + n);
+        s = this._state.stars = [];
+        for (let i = 0; i < n; i++) {
+          const b = rnd();
+          const col = b > 0.72 ? "#bcd8ff" : (b < 0.2 ? "#ffe6c0" : "#ffffff");
+          s.push({ a: rnd() * TAU, z: rnd(), b, col });
+        }
+      }
+      return s;
+    }
 
     render(t) {
       this._t = t;
@@ -456,7 +576,9 @@
     frame(now) {
       if (this.staticFrame) return;
       if (!this.visible || this.paused) return;
-      const minDelta = 1000 / this.fpsCap;
+      const fxDef = EFFECTS[this.effect];
+      const cap = (fxDef && fxDef.fps) ? Math.min(this.fpsCap, fxDef.fps) : this.fpsCap;
+      const minDelta = 1000 / cap;
       if (now - this._last < minDelta) return;
       this._last = now;
       if (!this._t0) this._t0 = now;
