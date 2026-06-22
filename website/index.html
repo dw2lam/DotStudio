@@ -102,120 +102,39 @@
   <span class="feed-out">get a screensaver</span>
 </section>
 
-<!-- ======================= EXHIBITION I — the gallery wall (live) ======================= -->
-<section id="exhibit" class="section walk">
-  <nav class="floor-rail" aria-label="Exhibition guide">
-    <a href="#p01"><i></i><b>01</b><em>Halftone</em></a>
-    <a href="#p02"><i></i><b>02</b><em>ASCII</em></a>
-    <a href="#p03"><i></i><b>03</b><em>Matrix Rain</em></a>
-    <a href="#p04"><i></i><b>04</b><em>Dithering</em></a>
-    <a href="#p05"><i></i><b>05</b><em>Thermal</em></a>
-    <a href="#p06"><i></i><b>06</b><em>Neon Edges</em></a>
-    <a href="#p07"><i></i><b>07</b><em>Voronoi</em></a>
-  </nav>
-
-  <div class="room-head reveal">
-    <span class="room-label">Exhibition&nbsp;I · live renders</span>
-    <h2>Walk the wall.</h2>
-    <p>Seven of the thirty-six effects, each resolving the same drifting gradient in real time — no video, no loops. Just the engine that powers the app, painting as you scroll.</p>
+<!-- ======================= THE FLOW — one source, morphing (live) ======================= -->
+<section id="exhibit" class="flow">
+  <div class="flow-head reveal">
+    <span class="kick">One source · many lives</span>
+    <h2>Flow through it.</h2>
+    <p>A single drifting gradient, transformed effect by effect as you scroll — dots to glyphs to grain to heat to light. One picture, never the same twice.</p>
   </div>
 
-  <article class="piece" id="p01">
-    <figure class="piece-art reveal">
-      <div class="frame frame-big"><canvas data-dot data-effect="halftone" data-role="tile" data-params='{"cell":10}'></canvas>
-        <div class="frame-scan" aria-hidden="true"></div><span class="frame-tag">live</span></div>
-    </figure>
-    <aside class="piece-plate reveal">
-      <span class="plate-no">No. 01</span>
-      <h3 class="plate-title">Halftone</h3>
-      <span class="plate-medium">Dots &amp; Dither · screen 0.4 · real-time canvas</span>
-      <p class="plate-note">A gradient resolved into ink dots that swell toward the light — the studio's signature, and the shape of the app's own icon.</p>
-    </aside>
-  </article>
+  <div class="flow-track">
+    <div class="flow-stage">
+      <canvas id="flowA" data-dot data-effect="halftone" data-source="aurora" data-role="tile" data-params='{"cell":16}' aria-label="Morphing effect field"></canvas>
+      <canvas id="flowB" class="flow-front" data-dot data-effect="ascii" data-source="aurora" data-role="tile" data-params='{"cell":15,"color":1}' aria-hidden="true"></canvas>
+      <div class="flow-vignette" aria-hidden="true"></div>
+      <div class="flow-scan" aria-hidden="true"></div>
 
-  <article class="piece" id="p02">
-    <figure class="piece-art reveal">
-      <div class="frame frame-big"><canvas data-dot data-effect="ascii" data-role="tile" data-params='{"cell":11,"color":1}'></canvas>
-        <div class="frame-scan" aria-hidden="true"></div><span class="frame-tag">live</span></div>
-    </figure>
-    <aside class="piece-plate reveal">
-      <span class="plate-no">No. 02</span>
-      <h3 class="plate-title">ASCII</h3>
-      <span class="plate-medium">Glyphs · cell 11 · source colour</span>
-      <p class="plate-note">Every cell re-typed as the character closest to its brightness. The picture, read back to you one glyph at a time.</p>
-    </aside>
-  </article>
+      <figure class="flow-cap">
+        <span class="flow-count"><b data-flow-i>01</b><span class="flow-total">/ 06</span></span>
+        <figcaption>
+          <span class="flow-name" data-flow-name>Halftone</span>
+          <span class="flow-medium" data-flow-medium>Dots &amp; Dither · real-time</span>
+        </figcaption>
+      </figure>
 
-  <article class="piece" id="p03">
-    <figure class="piece-art reveal">
-      <div class="frame frame-big"><canvas data-dot data-effect="matrix" data-role="tile" data-params='{"cell":13,"reveal":1}'></canvas>
-        <div class="frame-scan" aria-hidden="true"></div><span class="frame-tag">live</span></div>
-    </figure>
-    <aside class="piece-plate reveal">
-      <span class="plate-no">No. 03</span>
-      <h3 class="plate-title">Matrix Rain</h3>
-      <span class="plate-medium">Glyphs · falling columns · reveal source</span>
-      <p class="plate-note">Source luminance, disclosed one falling column at a time. Turn away and it keeps raining without you.</p>
-    </aside>
-  </article>
-
-  <article class="piece" id="p04">
-    <figure class="piece-art reveal">
-      <div class="frame frame-big"><canvas data-dot data-effect="dither" data-role="tile" data-params='{"cell":2,"mono":1}'></canvas>
-        <div class="frame-scan" aria-hidden="true"></div><span class="frame-tag">live</span></div>
-    </figure>
-    <aside class="piece-plate reveal">
-      <span class="plate-no">No. 04</span>
-      <h3 class="plate-title">Dithering</h3>
-      <span class="plate-medium">Dots &amp; Dither · Bayer 4×4 · two colours</span>
-      <p class="plate-note">Two colours and an ordered threshold, conspiring to look like a thousand. Pure navy and phosphor green.</p>
-    </aside>
-  </article>
-
-  <article class="piece" id="p05">
-    <figure class="piece-art reveal">
-      <div class="frame frame-big"><canvas data-dot data-effect="thermal" data-role="tile" data-params='{"gain":1.1}'></canvas>
-        <div class="frame-scan" aria-hidden="true"></div><span class="frame-tag">live</span></div>
-    </figure>
-    <aside class="piece-plate reveal">
-      <span class="plate-no">No. 05</span>
-      <h3 class="plate-title">Thermal</h3>
-      <span class="plate-medium">Color · infrared remap · gain 1.1</span>
-      <p class="plate-note">Brightness remapped to heat. The same drifting field, seen through an infrared eye — violet cold, white hot.</p>
-    </aside>
-  </article>
-
-  <article class="piece" id="p06">
-    <figure class="piece-art reveal">
-      <div class="frame frame-big"><canvas data-dot data-effect="neon" data-role="tile" data-params='{"gain":3.5}'></canvas>
-        <div class="frame-scan" aria-hidden="true"></div><span class="frame-tag">live</span></div>
-    </figure>
-    <aside class="piece-plate reveal">
-      <span class="plate-no">No. 06</span>
-      <h3 class="plate-title">Neon Edges</h3>
-      <span class="plate-medium">Lines &amp; Edges · gradient magnitude · glow 3.5</span>
-      <p class="plate-note">Only the edges of the gradient survive, traced in glowing wire and bloomed back into the dark.</p>
-    </aside>
-  </article>
-
-  <article class="piece" id="p07">
-    <figure class="piece-art reveal">
-      <div class="frame frame-big"><canvas data-dot data-effect="voronoi" data-role="tile" data-params='{"count":30}'></canvas>
-        <div class="frame-scan" aria-hidden="true"></div><span class="frame-tag">live</span></div>
-    </figure>
-    <aside class="piece-plate reveal">
-      <span class="plate-no">No. 07</span>
-      <h3 class="plate-title">Voronoi</h3>
-      <span class="plate-medium">Generative · 30 cells · live</span>
-      <p class="plate-note">The plane shattered into cells, each tinted by the light beneath its slowly drifting seed.</p>
-    </aside>
-  </article>
+      <div class="flow-ticks" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <span class="flow-hint" aria-hidden="true">scroll to develop ↓</span>
+    </div>
+  </div>
 </section>
 
 <!-- ======================= THE COLLECTION (real renders) ======================= -->
 <section id="collection" class="section section-collection">
   <div class="section-head reveal">
-    <span class="kick">Exhibition II · the print room</span>
+    <span class="kick">The print room · shipped presets</span>
     <h2>Prints from the app.</h2>
     <p>Every frame below is a real export from DotStudio — one of the screensavers that come pre-installed. Drag a gradient, image or clip underneath and the same look paints over it.</p>
   </div>

@@ -372,8 +372,8 @@
       this.sourceName = opts.source || el.dataset.source || "aurora";
       this.params = opts.params || {};
       this.staticFrame = !!opts.static || el.hasAttribute("data-static") || REDUCE;
-      this.fpsCap = opts.fps || (el.dataset.role === "tile" ? 30 : 60);
-      this._last = 0; this._t0 = 0; this.visible = false; this._state = {};
+      this.fpsCap = opts.fps || (el.dataset.fps ? +el.dataset.fps : (el.dataset.role === "tile" ? 30 : 60));
+      this._last = 0; this._t0 = 0; this.visible = false; this.paused = false; this._state = {};
       this.dpr = Math.min(2, global.devicePixelRatio || 1);
       this.resize();
       this._ro = new ResizeObserver(() => this.resize());
@@ -392,10 +392,10 @@
     setEffect(name) {
       if (name === this.effect) return;
       this.effect = name; this._state = {};
-      this.ctx.clearRect(0, 0, this.w, this.h);
-      if (this.staticFrame) this.render(0.6);
+      // repaint the new effect immediately so live crossfades never blank out
+      this.render(this.staticFrame ? 0.6 : (this._t || 0.6));
     }
-    setParams(p) { this.params = p; if (this.staticFrame) this.render(this._t || 0.6); }
+    setParams(p) { this.params = p; this._state = {}; if (this.staticFrame || this.visible) this.render(this._t || 0.6); }
     setSource(name) { this.sourceName = name; this._state = {}; if (this.staticFrame) this.render(this._t || 0.6); }
 
     /* helpers exposed to effects */
@@ -455,7 +455,7 @@
     }
     frame(now) {
       if (this.staticFrame) return;
-      if (!this.visible) return;
+      if (!this.visible || this.paused) return;
       const minDelta = 1000 / this.fpsCap;
       if (now - this._last < minDelta) return;
       this._last = now;

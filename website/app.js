@@ -166,53 +166,77 @@
     buildSliders("ascii");
   }
 
-  /* ----------------------- gallery walk: rail + parallax ------------------ */
-  (function gallery() {
-    const exhibit = document.getElementById("exhibit");
-    const pieces = Array.from(document.querySelectorAll(".piece"));
-    if (!exhibit || !pieces.length) return;
-    const rail = document.querySelector(".floor-rail");
+  /* ------------- the flow: one field morphing through effects ------------- */
+  (function flow() {
+    const sec = document.getElementById("exhibit");
+    const track = sec && sec.querySelector(".flow-track");
+    const elA = document.getElementById("flowA");
+    const elB = document.getElementById("flowB");
+    const A = elA && elA._reg, B = elB && elB._reg;
+    if (!sec || !track || !A || !B) return;
 
-    if (rail) {
-      // fade the rail in/out with the exhibition
-      new IntersectionObserver((es) => es.forEach((e) =>
-        rail.classList.toggle("show", e.isIntersecting)),
-        { rootMargin: "-12% 0px -12% 0px" }).observe(exhibit);
+    // the sequence the field dissolves through (params mirror the app)
+    const SEQ = [
+      { fx: "halftone", name: "Halftone",    medium: "Dots & Dither · screen angle", p: { cell: 16 } },
+      { fx: "ascii",    name: "ASCII",       medium: "Glyphs · source colour",       p: { cell: 15, color: 1 } },
+      { fx: "matrix",   name: "Matrix Rain", medium: "Glyphs · reveal source",       p: { cell: 16, reveal: 1 } },
+      { fx: "dither",   name: "Dithering",   medium: "Bayer 4×4 · two colours",      p: { cell: 3, mono: 1 } },
+      { fx: "thermal",  name: "Thermal",     medium: "Color · infrared remap",       p: { gain: 1.15 } },
+      { fx: "neon",     name: "Neon Edges",  medium: "Lines & Edges · glow",         p: { gain: 3.2 } },
+    ];
+    const N = SEQ.length;
+    const nameEl = sec.querySelector("[data-flow-name]");
+    const medEl  = sec.querySelector("[data-flow-medium]");
+    const iEl    = sec.querySelector("[data-flow-i]");
+    const totEl  = sec.querySelector(".flow-total");
+    const hint   = sec.querySelector(".flow-hint");
+    const ticks  = Array.from(sec.querySelectorAll(".flow-ticks i"));
+    if (totEl) totEl.textContent = "/ " + String(N).padStart(2, "0");
 
-      // light up the rail dot for whichever piece holds the viewport centre
-      const links = Array.from(rail.querySelectorAll("a"));
-      const setActive = (id) => links.forEach((a) =>
-        a.classList.toggle("on", a.getAttribute("href") === "#" + id));
-      const pObs = new IntersectionObserver((es) => es.forEach((e) => {
-        if (e.isIntersecting) setActive(e.target.id);
-      }), { rootMargin: "-45% 0px -45% 0px" });
-      pieces.forEach((p) => pObs.observe(p));
-    }
+    const keyed = { A: -1, B: -1 };
+    const keyTo = (reg, slot, idx) => {
+      if (keyed[slot] === idx) return;
+      keyed[slot] = idx;
+      reg.setParams({ ...SEQ[idx].p });   // params first…
+      reg.setEffect(SEQ[idx].fx);         // …then effect repaints immediately
+    };
+    let shown = -1;
+    const hud = (idx) => {
+      if (idx === shown) return; shown = idx;
+      if (nameEl) nameEl.textContent = SEQ[idx].name;
+      if (medEl)  medEl.textContent  = SEQ[idx].medium;
+      if (iEl)    iEl.textContent    = String(idx + 1).padStart(2, "0");
+      ticks.forEach((t, k) => t.classList.toggle("on", k === idx));
+    };
 
-    // subtle parallax: the framed canvas drifts against the scroll (depth)
-    if (!E.reduce) {
-      const frames = pieces.map((p) => p.querySelector(".frame-big")).filter(Boolean);
-      let ticking = false, active = false;
-      new IntersectionObserver((es) => es.forEach((e) => { active = e.isIntersecting; }),
-        { rootMargin: "120px" }).observe(exhibit);
-      const apply = () => {
-        const vh = window.innerHeight;
-        frames.forEach((f) => {
-          const r = f.getBoundingClientRect();
-          if (r.bottom < -80 || r.top > vh + 80) return;
-          const prog = (r.top + r.height / 2 - vh / 2) / vh;   // -~.6 .. .6 across the screen
-          f.style.transform = "translate3d(0," + (prog * -26).toFixed(1) + "px,0)";
-        });
-        ticking = false;
-      };
-      const onScroll = () => {
-        if (ticking || !active) return;
-        ticking = true; requestAnimationFrame(apply);
-      };
-      window.addEventListener("scroll", onScroll, { passive: true });
-      window.addEventListener("resize", onScroll, { passive: true });
-      apply();
-    }
+    // reduced motion: no scroll morph, just hold the first effect
+    if (E.reduce) { keyTo(A, "A", 0); elB.style.opacity = 0; B.paused = true; hud(0); return; }
+
+    let ticking = false, active = false;
+    new IntersectionObserver((es) => es.forEach((e) => { active = e.isIntersecting; }),
+      { rootMargin: "150px" }).observe(sec);
+
+    const frame = () => {
+      ticking = false;
+      const travel = track.offsetHeight - window.innerHeight;
+      const p = travel > 0 ? Math.min(Math.max(-track.getBoundingClientRect().top / travel, 0), 1) : 0;
+      const t = p * (N - 1);
+      const lo = Math.min(Math.floor(t), N - 1);
+      const hi = Math.min(lo + 1, N - 1);
+      const f = t - lo;
+      keyTo(A, "A", lo);                 // back layer: current effect, full opacity
+      keyTo(B, "B", hi);                 // front layer: next effect, fades in
+      const fade = lo === hi ? 0 : f;
+      elB.style.opacity = fade.toFixed(3);
+      B.paused = fade < 0.004;           // skip rendering the hidden layer
+      hud(f > 0.5 && lo < hi ? hi : lo);
+      if (hint) hint.classList.toggle("gone", p > 0.03);
+    };
+    const onScroll = () => { if (ticking || !active) return; ticking = true; requestAnimationFrame(frame); };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll, { passive: true });
+    new IntersectionObserver(() => onScroll(), { rootMargin: "0px" }).observe(sec);
+    frame();
   })();
 
   /* ---------------------- footer year + smooth anchors -------------------- */
