@@ -233,11 +233,14 @@
       const hi = Math.min(lo + 1, N - 1);
       const f = t - lo;
       keyTo(A, "A", lo);                 // back layer: current effect, full opacity
-      keyTo(B, "B", hi);                 // front layer: next effect, fades in
-      const fade = lo === hi ? 0 : f;
+      keyTo(B, "B", hi);                 // front layer: next effect
+      // Snap to each effect: hold it fully, then a quick switch near the boundary
+      // (no long blended overlap, which looked muddy on the black hole / universe).
+      const sstep = (a, b, x) => { const u = Math.min(Math.max((x - a) / (b - a), 0), 1); return u * u * (3 - 2 * u); };
+      const fade = lo === hi ? 0 : sstep(0.82, 0.96, f);
       elB.style.opacity = fade.toFixed(3);
       B.paused = fade < 0.004;           // skip rendering the hidden layer
-      hud(f > 0.5 && lo < hi ? hi : lo);
+      hud(fade > 0.5 ? hi : lo);
       if (hint) hint.classList.toggle("gone", p > 0.03);
     };
     const onScroll = () => { if (ticking || !active) return; ticking = true; requestAnimationFrame(frame); };

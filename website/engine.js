@@ -398,7 +398,7 @@
     blackhole: { cell: 8, fps: 36, paint(c, P) {
       const t = c.t();
       // raymarch resolution scales with the canvas (capped so the CPU keeps up)
-      const BW = Math.max(180, Math.min(Math.round(c.w * 0.34), 320));
+      const BW = Math.max(200, Math.min(Math.round(c.w * 0.42), 360));
       const BH = Math.max(8, Math.round(BW * c.h / c.w));
       const off = c.scratch(BW, BH), octx = off.getContext("2d");
       const img = octx.createImageData(BW, BH), data = img.data;
@@ -463,11 +463,11 @@
       const ctx = c.ctx;
       ctx.fillStyle = "#000"; ctx.fillRect(0, 0, c.w, c.h);
       ctx.imageSmoothingEnabled = true;
-      // bloom: two blur radii added, then the sharp image on top
+      // bloom: a soft glow added under a crisp sharp pass on top
       ctx.globalCompositeOperation = "lighter";
-      ctx.filter = "blur(14px)"; ctx.drawImage(off, 0, 0, c.w, c.h);
-      ctx.filter = "blur(5px)"; ctx.drawImage(off, 0, 0, c.w, c.h);
+      ctx.filter = "blur(9px)"; ctx.drawImage(off, 0, 0, c.w, c.h);
       ctx.filter = "none"; ctx.globalCompositeOperation = "source-over";
+      ctx.imageSmoothingEnabled = true;
       ctx.drawImage(off, 0, 0, c.w, c.h);
     }},
 
