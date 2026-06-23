@@ -65,10 +65,34 @@
     const nameEl = document.querySelector("[data-hero-fx]");
     let i = 0, auto = true, timer = null;
 
+    // WebGPU black hole: runs the real shader on an overlay canvas when supported.
+    const heroGpu = document.getElementById("heroGpu");
+    let bhInst = null, bhBusy = false;
+    async function gpuBlackHole(on) {
+      if (!heroGpu || !window.DotBH || !window.DotBH.supported) return false;
+      if (on) {
+        if (!bhInst && !bhBusy) {
+          bhBusy = true;
+          try { bhInst = await window.DotBH.mount(heroGpu); } catch (e) { bhBusy = false; return false; }
+          bhBusy = false;
+        }
+        if (!bhInst) return false;
+        heroGpu.classList.add("on"); reg.paused = true; bhInst.setActive(true);
+        const tag = document.getElementById("heroTag");
+        if (tag) tag.textContent = "live · real shader · webgpu";
+        return true;
+      }
+      heroGpu.classList.remove("on"); if (bhInst) bhInst.setActive(false); reg.paused = false;
+      const tag = document.getElementById("heroTag");
+      if (tag) tag.textContent = "live · 60fps · canvas";
+      return false;
+    }
+
     function setFx(name, fromUser) {
       reg.setEffect(name);
       if (nameEl) nameEl.textContent = E.EFFECT_LABEL[name] || name;
       chips.forEach((ch) => ch.classList.toggle("on", ch.dataset.fx === name));
+      if (name === "blackhole") gpuBlackHole(true); else gpuBlackHole(false);
       if (fromUser) { auto = false; document.querySelector(".hero-stage")?.classList.add("manual"); }
     }
     function tick() { if (!auto) return; i = (i + 1) % cycle.length; setFx(cycle[i]); }
