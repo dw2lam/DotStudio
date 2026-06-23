@@ -468,14 +468,86 @@
       ctx.filter = "none"; ctx.globalCompositeOperation = "source-over";
       ctx.drawImage(off, 0, 0, c.w, c.h);
     }},
+
+    /* ---- Universe: top-down heliocentric solar system ---- */
+    universe: { cell: 6, fps: 40, paint(c, P) {
+      const ctx = c.ctx, t = c.t();
+      const W = c.w, H = c.h, cx = W / 2, cy = H / 2, base = Math.min(W, H);
+      const scale = (P.scale == null ? 1 : P.scale), speed = (P.speed == null ? 1 : P.speed);
+      const tilt = 0.82;
+      ctx.fillStyle = "#05060c"; ctx.fillRect(0, 0, W, H);
+      // planets: [orbitFrac, sizeFrac, [r,g,b], orbitSpeed, ring]
+      const PL = [
+        [0.085, 0.006, [150,150,158], 1.60, 0],
+        [0.130, 0.011, [216,193,136], 1.18, 0],
+        [0.175, 0.013, [60,134,200],  1.00, 0],
+        [0.225, 0.009, [200,90,50],   0.81, 0],
+        [0.300, 0.026, [216,180,138], 0.44, 0],
+        [0.370, 0.022, [216,200,154], 0.32, 1],
+        [0.430, 0.016, [159,224,232], 0.23, 0],
+        [0.490, 0.015, [74,111,208],  0.18, 0],
+      ];
+      // orbit rings
+      if (P.orbits !== 0) {
+        ctx.strokeStyle = "rgba(120,120,135,0.32)"; ctx.lineWidth = Math.max(1, base * 0.0012);
+        for (const pl of PL) {
+          const R = pl[0] * base * scale;
+          ctx.beginPath(); ctx.ellipse(cx, cy, R, R * tilt, 0, 0, TAU); ctx.stroke();
+        }
+      }
+      // sun glow
+      const sunR = 0.05 * base * scale;
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, sunR * 3.2);
+      g.addColorStop(0, "rgba(255,252,238,1)"); g.addColorStop(0.28, "rgba(255,205,110,0.95)");
+      g.addColorStop(0.7, "rgba(255,130,50,0.4)"); g.addColorStop(1, "rgba(255,120,40,0)");
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, sunR * 3.2, 0, TAU); ctx.fill();
+      // planets
+      for (let i = 0; i < PL.length; i++) {
+        const [of_, sf, col, osp, ring] = PL[i];
+        const a = t * speed * 0.1 * osp + i * 1.7;
+        const R = of_ * base * scale, sz = Math.max(2, sf * base * scale);
+        const x = cx + Math.cos(a) * R, y = cy + Math.sin(a) * R * tilt;
+        if (ring) {
+          ctx.strokeStyle = "rgba(210,196,150,0.65)"; ctx.lineWidth = Math.max(1, sz * 0.35);
+          ctx.beginPath(); ctx.ellipse(x, y, sz * 2.0, sz * 2.0 * 0.4, 0, 0, TAU); ctx.stroke();
+        }
+        const dx = (cx - x), dy = (cy - y), dl = Math.hypot(dx, dy) || 1;
+        const hx = x + dx / dl * sz * 0.45, hy = y + dy / dl * sz * 0.45;
+        const pg = ctx.createRadialGradient(hx, hy, sz * 0.1, x, y, sz);
+        pg.addColorStop(0, `rgb(${Math.min(255,col[0]*1.35)|0},${Math.min(255,col[1]*1.35)|0},${Math.min(255,col[2]*1.35)|0})`);
+        pg.addColorStop(0.65, rgbStr(col));
+        pg.addColorStop(1, `rgb(${col[0]*0.25|0},${col[1]*0.25|0},${col[2]*0.25|0})`);
+        ctx.fillStyle = pg; ctx.beginPath(); ctx.arc(x, y, sz, 0, TAU); ctx.fill();
+        if (i === 2) {  // Earth — tiny pulsing location marker
+          const pulse = 0.5 + 0.5 * Math.sin(t * 3);
+          ctx.fillStyle = `rgba(80,255,120,${0.5 + 0.4 * pulse})`;
+          ctx.beginPath(); ctx.arc(x - sz * 0.3, y - sz * 0.2, Math.max(1, sz * 0.28), 0, TAU); ctx.fill();
+        }
+      }
+    }},
+
+    /* ---- NES 8-Bit: palette quantize + scanlines ---- */
+    nes: { pixel: true, cell: 4.5, paint(c, P) {
+      const { bw, bh, data, t } = c.px();
+      const PAL = [[16,24,64],[24,96,160],[44,168,168],[88,184,96],[208,184,96],[238,242,214]];
+      const scan = (P.scan == null ? 0.32 : P.scan);
+      let i = 0;
+      for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+        const L = c.src(x / bw, y / bh, t);
+        const col = PAL[clamp(Math.floor(L * PAL.length), 0, PAL.length - 1) | 0];
+        const s = 1 - scan * (y % 2);
+        data[i++] = col[0] * s; data[i++] = col[1] * s; data[i++] = col[2] * s; data[i++] = 255;
+      }
+      c.flush();
+    }},
   };
 
-  const EFFECT_ORDER = ["ascii", "halftone", "dither", "matrix", "dots", "thermal", "neon", "voronoi", "hex", "gameboy", "scanlines", "vhs", "starfield", "blackhole"];
+  const EFFECT_ORDER = ["ascii", "halftone", "dither", "matrix", "dots", "thermal", "neon", "voronoi", "hex", "gameboy", "scanlines", "vhs", "nes", "starfield", "universe", "blackhole"];
   const EFFECT_LABEL = {
     ascii: "ASCII", halftone: "Halftone", dither: "Dithering", matrix: "Matrix Rain",
     dots: "Dots", thermal: "Thermal", neon: "Neon Edges", voronoi: "Voronoi",
     hex: "Hex Mosaic", gameboy: "Game Boy", scanlines: "Phosphor", vhs: "VHS",
-    starfield: "Starfield", blackhole: "Black Hole",
+    nes: "NES 8-Bit", starfield: "Starfield", universe: "Universe", blackhole: "Black Hole",
   };
 
   /* --------------------------- canvas controller -------------------------- */
