@@ -397,7 +397,9 @@
     /* ---- Black Hole: gravitational lensing + accretion disk (low-res raymarch) ---- */
     blackhole: { cell: 8, fps: 36, paint(c, P) {
       const t = c.t();
-      const BW = 188, BH = Math.max(8, Math.round(BW * c.h / c.w));
+      // raymarch resolution scales with the canvas (capped so the CPU keeps up)
+      const BW = Math.max(180, Math.min(Math.round(c.w * 0.34), 320));
+      const BH = Math.max(8, Math.round(BW * c.h / c.w));
       const off = c.scratch(BW, BH), octx = off.getContext("2d");
       const img = octx.createImageData(BW, BH), data = img.data;
       const mass = P.mass || 0.4, brightness = P.brightness || 5;

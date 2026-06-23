@@ -185,9 +185,11 @@
       { fx: "ascii",    name: "ASCII",       medium: "Glyphs · source colour",       p: { cell: 15, color: 1 } },
       { fx: "matrix",   name: "Matrix Rain", medium: "Glyphs · reveal source",       p: { cell: 16, reveal: 1 } },
       { fx: "dither",   name: "Dithering",   medium: "Bayer 4×4 · two colours",      p: { cell: 3, mono: 1 } },
+      { fx: "nes",      name: "NES 8-Bit",   medium: "Color · 8-bit palette",        p: { scan: 0.3 } },
       { fx: "thermal",  name: "Thermal",     medium: "Color · infrared remap",       p: { gain: 1.15 } },
       { fx: "neon",     name: "Neon Edges",  medium: "Lines & Edges · glow",         p: { gain: 3.2 } },
       { fx: "starfield",name: "Starfield",   medium: "Generative · warp speed",      p: { speed: 1.1, warp: 0.5 } },
+      { fx: "universe", name: "Universe",    medium: "Generative · live solar system", p: { scale: 1, speed: 1.1 } },
       { fx: "blackhole",name: "Black Hole",  medium: "Generative · gravitational lensing", p: { mass: 0.4, brightness: 5 } },
     ];
     const N = SEQ.length;
