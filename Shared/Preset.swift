@@ -65,4 +65,7 @@ struct Library: Codable, Equatable {
     var version: Int = 2
     var locationLat: Double?     // resolved device location (for the Universe marker)
     var locationLon: Double?
+    /// Saver render resolution as a fraction of native (1 = full Retina). Optional so
+    /// older builds still decode the library; nil means full quality.
+    var renderScale: Double?
 }
