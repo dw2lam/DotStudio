@@ -5,6 +5,11 @@ options:
     macOS: "14.0"
   createIntermediateGroups: true
 
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.6.0
+
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -48,15 +53,23 @@ targets:
         codeSign: true
         copy:
           destination: resources
+      - package: Sparkle
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleDisplayName: DotStudio
+        LSApplicationCategoryType: "public.app-category.graphics-design"
+        NSHumanReadableCopyright: "DotStudio"
+        # Sparkle auto-update: appcast rides on the latest GitHub release.
+        SUFeedURL: "https://github.com/dw2lam/DotStudio/releases/latest/download/appcast.xml"
+        SUPublicEDKey: "5cK2ecNcpoVKWQrZc1RgdgBRk2n9Xsa/ygTSWfzEdrE="
     settings:
       base:
         PRODUCT_NAME: DotStudio
         PRODUCT_BUNDLE_IDENTIFIER: com.davidlam.DotStudio
         SWIFT_OBJC_BRIDGING_HEADER: Shared/Bridging.h
-        GENERATE_INFOPLIST_FILE: "YES"
         ENABLE_APP_SANDBOX: "NO"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.graphics-design"
-        INFOPLIST_KEY_NSHumanReadableCopyright: "DotStudio"
-        INFOPLIST_KEY_CFBundleDisplayName: DotStudio
         MARKETING_VERSION: "1.1.3"

@@ -1,0 +1,79 @@
+name: Release
+
+# Push a tag like v1.2.0 and this builds, packages, and publishes the release.
+# The tag is the single source of truth for the version — project.yml's
+# MARKETING_VERSION is overridden at build time, so it can never drift again.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Ensure Metal toolchain
+        run: xcodebuild -downloadComponent MetalToolchain || true
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Build (version from tag)
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          xcodebuild -project DotStudio.xcodeproj -scheme DotStudio -configuration Release \
+            -derivedDataPath build/DD \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            build
+
+      - name: Verify build
+        run: |
+          APP="build/DD/Build/Products/Release/DotStudio.app"
+          test -d "$APP"
+          BUILT=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")
+          SAVER=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Resources/DotStudio.saver/Contents/Info.plist")
+          echo "app=$BUILT saver=$SAVER tag=${GITHUB_REF_NAME#v}"
+          test "$BUILT" = "${GITHUB_REF_NAME#v}"
+          test "$SAVER" = "${GITHUB_REF_NAME#v}"
+          codesign --verify --deep "$APP"
+
+      - name: Package DMG
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          STAGE=build/dmg-stage
+          mkdir -p "$STAGE" dist
+          cp -R build/DD/Build/Products/Release/DotStudio.app "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
+          hdiutil create -volname "DotStudio $VERSION" -srcfolder "$STAGE" -ov -format UDZO dist/DotStudio.dmg
+
+      - name: Generate Sparkle appcast
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          SPARKLE_VERSION=2.9.4
+          curl -sL -o sparkle.tar.xz "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
+          mkdir sparkle-tools && tar -xf sparkle.tar.xz -C sparkle-tools
+          echo "$SPARKLE_ED_PRIVATE_KEY" | ./sparkle-tools/bin/generate_appcast --ed-key-file - \
+            --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/" \
+            --link "https://github.com/${GITHUB_REPOSITORY}" \
+            dist/
+          test -f dist/appcast.xml
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/DotStudio.dmg dist/appcast.xml \
+            --title "DotStudio ${GITHUB_REF_NAME#v}" \
+            --generate-notes \
+            --notes "> **First launch:** DotStudio isn't notarized — right-click the app and choose **Open** the first time.
+          $(awk "/^## ${GITHUB_REF_NAME#v}/{f=1;next} /^## /{f=0} f" CHANGELOG.md 2>/dev/null || true)"

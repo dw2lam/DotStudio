@@ -20,6 +20,19 @@ enum Installer {
             ?? Bundle.main.url(forResource: "DotStudio", withExtension: "saver", subdirectory: "Resources")
     }
 
+    /// After an app update the user's installed .saver is stale — replace it when the
+    /// bundled copy is newer. The old code keeps running until legacyScreenSaver next
+    /// relaunches; that's fine for a screensaver.
+    static func reinstallIfOutdated() {
+        guard isInstalled,
+              let bundledURL = bundledSaverURL,
+              let bundled = Bundle(url: bundledURL)?.infoDictionary?["CFBundleVersion"] as? String,
+              let installed = Bundle(url: installedURL)?.infoDictionary?["CFBundleVersion"] as? String,
+              bundled.compare(installed, options: .numeric) == .orderedDescending
+        else { return }
+        _ = install()
+    }
+
     @discardableResult
     static func install() -> Result<URL, Error> {
         guard let src = bundledSaverURL else {
