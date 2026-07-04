@@ -43,5 +43,10 @@ struct DotStudioApp: App {
                 Button("Check for Updates…") { updater.checkForUpdates(nil) }
             }
         }
+
+        Settings {
+            SettingsView(updater: updater.updater)
+                .environmentObject(model)
+        }
     }
 }

@@ -220,6 +220,11 @@ struct ContentView: View {
             Button { Installer.openScreenSaverSettings() } label: {
                 Label("Wallpaper Settings", systemImage: "gearshape")
             }
+
+            SettingsLink {
+                Label("Screensaver Settings", systemImage: "slider.horizontal.3")
+            }
+            .help("Playback mode, rotation, day/night, quality, updates (⌘,)")
         }
     }
 }

@@ -16,8 +16,6 @@ struct InspectorView: View {
                 sourceSection
                 Divider()
                 effectsSection
-                Divider()
-                saverSection
             }
             .padding(16)
         }
@@ -151,112 +149,6 @@ struct InspectorView: View {
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
-    }
-
-    // MARK: Screensaver (library-wide)
-
-    private var saverSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("SCREENSAVER").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Text("applies to all styles").font(.caption2).foregroundStyle(.tertiary)
-            }
-            Picker("Quality", selection: qualityBinding) {
-                Text("Full").tag(1.0)
-                Text("Balanced").tag(0.75)
-                Text("Efficient").tag(0.5)
-            }
-            .controlSize(.small)
-            Text("Lower quality renders at reduced resolution — much less memory and battery on Retina displays, with the same chunky look.")
-                .font(.caption2).foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Toggle("Rotate through styles", isOn: rotationEnabled)
-                .controlSize(.small)
-            if model.library.rotation?.enabled == true {
-                Picker("Every", selection: rotation(\.intervalMinutes)) {
-                    Text("1 min").tag(1.0)
-                    Text("5 min").tag(5.0)
-                    Text("15 min").tag(15.0)
-                    Text("30 min").tag(30.0)
-                    Text("1 hour").tag(60.0)
-                }
-                .controlSize(.small)
-                Toggle("Shuffle order", isOn: rotation(\.shuffle))
-                    .controlSize(.small)
-                labeledSlider("Crossfade (s)", value: rotation(\.transitionSeconds), 0, 3)
-            }
-
-            Toggle("Day / night styles", isOn: scheduleEnabled)
-                .controlSize(.small)
-            if model.library.schedule?.enabled == true {
-                presetPicker("Day", selection: schedule(\.dayPresetID))
-                presetPicker("Night", selection: schedule(\.nightPresetID))
-                Text("Follows the sun at your location — switches at sunrise and sunset.")
-                    .font(.caption2).foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    private func presetPicker(_ label: String, selection: Binding<UUID?>) -> some View {
-        Picker(label, selection: selection) {
-            Text("—").tag(UUID?.none)
-            ForEach(model.library.presets) { p in
-                Text(p.name).tag(UUID?.some(p.id))
-            }
-        }
-        .controlSize(.small)
-    }
-
-    private var qualityBinding: Binding<Double> {
-        Binding(get: { model.library.renderScale ?? 1.0 },
-                set: { model.library.renderScale = $0 >= 1.0 ? nil : $0; model.save() })
-    }
-
-    /// Binding into Library.rotation, materializing the spec on first edit.
-    private func rotation<T>(_ kp: WritableKeyPath<RotationSpec, T>) -> Binding<T> {
-        Binding(get: { (model.library.rotation ?? RotationSpec())[keyPath: kp] },
-                set: {
-                    var spec = model.library.rotation ?? RotationSpec()
-                    spec[keyPath: kp] = $0
-                    model.library.rotation = spec
-                    model.save()
-                })
-    }
-
-    /// Binding into Library.schedule, materializing the spec on first edit.
-    private func schedule<T>(_ kp: WritableKeyPath<ScheduleSpec, T>) -> Binding<T> {
-        Binding(get: { (model.library.schedule ?? ScheduleSpec())[keyPath: kp] },
-                set: {
-                    var spec = model.library.schedule ?? ScheduleSpec()
-                    spec[keyPath: kp] = $0
-                    model.library.schedule = spec
-                    model.save()
-                })
-    }
-
-    // Rotation and day/night are mutually exclusive — enabling one disables the other.
-    private var rotationEnabled: Binding<Bool> {
-        Binding(get: { model.library.rotation?.enabled ?? false },
-                set: {
-                    var spec = model.library.rotation ?? RotationSpec()
-                    spec.enabled = $0
-                    model.library.rotation = spec
-                    if $0 { model.library.schedule?.enabled = false }
-                    model.save()
-                })
-    }
-    private var scheduleEnabled: Binding<Bool> {
-        Binding(get: { model.library.schedule?.enabled ?? false },
-                set: {
-                    var spec = model.library.schedule ?? ScheduleSpec()
-                    spec.enabled = $0
-                    model.library.schedule = spec
-                    if $0 { model.library.rotation?.enabled = false }
-                    model.save()
-                })
     }
 
     // MARK: Helpers
