@@ -44,6 +44,14 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     // astro() only changes at wall-clock resolution — recompute at most 1×/sec.
     private var astroCached: (at: CFTimeInterval, value: (sun: simd_float3, userLon: Float, userLat: Float, hasLoc: Bool))?
 
+    // Crossfade: while `outgoing` is set, both chains render (old → fadeOld,
+    // new → drawable via blend pass 41) until progress reaches 1.
+    private var outgoing: (preset: Preset, packed: [FXUniforms], startTime: CFTimeInterval)?
+    private var transitionBegan: CFTimeInterval = 0
+    private var transitionDuration: Double = 0
+    private var fadeOld: MTLTexture?
+    private var fadeNew: MTLTexture?
+
     init?(pixelFormat: MTLPixelFormat, store: SharedStore) {
         guard let device = MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue() else { return nil }
@@ -111,6 +119,19 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
     }
 
+    /// Switch presets with a GPU crossfade. Falls back to a hard cut when there's
+    /// nothing to fade from (first apply) or the duration is negligible.
+    func transition(to preset: Preset, source: SourceSpec, duration: Double) {
+        guard duration > 0.05, let current = self.preset else {
+            apply(preset, source: source)
+            return
+        }
+        outgoing = (current, packedUniforms, startTime)
+        transitionBegan = CACurrentMediaTime()
+        transitionDuration = duration
+        apply(preset, source: source)   // shared global source ⇒ no media reload mid-fade
+    }
+
     /// Sun/location for the Universe effect, cached for a second.
     private func cachedAstro() -> (sun: simd_float3, userLon: Float, userLat: Float, hasLoc: Bool) {
         let now = CACurrentMediaTime()
@@ -170,25 +191,100 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             guard let cmd = queue.makeCommandBuffer() else { inFlight.signal(); return }
             cmd.addCompletedHandler { [inFlight] _ in inFlight.signal() }
 
-            let t = Float(CACurrentMediaTime() - startTime)
+            let now = CACurrentMediaTime()
+            let t = Float(now - startTime)
             let sTex = media?.currentTexture()
             if !loggedFirstFrame {
                 loggedFirstFrame = true
                 store.debug("first draw size=\(drawableSize) effects=\(preset.effects.count) srcTexNil=\(sTex == nil) sourceKind=\(source.kind.rawValue)")
             }
-            encodePasses(cmd, finalDescriptor: final, pingA: texA, pingB: texB,
-                         size: drawableSize, time: t, preset: preset, source: source,
-                         sourceTex: sTex, usePacked: true)
+
+            var blended = false
+            if let out = outgoing {
+                let progress = (now - transitionBegan) / max(transitionDuration, 0.001)
+                if progress >= 1 {
+                    outgoing = nil
+                    fadeOld = nil; fadeNew = nil     // ~2 drawables of VRAM back until the next fade
+                } else {
+                    ensureFadeTextures(width: Int(ds.width), height: Int(ds.height),
+                                       format: view.colorPixelFormat)
+                    if let fo = fadeOld, let fn = fadeNew {
+                        // Outgoing chain → fadeOld (its own time base keeps its motion coherent).
+                        encodePasses(cmd, finalDescriptor: offscreenDescriptor(fo), pingA: texA, pingB: texB,
+                                     size: drawableSize, time: Float(now - out.startTime),
+                                     preset: out.preset, source: source, sourceTex: sTex,
+                                     packedUniforms: out.packed)
+                        // Incoming chain → fadeNew. The shared ping-pong is safe: the chains
+                        // encode sequentially and each result is parked before the next starts.
+                        encodePasses(cmd, finalDescriptor: offscreenDescriptor(fn), pingA: texA, pingB: texB,
+                                     size: drawableSize, time: t, preset: preset, source: source,
+                                     sourceTex: sTex, packedUniforms: packedUniforms)
+                        encodeBlend(cmd, final: final, newTex: fn, oldTex: fo,
+                                    progress: Float(progress), size: drawableSize)
+                        blended = true
+                    }
+                }
+            }
+            if !blended {
+                encodePasses(cmd, finalDescriptor: final, pingA: texA, pingB: texB,
+                             size: drawableSize, time: t, preset: preset, source: source,
+                             sourceTex: sTex, packedUniforms: packedUniforms)
+            }
             cmd.present(drawable)
             cmd.commit()
         }
+    }
+
+    // MARK: Crossfade helpers
+
+    private func ensureFadeTextures(width: Int, height: Int, format: MTLPixelFormat) {
+        if fadeOld?.width == width, fadeOld?.height == height, fadeNew != nil { return }
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: format,
+                                                         width: max(width, 1), height: max(height, 1),
+                                                         mipmapped: false)
+        d.usage = [.shaderRead, .renderTarget]
+        d.storageMode = .private
+        fadeOld = device.makeTexture(descriptor: d)
+        fadeNew = device.makeTexture(descriptor: d)
+    }
+
+    private func offscreenDescriptor(_ tex: MTLTexture) -> MTLRenderPassDescriptor {
+        let rpd = MTLRenderPassDescriptor()
+        rpd.colorAttachments[0].texture = tex
+        rpd.colorAttachments[0].loadAction = .dontCare
+        rpd.colorAttachments[0].storeAction = .store
+        return rpd
+    }
+
+    /// Final pass of a transition frame: mix(fadeOld, fadeNew, smoothstep(progress))
+    /// straight into the drawable, via internal shader effect 41.
+    private func encodeBlend(_ cmd: MTLCommandBuffer, final: MTLRenderPassDescriptor,
+                             newTex: MTLTexture, oldTex: MTLTexture,
+                             progress: Float, size: CGSize) {
+        guard let enc = cmd.makeRenderCommandEncoder(descriptor: final) else { return }
+        enc.setRenderPipelineState(pipeline)
+        var u = FXUniforms()
+        u.resolution = simd_float2(Float(size.width), Float(size.height))
+        u.effect = 41
+        u.p0 = simd_float4(progress, 0, 0, 0)
+        u.srcSize = simd_float2(Float(newTex.width), Float(newTex.height))
+        enc.setFragmentBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
+        enc.setFragmentTexture(newTex, index: 0)
+        enc.setFragmentTexture(glyphs ?? dummy, index: 1)
+        enc.setFragmentTexture(planetTex.earthDay, index: 2)
+        enc.setFragmentTexture(planetTex.earthNight, index: 3)
+        enc.setFragmentTexture(planetTex.planets, index: 4)
+        enc.setFragmentTexture(oldTex, index: 5)
+        enc.setFragmentSamplerState(sampler, index: 0)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        enc.endEncoding()
     }
 
     /// Encode the full source→effects pass chain. Last pass writes into `finalDescriptor`.
     private func encodePasses(_ cmd: MTLCommandBuffer, finalDescriptor: MTLRenderPassDescriptor,
                               pingA: MTLTexture, pingB: MTLTexture, size: CGSize, time: Float,
                               preset: Preset, source: SourceSpec, sourceTex: MTLTexture?,
-                              usePacked: Bool = false) {
+                              packedUniforms packed: [FXUniforms]? = nil) {
         let res = simd_float2(Float(size.width), Float(size.height))
         let useGradient = (source.kind == .gradient) || (sourceTex == nil)
         let effects = preset.effects.filter { $0.enabled }
@@ -222,10 +318,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             guard let enc = cmd.makeRenderCommandEncoder(descriptor: rpd) else { continue }
             enc.setRenderPipelineState(pipeline)
 
-            // Start from the pre-packed uniforms (effect id, params, palette) when this
-            // is the live preset; thumbnails of arbitrary presets pack per pass below.
-            let packed = usePacked && packedUniforms.count == effects.count
-            var u = (packed && i > 0 && !serialBlit) ? packedUniforms[i - 1] : FXUniforms()
+            // Start from the pre-packed uniforms (effect id, params, palette) when the
+            // caller supplied them; thumbnails of arbitrary presets pack per pass below.
+            let havePacked = (packed?.count == effects.count)
+            var u = (havePacked && i > 0 && !serialBlit) ? packed![i - 1] : FXUniforms()
             u.resolution = res
             u.time = time
             u.glyphCount = Int32(GlyphAtlas.count)
@@ -247,7 +343,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 u.effect = 38                      // upscale the precomputed dither grid
                 u.p0 = simd_float4(Float(gridW), Float(gridH), 0, 0)
             } else {
-                if !packed { inst!.pack(into: &u) }
+                if !havePacked { inst!.pack(into: &u) }
                 if inst!.kind == .universe {
                     let a = cachedAstro()
                     u.p1 = simd_float4(a.sun.x, a.sun.y, a.sun.z, 0)
@@ -262,6 +358,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             enc.setFragmentTexture(planetTex.earthDay, index: 2)
             enc.setFragmentTexture(planetTex.earthNight, index: 3)
             enc.setFragmentTexture(planetTex.planets, index: 4)
+            enc.setFragmentTexture(dummy, index: 5)   // fadePrev; only real during a crossfade
             enc.setFragmentSamplerState(sampler, index: 0)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             enc.endEncoding()
@@ -288,6 +385,15 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let rel = subLon - userLon
         let sun = simd_float3(Float(cos(decl) * sin(rel)), Float(sin(decl)), Float(cos(decl) * cos(rel)))
         return (sun, Float(userLon), Float(userLat), location != nil)
+    }
+
+    /// Solar elevation (radians) at the user's location right now, derived from
+    /// astro()'s sun vector: sin(alt) = sinφ·sun.y + cosφ·sun.z. Negative below the
+    /// horizon; −0.833° is conventional sunset (refraction + solar radius).
+    static func solarElevation(location: (lat: Double, lon: Double)?) -> Double {
+        let a = astro(location: location)
+        let s = Double(sin(a.userLat)) * Double(a.sun.y) + Double(cos(a.userLat)) * Double(a.sun.z)
+        return asin(max(-1, min(1, s)))
     }
 
     // MARK: Serial dither (compute)

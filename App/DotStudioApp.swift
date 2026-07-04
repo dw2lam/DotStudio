@@ -32,6 +32,12 @@ struct DotStudioApp: App {
                 Button("New Screensaver") { model.addPreset() }
                     .keyboardShortcut("n")
                 Button("Add Demo Screensavers") { model.addDemoPack() }
+                Divider()
+                Button("Import Screensavers…") { model.importPresetsViaPanel() }
+                    .keyboardShortcut("o")
+                Button("Export Screensaver…") { model.exportSelected() }
+                    .keyboardShortcut("e")
+                    .disabled(model.selectedID == nil)
             }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { updater.checkForUpdates(nil) }

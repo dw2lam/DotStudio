@@ -1,18 +1,30 @@
 # Changelog
 
-## 1.2.0 — Trustworthy & efficient
+## 1.2.0 — Rotation, day/night, and a trustworthy foundation
 
+### New
+- **Rotate through styles** — the screensaver can cycle your presets on an
+  interval (1 min – 1 hour), in order or shuffled, with a **GPU crossfade**
+  between them. Every display shows the same preset with no coordination.
+- **Day / night styles** — pick one preset for daytime and one for night;
+  DotStudio follows the actual sun at your location (falls back to your
+  time zone) and crossfades at sunrise/sunset.
+- **Share presets** — File → Export/Import Screensavers (`.dotstudiopreset`
+  files, drag-drop onto the sidebar works too). Files from newer versions
+  import gracefully, skipping effects this build doesn't know.
+- **Quality setting** (Full / Balanced / Efficient): renders the screensaver
+  at reduced resolution — Efficient cuts GPU memory and bandwidth ~4× on
+  Retina displays with the same chunky aesthetic.
+- **Auto-updates via Sparkle** — the app checks for new releases and refreshes
+  the installed screensaver after updating itself.
+
+### Fixed / improved
 - **Your library can no longer be silently wiped.** A damaged `library.json` is
   backed up and reported with a "Reveal Backup" alert; the running screensaver
   keeps its last-good preset. Import and save failures are surfaced too.
-- **New Quality setting** (Full / Balanced / Efficient): renders the screensaver
-  at reduced resolution — Efficient cuts GPU memory and bandwidth ~4× on Retina
-  displays with the same chunky aesthetic.
 - **Battery aware**: frame rate caps at 15 fps on battery, 10 fps in Low Power
   Mode, and the System Settings preview thumbnail now runs at 10 fps.
 - **Video presets get real thumbnails** (poster frame) instead of a gradient.
-- **Auto-updates via Sparkle** — the app checks for new releases and refreshes
-  the installed screensaver after updating itself.
 - Releases are now built and published by CI directly from the version tag.
 - Debug logging is opt-in (`touch debug.enabled` next to `library.json`).
 

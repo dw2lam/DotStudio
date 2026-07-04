@@ -57,6 +57,23 @@ struct Preset: Codable, Identifiable, Equatable, Hashable {
     var source: SourceSpec?
 }
 
+/// Sun-driven day/night preset scheduling.
+struct ScheduleSpec: Codable, Equatable {
+    var enabled: Bool = false
+    var dayPresetID: UUID?
+    var nightPresetID: UUID?
+}
+
+/// Automatic preset rotation for the screensaver.
+struct RotationSpec: Codable, Equatable {
+    var enabled: Bool = false
+    var intervalMinutes: Double = 5
+    var shuffle: Bool = false
+    var transitionSeconds: Double = 1.5
+    /// Restrict rotation to these presets; nil = rotate through all.
+    var presetIDs: [UUID]?
+}
+
 /// The whole on-disk library: one shared source + the saved styles.
 struct Library: Codable, Equatable {
     var presets: [Preset] = []
@@ -68,4 +85,8 @@ struct Library: Codable, Equatable {
     /// Saver render resolution as a fraction of native (1 = full Retina). Optional so
     /// older builds still decode the library; nil means full quality.
     var renderScale: Double?
+    /// Automatic preset rotation; nil = show the active preset only.
+    var rotation: RotationSpec?
+    /// Day/night scheduling; when enabled it overrides rotation.
+    var schedule: ScheduleSpec?
 }

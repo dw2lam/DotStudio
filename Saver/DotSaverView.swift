@@ -88,19 +88,70 @@ final class DotSaverView: ScreenSaverView {
             return
         }
         renderScale = CGFloat(lib.renderScale ?? 1)   // picked up next frame by syncDrawableSize
-        let active = lib.presets.first { $0.id == lib.activeID } ?? lib.presets.first!
-        let changed = force || active.id != activeID || mod != lastModified
-        if force { store.debug("reload active=\(active.name) effects=\(active.effects.count) sourceKind=\(lib.source.kind.rawValue)") }
+        let target = DotSaverView.effectivePreset(in: lib, now: Date())
+        let changed = force || target.id != activeID || mod != lastModified
+        if force { store.debug("reload active=\(target.name) effects=\(target.effects.count) sourceKind=\(lib.source.kind.rawValue)") }
         if changed {
-            activeID = active.id
+            // Crossfade on rotation/schedule-driven switches; hard cut on first load and edits.
+            let automatic = (lib.rotation?.enabled ?? false) || (lib.schedule?.enabled ?? false)
+            let fade = !force && target.id != activeID && automatic
+            activeID = target.id
             lastModified = mod
             if let la = lib.locationLat, let lo = lib.locationLon {
                 renderer?.location = (la, lo)
             }
-            renderer?.apply(active, source: lib.source)
-            presetFPS = active.fps
+            let fadeDuration = lib.rotation?.transitionSeconds ?? 1.5   // schedule-only flips get a default fade
+            if fade, fadeDuration > 0 {
+                renderer?.transition(to: target, source: lib.source, duration: fadeDuration)
+            } else {
+                renderer?.apply(target, source: lib.source)
+            }
+            presetFPS = target.fps
             animationTimeInterval = effectiveInterval()
         }
+    }
+
+    // MARK: Rotation
+
+    /// Which preset belongs on screen right now. Precedence: day/night schedule >
+    /// rotation slot > active preset. Pure function of (library, wall clock), so
+    /// every display converges on the same answer with zero coordination.
+    static func effectivePreset(in lib: Library, now: Date) -> Preset {
+        let fallback = lib.presets.first { $0.id == lib.activeID } ?? lib.presets.first!
+        if let sched = lib.schedule, sched.enabled {
+            var loc: (lat: Double, lon: Double)?
+            if let la = lib.locationLat, let lo = lib.locationLon { loc = (la, lo) }
+            let night = MetalRenderer.solarElevation(location: loc) < (-0.833 * .pi / 180)
+            if let id = night ? sched.nightPresetID : sched.dayPresetID,
+               let preset = lib.presets.first(where: { $0.id == id }) {
+                return preset
+            }
+        }
+        guard let rot = lib.rotation, rot.enabled else { return fallback }
+        var pool = lib.presets
+        if let ids = rot.presetIDs, !ids.isEmpty {
+            let allowed = Set(ids)
+            let filtered = lib.presets.filter { allowed.contains($0.id) }
+            if !filtered.isEmpty { pool = filtered }
+        }
+        guard pool.count > 1 else { return pool.first ?? fallback }
+        let interval = max(rot.intervalMinutes, 0.25) * 60
+        let slot = Int(now.timeIntervalSince1970 / interval)
+        let idx = rot.shuffle ? shuffledIndex(slot: slot, count: pool.count) : slot % pool.count
+        return pool[idx]
+    }
+
+    /// Deterministic shuffle: each round of `count` slots is a seeded Fisher–Yates
+    /// permutation, so no preset repeats until all have shown — and displays agree.
+    private static func shuffledIndex(slot: Int, count: Int) -> Int {
+        let round = slot / count, pos = slot % count
+        var order = Array(0..<count)
+        var state = UInt64(bitPattern: Int64(round)) &* 2654435761 &+ 0x9E3779B97F4A7C15
+        for i in stride(from: count - 1, to: 0, by: -1) {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            order.swapAt(i, Int(state % UInt64(i + 1)))
+        }
+        return order[pos]
     }
 
     // MARK: Frame pacing (preview + power aware)
