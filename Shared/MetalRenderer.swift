@@ -27,6 +27,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private var startTime: CFTimeInterval = CACurrentMediaTime()
     private var loggedFirstFrame = false
 
+    // Cap frames-in-flight so drawables/IOSurfaces are recycled rather than queued up.
+    private let inFlight = DispatchSemaphore(value: 2)
+
     // Render description
     private(set) var preset: Preset?
     private var source = SourceSpec()
@@ -122,30 +125,40 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     }
 
     func draw(in view: MTKView) {
-        // Ensure offscreen textures exist & match the drawable. In a screensaver the
-        // view is created at full size before the delegate is set, so the initial
-        // drawableSizeWillChange callback can be missed — recreate here if needed.
-        let ds = view.drawableSize
-        if texA == nil || texB == nil || drawableSize != ds {
-            mtkView(view, drawableSizeWillChange: ds)
-        }
-        guard let preset = preset,
-              let cmd = queue.makeCommandBuffer(),
-              let final = view.currentRenderPassDescriptor,
-              let drawable = view.currentDrawable,
-              let texA = texA, let texB = texB else { return }
+        // The screensaver host drives each frame manually (see DotSaverView) rather than
+        // through MTKView's display link, so nothing drains an autorelease pool per frame.
+        // Without this pool the per-frame CAMetalDrawable / IOSurface / command buffer
+        // objects accumulate and leak GPU memory (grew to ~14 GB over days of idle).
+        autoreleasepool {
+            // Ensure offscreen textures exist & match the drawable. In a screensaver the
+            // view is created at full size before the delegate is set, so the initial
+            // drawableSizeWillChange callback can be missed — recreate here if needed.
+            let ds = view.drawableSize
+            if texA == nil || texB == nil || drawableSize != ds {
+                mtkView(view, drawableSizeWillChange: ds)
+            }
+            guard let preset = preset,
+                  let final = view.currentRenderPassDescriptor,
+                  let drawable = view.currentDrawable,
+                  let texA = texA, let texB = texB else { return }
 
-        let t = Float(CACurrentMediaTime() - startTime)
-        let sTex = media?.currentTexture()
-        if !loggedFirstFrame {
-            loggedFirstFrame = true
-            store.debug("first draw size=\(drawableSize) effects=\(preset.effects.count) srcTexNil=\(sTex == nil) sourceKind=\(source.kind.rawValue)")
+            // Throttle frames-in-flight; released in the command buffer's completion handler.
+            inFlight.wait()
+            guard let cmd = queue.makeCommandBuffer() else { inFlight.signal(); return }
+            cmd.addCompletedHandler { [inFlight] _ in inFlight.signal() }
+
+            let t = Float(CACurrentMediaTime() - startTime)
+            let sTex = media?.currentTexture()
+            if !loggedFirstFrame {
+                loggedFirstFrame = true
+                store.debug("first draw size=\(drawableSize) effects=\(preset.effects.count) srcTexNil=\(sTex == nil) sourceKind=\(source.kind.rawValue)")
+            }
+            encodePasses(cmd, finalDescriptor: final, pingA: texA, pingB: texB,
+                         size: drawableSize, time: t, preset: preset, source: source,
+                         sourceTex: sTex)
+            cmd.present(drawable)
+            cmd.commit()
         }
-        encodePasses(cmd, finalDescriptor: final, pingA: texA, pingB: texB,
-                     size: drawableSize, time: t, preset: preset, source: source,
-                     sourceTex: sTex)
-        cmd.present(drawable)
-        cmd.commit()
     }
 
     /// Encode the full source→effects pass chain. Last pass writes into `finalDescriptor`.

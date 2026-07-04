@@ -3,6 +3,7 @@
 
 import ScreenSaver
 import MetalKit
+import QuartzCore
 
 @objc(DotSaverView)
 final class DotSaverView: ScreenSaverView {
@@ -34,6 +35,13 @@ final class DotSaverView: ScreenSaverView {
         view.isPaused = true
         view.colorPixelFormat = .bgra8Unorm
         view.layer?.isOpaque = true
+        // Cap the CAMetalLayer drawable pool. Left uncapped it grew to ~13 in-flight
+        // drawables (~33 MB each at 2× Retina ≈ 430 MB); the render loop only needs a
+        // couple. 3 gives headroom for the frame WindowServer is compositing plus the
+        // 2 we allow in flight (see MetalRenderer.inFlight), without over-allocating.
+        if let metalLayer = view.layer as? CAMetalLayer {
+            metalLayer.maximumDrawableCount = 3
+        }
         try? FileManager.default.removeItem(at: store.baseDir.appendingPathComponent("debug.log"))
         store.debug("=== commonInit \(Date()) bounds=\(bounds) isPreview=\(isPreview) ===")
         guard let r = MetalRenderer(pixelFormat: view.colorPixelFormat, store: store) else {

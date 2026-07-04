@@ -13,8 +13,8 @@ settings:
     CODE_SIGNING_REQUIRED: "YES"
     CODE_SIGNING_ALLOWED: "YES"
     ENABLE_HARDENED_RUNTIME: "NO"
-    MARKETING_VERSION: "1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "1.1.3"
+    CURRENT_PROJECT_VERSION: "5"
     DEVELOPMENT_TEAM: ""
     MTL_FAST_MATH: "YES"
 
@@ -59,4 +59,4 @@ targets:
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.graphics-design"
         INFOPLIST_KEY_NSHumanReadableCopyright: "DotStudio"
         INFOPLIST_KEY_CFBundleDisplayName: DotStudio
-        MARKETING_VERSION: "1.0"
+        MARKETING_VERSION: "1.1.3"
