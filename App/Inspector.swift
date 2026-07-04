@@ -16,6 +16,8 @@ struct InspectorView: View {
                 sourceSection
                 Divider()
                 effectsSection
+                Divider()
+                saverSection
             }
             .padding(16)
         }
@@ -149,6 +151,32 @@ struct InspectorView: View {
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
+    }
+
+    // MARK: Screensaver (library-wide)
+
+    private var saverSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("SCREENSAVER").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Text("applies to all styles").font(.caption2).foregroundStyle(.tertiary)
+            }
+            Picker("Quality", selection: qualityBinding) {
+                Text("Full").tag(1.0)
+                Text("Balanced").tag(0.75)
+                Text("Efficient").tag(0.5)
+            }
+            .controlSize(.small)
+            Text("Lower quality renders at reduced resolution — much less memory and battery on Retina displays, with the same chunky look.")
+                .font(.caption2).foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var qualityBinding: Binding<Double> {
+        Binding(get: { model.library.renderScale ?? 1.0 },
+                set: { model.library.renderScale = $0 >= 1.0 ? nil : $0; model.save() })
     }
 
     // MARK: Helpers

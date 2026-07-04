@@ -34,6 +34,19 @@ struct ContentView: View {
                 Button("OK", role: .cancel) {}
             }
         } message: { Text(installMsg) }
+        .alert(item: $model.storeAlert) { alert in
+            if let backup = alert.backupURL {
+                return Alert(
+                    title: Text(alert.title),
+                    message: Text(alert.message),
+                    primaryButton: .default(Text("Reveal Backup in Finder")) {
+                        NSWorkspace.shared.activateFileViewerSelecting([backup])
+                    },
+                    secondaryButton: .cancel(Text("OK")))
+            }
+            return Alert(title: Text(alert.title), message: Text(alert.message),
+                         dismissButton: .default(Text("OK")))
+        }
     }
 
     private func doInstall() {

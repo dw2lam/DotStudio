@@ -37,6 +37,13 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private let store: SharedStore
     var location: (lat: Double, lon: Double)?      // resolved device location (Universe marker)
 
+    // Per-effect uniforms packed once at apply(); per frame only the dynamic
+    // fields (time/resolution/srcSize/astro) are overwritten on a copy.
+    private var packedUniforms: [FXUniforms] = []
+
+    // astro() only changes at wall-clock resolution — recompute at most 1×/sec.
+    private var astroCached: (at: CFTimeInterval, value: (sun: simd_float3, userLon: Float, userLat: Float, hasLoc: Bool))?
+
     init?(pixelFormat: MTLPixelFormat, store: SharedStore) {
         guard let device = MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue() else { return nil }
@@ -91,10 +98,26 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let sourceChanged = (self.source != source)
         self.preset = preset
         self.source = source
+        // Pack static uniforms (effect id, params, palette) once per preset change
+        // instead of re-reading the params dictionary every pass every frame.
+        packedUniforms = preset.effects.filter { $0.enabled }.map { inst in
+            var u = FXUniforms()
+            inst.pack(into: &u)
+            return u
+        }
         if sourceChanged {
             startTime = CACurrentMediaTime()
             loadMedia(for: source)
         }
+    }
+
+    /// Sun/location for the Universe effect, cached for a second.
+    private func cachedAstro() -> (sun: simd_float3, userLon: Float, userLat: Float, hasLoc: Bool) {
+        let now = CACurrentMediaTime()
+        if let c = astroCached, now - c.at < 1 { return c.value }
+        let v = MetalRenderer.astro(location: location)
+        astroCached = (now, v)
+        return v
     }
 
     private func loadMedia(for source: SourceSpec) {
@@ -155,7 +178,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             }
             encodePasses(cmd, finalDescriptor: final, pingA: texA, pingB: texB,
                          size: drawableSize, time: t, preset: preset, source: source,
-                         sourceTex: sTex)
+                         sourceTex: sTex, usePacked: true)
             cmd.present(drawable)
             cmd.commit()
         }
@@ -164,7 +187,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// Encode the full source→effects pass chain. Last pass writes into `finalDescriptor`.
     private func encodePasses(_ cmd: MTLCommandBuffer, finalDescriptor: MTLRenderPassDescriptor,
                               pingA: MTLTexture, pingB: MTLTexture, size: CGSize, time: Float,
-                              preset: Preset, source: SourceSpec, sourceTex: MTLTexture?) {
+                              preset: Preset, source: SourceSpec, sourceTex: MTLTexture?,
+                              usePacked: Bool = false) {
         let res = simd_float2(Float(size.width), Float(size.height))
         let useGradient = (source.kind == .gradient) || (sourceTex == nil)
         let effects = preset.effects.filter { $0.enabled }
@@ -198,7 +222,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             guard let enc = cmd.makeRenderCommandEncoder(descriptor: rpd) else { continue }
             enc.setRenderPipelineState(pipeline)
 
-            var u = FXUniforms()
+            // Start from the pre-packed uniforms (effect id, params, palette) when this
+            // is the live preset; thumbnails of arbitrary presets pack per pass below.
+            let packed = usePacked && packedUniforms.count == effects.count
+            var u = (packed && i > 0 && !serialBlit) ? packedUniforms[i - 1] : FXUniforms()
             u.resolution = res
             u.time = time
             u.glyphCount = Int32(GlyphAtlas.count)
@@ -220,9 +247,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 u.effect = 38                      // upscale the precomputed dither grid
                 u.p0 = simd_float4(Float(gridW), Float(gridH), 0, 0)
             } else {
-                inst!.pack(into: &u)
+                if !packed { inst!.pack(into: &u) }
                 if inst!.kind == .universe {
-                    let a = MetalRenderer.astro(location: location)
+                    let a = cachedAstro()
                     u.p1 = simd_float4(a.sun.x, a.sun.y, a.sun.z, 0)
                     let orbits: Float = (inst!.params["orbits"] ?? 1) > 0.5 ? 1 : 0
                     u.p2 = simd_float4(a.userLon, a.userLat, a.hasLoc ? 1 : 0, orbits)
@@ -312,7 +339,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     // MARK: Thumbnails (offscreen, one frame, synchronous)
 
-    func renderThumbnail(preset: Preset, source: SourceSpec, width: Int, height: Int, time: Float = 1.2) -> CGImage? {
+    func renderThumbnail(preset: Preset, source: SourceSpec, width: Int, height: Int, time: Float = 1.2,
+                         sourceTexOverride: MTLTexture? = nil) -> CGImage? {
         let fmt: MTLPixelFormat = .bgra8Unorm
         guard let cmd = queue.makeCommandBuffer() else { return nil }
         let (a, b) = makeOffscreen(width: width, height: height, format: fmt)
@@ -330,9 +358,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         desc.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1)
         desc.colorAttachments[0].storeAction = .store
 
-        // Load an image source synchronously; video/gradient render on the gradient fallback.
-        var thumbTex: MTLTexture?
-        if source.kind == .image, let name = source.mediaFilename {
+        // Load an image source synchronously; video passes a poster frame via
+        // sourceTexOverride (see Thumbnailer); gradient renders the fallback.
+        var thumbTex: MTLTexture? = sourceTexOverride
+        if thumbTex == nil, source.kind == .image, let name = source.mediaFilename {
             thumbTex = ImageSource(url: store.mediaURL(name), device: device)?.currentTexture()
         }
 
