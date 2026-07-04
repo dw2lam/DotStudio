@@ -193,6 +193,7 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
                             texture2d<float> earthDay   [[texture(2)]],
                             texture2d<float> earthNight [[texture(3)]],
                             texture2d_array<float> planetTex [[texture(4)]],
+                            texture2d<float> fadePrev [[texture(5)]],   // outgoing preset during a crossfade
                             sampler samp           [[sampler(0)]])
 {
     float2 uv  = in.uv;
@@ -878,6 +879,12 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         float2 gridSize = u.p0.xy;
         float2 g = (floor(uv * gridSize) + 0.5) / gridSize;
         return src.sample(samp, g);
+    }
+
+    case 41: { // INTERNAL crossfade — set by the renderer during preset rotation,
+               // never by an EffectInstance. src = incoming frame, fadePrev = outgoing.
+        float k = smoothstep(0.0, 1.0, u.p0.x);
+        return float4(mix(fadePrev.sample(samp, uv).rgb, base.rgb, k), 1.0);
     }
 
     default:

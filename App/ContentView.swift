@@ -1,6 +1,7 @@
 //  ContentView.swift — sidebar + live preview + inspector.
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
@@ -75,6 +76,17 @@ struct ContentView: View {
             }
         }
         .navigationSplitViewColumnWidth(min: 240, ideal: 264)
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            var found = false
+            for p in providers where p.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                found = true
+                _ = p.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url, url.pathExtension.lowercased() == "dotstudiopreset" else { return }
+                    DispatchQueue.main.async { model.importPresets(from: [url]) }
+                }
+            }
+            return found
+        }
         .safeAreaInset(edge: .bottom) {
             HStack(spacing: 14) {
                 Button { model.addPreset() } label: { Image(systemName: "plus") }

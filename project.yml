@@ -65,6 +65,17 @@ targets:
         # Sparkle auto-update: appcast rides on the latest GitHub release.
         SUFeedURL: "https://github.com/dw2lam/DotStudio/releases/latest/download/appcast.xml"
         SUPublicEDKey: "5cK2ecNcpoVKWQrZc1RgdgBRk2n9Xsa/ygTSWfzEdrE="
+        # Sharable preset documents (.dotstudiopreset)
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.davidlam.dotstudio.preset
+            UTTypeDescription: DotStudio Screensaver Preset
+            UTTypeConformsTo: [public.json]
+            UTTypeTagSpecification:
+              public.filename-extension: [dotstudiopreset]
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: DotStudio Screensaver Preset
+            LSItemContentTypes: [com.davidlam.dotstudio.preset]
+            CFBundleTypeRole: Viewer
     settings:
       base:
         PRODUCT_NAME: DotStudio
