@@ -16,6 +16,15 @@ final class DotSaverView: ScreenSaverView {
     private var frameTick = 0
     private var renderScale: CGFloat = 1   // Library.renderScale (1 = full Retina)
     private var presetFPS = 30             // active preset's fps, before power clamps
+    private var lastFrameAt = CACurrentMediaTime()
+    private var idleWatchdog: Timer?
+
+    /// Every live instance in this host process. The host leaks instances (see
+    /// teardownMetalStack), so each new activation sweeps the previous ones.
+    private static var instances = NSHashTable<DotSaverView>.weakObjects()
+
+    /// Short id for log attribution across leaked instances.
+    private let logID = String(UUID().uuidString.prefix(4))
 
     override init?(frame: NSRect, isPreview: Bool) {
         super.init(frame: frame, isPreview: isPreview)
@@ -30,6 +39,49 @@ final class DotSaverView: ScreenSaverView {
     private func commonInit() {
         // The System Settings thumbnail doesn't need full frame rate.
         animationTimeInterval = 1.0 / (isPreview ? 10.0 : 30.0)
+        store.debug("=== [\(logID)] commonInit \(Date()) bounds=\(bounds) isPreview=\(isPreview) ===")
+
+        // A new activation means every earlier instance is a dead husk the host
+        // will never drive again (it neither stops nor releases them). Sweep their
+        // GPU stacks now — this runs while the process is guaranteed awake, unlike
+        // a timer, which App Nap suspends the moment the saver is dismissed.
+        for old in DotSaverView.instances.allObjects where old !== self && old.isStale {
+            store.debug("[\(logID)] sweeping stale instance [\(old.logID)]")
+            old.teardownMetalStack()
+        }
+        DotSaverView.instances.add(self)
+
+        buildMetalStack()
+        // Last-resort cleanup for the final activation (no successor to sweep it).
+        // App Nap may delay this timer, but it fires whenever the process next runs.
+        idleWatchdog = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            guard let self, self.metalView != nil, self.isStale else { return }
+            self.store.debug("[\(self.logID)] idle watchdog — no frames for 5s, tearing down")
+            self.teardownMetalStack()
+        }
+    }
+
+    /// True when the host has stopped driving this view. 2s ≈ two poll periods —
+    /// a new activation always means the previous one stopped, so err eager.
+    private var isStale: Bool { CACurrentMediaTime() - lastFrameAt > 2 }
+
+    /// On dismissal the host detaches leaked views from their window (observed:
+    /// teardown sees window=nil superview=nil) without ever calling stopAnimation.
+    /// That detach is the reliable, immediate teardown signal — event-driven, so
+    /// App Nap can't delay it the way it delays the watchdog timer.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil {
+            store.debug("[\(logID)] detached from window — tearing down Metal stack")
+            teardownMetalStack()
+        }
+    }
+
+    /// Create the MTKView + renderer. Split out of commonInit because the whole
+    /// stack is torn down in stopAnimation() and rebuilt in startAnimation() —
+    /// see the host-leak note there.
+    private func buildMetalStack() {
+        guard metalView == nil else { return }
         let view = MTKView(frame: bounds)
         view.autoresizingMask = [.width, .height]
         view.framebufferOnly = true
@@ -49,10 +101,6 @@ final class DotSaverView: ScreenSaverView {
         if let metalLayer = view.layer as? CAMetalLayer {
             metalLayer.maximumDrawableCount = 3
         }
-        if !isPreview && store.debugEnabled {
-            try? FileManager.default.removeItem(at: store.baseDir.appendingPathComponent("debug.log"))
-        }
-        store.debug("=== commonInit \(Date()) bounds=\(bounds) isPreview=\(isPreview) ===")
         guard let r = MetalRenderer(pixelFormat: view.colorPixelFormat, store: store) else {
             store.debug("MetalRenderer init returned nil — black screen")
             return
@@ -64,6 +112,43 @@ final class DotSaverView: ScreenSaverView {
         addSubview(view)
         store.debug("renderer ready, store base=\(store.baseDir.path)")
         reload(force: true)
+    }
+
+    override func startAnimation() {
+        super.startAnimation()
+        buildMetalStack()   // rebuild after a stopAnimation() teardown
+    }
+
+    override func stopAnimation() {
+        super.stopAnimation()
+        // Belt-and-suspenders: observed macOS 15 never actually calls this on
+        // dismissal (the idle watchdog is the reliable path), but if it ever does,
+        // tear down immediately.
+        store.debug("stopAnimation — tearing down Metal stack")
+        teardownMetalStack()
+    }
+
+    /// Free everything GPU-sized. The legacyScreenSaver host on macOS 14+/15 leaks
+    /// every DotSaverView it creates (one per display per activation) without
+    /// stopping it — each pinned a CAMetalLayer drawable pool, two full-res
+    /// ping-pong textures, and the planet textures (~200-560 MB per activation;
+    /// observed 5 GB after two days). After teardown a leaked view is a hollow
+    /// shell; buildMetalStack() restores everything in ~100 ms if we're revived.
+    private func teardownMetalStack() {
+        guard metalView != nil else { return }
+        store.debug("[\(logID)] teardown: window=\(window == nil ? "nil" : "alive") superview=\(superview == nil ? "nil" : "alive")")
+        metalView?.delegate = nil
+        metalView?.releaseDrawables()      // force the CAMetalLayer pool free NOW
+        metalView?.removeFromSuperview()
+        metalView = nil
+        renderer = nil
+        activeID = nil
+        lastModified = nil
+        frameTick = 0
+        // The leaked window is hidden, so nothing else commits our layer removal
+        // to the render server — without a flush WindowServer keeps the drawable
+        // IOSurfaces pinned in this process forever.
+        CATransaction.flush()
     }
 
     private func reload(force: Bool) {
@@ -184,15 +269,28 @@ final class DotSaverView: ScreenSaverView {
     }
 
     override func animateOneFrame() {
-        guard let mv = metalView else { return }
-        if mv.frame.size != bounds.size { mv.frame = bounds }   // catch up if we started 0×0
-        syncDrawableSize()
-        frameTick += 1
-        if frameTick % 30 == 0 {
-            reload(force: false)                                // poll for edits ~1×/sec
-            animationTimeInterval = effectiveInterval()         // track battery/power changes
+        // Pool the whole tick: the reload poll (file read + JSON decode) also
+        // allocates autoreleased objects, and the host never drains for us.
+        autoreleasepool {
+            // The leaky host keeps driving detached views after dismissal. Never
+            // render — and above all never REBUILD the Metal stack — without a
+            // window, or every dismissed activation stays resident forever.
+            guard window != nil else {
+                teardownMetalStack()   // no-op if already down
+                return
+            }
+            lastFrameAt = CACurrentMediaTime()
+            if metalView == nil { buildMetalStack() }   // revive after a teardown
+            guard let mv = metalView else { return }
+            if mv.frame.size != bounds.size { mv.frame = bounds }   // catch up if we started 0×0
+            syncDrawableSize()
+            frameTick += 1
+            if frameTick % 30 == 0 {
+                reload(force: false)                                // poll for edits ~1×/sec
+                animationTimeInterval = effectiveInterval()         // track battery/power changes
+            }
+            mv.draw()
         }
-        mv.draw()
     }
 
     /// Manually size the drawable: native pixels × renderScale. With
