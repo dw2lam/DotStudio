@@ -19,6 +19,12 @@
   the installed screensaver after updating itself.
 
 ### Fixed / improved
+- **Fixed runaway memory in the macOS screensaver host.** macOS never releases
+  screensaver views it has abandoned (a system bug affecting all third-party
+  savers) — each activation stranded a full GPU stack, growing the
+  `legacyScreenSaver (Wallpaper)` process by hundreds of MB per lock/unlock
+  (observed: 5 GB in two days on two displays). DotStudio now tears down its
+  Metal resources the moment the host abandons a view; memory stays flat.
 - **Your library can no longer be silently wiped.** A damaged `library.json` is
   backed up and reported with a "Reveal Backup" alert; the running screensaver
   keeps its last-good preset. Import and save failures are surfaced too.
