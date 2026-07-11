@@ -59,6 +59,10 @@ jobs:
         env:
           SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
         run: |
+          if [ -z "$SPARKLE_ED_PRIVATE_KEY" ]; then
+            echo "::warning::SPARKLE_ED_PRIVATE_KEY secret not set — skipping appcast; auto-update feed won't include this release"
+            exit 0
+          fi
           SPARKLE_VERSION=2.9.4
           curl -sL -o sparkle.tar.xz "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
           mkdir sparkle-tools && tar -xf sparkle.tar.xz -C sparkle-tools
@@ -72,7 +76,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/DotStudio.dmg dist/appcast.xml \
+          ASSETS="dist/DotStudio.dmg"
+          [ -f dist/appcast.xml ] && ASSETS="$ASSETS dist/appcast.xml"
+          gh release create "$GITHUB_REF_NAME" $ASSETS \
             --title "DotStudio ${GITHUB_REF_NAME#v}" \
             --generate-notes \
             --notes "> **First launch:** DotStudio isn't notarized — right-click the app and choose **Open** the first time.
