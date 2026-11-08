@@ -23,6 +23,9 @@ final class SharedStore {
     init(role: StoreRole) {
         let fm = FileManager.default
         switch role {
+        case .app where ProcessInfo.processInfo.environment["DOTSTUDIO_STORE_DIR"] != nil:
+            // Dev/test override: keep headless renders away from the real library.
+            baseDir = URL(fileURLWithPath: ProcessInfo.processInfo.environment["DOTSTUDIO_STORE_DIR"]!, isDirectory: true)
         case .app:
             // Write into the screensaver host's sandbox container.
             let home = fm.homeDirectoryForCurrentUser

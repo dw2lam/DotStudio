@@ -9,7 +9,9 @@ final class Thumbnailer {
     private let store: SharedStore
     private var cache: [UUID: NSImage] = [:]
     private var keys: [UUID: Int] = [:]
-    let width = 168, height = 94
+    /// Gallery tiles are ~260pt wide; 16:10 matches most Mac displays.
+    let width = 448, height = 280
+    private var effectCache: [Int: NSImage] = [:]
 
     /// Called on the main queue when an async poster frame arrives, so the
     /// owner (AppModel) can trigger a SwiftUI refresh.
@@ -50,9 +52,31 @@ final class Thumbnailer {
                                                  sourceTexOverride: override) else {
             return cache[preset.id]
         }
-        let img = NSImage(cgImage: cg, size: NSSize(width: width, height: height))
+        let img = NSImage(cgImage: cg, size: NSSize(width: width / 2, height: height / 2))
         cache[preset.id] = img
         keys[preset.id] = key
+        return img
+    }
+
+    /// A small swatch of one effect applied alone to the current source (Add Effect picker).
+    func effectImage(_ kind: EffectKind, source: SourceSpec) -> NSImage? {
+        var override: MTLTexture?
+        if source.kind == .video, let name = source.mediaFilename {
+            if let tex = posters[name] { override = tex } else { requestPoster(name) }
+        }
+        var hasher = Hasher()
+        hasher.combine(kind)
+        hasher.combine(source)
+        hasher.combine(override != nil)
+        let key = hasher.finalize()
+        if let img = effectCache[key] { return img }
+        let w = 224, h = 140
+        guard let cg = renderer?.renderThumbnail(preset: Preset(name: kind.displayName, effects: [EffectInstance(kind)]),
+                                                 source: source, width: w, height: h,
+                                                 sourceTexOverride: override) else { return nil }
+        let img = NSImage(cgImage: cg, size: NSSize(width: w / 2, height: h / 2))
+        if effectCache.count > 200 { effectCache.removeAll() }
+        effectCache[key] = img
         return img
     }
 

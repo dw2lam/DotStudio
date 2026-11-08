@@ -26,3 +26,63 @@ enum Shots {
         exit(0)
     }
 }
+
+// MARK: - UI shots
+
+import SwiftUI
+
+/// Headless renders of the app's screens (DOTSTUDIO_UI_SHOTS=<dir>) for design
+/// review without opening a visible window. Pair with DOTSTUDIO_STORE_DIR so it
+/// never touches the real library. Metal views render black here; tiles use thumbnails.
+enum UIShots {
+    static func run(outDir: String) {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.prohibited)
+        try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
+        let model = AppModel()
+        model.storeAlert = nil
+        let size = CGSize(width: 1280, height: 860)
+
+        func snap<V: View>(_ name: String, _ size: CGSize, dark: Bool, _ view: V) {
+            let host = NSHostingView(rootView: view.environmentObject(model)
+                .frame(width: size.width, height: size.height))
+            host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            let win = NSWindow(contentRect: CGRect(origin: CGPoint(x: -30000, y: -30000), size: size),
+                               styleMask: [.borderless], backing: .buffered, defer: false)
+            win.appearance = host.appearance
+            win.contentView = host
+            host.frame = CGRect(origin: .zero, size: size)
+            for _ in 0..<4 {
+                host.layoutSubtreeIfNeeded()
+                RunLoop.main.run(until: Date().addingTimeInterval(0.25))
+            }
+            guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
+            host.cacheDisplay(in: host.bounds, to: rep)
+            let suffix = dark ? "-dark" : ""
+            try? rep.representation(using: .png, properties: [:])?
+                .write(to: URL(fileURLWithPath: outDir).appendingPathComponent("\(name)\(suffix).png"))
+            win.contentView = nil
+        }
+
+        let only = ProcessInfo.processInfo.environment["DOTSTUDIO_UI_MODE"]
+        if let m = only.flatMap(AppModel.PlaybackMode.init(rawValue:)) { model.playbackMode = m }
+        for dark in [false, true] {
+            model.editingID = nil
+            snap("library", size, dark: dark, ContentView())
+            if let look = model.library.presets.first(where: { !$0.isScene }) {
+                model.editingID = look.id
+                snap("editor-look", size, dark: dark, ContentView())
+            }
+            if let scene = model.library.presets.first(where: { $0.isScene }) {
+                model.editingID = scene.id
+                snap("editor-scene", size, dark: dark, ContentView())
+            }
+            snap("add-effect", CGSize(width: 430, height: 500), dark: dark,
+                 AddEffectPicker(source: model.library.source, thumbnailer: model.thumbnailer) { _ in })
+            snap("source", CGSize(width: 340, height: 300), dark: dark,
+                 SourceEditor(source: .constant(model.library.source), model: model).padding(16))
+        }
+        FileHandle.standardOutput.write(Data("ui shots done\n".utf8))
+        exit(0)
+    }
+}

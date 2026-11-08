@@ -34,7 +34,11 @@ final class AppModel: ObservableObject {
     }()
     @Published var library: Library
     @Published var selectedID: UUID?
+    /// The style open in the editor; nil = the library gallery is showing.
+    @Published var editingID: UUID?
     @Published var storeAlert: StoreAlert?
+    /// Whether DotStudio is installed and picked in System Settings.
+    @Published private(set) var setupStatus: Installer.Status = Installer.status
 
     init() {
         switch store.loadLibrary() {
@@ -126,14 +130,156 @@ final class AppModel: ObservableObject {
         library.presets.first { $0.id == library.activeID }?.name ?? "—"
     }
 
+    // MARK: Navigation
+
+    func edit(_ id: UUID) {
+        selectedID = id
+        editingID = id
+    }
+
+    func closeEditor() {
+        if let id = editingID { selectedID = id }
+        editingID = nil
+    }
+
+    /// Copy the bundled .saver into ~/Library/Screen Savers, then send the user
+    /// straight to the one place macOS lets them pick it.
+    func installScreensaver() {
+        switch Installer.install() {
+        case .success:
+            refreshSetupStatus()
+            if setupStatus != .ready { Installer.openScreenSaverSettings() }
+        case .failure(let e):
+            storeAlert = StoreAlert(title: "Couldn't Install the Screensaver",
+                                    message: e.localizedDescription)
+        }
+    }
+
+    func refreshSetupStatus() {
+        let s = Installer.status
+        if s != setupStatus { setupStatus = s }
+    }
+
+    // MARK: Playback
+
+    enum PlaybackMode: String, CaseIterable, Identifiable {
+        case single = "One Style"
+        case rotate = "Rotate"
+        case dayNight = "Day & Night"
+        var id: String { rawValue }
+        var symbol: String {
+            switch self {
+            case .single: return "play.rectangle"
+            case .rotate: return "arrow.triangle.2.circlepath"
+            case .dayNight: return "sun.horizon"
+            }
+        }
+    }
+
+    /// Rotation and day/night collapse into one mode, so they never fight.
+    var playbackMode: PlaybackMode {
+        get {
+            if library.schedule?.enabled == true { return .dayNight }
+            if library.rotation?.enabled == true { return .rotate }
+            return .single
+        }
+        set {
+            var rot = library.rotation ?? RotationSpec()
+            var sch = library.schedule ?? ScheduleSpec()
+            rot.enabled = (newValue == .rotate)
+            sch.enabled = (newValue == .dayNight)
+            if newValue == .dayNight {
+                // Seed sensible picks so the mode works the moment it's chosen.
+                if sch.dayPresetID == nil { sch.dayPresetID = library.activeID ?? library.presets.first?.id }
+                if sch.nightPresetID == nil {
+                    sch.nightPresetID = library.presets.first { $0.isScene }?.id ?? library.presets.last?.id
+                }
+            }
+            library.rotation = rot
+            library.schedule = sch
+            save()
+        }
+    }
+
+    var rotation: RotationSpec { library.rotation ?? RotationSpec() }
+    var schedule: ScheduleSpec { library.schedule ?? ScheduleSpec() }
+
+    func updateRotation(_ change: (inout RotationSpec) -> Void) {
+        var r = rotation; change(&r); library.rotation = r; save()
+    }
+
+    func updateSchedule(_ change: (inout ScheduleSpec) -> Void) {
+        var s = schedule; change(&s); library.schedule = s; save()
+    }
+
+    /// nil presetIDs = every style rotates.
+    func isInRotation(_ id: UUID) -> Bool {
+        guard let ids = rotation.presetIDs, !ids.isEmpty else { return true }
+        return ids.contains(id)
+    }
+
+    func toggleRotation(_ id: UUID) {
+        updateRotation { r in
+            var ids = r.presetIDs.flatMap { $0.isEmpty ? nil : $0 } ?? library.presets.map(\.id)
+            if let i = ids.firstIndex(of: id) {
+                guard ids.count > 1 else { return }          // keep at least one style rotating
+                ids.remove(at: i)
+            } else {
+                ids.append(id)
+            }
+            ids = library.presets.map(\.id).filter(ids.contains)   // library order, no strays
+            r.presetIDs = ids.count == library.presets.count ? nil : ids
+        }
+    }
+
+    var rotationCount: Int { library.presets.filter { isInRotation($0.id) }.count }
+
+    /// What the screensaver shows for a style, in the current mode (for tile badges).
+    enum Role { case none, active, rotating, day, night, dayAndNight }
+    func role(of id: UUID) -> Role {
+        switch playbackMode {
+        case .single: return library.activeID == id ? .active : .none
+        case .rotate: return isInRotation(id) ? .rotating : .none
+        case .dayNight:
+            let d = schedule.dayPresetID == id, n = schedule.nightPresetID == id
+            return d && n ? .dayAndNight : d ? .day : n ? .night : .none
+        }
+    }
+
+    /// One-click "show this one": switches to single mode and makes it active.
+    func useAsScreensaver(_ id: UUID) {
+        library.activeID = id
+        if playbackMode != .single { playbackMode = .single } else { save() }
+    }
+
+    func preset(_ id: UUID) -> Preset? { library.presets.first { $0.id == id } }
+
     // MARK: Preset CRUD
 
+    /// New Look: a blank-ish stack on the shared source, opened straight in the editor.
     func addPreset() {
-        var p = Preset(name: "Untitled \(library.presets.count + 1)")
-        p.effects = [EffectInstance(.noiseField), EffectInstance(.dither)]
+        var p = Preset(name: uniqueName("New Look"))
+        p.effects = [EffectInstance(.dither)]
         library.presets.append(p)
-        selectedID = p.id
         save()
+        edit(p.id)
+    }
+
+    /// New Scene from a generator effect.
+    func addScene(_ kind: EffectKind) {
+        var p = Preset(name: uniqueName(kind.displayName))
+        p.effects = [EffectInstance(kind)]
+        library.presets.append(p)
+        save()
+        edit(p.id)
+    }
+
+    private func uniqueName(_ base: String) -> String {
+        let names = Set(library.presets.map(\.name))
+        if !names.contains(base) { return base }
+        var n = 2
+        while names.contains("\(base) \(n)") { n += 1 }
+        return "\(base) \(n)"
     }
 
     /// Append the built-in demo screensavers that aren't already present (by name).
@@ -147,21 +293,40 @@ final class AppModel: ObservableObject {
     }
 
     func duplicateSelected() {
-        guard let sel = selected else { return }
+        guard let id = selectedID else { return }
+        duplicate(id)
+    }
+
+    @discardableResult
+    func duplicate(_ id: UUID) -> UUID? {
+        guard let sel = preset(id) else { return nil }
         var copy = sel
         copy.id = UUID()
         copy.name = sel.name + " Copy"
         copy.effects = sel.effects.map { var e = $0; e.id = UUID(); return e }
-        library.presets.append(copy)
+        let at = (library.presets.firstIndex { $0.id == id } ?? library.presets.count - 1) + 1
+        library.presets.insert(copy, at: at)
+        if let ids = library.rotation?.presetIDs, ids.contains(id) { library.rotation?.presetIDs?.append(copy.id) }
         selectedID = copy.id
         save()
+        return copy.id
     }
 
     func deleteSelected() {
-        guard let id = selectedID, let idx = library.presets.firstIndex(where: { $0.id == id }) else { return }
+        guard let id = selectedID else { return }
+        delete(id)
+    }
+
+    func delete(_ id: UUID) {
+        guard let idx = library.presets.firstIndex(where: { $0.id == id }) else { return }
         library.presets.remove(at: idx)
         if library.activeID == id { library.activeID = library.presets.first?.id }
-        selectedID = library.presets.first?.id
+        library.rotation?.presetIDs?.removeAll { $0 == id }
+        if library.schedule?.dayPresetID == id { library.schedule?.dayPresetID = nil }
+        if library.schedule?.nightPresetID == id { library.schedule?.nightPresetID = nil }
+        if editingID == id { editingID = nil }
+        let neighbor = library.presets.indices.contains(idx) ? idx : library.presets.count - 1
+        selectedID = neighbor >= 0 ? library.presets[neighbor].id : nil
         save()
         thumbnailer.retain(ids: Set(library.presets.map(\.id)))
     }
@@ -169,7 +334,12 @@ final class AppModel: ObservableObject {
     // MARK: Preset sharing (.dotstudiopreset)
 
     func exportSelected() {
-        guard let sel = selected else { return }
+        guard let id = selectedID else { return }
+        exportPreset(id)
+    }
+
+    func exportPreset(_ id: UUID) {
+        guard let sel = preset(id) else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.dotstudioPreset]
         panel.nameFieldStringValue = sel.name
@@ -242,8 +412,8 @@ final class AppModel: ObservableObject {
     // MARK: Still-image export / wallpaper
 
     /// Save the selected screensaver as a PNG (rendered at screen resolution).
-    func exportSelectedAsImage() {
-        guard let sel = selected else { return }
+    func exportSelectedAsImage(_ id: UUID? = nil) {
+        guard let sel = preset(id ?? selectedID ?? UUID()) else { return }
         do {
             try Exporter.exportImagePanel(preset: sel, library: library, store: store)
         } catch {
@@ -253,8 +423,8 @@ final class AppModel: ObservableObject {
     }
 
     /// Render the selected screensaver and set it as the desktop wallpaper.
-    func setSelectedAsWallpaper() {
-        guard let sel = selected else { return }
+    func setSelectedAsWallpaper(_ id: UUID? = nil) {
+        guard let sel = preset(id ?? selectedID ?? UUID()) else { return }
         do {
             try Exporter.setAsWallpaper(preset: sel, library: library, store: store)
         } catch {

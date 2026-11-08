@@ -14,6 +14,38 @@ enum Installer {
         FileManager.default.fileExists(atPath: installedURL.path)
     }
 
+    enum Status: Equatable {
+        case notInstalled
+        case notChosen      // installed, but another screensaver is picked in System Settings
+        case ready
+    }
+
+    static var status: Status {
+        guard isInstalled else { return .notInstalled }
+        return isChosenInSystemSettings ? .ready : .notChosen
+    }
+
+    /// macOS 14+ keeps the screen-saver pick per display/space in the wallpaper
+    /// store; each Idle choice holds a nested plist whose `module` URL names the
+    /// .saver. True if any of them points at ours. (Read-only; best effort.)
+    static var isChosenInSystemSettings: Bool {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store/Index.plist")
+        guard let data = try? Data(contentsOf: url),
+              let root = try? PropertyListSerialization.propertyList(from: data, format: nil)
+        else { return true }   // can't tell: don't nag
+        let needle = Data(saverName.utf8)
+        func scan(_ o: Any, idle: Bool) -> Bool {
+            if let d = o as? [String: Any] {
+                return d.contains { k, v in scan(v, idle: idle || k == "Idle") }
+            }
+            if let a = o as? [Any] { return a.contains { scan($0, idle: idle) } }
+            if idle, let d = o as? Data { return d.range(of: needle) != nil }
+            return false
+        }
+        return scan(root, idle: false)
+    }
+
     /// Returns the .saver bundled inside the app (embedded at build time).
     static var bundledSaverURL: URL? {
         Bundle.main.url(forResource: "DotStudio", withExtension: "saver")
