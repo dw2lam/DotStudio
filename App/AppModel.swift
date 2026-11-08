@@ -37,6 +37,8 @@ final class AppModel: ObservableObject {
     /// The style open in the editor; nil = the library gallery is showing.
     @Published var editingID: UUID?
     @Published var storeAlert: StoreAlert?
+    /// Shows the welcome sheet (first launch, or Help ▸ Welcome to DotStudio…).
+    @Published var showOnboarding = false
     /// Whether DotStudio is installed and picked in System Settings.
     @Published private(set) var setupStatus: Installer.Status = Installer.status
 
