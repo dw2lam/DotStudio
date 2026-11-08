@@ -18,7 +18,7 @@
         P.se = u.p0.y * 0.0174533;
         const float saz = 0.16;
         P.sd = float3(sin(saz) * cos(P.se), sin(P.se), cos(saz) * cos(P.se));
-        P.esun = srgbToLinear(u.colorB.rgb) * 11.0;
+        P.esun = srgbToLinear(u.colorB.rgb) * 9.5;
         P.mie = 0.008 + 0.065 * haze;
         P.tauS = NATURE_RAYLEIGH + P.mie;
         P.tauT = P.tauS + float3(0.016, 0.047, 0.002) + 0.02 * haze;
@@ -50,15 +50,13 @@
             float steep = 0.028 + 0.07 * waves;
             // Wind sea from the sun's side (crests roll toward the camera) plus a cross swell.
             for (int i = 0; i < 17; ++i) {
-                float fi = float(i);
-                float lam = 80.0 * pow(0.73, fi);
-                float hr = nature_h1(fi * 7.0 + 3.0), hp = nature_h1(fi * 13.0 + 1.0);
-                float ang = -1.5708 + (hr - 0.5) * (i < 3 ? 1.2 : 2.6) + (i == 1 ? 0.9 : 0.0);
-                float2 dir = float2(cos(ang), sin(ang));
+                float4 W = NATURE_WAVES[i];                  // direction, phase, wavelength
+                float2 dir = W.xy;
+                float lam = W.w;
                 float k = 6.2831853 / lam;
                 float s = steep * (i < 3 ? 0.5 + 0.8 * waves : (i < 11 ? 0.62 : 0.55));
                 float rs = smoothstep(1.5 * foot, 5.0 * foot, lam);
-                float ph = dot(w, dir) * k - sqrt(9.81 * k) * ts + hp * 6.2831853;
+                float ph = dot(w, dir) * k - sqrt(9.81 * k) * ts + W.z;
                 slope += dir * cos(ph) * s * rs;
                 unres += (1.0 - rs) * s * s * 0.5;
             }

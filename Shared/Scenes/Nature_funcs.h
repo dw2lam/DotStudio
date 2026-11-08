@@ -103,9 +103,9 @@ struct NatureAuroraP {
 
 static inline float nature_fold(float x, float k, float ts, thread float &d) {
     float a1 = x * 0.0105 + k * 2.1 + ts * 0.020;
-    float a2 = x * 0.0260 - k * 1.3 - ts * 0.034;
-    float a3 = x * 0.0590 + k * 4.7 + ts * 0.052;
-    d = 0.55 * 0.0105 * cos(a1) + 0.30 * 0.0260 * cos(a2) + 0.15 * 0.0590 * cos(a3);
+    float a2 = x * 0.0315 - k * 1.3 - ts * 0.034;
+    float a3 = x * 0.0630 + k * 4.7 + ts * 0.052;
+    d = 0.55 * 0.0105 * cos(a1) + 0.30 * 0.0315 * cos(a2) + 0.15 * 0.0630 * cos(a3);
     return 0.55 * sin(a1) + 0.30 * sin(a2) + 0.15 * sin(a3);
 }
 // Small curls (~20–40 km) on top of the big folds; only used to refine a found crossing.
@@ -125,7 +125,7 @@ static inline float3 nature_curtainLight(float x, float alt, float k, constant F
     float patch = smoothstep(0.18, 0.78, nature_n1(x * 0.011 + k * 13.0 - ts * 0.022));
     if (patch <= 0.0) return float3(0.0);
     patch *= 0.75 + 0.25 * sin(ts * 0.21 + x * 0.004 + k * 2.0);
-    float hb = 96.0 + 14.0 * (nature_n1(x * 0.012 + k * 7.3 + ts * 0.01) - 0.5);    // lower hem
+    float hb = 96.0 + 5.0 * sin(x * 0.021 + k * 7.3 + ts * 0.01) + 3.0 * sin(x * 0.067 - k * 2.1);  // lower hem
     float dy = alt - hb;
     // Light scattered in the air around the sheet: a soft halo, also below the hem.
     float3 halo = P.cG * exp(dy < 10.0 ? (dy - 10.0) / 10.0 : (10.0 - dy) / 35.0) * 0.035;
@@ -138,7 +138,7 @@ static inline float3 nature_curtainLight(float x, float alt, float k, constant F
     float q = 0.5 * r1 + 0.32 * r2 + 0.18 * r3;
     float ray = 0.30 + 1.6 * q * q * q;
     // Broad brightness swells along the sheet (tens of km), under the fine rays.
-    float swell = 0.45 + 1.1 * nature_n1(x * 0.035 - drift * 0.15 + k * 3.0);
+    float swell = 1.0 + 0.4 * sin(x * 0.11 - drift * 0.5 + k * 3.0) + 0.25 * sin(x * 0.043 + k);
     // Rays reach different heights: a ragged, picket-fence top.
     float rh = r3 * (0.55 + 0.45 * r1);
     float Ht = 40.0 * P.height * (0.3 + 1.4 * rh * rh);
@@ -183,26 +183,40 @@ static inline float3 nature_curtains(float3 rd, constant FXUniforms& u, NatureAu
         if (amax < 35.0 || min(a0, a1) > 120.0 + 330.0 * P.height) continue;
         // March the fold by rotating its three phasors (no trig inside the loop).
         float x0 = s0 * d2.x, dx = ds * d2.x;
-        float ph1 = x0 * 0.0105 + fk * 2.1 + P.ts * 0.020;
-        float ph2 = x0 * 0.0260 - fk * 1.3 - P.ts * 0.034;
-        float ph3 = x0 * 0.0590 + fk * 4.7 + P.ts * 0.052;
-        float2 z1 = float2(cos(ph1), sin(ph1)), z2 = float2(cos(ph2), sin(ph2)), z3 = float2(cos(ph3), sin(ph3));
+        // Fold frequencies are locked at 1 : 3 : 6, so every phasor and step rotation is a
+        // power of the first one (complex products instead of trig).
+        float c1 = fk * 2.1 + P.ts * 0.020, c2 = -fk * 1.3 - P.ts * 0.034, c3 = fk * 4.7 + P.ts * 0.052;
+        float ph1 = x0 * 0.0105 + c1;
+        float2 z1 = float2(cos(ph1), sin(ph1));
+        float2 e1 = float2(z1.x * z1.x - z1.y * z1.y, 2.0 * z1.x * z1.y);            // z1²
+        float2 e3 = float2(e1.x * z1.x - e1.y * z1.y, e1.x * z1.y + e1.y * z1.x);    // z1³
+        float2 e6 = float2(e3.x * e3.x - e3.y * e3.y, 2.0 * e3.x * e3.y);            // z1⁶
+        float o2a = c2 - 3.0 * c1, o3a = c3 - 6.0 * c1;
+        float2 o2 = float2(cos(o2a), sin(o2a)), o3 = float2(cos(o3a), sin(o3a));
+        float2 z2 = float2(e3.x * o2.x - e3.y * o2.y, e3.x * o2.y + e3.y * o2.x);
+        float2 z3 = float2(e6.x * o3.x - e6.y * o3.y, e6.x * o3.y + e6.y * o3.x);
         float2 r1 = float2(cos(dx * 0.0105), sin(dx * 0.0105));
-        float2 r2 = float2(cos(dx * 0.0260), sin(dx * 0.0260));
-        float2 r3 = float2(cos(dx * 0.0590), sin(dx * 0.0590));
+        float2 r1s = float2(r1.x * r1.x - r1.y * r1.y, 2.0 * r1.x * r1.y);
+        float2 r2 = float2(r1s.x * r1.x - r1s.y * r1.y, r1s.x * r1.y + r1s.y * r1.x);
+        float2 r3 = float2(r2.x * r2.x - r2.y * r2.y, 2.0 * r2.x * r2.y);
         float gp = s0 * D - Z - A * (0.55 * z1.y + 0.30 * z2.y + 0.15 * z3.y);
         float3 ck = float3(0.0);
         for (int i = 1; i <= N; ++i) {
             float s = s0 + ds * float(i);
+            float2 q1 = z1, q2 = z2, q3 = z3;
             z1 = float2(z1.x * r1.x - z1.y * r1.y, z1.y * r1.x + z1.x * r1.y);
             z2 = float2(z2.x * r2.x - z2.y * r2.y, z2.y * r2.x + z2.x * r2.y);
             z3 = float2(z3.x * r3.x - z3.y * r3.y, z3.y * r3.x + z3.x * r3.y);
             float g = s * D - Z - A * (0.55 * z1.y + 0.30 * z2.y + 0.15 * z3.y);
             if (g * gp <= 0.0) {
-                float sc = s - ds + ds * gp / (gp - g);
-                // One Newton step on the full sheet (big folds + curls).
-                float fd, cd, x = sc * d2.x;
-                float fz = nature_fold(x, fk, P.ts, fd) + nature_curl(x, fk, P.ts, cd);
+                float f = gp / (gp - g);
+                float sc = s - ds + ds * f;
+                // One Newton step on the full sheet (big folds + curls). The big folds come
+                // from the marched phasors, interpolated to the crossing (no extra trig).
+                float2 w1 = normalize(mix(q1, z1, f)), w2 = normalize(mix(q2, z2, f)), w3 = normalize(mix(q3, z3, f));
+                float fd = 0.55 * 0.0105 * w1.x + 0.30 * 0.0315 * w2.x + 0.15 * 0.0630 * w3.x;
+                float cd, x = sc * d2.x;
+                float fz = 0.55 * w1.y + 0.30 * w2.y + 0.15 * w3.y + nature_curl(x, fk, P.ts, cd);
                 float dg = D - A * (fd + cd) * d2.x;
                 sc -= (sc * D - Z - A * fz) / (abs(dg) > 0.05 ? dg : (dg < 0.0 ? -0.05 : 0.05));
                 sc = clamp(sc, s - ds * 1.5, s + ds * 0.5);
@@ -212,7 +226,8 @@ static inline float3 nature_curtains(float3 rd, constant FXUniforms& u, NatureAu
                 float cosT = abs(d2.x * sl + d2.y) * rsqrt(1.0 + sl * sl) * cosE;
                 float path = 1.0 / max(cosT, 0.11);
                 float alt = sc * tanE - sc * sc * (1.0 / 12742.0);   // Earth curvature drop
-                ck += nature_curtainLight(x, alt, fk, u, P) * path;
+                if (alt > 40.0 && alt < 140.0 + 300.0 * P.height)    // skip crossings that see nothing
+                    ck += nature_curtainLight(x, alt, fk, u, P) * path;
             }
             gp = g;
         }
@@ -275,7 +290,7 @@ static inline float3 nature_auroraView(float3 rd, constant FXUniforms& u, Nature
 
     if (land.x < 0.999 && land.y < 0.999) {
         float3 sky = float3(0.0);
-        sky += nature_stars(rd, P.pix, P.stars, P.t, 3.0, P.soft > 0.0 ? 2 : 3) * ext;
+        sky += nature_stars(rd, P.pix, P.stars, P.t, 3.0, P.soft > 0.0 ? 1 : 3) * ext;
         float3 aur = nature_curtains(rd, u, P) * P.inten * 0.3;
         sky += aur * mix(0.55, 1.0, ext);
         col += sky;
@@ -314,6 +329,20 @@ struct NatureOceanP {
     float pix;
 };
 
+// Ocean wave trains: (direction toward the camera ± spread, phase, wavelength m), from
+// 80 m swell down to 0.5 m wind ripples, geometric in wavelength (ratio 0.73).
+constant float4 NATURE_WAVES[17] = {
+    float4(0.00807, -0.99997, 6.10883, 80.00000), float4(0.96510, -0.26189, 4.07102, 58.40000),
+    float4(-0.16502, -0.98629, 1.39632, 42.63200), float4(-0.56280, -0.82659, 5.88731, 31.12136),
+    float4(-0.52702, -0.84985, 0.80283, 22.71859), float4(-0.21676, -0.97622, 5.53007, 16.58457),
+    float4(0.48458, -0.87475, 5.48773, 12.10674), float4(0.32469, -0.94582, 2.09701, 8.83792),
+    float4(0.53841, -0.84269, 6.00753, 6.45168), float4(0.83512, -0.55007, 5.19055, 4.70973),
+    float4(-0.55720, -0.83038, 5.68147, 3.43810), float4(-0.94312, -0.33245, 5.66172, 2.50981),
+    float4(-0.94794, -0.31846, 1.93828, 1.83216), float4(-0.25430, -0.96713, 5.55347, 1.33748),
+    float4(0.82914, -0.55904, 5.75483, 0.97636), float4(0.27277, -0.96208, 2.29456, 0.71274),
+    float4(0.00787, -0.99997, 1.99348, 0.52030)
+};
+
 static inline float nature_airmass(float e) {
     float ec = max(e, -0.025);
     return 1.0 / (sin(ec) + 0.50572 * pow(max(ec * 57.29578 + 6.07995, 0.5), -1.6364));
@@ -321,6 +350,16 @@ static inline float nature_airmass(float e) {
 static inline float nature_hg(float c, float g) {
     float d = 1.0 + g * g - 2.0 * g * c;
     return (1.0 - g * g) / (4.0 * NATURE_PI * d * sqrt(d));
+}
+
+// Sunlight reaching altitude h km: the sun sits higher above that point's own horizon
+// (dip ≈ √(2h/R)) and the path runs through thinner air (× e^(−h/8)). This is what keeps
+// clouds glowing pink and red for a while after the sun has set at sea level.
+static inline float3 nature_sunAt(NatureOceanP P, float h) {
+    float dip = sqrt(2.0 * h / 6371.0);
+    float se = P.se + dip;
+    float vis = smoothstep(-0.012, 0.006, se);
+    return exp(-P.tauT * nature_airmass(se) * exp(-h / 8.0)) * vis;
 }
 
 // Sky radiance along v (no sun disc, no clouds).
@@ -334,9 +373,8 @@ static inline float3 nature_oceanAtmos(float3 v, NatureOceanP P) {
     float3 tauV = P.tauS * mv;
     // Light reaching the scatterers: views near the zenith scatter higher up, where the
     // sun's path is shorter (so the zenith stays blue after the horizon turns red).
-    float k = mix(1.0, 0.22, sqrt(ev));
-    float3 Ts = exp(-P.tauT * nature_airmass(P.se) * k);
-    float vis = smoothstep(-0.05, 0.01, P.se);
+    float3 Ts = nature_sunAt(P, 1.0 + 7.0 * sqrt(ev));
+    float vis = 1.0;
     float3 scat = (betaR * pr + P.mie * pm) / (betaR + P.mie);
     float3 L = P.esun * Ts * vis * scat * (1.0 - exp(-tauV));
     // Multiple scattering, roughly: a soft skylight that survives after sunset.
@@ -360,15 +398,15 @@ static inline float nature_cloudNoise(float2 p, int oct) {
 static inline float3 nature_oceanClouds(float3 v, float3 sky, NatureOceanP P, int oct) {
     if (v.y < 0.004 || P.clouds <= 0.0) return sky;
     float c = dot(v, P.sd);
-    float vis = smoothstep(-0.05, 0.0, P.se);
-    float3 Tc = exp(-P.tauT * nature_airmass(P.se) * 0.82);          // sunlight at cloud height
+    float vis = 1.0;
+    float3 Tc = nature_sunAt(P, 2.5);                                 // sunlight at the deck
     // Cirrus at 8 km: streaks stretched along the wind.
     float tC = 8.0 / v.y;
     float2 q = v.xz * tC;
     float2 qs = float2(q.x * 0.6 + q.y * 0.25, q.y * 0.08 - q.x * 0.1) * 0.22 + float2(P.tc * 0.25, 0.0);
-    float ci = gfbm(qs, 3) + 0.35;
+    float ci = gfbm(qs, 2) + 0.35;
     float cir = smoothstep(0.30, 0.85, ci) * P.clouds * exp(-tC * 0.006);
-    float3 cirC = P.esun * Tc * vis * (0.10 + 1.6 * nature_hg(c, 0.7)) * 0.12 + sky * 0.6;
+    float3 cirC = P.esun * nature_sunAt(P, 8.0) * (0.10 + 1.6 * nature_hg(c, 0.7)) * 0.12 + sky * 0.6;
     float3 col = mix(sky, cirC, cir * 0.55 * (oct < 5 ? 0.0 : 1.0));
     // Altocumulus at 2.5 km.
     float tA = 2.5 / v.y;
@@ -708,16 +746,16 @@ struct NatureSnowP {
 
 constant float NATURE_SNOW_CAMH = 1.7;
 
-// Silhouette of a pine row at depth z: 1 where a trunk/canopy covers the pixel.
-static inline float nature_pineRow(float2 sp, float z, float h0, float seed, float pix) {
+// Silhouette of a pine row at depth z: .x = coverage, .y = snow lying on the branch tiers.
+static inline float2 nature_pineRow(float2 sp, float z, float h0, float seed, float pix) {
     float wx = sp.x * z;                              // metres across at that depth
     float gy = h0 - NATURE_SNOW_CAMH / z;             // ground line at that depth (screen)
     float wy = (sp.y - gy) * z;                       // metres above the ground there
-    if (wy < 0.0) return 1.0;
-    if (wy > 22.0) return 0.0;
+    if (wy < 0.0) return float2(1.0, 0.0);
+    if (wy > 22.0) return float2(0.0);
     const float sp_ = 4.2;
     float ci = floor(wx / sp_);
-    float cov = 0.0;
+    float cov = 0.0, snow = 0.0;
     for (int j = -1; j <= 1; ++j) {
         float id = ci + float(j);
         float3 h = pcg3(float3(id, seed, 5.0));
@@ -729,9 +767,15 @@ static inline float nature_pineRow(float2 sp, float z, float h0, float seed, flo
         float tier = fract(wy / (H * 0.13) + h.z * 3.0);
         float hw = H * 0.26 * rel * (0.72 + 0.28 * (1.0 - tier)) + 0.12;
         float aa = pix * z * 1.5;
-        cov = max(cov, smoothstep(hw + aa, hw - aa, abs(wx - cx)));
+        float dx = abs(wx - cx);
+        float c = smoothstep(hw + aa, hw - aa, dx);
+        if (c > cov) {
+            cov = c;
+            // Snow sits on each tier's ledge, thickest toward the branch tips.
+            snow = smoothstep(0.32, 0.05, tier) * smoothstep(0.15, 0.8, dx / hw) * (0.6 + 0.4 * h.y);
+        }
     }
-    return cov;
+    return float2(cov, snow);
 }
 
 // The lamp is shaded: it throws a cone of light downward (soft-edged, ~55° half-angle).
@@ -755,6 +799,9 @@ static inline float3 nature_snowBack(float2 sp, NatureSnowP P, thread float &zb)
         float3 toL = P.L - W;
         float d2 = dot(toL, toL);
         float pool = P.lampI * (P.L.y + NATURE_SNOW_CAMH) / (d2 * sqrt(d2) + 0.5) * nature_lampCone(-toL);
+        float3 toL2 = float3(-9.5, 3.0, 19.5) - W;                    // the far lamp's pool
+        float e2 = dot(toL2, toL2);
+        pool += P.lampI * 4.7 / (e2 * sqrt(e2) + 0.5) * nature_lampCone(-toL2) * 0.8;
         float3 snow = P.sky * 2.2 + P.lampC * pool * 2.6;
         // Soft drifts and the odd glint near the lamp.
         float drift = gnoise(float2(W.x * 0.35, z * 0.5)) * 0.15 + gnoise(float2(W.x * 1.3, z * 2.0)) * 0.06;
@@ -767,18 +814,30 @@ static inline float3 nature_snowBack(float2 sp, NatureSnowP P, thread float &zb)
     } else {
         // Sky: dusk gradient, brighter toward the horizon where the fog thickens.
         col = P.sky * (0.9 + 1.4 * exp(-y * 3.0));
-        col = mix(col, P.fogC, exp(-y * 6.0) * 0.6);
+        col = mix(col, P.fogC, exp(-y * 7.0));
     }
     // Pine rows, far to near, each veiled by its depth's fog.
     for (int r = 0; r < 3; ++r) {
         float z = r == 0 ? 70.0 : (r == 1 ? 38.0 : 21.0);
-        float cov = nature_pineRow(sp, z, P.h0, float(r) * 13.0 + 1.0, P.pix);
+        float2 pr = nature_pineRow(sp, z, P.h0, float(r) * 13.0 + 1.0, P.pix);
+        float cov = pr.x;
         if (cov > 0.0 && z < zb) {
             float3 tc = P.sky * 0.22 + P.lampC * P.lampI * 0.002 / (r == 2 ? 1.0 : 3.0);
-            float fogF = 1.0 - exp(-z * 0.045);
+            tc = mix(tc, P.sky * 2.0 + P.lampC * P.lampI * 0.004, pr.y * 0.45);
+            float fogF = 1.0 - exp(-z * 0.042);
             col = mix(col, mix(tc, P.fogC, fogF), cov);
             if (cov > 0.5) zb = z;
         }
+    }
+    // A second lamp far down the path, mostly lost in the snow: depth, and somewhere to go.
+    {
+        const float3 L2 = float3(-9.5, 3.0, 19.5);
+        float2 l2s = float2(L2.x / L2.z, P.h0 + L2.y / L2.z);
+        float d2l = length(sp - l2s);
+        float fog2 = exp(-L2.z * 0.03);
+        if (abs(sp.x - l2s.x) < 0.05 / L2.z && sp.y < l2s.y && sp.y > P.h0 - NATURE_SNOW_CAMH / L2.z && L2.z < zb)
+            col = mix(col, P.sky * 0.1, fog2);
+        col += P.lampC * P.lampI * (0.00006 / (d2l * d2l + 0.00002) + 0.02 * exp(-d2l * 8.0)) * (0.4 + 0.6 * fog2);
     }
     // The lamp post (7 m away): a dark pole and the lantern.
     float poleX = lampS.x;
