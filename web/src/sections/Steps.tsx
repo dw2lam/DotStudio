@@ -1,41 +1,48 @@
 import { Reveal } from "../components/Reveal";
-import { WordsPullUpMultiStyle } from "../components/animations/WordsPullUpMultiStyle";
+import { SectionHeader } from "../components/SectionHeader";
 
 const CREAM = "#E1E0CC";
 
 const STEPS = [
   {
     n: "01",
-    title: "Feed it a source",
-    body: "Start from a built-in gradient, drop in any image, or point it at a video. The source is shared by every style, so one picture can wear a dozen looks.",
+    title: "Drag it in",
+    body: (
+      <>
+        Download the DMG and drag <b className="font-normal text-gray-200">DotStudio</b> into
+        Applications.
+      </>
+    ),
   },
   {
     n: "02",
-    title: "Stack & tune effects",
-    body: "Add effects to a stack — they apply top to bottom. Dither into halftone into scanlines. Drag the dials, swap the palette, watch it move.",
+    title: "Open it once",
+    body: (
+      <>
+        It isn't notarized yet, so macOS stops the first launch. Go to{" "}
+        <b className="font-normal text-gray-200">System Settings → Privacy &amp; Security</b> and click{" "}
+        <b className="font-normal text-gray-200">Open Anyway</b>.
+      </>
+    ),
   },
   {
     n: "03",
-    title: "Install it",
-    body: "One click copies a real .saver into your Screen Savers folder and opens Wallpaper settings. Pick “DotStudio” once — after that you switch screensavers inside the app.",
+    title: "Follow the welcome guide",
+    body: (
+      <>
+        It installs the screensaver for you, then shows you where to choose it in{" "}
+        <b className="font-normal text-gray-200">Wallpaper → Screen Saver</b>. After that, you switch
+        styles inside the app.
+      </>
+    ),
   },
 ];
 
 export function Steps() {
   return (
-    <section id="how" className="relative bg-black px-4 py-20 sm:py-28 md:py-32">
+    <section id="install" className="relative bg-black px-4 py-20 sm:py-28 md:py-32">
       <div className="mx-auto max-w-7xl">
-        <header className="mb-10 sm:mb-14">
-          <span className="text-[10px] uppercase tracking-[0.25em] text-primary sm:text-xs">
-            From canvas to lock screen
-          </span>
-          <div className="mt-4">
-            <WordsPullUpMultiStyle
-              className="text-2xl font-normal sm:text-3xl md:text-4xl lg:text-5xl"
-              segments={[{ text: "Three steps to a living desktop.", className: "" }]}
-            />
-          </div>
-        </header>
+        <SectionHeader eyebrow="Install" title="Three steps," aside="once." />
 
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           {STEPS.map((s, i) => (
@@ -50,6 +57,20 @@ export function Steps() {
             </Reveal>
           ))}
         </div>
+
+        <Reveal y={10} scaleFrom={1} className="mt-8 sm:mt-10">
+          <div className="grid grid-cols-1 gap-x-8 gap-y-4 border-t border-white/10 pt-6 text-xs text-gray-500 sm:grid-cols-2 sm:text-sm">
+            <p>
+              <span className="text-gray-300">Updates itself.</span> New versions arrive from GitHub
+              Releases; the app checks and installs them for you.
+            </p>
+            <p>
+              <span className="text-gray-300">Your library stays yours.</span> Styles are saved on
+              your Mac in{" "}
+              <span className="text-gray-400">~/Library/Application Support/DotStudio</span>.
+            </p>
+          </div>
+        </Reveal>
       </div>
     </section>
   );

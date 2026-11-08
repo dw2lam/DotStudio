@@ -2,7 +2,7 @@ import { ArrowRight } from "lucide-react";
 import { Reveal } from "../components/Reveal";
 
 const CREAM = "#E1E0CC";
-const LATEST = "https://github.com/dw2lam/dotstudio/releases/latest";
+const LATEST = "https://github.com/dw2lam/DotStudio/releases/latest/download/DotStudio.dmg";
 
 export function Download() {
   return (
@@ -16,8 +16,8 @@ export function Download() {
               Get DotStudio
             </h2>
             <p className="mx-auto mt-4 max-w-md text-xs text-gray-400 sm:text-sm md:text-base">
-              Download the latest build, drop it in Applications, and start making custom Mac
-              screensavers from anything — a gradient, a photo, a clip.
+              Twenty-eight styles to start, a live editor to make more, and updates that
+              arrive on their own. Native, local, free.
             </p>
 
             <a
@@ -33,7 +33,7 @@ export function Download() {
             </a>
 
             <div className="mt-6 flex items-center justify-center gap-3 text-xs text-gray-500">
-              <span>Latest release · macOS 14+</span>
+              <span>DMG · macOS 14 or later</span>
               <span aria-hidden="true">·</span>
               <a
                 href="https://github.com/dw2lam/dotstudio/releases"
@@ -44,10 +44,6 @@ export function Download() {
                 All releases
               </a>
             </div>
-            <p className="mx-auto mt-6 max-w-sm text-[11px] leading-relaxed text-gray-600">
-              Unsigned for now: if macOS blocks the first launch, right-click{" "}
-              <b className="text-gray-400">DotStudio.app → Open</b>.
-            </p>
           </div>
         </div>
       </Reveal>

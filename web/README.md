@@ -20,14 +20,17 @@ scale/fade entrances).
 | Section | What it is |
 |---------|-----------|
 | `Hero` | Inset rounded viewport, **live ASCII effect canvas** backdrop (no stock video), hanging black nav pill, giant `DotStudio` wordmark, pitch + "Get DotStudio" CTA |
-| `Collection` | The print room — a **real macOS app screenshot** (`app-preview`, served as webp with a png fallback) floating on a soft cream glow, then a responsive grid of all 16 real gallery renders with gradient captions, plus a scroll-revealed lead |
-| `LiveStrip` | "Running right now" — three live `EffectCanvas` tiles (ASCII / Matrix / Halftone) with `live · 60fps` tags |
-| `Catalog` | "Forty ways to look" — the full 40-effect index grouped into 7 `#212121` cards of chips |
-| `Steps` | "Three steps to a living desktop" — Feed → Stack & tune → Install |
+| `Showcase` | "The best of the library": a bento of the owner's favourite scenes, Liquid Chrome / Golden Hour / Neon Horizon as silent render loops, Universe / Topography / Aurora as stills |
+| `Studio` | The app itself: native window grabs of the gallery (Playback bar: One Style / Rotate / Day & Night), the editor on Lava Lamp, and the welcome sheet's Create Your Own tab |
+| `Packs` | The four new scene packs (Clocks, Flowing, Nature, Retro), one card each, no style repeated from Showcase |
+| `Looks` | One built-in photo, six Looks, switchable in place (images load on demand) |
+| `Steps` | Install: DMG → Open Anyway in Privacy & Security → welcome guide; auto-updates + library location |
 | `Download` | Centered `#101010` CTA card: icon, "Get DotStudio", cream pill download button, release meta |
 
-Two sections from earlier drafts were cut: a personal "About" section, and a
-"Features" highlight grid that turned out to repeat Collection/LiveStrip/Catalog/Steps
+Each style appears once on the page. Earlier versions had a 16-render Collection, a
+live-canvas strip and a 40-effect Catalog; the redesigned (gallery-first) app made them
+obsolete. Two sections from earlier drafts were cut: a personal "About" section, and a
+"Features" highlight grid that turned out to repeat the other sections
 (and whose per-card "Learn more → GitHub" links pulled visitors off the page before
 the Download CTA). The only outbound CTAs now are the Hero and Download buttons.
 
@@ -60,5 +63,14 @@ This is a **build** project (unlike the static `../website`). `vercel.json` sets
 `framework: vite`, `buildCommand: npm run build`, `outputDirectory: dist`. Point a
 Vercel project's **Root Directory** at `web` to ship it.
 
-Real assets (`icon.png`, `gallery/*.png`) are copied into `public/` from
-`../website/assets`.
+## Media (`public/media/`)
+
+All renders come from the app's own renderer (`tools/gallery/render.sh … --size 2400x1500`),
+app grabs are native window captures (`screencapture -l`, shadow included) of a Debug
+build run against a scratch library (`DOTSTUDIO_STORE_DIR`) with the dev-only
+`DOTSTUDIO_DEMO_*` hooks in `App/ContentView.swift`.
+
+- `scenes/*.webp`: 1600 px stills (Flip Clock rendered natively at 2560x800 for its wide tile)
+- `loops/*.{webm,mp4,webp}`: 1280x800 silent loops + posters; lazy, play only in view
+- `looks/*.webp`: 1280x800, one built-in photo (Wadi Rum, CC0) per Look
+- `app/*.webp`: 2400 px window grabs with transparent shadow margin

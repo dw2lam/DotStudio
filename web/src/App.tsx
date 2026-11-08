@@ -1,7 +1,8 @@
 import { Hero } from "./sections/Hero";
-import { Collection } from "./sections/Collection";
-import { LiveStrip } from "./sections/LiveStrip";
-import { Catalog } from "./sections/Catalog";
+import { Showcase } from "./sections/Showcase";
+import { Studio } from "./sections/Studio";
+import { Packs } from "./sections/Packs";
+import { Looks } from "./sections/Looks";
 import { Steps } from "./sections/Steps";
 import { Download } from "./sections/Download";
 
@@ -9,9 +10,10 @@ export default function App() {
   return (
     <div className="min-h-screen bg-black">
       <Hero />
-      <Collection />
-      <LiveStrip />
-      <Catalog />
+      <Showcase />
+      <Studio />
+      <Packs />
+      <Looks />
       <Steps />
       <Download />
 
@@ -20,7 +22,7 @@ export default function App() {
           <div className="flex items-center gap-2.5">
             <img src="/icon.png" alt="" className="h-6 w-6 rounded" />
             <span>
-              <span className="text-primary">DotStudio</span> — any art → a living Mac screensaver.
+              <span className="text-primary">DotStudio</span> — living screensavers for your Mac.
             </span>
           </div>
           <div className="flex items-center gap-5">

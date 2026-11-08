@@ -32,10 +32,13 @@ struct ContentView: View {
         .sheet(isPresented: $model.showOnboarding, onDismiss: {
             hasCompletedOnboarding = true   // finishing, skipping, or Esc all count
         }) {
-            OnboardingView()
+            OnboardingView(initialStep: DemoHooks.onboardingCreate ? .pick : .welcome,
+                           pickMode: DemoHooks.onboardingCreate ? .create : .presets)
                 .environmentObject(model)
         }
-        .onAppear { presentOnboardingIfNeeded() }
+        .onAppear {
+            if DemoHooks.isActive { DemoHooks.apply(to: model) } else { presentOnboardingIfNeeded() }
+        }
         .onChange(of: model.storeAlert == nil) { _, clear in
             if clear { presentOnboardingIfNeeded() }   // wait out a launch-time library alert
         }
@@ -55,9 +58,39 @@ struct ContentView: View {
     }
 
     private func presentOnboardingIfNeeded() {
-        guard !hasCompletedOnboarding, !Self.isRenderingShots,
+        guard !hasCompletedOnboarding, !Self.isRenderingShots, !DemoHooks.isActive,
               !model.showOnboarding, model.storeAlert == nil else { return }
         model.showOnboarding = true
+    }
+}
+
+/// DEV-ONLY hooks for website screen grabs; inert unless one of these env vars is set:
+///   DOTSTUDIO_DEMO_EDIT=<style name>    open that style in the editor on launch
+///   DOTSTUDIO_DEMO_ONBOARDING=create    open the welcome sheet on its "Create Your Own" tab
+///   DOTSTUDIO_DEMO_WINDOW=1440x900      size the main window's content
+/// While any is set the first-launch sheet never auto-presents. Pair with DOTSTUDIO_STORE_DIR.
+enum DemoHooks {
+    private static let env = ProcessInfo.processInfo.environment
+    static let editName = env["DOTSTUDIO_DEMO_EDIT"]
+    static let onboardingCreate = env["DOTSTUDIO_DEMO_ONBOARDING"] == "create"
+    static let windowSize: CGSize? = env["DOTSTUDIO_DEMO_WINDOW"].flatMap { s in
+        let p = s.split(separator: "x").compactMap { Double($0) }
+        return p.count == 2 ? CGSize(width: p[0], height: p[1]) : nil
+    }
+    static var isActive: Bool { editName != nil || onboardingCreate || windowSize != nil }
+
+    @MainActor static func apply(to model: AppModel) {
+        if let name = editName, let p = model.library.presets.first(where: { $0.name == name }) {
+            model.edit(p.id)
+        }
+        DispatchQueue.main.async {
+            if let size = windowSize,
+               let win = NSApp.windows.first(where: { $0.isVisible && $0.styleMask.contains(.titled) }) {
+                win.setContentSize(size)
+                win.center()
+            }
+            if onboardingCreate { model.showOnboarding = true }
+        }
     }
 }
 

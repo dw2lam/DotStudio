@@ -6,7 +6,7 @@ import { WordsPullUp } from "../components/animations/WordsPullUp";
 
 const CREAM = "#E1E0CC";
 const EASE = [0.16, 1, 0.3, 1] as const;
-const DOWNLOAD = "https://github.com/dw2lam/dotstudio/releases/latest";
+const DOWNLOAD = "https://github.com/dw2lam/DotStudio/releases/latest/download/DotStudio.dmg";
 
 export function Hero() {
   return (
@@ -44,9 +44,9 @@ export function Hero() {
                 transition={{ duration: 0.8, delay: 0.5, ease: EASE }}
                 className="max-w-md text-xs leading-[1.2] text-primary/70 sm:text-sm md:text-base [text-shadow:0_1px_14px_rgba(0,0,0,0.9)]"
               >
-                Turn any gradient, image or video into a{" "}
-                <span style={{ color: CREAM }}>custom Mac screensaver</span> — run it through dither,
-                ASCII, halftone, VHS and 40+ live effects, then install it straight to your desktop.
+                Living screensavers for your Mac:{" "}
+                <span style={{ color: CREAM }}>generative scenes, real clocks</span> and looks that
+                restyle your own photos. Pick from the gallery or build your own in a live editor.
                 Native, local, free.
               </motion.p>
 

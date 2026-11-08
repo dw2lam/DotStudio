@@ -2,9 +2,9 @@ const LINK_COLOR = "rgba(225, 224, 204, 0.8)";
 const LINK_HOVER = "#E1E0CC";
 
 const ITEMS: { label: string; href: string; external?: boolean }[] = [
-  { label: "Gallery", href: "#collection" },
-  { label: "Live", href: "#live" },
-  { label: "Effects", href: "#catalog" },
+  { label: "Scenes", href: "#scenes" },
+  { label: "App", href: "#studio" },
+  { label: "Looks", href: "#looks" },
   { label: "Source", href: "https://github.com/dw2lam/dotstudio", external: true },
   { label: "Download", href: "#download" },
 ];
