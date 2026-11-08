@@ -1248,73 +1248,72 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         return float4(col, 1.0);
     }
 
-    case 43: { // AURORA (scene) — three folded light curtains with vertical rays over a ridge.
-               // p0 = (speed, glow, height, stars); colorA sky, colorB aurora.
-        float speed = u.p0.x, inten = u.p0.y, height = max(u.p0.z, 0.2), starsAmt = u.p0.w;
-        float ts = t * speed;
+    case 43: { // AURORA (scene) — volumetric auroral curtains over a mountain lake at night.
+               // Curtains are thin vertical sheets 150–520 km away, traced in top view so
+               // hem altitude, Earth curvature, fold brightening and field-aligned rays are
+               // geometric, not painted (see nature_curtains in Scenes/Nature_funcs.h).
+               // p0 = (speed, glow, height, stars)  p1 = (lake, activity)
+               // colorA sky, colorB aurora (the green; tops and fringe are derived from it).
         float aspect = res.x / res.y;
-        float2 p = float2((uv.x - 0.5) * aspect, 1.0 - uv.y);     // y: 0 bottom → 1 top
-        float3 sky = u.colorA.rgb;
-        float3 ac = u.colorB.rgb;
-        float3 acL = srgbToOklab(ac);
-        // Curtain tops fade toward violet (as real high-altitude aurora does), whatever the base hue.
-        float3 topC = oklabToSrgb(mix(acL, srgbToOklab(float3(0.50, 0.28, 0.90)), 0.7) * float3(0.85, 1.0, 1.0));
+        float2 sp = float2((uv.x - 0.5) * 2.0 * aspect, (0.5 - uv.y) * 2.0);
+        const float F = 1.3, pitch = 0.30;
+        float3 fwd = float3(0.0, sin(pitch), cos(pitch));
+        float3 up = float3(0.0, cos(pitch), -sin(pitch));
+        float3 rd = normalize(fwd * F + float3(1.0, 0.0, 0.0) * sp.x + up * sp.y);
 
-        float3 col = sky * (0.6 + 2.2 * (1.0 - p.y) * (1.0 - p.y));
-        col += ac * 0.04 * exp(-max(p.y - 0.12, 0.0) * 4.0);   // faint horizon airglow
+        NatureAuroraP P;
+        P.ts = t * u.p0.x;
+        P.inten = u.p0.y;
+        P.height = max(u.p0.z, 0.2);
+        P.stars = u.p0.w;
+        P.act = clamp(u.p1.y, 0.0, 1.0);
+        P.pix = 2.0 / (res.y * F);
+        P.t = t;
+        P.soft = 0.0;
+        P.sky = nature_lin(u.colorA.rgb);
+        float3 gS = u.colorB.rgb;
+        P.cG = srgbToLinear(gS);
+        float3 gL = srgbToOklab(gS);
+        P.cTop = srgbToLinear(oklabToSrgb(mix(gL, srgbToOklab(float3(0.92, 0.22, 0.66)), 0.85)));
+        P.cPink = srgbToLinear(oklabToSrgb(mix(gL, srgbToOklab(float3(1.0, 0.32, 0.62)), 0.9)));
+        float lake = clamp(u.p1.x, 0.0, 1.0);
 
-        // ridge silhouette
-        float rx = p.x * 1.3 + 7.0;
-        float ridge = 0.10 + 0.07 * vnoise(float2(rx * 0.9, 0.5)) + 0.035 * vnoise(float2(rx * 3.1, 2.5))
-                    + 0.012 * vnoise(float2(rx * 11.0, 4.5));
-
-        // stars
-        float3 stars = float3(0.0);
-        for (int L = 0; L < 2; ++L) {
-            float s = 45.0 + float(L) * 40.0;
-            float2 g = p * s;
-            float2 cell = floor(g), f = fract(g) - 0.5;
-            float2 j = (hash22(cell + float(L) * 19.0) - 0.5) * 0.7;
-            float h = hash21(cell + float(L) * 7.0);
-            float tw = 0.65 + 0.35 * sin(t * (1.0 + h * 3.0) + h * 40.0);
-            float rad = (1.1 + 0.9 * (1.0 - float(L))) * s / res.y;    // ~1–2 px stars at any size
-            float st = smoothstep(rad, rad * 0.3, length(f - j)) * step(0.9, h);
-            stars += float3(0.85, 0.9, 1.0) * st * tw * (0.35 + 0.65 * hash21(cell + 3.0));
+        float3 col;
+        if (rd.y >= 0.0 || lake <= 0.0) {
+            float3 r = rd; r.y = max(r.y, 0.0);
+            col = nature_auroraView(rd, u, P);
+            if (rd.y < 0.0) {           // no lake: snowy shore, faintly lit by the sky
+                col = P.sky * 0.35 + P.cG * 0.004 * P.inten;
+            }
+        } else {
+            // Lake: mirror of the view, roughened by slow ripples (world-space sines,
+            // faded out where a ripple would be smaller than a pixel).
+            float camH = 1.6;                                   // metres above the water
+            float dist = camH / -rd.y;
+            float2 w = rd.xz * dist;
+            float foot = dist * P.pix / max(-rd.y, 0.02);       // pixel footprint, metres
+            float2 grad = float2(0.0);
+            float ts = t * 0.35;
+            for (int i = 0; i < 6; ++i) {
+                float fi = float(i);
+                float lam = 0.3 * pow(1.65, fi);
+                float ang = 1.5708 + (fi - 2.5) * 0.33 + 0.25 * sin(fi * 3.7);
+                float2 dir = float2(cos(ang), sin(ang));
+                float k = 6.2831853 / lam;
+                float amp = 0.0013 * smoothstep(foot * 3.0, foot * 8.0, lam);
+                grad += dir * cos(dot(w, dir) * k + ts * sqrt(9.8 * k) * 0.6 + fi * 2.3) * amp;
+            }
+            float3 n = normalize(float3(-grad.x, 1.0, -grad.y));
+            float3 rr = reflect(rd, n);
+            rr.y = max(rr.y, 0.0005);
+            float fres = nature_schlick(dot(-rd, n));
+            P.soft = 5.0;
+            float3 refl = nature_auroraView(rr, u, P);
+            float3 body = P.sky * 0.05;
+            col = mix(body, refl, mix(0.0, fres, lake));
+            col = mix(col, P.sky * 0.35 + P.cG * 0.004 * P.inten, 1.0 - lake);
         }
-
-        // Each curtain is a ribbon: a bright, crisp lower hem that follows a slow
-        // meandering curve, fading upward into rays; brightness gathers in patches
-        // along its length (gaps between them keep it from reading as a wall).
-        float3 acc = float3(0.0);
-        for (int i = 0; i < 3; ++i) {
-            float k = float(i);
-            float x = p.x * (0.8 + 0.25 * k) + k * 2.3;
-            float xw = x + 0.45 * sin(x * 0.7 + ts * 0.05 + k * 1.3) + 0.2 * sin(x * 1.9 - ts * 0.08 + k * 0.7);
-            float yb = 0.36 + 0.11 * k + 0.09 * sin(xw * 1.1 + ts * 0.04 + k) + 0.035 * sin(xw * 2.9 - ts * 0.06 + k * 2.1);
-            float dy = p.y - yb;
-            float hgt = 0.17 * height * (1.0 - 0.15 * k);
-            float bottom = smoothstep(-0.01, 0.012, dy);
-            float body = exp(-max(dy, 0.0) / hgt);
-            float hem = exp(-max(dy, 0.0) / 0.018) * 0.9;
-            float r1 = vnoise(float2(xw * 26.0 + k * 7.0, ts * 0.10 + k));
-            float r2 = vnoise(float2(xw * 70.0 + k * 3.0, ts * 0.16 + k * 3.0));
-            float rays = 0.55 + 0.45 * r1 + 0.25 * (r2 - 0.5);
-            float patch = smoothstep(0.28, 0.8, vnoise(float2(xw * 1.1 - ts * 0.15, k * 4.0 + ts * 0.03)));
-            float a = bottom * (body * rays + hem) * patch * (1.0 - 0.3 * k);
-            float3 c = mix(ac, topC, smoothstep(0.02, hgt * 1.8, dy));
-            acc += c * a;
-            acc += ac * 0.05 * exp(-max(dy, 0.0) / 0.3) * bottom * patch * (1.0 - 0.3 * k);   // airglow above
-        }
-        float3 aur = 1.0 - exp(-acc * inten * 1.5);
-        col += stars * starsAmt * (1.0 - clamp(luma(aur) * 2.5, 0.0, 1.0));
-        col += aur;
-
-        float aa = 1.5 / res.y;
-        float ground = smoothstep(ridge + aa, ridge - aa, p.y);
-        float3 land = sky * 0.3 + ac * 0.025 * smoothstep(ridge - 0.06, ridge, p.y);
-        col = mix(col, land, ground);
-        col += bandDither(px) * 2.0;
-        return float4(col, 1.0);
+        return float4(nature_display(col * 1.0, px), 1.0);
     }
 
     case 44: { // TOPOGRAPHY (scene) — isolines of a slowly evolving warped-fbm terrain,
