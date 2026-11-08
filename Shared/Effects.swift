@@ -23,7 +23,49 @@ struct ParamSpec: Identifiable {
     }
 }
 
-enum EffectCategory: String, CaseIterable { case dotsDither = "Dots & Dither", lines = "Lines & Edges", glyphs = "Glyphs", glitch = "Glitch", color = "Color", warp = "Warp & Mirror", generative = "Generative" }
+/// User-facing groups for the Add-effect picker. Scenes (generators that ignore the
+/// source) come first; every other group restyles the shared source.
+enum EffectCategory: String, CaseIterable {
+    case scenes      = "Scenes"
+    case print       = "Print & Halftone"
+    case ditherPixel = "Dither & Pixel"
+    case type        = "Type & Glyph"
+    case retro       = "Retro Screens"
+    case lines       = "Lines & Ink"
+    case distort     = "Glass & Distort"
+    case colorLight  = "Color & Light"
+
+    /// SF Symbol for the group (picker headers, chips).
+    var symbol: String {
+        switch self {
+        case .scenes:      return "sparkles"
+        case .print:       return "circle.grid.3x3.fill"
+        case .ditherPixel: return "checkerboard.rectangle"
+        case .type:        return "textformat"
+        case .retro:       return "tv"
+        case .lines:       return "scribble.variable"
+        case .distort:     return "drop"
+        case .colorLight:  return "sun.max"
+        }
+    }
+
+    /// One line describing the group.
+    var blurb: String {
+        switch self {
+        case .scenes:      return "Generative pieces that play on their own — no source needed."
+        case .print:       return "Ink on paper: halftone screens, riso overprints, engraving."
+        case .ditherPixel: return "1-bit and low-bit dithering, pixels and mosaics."
+        case .type:        return "Rebuild the image out of characters."
+        case .retro:       return "CRTs, consoles, tape and signal glitches."
+        case .lines:       return "Edges, contours and line work."
+        case .distort:     return "Refract, mirror and warp the source."
+        case .colorLight:  return "Grade, glow, grain and tone."
+        }
+    }
+
+    /// True for the group whose effects ignore the source.
+    var isScenes: Bool { self == .scenes }
+}
 
 enum EffectKind: String, Codable, CaseIterable {
     // grain.rad set
@@ -34,6 +76,8 @@ enum EffectKind: String, Codable, CaseIterable {
     // cool pack
     case kaleidoscope, chromaticShift, bloom, hexMosaic, mirror, glitchBlocks
     case gameboy, neonEdges, fisheye, swirl, ripple, toon, thermal, truchet, ledPanel, nes8bit, starfield, universe, blackhole
+    // modern pack: scenes + looks
+    case meshGradient, aurora, topography, liquidChrome, silk, risograph, grainWash, glass
 
     var displayName: String {
         switch self {
@@ -49,7 +93,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .edge: return "Edge Detection"
         case .crosshatch: return "Crosshatch"
         case .wave: return "Wave Lines"
-        case .noiseField: return "Noise Field"
+        case .noiseField: return "Liquify"
         case .voronoi: return "Voronoi"
         case .vhs: return "VHS"
         case .pixelate: return "Pixelate"
@@ -77,22 +121,84 @@ enum EffectKind: String, Codable, CaseIterable {
         case .starfield: return "Starfield"
         case .universe: return "Universe"
         case .blackhole: return "Black Hole"
+        case .meshGradient: return "Mesh Gradient"
+        case .aurora: return "Aurora"
+        case .topography: return "Topography"
+        case .liquidChrome: return "Liquid Chrome"
+        case .silk: return "Silk"
+        case .risograph: return "Risograph"
+        case .grainWash: return "Grain Wash"
+        case .glass: return "Glass"
+        }
+    }
+
+    /// One-line description for the Add-effect picker.
+    var blurb: String {
+        switch self {
+        case .dither:    return "Ordered, blue-noise and error-diffusion dithering, 1-bit or color."
+        case .halftone:  return "A rotated print screen of round ink dots."
+        case .dots:      return "A plain grid of dots sized by brightness."
+        case .ascii:     return "Redraws the image in monospace characters."
+        case .matrix:    return "Falling code rain, optionally revealing the source."
+        case .contour:   return "Iso-brightness bands with contour lines."
+        case .pixelSort: return "Smears bright runs sideways, glitch-art style."
+        case .blockify:  return "Chunky square blocks."
+        case .threshold: return "Two-tone cut at a brightness level."
+        case .edge:      return "Sobel edge lines on a flat ground."
+        case .crosshatch:return "Engraved pen hatching that deepens with shadow."
+        case .wave:      return "Horizontal lines displaced by brightness."
+        case .noiseField:return "Slowly liquifies the source with drifting noise."
+        case .voronoi:   return "Irregular cell mosaic."
+        case .vhs:       return "Tape wobble, color bleed and a roll bar."
+        case .pixelate:  return "Square pixels of any size."
+        case .posterize: return "Reduces each channel to a few flat levels."
+        case .phosphor:  return "Monochrome tint, like a single-color CRT."
+        case .scanlines: return "CRT scanlines with a soft RGB mask."
+        case .grain:     return "Animated film grain."
+        case .vignette:  return "Darkens the corners."
+        case .kaleidoscope: return "Mirrored wedges that slowly turn."
+        case .chromaticShift: return "Pulls red and blue apart, lens-fringe style."
+        case .bloom:     return "Soft glow around bright areas."
+        case .hexMosaic: return "Hexagonal tile mosaic."
+        case .mirror:    return "Mirrors the frame horizontally, vertically or both."
+        case .glitchBlocks: return "Rows that jump sideways with channel splits."
+        case .gameboy:   return "The four-green handheld palette, dithered."
+        case .neonEdges: return "Glowing edges on black."
+        case .fisheye:   return "Barrel lens bulge."
+        case .swirl:     return "Twists the center."
+        case .ripple:    return "Concentric water ripples."
+        case .toon:      return "Flat cel shading with ink outlines."
+        case .thermal:   return "Heat-camera false color."
+        case .truchet:   return "Quarter-circle tile maze."
+        case .ledPanel:  return "A wall of round LEDs."
+        case .nes8bit:   return "Snaps to the NES palette with chunky pixels."
+        case .starfield: return "Fly through an endless field of stars."
+        case .universe:  return "The solar system, with Earth's real day and night."
+        case .blackhole: return "A lensing black hole with a glowing accretion disk."
+        case .meshGradient: return "Soft, grainy color fields drifting into each other."
+        case .aurora:    return "Northern lights rippling above a dark ridge."
+        case .topography: return "A living contour map with shaded relief."
+        case .liquidChrome: return "Molten mirror metal, optionally iridescent."
+        case .silk:      return "A flow field of fine strands drifting like brushed silk."
+        case .risograph: return "Two-ink riso print with grain and misregistration."
+        case .grainWash: return "Dreamy soft focus with film grain and an optional color wash."
+        case .glass:     return "Looks through fluted, tiled or liquid glass."
         }
     }
 
     var category: EffectCategory {
         switch self {
-        case .dither, .halftone, .dots, .pixelate, .blockify: return .dotsDither
-        case .ascii, .matrix: return .glyphs
-        case .contour, .edge, .crosshatch, .wave: return .lines
-        case .vhs, .scanlines, .grain, .pixelSort: return .glitch
-        case .threshold, .posterize, .phosphor, .vignette: return .color
-        case .noiseField, .voronoi, .starfield, .universe, .blackhole: return .generative
-        case .hexMosaic, .ledPanel, .truchet: return .dotsDither
-        case .gameboy, .bloom, .thermal, .toon, .nes8bit: return .color
-        case .neonEdges: return .lines
-        case .chromaticShift, .glitchBlocks: return .glitch
-        case .kaleidoscope, .mirror, .fisheye, .swirl, .ripple: return .warp
+        case .starfield, .universe, .blackhole,
+             .meshGradient, .aurora, .topography, .liquidChrome, .silk:   return .scenes
+        case .halftone, .risograph, .crosshatch, .dots:                   return .print
+        case .dither, .threshold, .pixelate, .blockify, .hexMosaic, .voronoi: return .ditherPixel
+        case .ascii, .matrix:                                             return .type
+        case .vhs, .scanlines, .phosphor, .gameboy, .nes8bit, .ledPanel,
+             .glitchBlocks, .pixelSort, .chromaticShift:                  return .retro
+        case .edge, .neonEdges, .contour, .wave, .truchet, .toon:         return .lines
+        case .glass, .noiseField, .kaleidoscope, .mirror,
+             .fisheye, .swirl, .ripple:                                   return .distort
+        case .grainWash, .grain, .bloom, .posterize, .thermal, .vignette: return .colorLight
         }
     }
 
@@ -128,6 +234,15 @@ enum EffectKind: String, Codable, CaseIterable {
         case .starfield: return 37
         case .universe:  return 39
         case .blackhole: return 40
+        // 38 = dither-grid blit and 41 = preset crossfade are internal passes; never assign them.
+        case .meshGradient: return 42
+        case .aurora:    return 43
+        case .topography: return 44
+        case .liquidChrome: return 45
+        case .silk:      return 46
+        case .risograph: return 47
+        case .grainWash: return 48
+        case .glass:     return 49
         case .edge:      return 12
         case .crosshatch:return 13
         case .contour:   return 14
@@ -229,6 +344,35 @@ enum EffectKind: String, Codable, CaseIterable {
                                  ParamSpec("stars", "Stars", 0, 3, def: 1),
                                  ParamSpec("rot", "Rotation", -15, 15, def: -8.7),
                                  ParamSpec("disk", "Disk Size", 0.5, 1.6, def: 1)]
+        case .meshGradient: return [ParamSpec("speed", "Speed", 0, 2, def: 0.6),
+                                    ParamSpec("scale", "Softness", 0.5, 2, def: 1),
+                                    ParamSpec("hue", "Hue Spread", 0, 1, def: 0.35),
+                                    ParamSpec("grain", "Grain", 0, 0.3, def: 0.08)]
+        case .aurora:    return [ParamSpec("speed", "Speed", 0, 2, def: 0.6),
+                                 ParamSpec("intensity", "Glow", 0.3, 2, def: 1),
+                                 ParamSpec("height", "Curtain Height", 0.4, 1.6, def: 1),
+                                 ParamSpec("stars", "Stars", 0, 1, def: 0.6)]
+        case .topography: return [ParamSpec("lines", "Lines", 8, 60, def: 30),
+                                  ParamSpec("scale", "Terrain Scale", 0.5, 3, def: 1.2),
+                                  ParamSpec("speed", "Speed", 0, 2, def: 0.5),
+                                  ParamSpec("fill", "Relief Shading", 0, 1, def: 0.5)]
+        case .liquidChrome: return [ParamSpec("speed", "Speed", 0, 2, def: 0.6),
+                                    ParamSpec("scale", "Ripple Scale", 0.5, 3, def: 1.2),
+                                    ParamSpec("iris", "Iridescence", 0, 1, def: 0.12)]
+        case .silk:      return [ParamSpec("speed", "Speed", 0, 2, def: 0.6),
+                                 ParamSpec("scale", "Swirl Size", 0.4, 2.5, def: 1),
+                                 ParamSpec("sheen", "Sheen", 0, 1, def: 0.4)]
+        case .risograph: return [ParamSpec(menu: "screen", "Screen", ["Grain", "Halftone"], def: 0),
+                                 ParamSpec("cell", "Dot Size", 2, 16, def: 4),
+                                 ParamSpec("misreg", "Misregistration", 0, 16, def: 5),
+                                 ParamSpec("paper", "Paper Texture", 0, 1, def: 0.5)]
+        case .grainWash: return [ParamSpec("soft", "Softness", 0, 1, def: 0.6),
+                                 ParamSpec("grain", "Grain", 0, 0.5, def: 0.16),
+                                 ParamSpec("tint", "Color Wash", 0, 1, def: 0)]
+        case .glass:     return [ParamSpec(menu: "style", "Glass", ["Fluted", "Tiles", "Liquid"], def: 0),
+                                 ParamSpec("size", "Size", 10, 200, def: 44),
+                                 ParamSpec("refract", "Refraction", 0, 1, def: 0.5),
+                                 ParamSpec("frost", "Frost", 0, 1, def: 0.3)]
         }
     }
 
@@ -243,6 +387,13 @@ enum EffectKind: String, Codable, CaseIterable {
         case .dither, .threshold, .dots, .wave, .edge, .ascii, .matrix, .neonEdges, .starfield, .universe, .blackhole: return .black
         case .halftone, .crosshatch: return .paper
         case .contour, .truchet: return .ink
+        case .meshGradient: return RGBA(0.13, 0.07, 0.34)       // deep indigo
+        case .aurora:       return RGBA(0.015, 0.03, 0.07)      // night sky
+        case .topography:   return RGBA(0.05, 0.06, 0.07)       // ground
+        case .liquidChrome: return RGBA(0.03, 0.03, 0.05)       // shadow
+        case .silk:         return RGBA(0.03, 0.03, 0.06)       // ground
+        case .risograph:    return RGBA(1.0, 0.28, 0.53)        // fluorescent pink ink
+        case .grainWash:    return RGBA(0.12, 0.08, 0.24)       // shadow wash
         default: return nil
         }
     }
@@ -253,23 +404,73 @@ enum EffectKind: String, Codable, CaseIterable {
         case .contour: return .paper
         case .wave, .edge, .neonEdges, .truchet: return .cyan
         case .ascii, .matrix, .phosphor: return .crtGreen
+        case .meshGradient: return RGBA(1.0, 0.56, 0.42)        // coral
+        case .aurora:       return RGBA(0.30, 1.0, 0.62)        // aurora green
+        case .topography:   return RGBA(0.93, 0.90, 0.82)       // contour ink
+        case .liquidChrome: return RGBA(0.92, 0.94, 1.0)        // highlight
+        case .silk:         return RGBA(0.98, 0.78, 0.55)       // champagne strands
+        case .risograph:    return RGBA(0.0, 0.47, 0.75)        // riso medium blue
+        case .grainWash:    return RGBA(1.0, 0.80, 0.64)        // highlight wash
         default: return nil
         }
     }
 
     var usesColors: Bool { defaultColorA != nil || defaultColorB != nil }
 
+    /// What palette slots A and B mean for this effect (labels for the color wells).
+    var colorALabel: String {
+        switch self {
+        case .risograph: return "Ink 1"
+        case .halftone, .crosshatch: return "Paper"
+        case .meshGradient: return "Deep"
+        case .aurora: return "Sky"
+        case .topography, .silk: return "Ground"
+        case .liquidChrome, .grainWash: return "Shadow"
+        default: return "Background"
+        }
+    }
+    var colorBLabel: String {
+        switch self {
+        case .risograph: return "Ink 2"
+        case .halftone, .crosshatch: return "Ink"
+        case .meshGradient: return "Light"
+        case .aurora: return "Aurora"
+        case .topography: return "Lines"
+        case .silk: return "Strands"
+        case .liquidChrome, .grainWash: return "Highlight"
+        default: return "Foreground"
+        }
+    }
+
     /// A self-contained generative piece that ignores the source (Universe, Black Hole…).
     /// Styles that start with one are "Scenes": ready to use, few knobs, no Source tab.
     var isScene: Bool {
         switch self {
-        case .starfield, .universe, .blackhole: return true
+        case .starfield, .universe, .blackhole,
+             .meshGradient, .aurora, .topography, .liquidChrome, .silk: return true
         default: return false
         }
     }
 
-    /// Still decodable from old libraries/share files, but no longer offered in the Add menu.
-    var isRetired: Bool { false }
+    /// Still decodable from old libraries/share files (and still renders), but no longer
+    /// offered in the Add menu: duplicates or dated looks superseded by newer effects.
+    var isRetired: Bool {
+        switch self {
+        case .blockify,                   // duplicate of Pixelate with a bigger range
+             .dots,                       // superseded by Halftone / Risograph
+             .voronoi,                    // edgeless, muddy mosaic; Hex Mosaic covers it
+             .truchet,                    // novelty tile maze
+             .toon,                       // dated cel-shade filter
+             .fisheye, .swirl, .ripple:   // Photo Booth-era warps; Glass replaces them
+            return true
+        default: return false
+        }
+    }
+
+    /// Add-menu entries for a group: live (non-retired) effects only, in catalog order.
+    static func available(in category: EffectCategory) -> [EffectKind] {
+        allCases.filter { $0.category == category && !$0.isRetired }
+    }
 }
 
 // MARK: - Uniform packing
@@ -326,6 +527,14 @@ extension EffectInstance {
         case .universe:  u.p0 = .init(g("scale"), g("speed"), g("stars"), g("planets"))
         case .blackhole: u.p0 = .init(g("mass"), g("brightness"), g("rot"), g("disk"))
                          u.p1 = .init(g("speed"), g("stars"), g("angle"), 0)
+        case .meshGradient: u.p0 = .init(g("speed"), g("scale"), g("hue"), g("grain"))
+        case .aurora:    u.p0 = .init(g("speed"), g("intensity"), g("height"), g("stars"))
+        case .topography: u.p0 = .init(g("lines"), g("scale"), g("speed"), g("fill"))
+        case .liquidChrome: u.p0 = .init(g("speed"), g("scale"), g("iris"), 0)
+        case .silk:      u.p0 = .init(g("speed"), g("scale"), g("sheen"), 0)
+        case .risograph: u.p0 = .init(g("screen"), g("cell"), g("misreg"), g("paper"))
+        case .grainWash: u.p0 = .init(g("soft"), g("grain"), g("tint"), 0)
+        case .glass:     u.p0 = .init(g("style"), g("size"), g("refract"), g("frost"))
         }
     }
 }
