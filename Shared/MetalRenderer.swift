@@ -360,6 +360,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             enc.setFragmentTexture(planetTex.earthNight, index: 3)
             enc.setFragmentTexture(planetTex.planets, index: 4)
             enc.setFragmentTexture(dummy, index: 5)   // fadePrev; only real during a crossfade
+            enc.setFragmentTexture(TextAtlas.texture(device, effect: u.effect) ?? dummy, index: 6)
             enc.setFragmentSamplerState(sampler, index: 0)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             enc.endEncoding()
