@@ -173,7 +173,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .ledPanel:  return "A wall of round LEDs."
         case .nes8bit:   return "Snaps to the NES palette with chunky pixels."
         case .starfield: return "Fly through an endless field of stars."
-        case .universe:  return "The solar system, with Earth's real day and night."
+        case .universe:  return "The solar system in 3D, with Earth's real day and night."
         case .blackhole: return "A lensing black hole with a glowing accretion disk."
         case .meshGradient: return "Soft, grainy color fields drifting into each other."
         case .aurora:    return "Northern lights rippling above a dark ridge."
@@ -336,7 +336,9 @@ enum EffectKind: String, Codable, CaseIterable {
                                  ParamSpec("speed", "Speed", 0, 3, def: 1),
                                  ParamSpec("stars", "Stars", 0, 2, def: 1),
                                  ParamSpec("planets", "Planet Speed", 0, 3, def: 1),
-                                 ParamSpec("orbits", "Orbit Lines", 0, 1, def: 1, toggle: true)]
+                                 ParamSpec("orbits", "Orbit Lines", 0, 1, def: 1, toggle: true),
+                                 ParamSpec("tilt", "Camera Tilt", 8, 80, def: 24),
+                                 ParamSpec("spin", "Camera Orbit", -2, 2, def: 1)]
         case .blackhole: return [ParamSpec("angle", "Angle", 0.05, 1.4, def: 0.22),
                                  ParamSpec("mass", "Mass", 0.15, 0.8, def: 0.4),
                                  ParamSpec("brightness", "Brightness", 1, 10, def: 5),
@@ -525,6 +527,9 @@ extension EffectInstance {
         case .nes8bit:   u.p0 = .init(g("cell"), g("scan"), g("sat"), 0)
         case .starfield: u.p0 = .init(g("speed"), g("density"), g("warp"), g("size"))
         case .universe:  u.p0 = .init(g("scale"), g("speed"), g("stars"), g("planets"))
+                         // p1/p2 are filled per frame by the renderer (sun, location, orbits);
+                         // Universe has no Foreground color well, so colorB carries the camera.
+                         u.colorB = .init(g("tilt"), g("spin"), 0, 1)
         case .blackhole: u.p0 = .init(g("mass"), g("brightness"), g("rot"), g("disk"))
                          u.p1 = .init(g("speed"), g("stars"), g("angle"), 0)
         case .meshGradient: u.p0 = .init(g("speed"), g("scale"), g("hue"), g("grain"))

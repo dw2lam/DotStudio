@@ -262,6 +262,157 @@ static inline float sobelMag(texture2d<float> tex, sampler s, float2 uv, float2 
     return length(float2(gx, gy));
 }
 
+// ---------------------------------------------------------------- Universe (3D solar system)
+// World space: the Sun sits at the origin, the ecliptic is the y = 0 plane, +y is
+// ecliptic north. Body 0 = Sun, 1…8 = Mercury…Neptune, 9 = the Moon.
+// Sizes and spacing are artistic (a true-scale system is invisible dots).
+
+constant float  UNI_ORB[9]   = {0.0, 1.55, 2.15, 2.85, 3.5, 4.9, 6.05, 7.15, 8.1};
+constant float  UNI_RAD[10]  = {0.46, 0.10, 0.18, 0.19, 0.14, 0.42, 0.35, 0.25, 0.24, 0.05};
+constant float  UNI_OSPD[9]  = {0.0, 1.60, 1.18, 1.00, 0.81, 0.44, 0.32, 0.23, 0.18};
+constant float  UNI_SPIN[10] = {0.0, 0.05, -0.03, 0.0, 0.25, 0.60, 0.55, -0.40, 0.40, 0.0};
+constant int    UNI_LAYER[10] = {-2, 0, 1, -1, 2, 3, 4, 5, 6, 7};   // planetTex layer, −1 Earth, −2 Sun
+constant float3 UNI_TINT[10] = {float3(1.0, 0.7, 0.35),
+    float3(0.6, 0.6, 0.62), float3(0.85, 0.75, 0.5), float3(0.25, 0.5, 0.9), float3(0.85, 0.42, 0.25),
+    float3(0.85, 0.68, 0.48), float3(0.88, 0.78, 0.55), float3(0.6, 0.85, 0.9), float3(0.4, 0.5, 0.92),
+    float3(0.6, 0.6, 0.6)};
+constant float  UNI_MOON_ORB = 0.40;
+constant float  UNI_RING_IN = 1.24, UNI_RING_OUT = 2.27;   // Saturn's rings, in Saturn radii
+
+// Orbital angle (prograde = counter-clockwise seen from +y). `ta` is the orbital clock.
+static inline float uniAngle(int i, float ta) {
+    return ta * UNI_OSPD[i] + hash21(float2(float(i - 1), 7.0)) * 6.2831853;
+}
+static inline float3 uniOrbitPos(int i, float ta) {
+    float a = uniAngle(i, ta);
+    return float3(cos(a), 0.0, -sin(a)) * UNI_ORB[i];
+}
+static inline float3 uniBodyPos(int i, float ta) {
+    if (i == 0) return float3(0.0);
+    if (i == 9) {                                            // the Moon, slightly inclined orbit
+        float a = ta * 6.0 + 1.3;
+        return uniOrbitPos(3, ta) + float3(cos(a), 0.16 * sin(a), -sin(a)) * UNI_MOON_ORB;
+    }
+    return uniOrbitPos(i, ta);
+}
+
+// Ray vs sphere with an analytic ~1 px edge: returns (t, coverage); coverage 0 = miss.
+static inline float2 uniSphere(float3 ro, float3 rd, float3 c, float r, float pix) {
+    float3 oc = ro - c;
+    float b = dot(oc, rd);
+    if (b > 0.0) return float2(0.0);                         // behind the camera
+    float d2 = max(dot(oc, oc) - b * b, 0.0);
+    float tca = -b;
+    float cov = clamp((r - sqrt(d2)) / (tca * pix) + 0.5, 0.0, 1.0);
+    float h = r * r - d2;
+    return float2(h > 0.0 ? tca - sqrt(h) : tca, cov);
+}
+
+// Saturn's ring opacity at rr (in Saturn radii): banded, with the Cassini division.
+static inline float uniRingAlpha(float rr, float aa) {
+    float edge = smoothstep(UNI_RING_IN - aa, UNI_RING_IN + aa, rr) * smoothstep(UNI_RING_OUT + aa, UNI_RING_OUT - aa, rr);
+    float bands = 0.45 + 0.55 * vnoise(float2(rr * 22.0, 3.7));
+    bands *= mix(0.55, 1.0, smoothstep(1.3, 1.55, rr));                 // faint inner C ring
+    float cassini = 1.0 - 0.85 * smoothstep(1.93 - aa, 1.95, rr) * smoothstep(2.01 + aa, 1.99, rr);
+    return edge * bands * cassini * 0.88;
+}
+
+// One shell of point stars. q = the ray's point on a sphere of radius R about the Sun,
+// k = cells per world unit. A star is kept only when its own spot on the shell falls in
+// the sampled cell, so stars are never cut in half by the cell grid.
+static inline float3 uniStars(float3 q, float R, float k, float3 eye, float3 rd, float pix,
+                              float seed, float density, float sizeK) {
+    float3 cell = floor(q * k);
+    float3 h2 = pcg3(cell + seed + 31.0);
+    if (h2.x > density) return float3(0.0);
+    float3 h = pcg3(cell + seed);
+    float3 s = R * normalize((cell + 0.15 + 0.7 * h) / k);
+    if (any(floor(s * k) != cell)) return float3(0.0);
+    float ang = length(normalize(s - eye) - rd);              // ≈ angle in radians
+    float big = h2.y * h2.y * h2.y * h2.y;
+    float sz = (0.6 + 1.5 * big) * sizeK * pix;
+    float I = exp(-ang * ang / (sz * sz)) * (0.2 + 0.7 * h2.z) * (0.6 + 1.1 * big);
+    return mix(float3(0.70, 0.80, 1.0), float3(1.0, 0.86, 0.68), h.z) * I;
+}
+
+// Additive layers (glow, plane) whose depth falls in (lo, hi].
+static inline float3 uniAddIn(float3 g, float dg, float3 p, float dp, float lo, float hi) {
+    return (dg > lo && dg <= hi ? g : float3(0.0)) + (dp > lo && dp <= hi ? p : float3(0.0));
+}
+
+static inline float2 uniUV(float3 n, float3 E, float3 N, float3 M, float lon0) {
+    float lat = asin(clamp(dot(n, N), -1.0, 1.0));
+    float lon = lon0 + atan2(dot(n, E), dot(n, M));
+    return float2(fract(lon * 0.1591549 + 0.5), 0.5 - lat * 0.3183099);
+}
+
+// Shade body i (centre c) at surface normal n0, lit by the Sun at the origin.
+// fp = pixel footprint in body radii (drives a 4-tap texture supersample, since the
+// planet maps have no mips). (eE, eN, eM, subLon) orient the Earth so its day/night
+// matches the wall clock.
+static inline float3 uniShade(int i, float3 c, float3 n0, float3 rd, float fp, float3 camR, float3 camU,
+                              float ts, float t, float3 eE, float3 eN, float3 eM, float subLon, float4 p2,
+                              float3 moonM, float3 ringN,
+                              texture2d<float> earthDay, texture2d<float> earthNight,
+                              texture2d_array<float> planetTex, sampler samp, bool haveTex) {
+    float mu = clamp(dot(n0, -rd), 0.0, 1.0);
+    if (i == 0) {                                                // the Sun: emissive, granulated, limb-darkened
+        float s = ts * 0.02, cs = cos(s), sn = sin(s);
+        float3 nr = float3(cs * n0.x - sn * n0.z, n0.y, sn * n0.x + cs * n0.z);
+        float g = fbm3(nr * 9.0 + float3(0.0, ts * 0.015, 0.0), 2.0, 0.5);
+        float limb = sqrt(mu);
+        return mix(float3(1.0, 0.38, 0.06), float3(1.0, 0.90, 0.70), limb) * (0.74 + 0.45 * g) * mix(0.75, 1.12, limb);
+    }
+    float3 E, N = float3(0.0, 1.0, 0.0), M; float lon0 = 0.0;
+    if (i == 3)      { E = eE; N = eN; M = eM; lon0 = subLon; }
+    else if (i == 9) { M = moonM; E = cross(N, M); }             // tidally locked: near side faces Earth
+    else { float s = ts * UNI_SPIN[i]; M = float3(sin(s), 0.0, cos(s)); E = float3(cos(s), 0.0, -sin(s)); }
+
+    const float2 o[4] = {float2(-0.125, -0.375), float2(0.375, -0.125), float2(0.125, 0.375), float2(-0.375, 0.125)};
+    float3 base = float3(0.0), night = float3(0.0);
+    int layer = UNI_LAYER[i];
+    for (int k = 0; k < 4; ++k) {
+        float3 n = normalize(n0 + (camR * o[k].x + camU * o[k].y) * fp);
+        float2 tuv = uniUV(n, E, N, M, lon0);
+        if (!haveTex) { base += UNI_TINT[i]; continue; }
+        if (layer < 0) { base += earthDay.sample(samp, tuv).rgb; night += earthNight.sample(samp, tuv).rgb; }
+        else           { base += planetTex.sample(samp, tuv, layer).rgb; }
+    }
+    base *= 0.25; night *= 0.25;
+
+    float3 L = normalize(-c);
+    float ndl = dot(n0, L);
+    float lit = smoothstep(-0.10, 1.0, ndl);
+    float3 col = base * (lit * 1.25 + 0.03 + 0.06 * mu);          // + faint camera-side fill on the night side
+
+    if (i == 3) {                                                // city lights + location marker
+        float day = smoothstep(-0.15, 0.15, ndl);
+        col += night * (1.0 - day) * float3(1.0, 0.82, 0.6) * 1.3;
+        if (p2.z > 0.5) {
+            float lat = asin(clamp(dot(n0, N), -1.0, 1.0));
+            float lon = lon0 + atan2(dot(n0, E), dot(n0, M));
+            float dlon = atan2(sin(lon - p2.x), cos(lon - p2.x));
+            float md = length(float2(dlon * cos(p2.y), lat - p2.y));
+            float pulse = 0.5 + 0.5 * sin(t * 3.0);
+            col = mix(col, float3(0.3, 1.0, 0.45), smoothstep(0.22, 0.0, md) * (0.55 + 0.45 * pulse) * step(0.05, mu));
+        }
+    }
+    if (i == 6) {                                                // the rings' shadow on Saturn
+        float3 P = c + n0 * UNI_RAD[6];
+        float dl = dot(L, ringN);
+        float s = dot(c - P, ringN) / (abs(dl) < 1e-4 ? 1e-4 : dl);
+        if (s > 0.0) col *= 1.0 - 0.7 * uniRingAlpha(length(P + L * s - c) / UNI_RAD[6], 0.02);
+    }
+    // atmosphere: a thin rim on the lit side
+    float3 atm = (i == 3) ? float3(0.35, 0.62, 1.0) * 0.9
+               : (i == 2) ? float3(1.0, 0.85, 0.6) * 0.45
+               : (i >= 5 && i <= 8) ? UNI_TINT[i] * 0.35 : float3(0.0);
+    float rim = 1.0 - mu; rim *= rim * rim;
+    col += atm * rim * smoothstep(-0.25, 0.45, ndl);
+    col += float3(0.30, 0.40, 0.60) * rim * rim * 0.10;          // faint cool backlight keeps dark limbs round
+    return col;
+}
+
 // ---------------------------------------------------------------- fragment
 
 fragment float4 fx_fragment(VOut in [[stage_in]],
@@ -779,96 +930,183 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         return float4(mix(u.colorA.rgb, u.colorB.rgb, acc), 1.0);
     }
 
-    case 39: { // UNIVERSE — top-down heliocentric solar system (Sun centred, planets orbiting).
-               // p0=(scale,speed,stars,planetSpeed)  p2=(userLon,userLat,hasLoc,orbitsOn)
-        float aspect = res.x / res.y;
-        float2 sc = (uv - 0.5) * float2(aspect, 1.0);
+    case 39: { // UNIVERSE — the solar system in 3D. A perspective camera above the ecliptic
+               // slowly orbits the Sun's axis (with a gentle precession), so occlusion, phases,
+               // foreshortened orbits and a two-shell parallax starfield all read as depth.
+               // Analytic only (sphere/plane hits, no ray-march): ~10 sphere tests + 8 orbit
+               // rings per pixel; fbm only on the Sun's disc; all-register compositing.
+               // p0=(scale,speed,stars,planetSpeed)  p1.xyz=live sun dir (Earth view frame)
+               // p2=(userLon,userLat,hasLoc,orbitsOn)  colorB=(tilt°, cameraOrbit)  colorA=space
         float scale = max(u.p0.x, 0.3);
         float speed = u.p0.y;
         float starsAmt = max(u.p0.z, 0.0);
         float planetSpeed = u.p0.w;
+        float tilt = clamp(u.colorB.x, 4.0, 86.0) * 0.01745329;
+        float camSpin = u.colorB.y;
         bool haveTex = earthDay.get_width() > 4;
-        const float INV2PI = 0.1591549, INVPI = 0.3183099, TILT = 0.82;
-        float rc = length(sc);
-        float3 col = float3(0.0);
+        float ts = t * speed;
+        float ta = ts * 0.07 * planetSpeed;                  // orbital clock (Earth year ≈ 90 s)
 
-        // ---- background: faint warm central haze + sparse stars ----
-        col += float3(0.10, 0.05, 0.02) * smoothstep(0.95 * scale, 0.0, rc);
-        for (int L = 0; L < 2; ++L) {
-            float s = 5.0 + float(L) * 4.0;
-            float2 g = sc * s;
-            float2 cell = floor(g), f = fract(g) - 0.5;
-            float2 j = (hash22(cell + float(L) * 17.0) - 0.5) * 0.8;
-            float star = smoothstep(0.05, 0.0, length(f - j)) * step(0.86, hash21(cell + float(L) * 5.0));
-            col += float3(0.7, 0.8, 1.0) * star * (0.4 + 0.6 * hash21(cell)) * 0.6 * starsAmt;
+        // ---- camera: orbit the Sun's axis; elevation precesses a few degrees ----
+        float elev = clamp(tilt + 0.06 * sin(ts * 0.023), 0.03, 1.52);
+        float az = 0.65 - ts * 0.028 * camSpin;           // retrograde vs the planets: the system visibly turns
+        float dist = 15.0 / scale;
+        float3 ro = dist * float3(cos(elev) * sin(az), sin(elev), cos(elev) * cos(az));
+        float3 fwd = normalize(float3(0.0, -0.9, 0.0) / scale - ro);   // aim a little below the Sun
+        float3 camR = normalize(cross(fwd, float3(0.0, 1.0, 0.0)));
+        float3 camU = cross(camR, fwd);
+        const float FOCAL = 2.5;                         // ~44° vertical FOV: depth without stretched limbs
+        float2 sp = (uv - 0.5) * 2.0; sp.y = -sp.y; sp.x *= res.x / res.y;
+        float3 rd = normalize(fwd * FOCAL + camR * sp.x + camU * sp.y);
+        float pix = 2.0 / (res.y * FOCAL);                   // radians per pixel
+
+        // ---- ecliptic plane + Saturn's ring plane (derivatives taken in uniform flow) ----
+        float rdy = abs(rd.y) < 1e-5 ? -1e-5 : rd.y;
+        float tP = -ro.y / rdy;
+        float3 hp = ro + rd * tP;
+        float pr = length(hp.xz);
+        float fw = max(fwidth(pr), 1e-5);
+        float3 pE = uniOrbitPos(3, ta), pS = uniOrbitPos(6, ta), pM = uniBodyPos(9, ta);
+        const float RT = 0.466;                              // Saturn's obliquity, fixed in space,
+        float3 ringN = float3(0.0, cos(RT), sin(RT));        // so the rings open and close over its year
+        float dn = dot(rd, ringN);
+        dn = abs(dn) < 1e-5 ? 1e-5 : dn;
+        float tR = dot(pS - ro, ringN) / dn;
+        float3 qR = ro + rd * tR;
+        float rr = length(qR - pS) / UNI_RAD[6];
+        float rfw = max(fwidth(rr), 1e-4);
+
+        // ---- bodies: nearest two hits (two, so a Moon crossing Earth keeps a clean edge) ----
+        int i1 = -1, i2 = -1; float t1 = 1e9, t2 = 1e9, c1 = 0.0, c2 = 0.0;
+        for (int i = 0; i < 10; ++i) {
+            float3 c = i == 3 ? pE : i == 6 ? pS : i == 9 ? pM : uniBodyPos(i, ta);
+            float2 h = uniSphere(ro, rd, c, UNI_RAD[i], pix);
+            if (h.y <= 0.0) continue;
+            if (h.x < t1) { i2 = i1; t2 = t1; c2 = c1; i1 = i; t1 = h.x; c1 = h.y; }
+            else if (h.x < t2) { i2 = i; t2 = h.x; c2 = h.y; }
         }
 
-        // 8 orbiting bodies: Mercury, Venus, Earth(-1), Mars, Jupiter, Saturn, Uranus, Neptune.
-        int   layer[8]  = {0, 1, -1, 2, 3, 4, 5, 6};
-        float bsize[8]  = {0.016, 0.024, 0.026, 0.020, 0.050, 0.044, 0.033, 0.032};
-        float ospeed[8] = {1.60, 1.18, 1.00, 0.81, 0.44, 0.32, 0.23, 0.18};
-        float bspin[8]  = {0.06, 0.04, 0.05, 0.07, 0.10, 0.09, 0.05, 0.05};
-        float3 fallback[8] = {float3(0.6,0.6,0.62), float3(0.85,0.75,0.5), float3(0.2,0.4,0.7),
-                              float3(0.8,0.4,0.25), float3(0.8,0.66,0.45), float3(0.85,0.75,0.5),
-                              float3(0.6,0.85,0.9), float3(0.35,0.45,0.85)};
-
-        // ---- orbit rings ----
-        if (u.p2.w > 0.5) {
-            for (int i = 0; i < 8; ++i) {
-                float orad = (0.12 + float(i) * 0.072) * scale;
-                float ringp = length(float2(sc.x / orad, sc.y / (orad * TILT)));
-                col += float3(0.42, 0.42, 0.48) * smoothstep(0.004, 0.0, abs(ringp - 1.0)) * 0.33;
+        // ---- background: space colour, far + near star shells, Milky Way ----
+        float3 col = u.colorA.rgb;
+        if (c1 < 0.999 && starsAmt > 0.0) {
+            float bri = min(starsAmt, 1.0);
+            float3 gN = normalize(float3(0.46, 0.84, -0.29));      // galactic pole, ~60° off the ecliptic's
+            float gl = dot(rd, gN);
+            float band = exp(-gl * gl * 30.0);                     // the Milky Way: denser stars + soft glow
+            col += uniStars(rd * 100.0, 100.0, 0.9, float3(0.0), rd, pix, 0.0,
+                            (0.035 + 0.11 * band) * starsAmt, 1.0) * bri;
+            float b = dot(ro, rd), cq = dot(ro, ro) - 1600.0;      // near shell (radius 40): parallax
+            float3 q = ro + rd * (-b + sqrt(max(b * b - cq, 0.0)));
+            col += uniStars(q, 40.0, 0.45, ro, rd, pix, 101.0, 0.07 * starsAmt, 1.3) * bri;
+            if (band > 0.03) {
+                float3 gC = normalize(float3(0.84, -0.46, 0.0));      // galactic centre, in the band
+                float2 gp = float2(dot(rd, gC), dot(rd, cross(gN, gC)));
+                float n = 0.62 * vnoise(gp * 3.0 + gl * 4.0 + 5.0) + 0.38 * vnoise(gp * 7.0 - gl * 9.0 + 1.0);
+                float lane = smoothstep(0.0, 0.05, abs(gl + 0.03 * (n - 0.5)));   // dark dust lane
+                float core = max(dot(rd, gC), 0.0);
+                core *= core;
+                float3 mw = mix(float3(0.55, 0.62, 0.85), float3(1.0, 0.86, 0.68), core);
+                col += mw * band * (0.35 + 0.65 * n) * mix(0.35, 1.0, lane) * (0.035 + 0.06 * core) * bri;
             }
         }
 
-        // ---- Sun at the centre ----
-        float sunR = 0.026 * scale;
-        col += float3(1.0, 0.55, 0.22) * smoothstep(sunR * 9.0, sunR * 1.2, rc) * 0.30;
-        col += float3(1.0, 0.82, 0.45) * smoothstep(sunR * 2.4, sunR * 0.9, rc) * 0.85;
-        col += float3(1.0, 0.97, 0.9)  * smoothstep(sunR * 1.1, sunR * 0.55, rc);
+        // ---- layers: bodies + rings (alpha), glow + plane (additive). Kept in scalars
+        //      (dynamically indexed arrays would spill to stack memory). depth < 0 = absent.
+        float4 LA = float4(0.0), LB = float4(0.0), LC = float4(0.0);
+        float dA = -1.0, dB = -1.0, dC = -1.0;
+        float3 G = float3(0.0), PL = float3(0.0); float dG = -1.0, dPl = -1.0;
+        float3 eL = normalize(-pE);                        // Earth's frame from the live sun vector
+        float decl = asin(clamp(u.p1.y, -1.0, 1.0));
+        float subLon = u.p2.x + atan2(u.p1.x, u.p1.z);
+        float3 eN = cos(decl) * float3(0.0, 1.0, 0.0) + sin(decl) * eL;
+        float3 eM = normalize(eL - sin(decl) * eN);
+        float3 eE = cross(eN, eM);
+        float3 moonM = normalize((pE - pM) * float3(1.0, 0.0, 1.0));
+        for (int k = 0; k < 2; ++k) {
+            int bi = k == 0 ? i2 : i1;
+            if (bi < 0) continue;
+            float bt = k == 0 ? t2 : t1, bc = k == 0 ? c2 : c1;
+            float3 c = bi == 3 ? pE : bi == 6 ? pS : bi == 9 ? pM : uniBodyPos(bi, ta);
+            float3 n0 = normalize(ro + rd * bt - c);
+            float3 sc = uniShade(bi, c, n0, rd, bt * pix / UNI_RAD[bi], camR, camU, ts, t,
+                                 eE, eN, eM, subLon, u.p2, moonM, ringN,
+                                 earthDay, earthNight, planetTex, samp, haveTex);
+            if (k == 0) { LA = float4(sc * bc, bc); dA = bt; } else { LB = float4(sc * bc, bc); dB = bt; }
+        }
 
-        // ---- planets (lit by the Sun at the centre) ----
-        for (int i = 0; i < 8; ++i) {
-            float orad = (0.12 + float(i) * 0.072) * scale;
-            float ph = hash21(float2(float(i), 7.0)) * 6.2831853;
-            float a = t * speed * 0.07 * ospeed[i] * planetSpeed + ph;
-            float2 pp = float2(cos(a) * orad, sin(a) * orad * TILT);
-            float pr = bsize[i] * scale;
+        float tc = -dot(ro, rd);                             // Sun glow, at its closest approach
+        if (tc > 0.0) {
+            float ds = length(ro + rd * tc);
+            float x = max(ds - UNI_RAD[0], 0.0);
+            float3 glow = float3(1.0, 0.60, 0.26) * (0.60 * exp(-x * 6.0) + 0.20 * exp(-x * 1.3))
+                        + float3(1.0, 0.45, 0.18) * 0.05 * exp(-ds * 0.32);
+            G = glow; dG = tc;
+        }
 
-            if (i == 5) {  // Saturn rings
-                float2 rl = (sc - pp) / float2(pr * 2.2, pr * 2.2 * TILT);
-                float rr = length(rl);
-                float ring = smoothstep(1.0, 0.93, rr) * smoothstep(0.6, 0.66, rr);
-                ring *= 1.0 - 0.7 * smoothstep(0.79, 0.805, rr) * smoothstep(0.85, 0.835, rr);
-                col = mix(col, float3(0.82, 0.74, 0.54), ring * 0.7);
-            }
-
-            float2 lp = (sc - pp) / pr;
-            float r2 = dot(lp, lp);
-            if (r2 < 1.0) {
-                float3 n; n.x = lp.x; n.y = -lp.y; n.z = sqrt(1.0 - r2);
-                float2 sd2 = normalize(-pp + 1e-5);
-                float3 sdir = normalize(float3(sd2.x, -sd2.y, 0.18));   // Sun lights the inward face
-                float aa = u.p2.x * float(layer[i] < 0) + t * speed * bspin[i];
-                float cs = cos(aa), sn = sin(aa);
-                float3 nw = float3(cs * n.x + sn * n.z, n.y, -sn * n.x + cs * n.z);
-                float lat = asin(clamp(nw.y, -1.0, 1.0)), lon = atan2(nw.x, nw.z);
-                float2 tuv = float2(lon * INV2PI + 0.5, 0.5 - lat * INVPI);
-                float3 base = (layer[i] < 0) ? (haveTex ? earthDay.sample(samp, tuv).rgb : float3(0.18,0.4,0.7))
-                                             : (haveTex ? planetTex.sample(samp, tuv, layer[i]).rgb : fallback[i]);
-                float lit = smoothstep(-0.4, 0.45, dot(n, sdir)) * 0.82 + 0.18;
-                lit *= mix(0.75, 1.0, n.z);
-                float3 pcol = base * lit;
-                // Earth location marker
-                if (layer[i] < 0 && u.p2.z > 0.5) {
-                    float dlon = atan2(sin(lon - u.p2.x), cos(lon - u.p2.x));
-                    float md = length(float2(dlon * cos(u.p2.y), lat - u.p2.y));
-                    float pulse = 0.5 + 0.5 * sin(t * 3.0);
-                    pcol = mix(pcol, float3(0.3, 1.0, 0.45), smoothstep(0.18, 0.0, md) * (0.5 + 0.5 * pulse));
+        if (tP > 0.0) {                                      // the ecliptic: dust disk, belt, orbits
+            float3 pc = float3(0.0);
+            float pth = atan2(-hp.z, hp.x);
+            float path = min(0.06 / abs(rdy), 0.9);          // thin slab: brighter where we graze it
+            float dens = exp(-pr * 0.42) * smoothstep(UNI_RAD[0], 1.5, pr) * (0.7 + 0.6 * vnoise(hp.xz * 1.3));
+            float belt = exp(-(pr - 4.18) * (pr - 4.18) * 30.0);
+            float3 dustC = mix(float3(1.0, 0.60, 0.30), float3(0.42, 0.52, 0.85), smoothstep(1.0, 7.0, pr));
+            pc += dustC * (dens * 0.9 + belt * 0.16) * path * 0.55;
+            if (belt > 0.03) {                               // asteroid belt, orbiting as one
+                const float NA = 300.0, DR = 0.06, R0 = 3.84;
+                float rot = ta * 0.62;
+                float th = (pth - rot) * 0.1591549;
+                float2 cell = floor(float2((th - floor(th)) * NA, (pr - R0) / DR));
+                float3 h = pcg3(float3(cell, 57.0));
+                if (h.x < 0.28) {
+                    float aa = (cell.x + 0.2 + 0.6 * h.y) / NA * 6.2831853 + rot;
+                    float3 pa = float3(cos(aa), 0.0, -sin(aa)) * (R0 + (cell.y + 0.2 + 0.6 * h.z) * DR);
+                    float3 v = pa - ro;
+                    float tv = dot(v, rd);
+                    float dpx = length(v - rd * tv) / (tv * pix);
+                    float sz = 0.5 + 0.5 * h.y;
+                    pc += float3(0.78, 0.72, 0.66) * exp(-dpx * dpx / (sz * sz)) * (0.25 + 0.45 * h.z) * belt;
                 }
-                col = mix(col, pcol, smoothstep(1.0, 0.9, r2));
+            }
+            if (u.p2.w > 0.5) {                              // orbit lines, with a trail behind each planet
+                for (int i = 1; i < 9; ++i) {
+                    float line = smoothstep(1.4, 0.3, abs(pr - UNI_ORB[i]) / fw);
+                    if (line <= 0.0) continue;
+                    float da = uniAngle(i, ta) - pth;
+                    da -= 6.2831853 * floor(da * 0.1591549);
+                    float trail = exp(-da * 2.2);
+                    pc += mix(float3(0.55, 0.62, 0.78) * 0.17, UNI_TINT[i] * 0.9, trail) * line;
+                }
+            }
+            pc *= exp(-max(tP - dist, 0.0) * 0.035);         // far side recedes
+            PL = pc; dPl = tP;
+        }
+
+        if (tR > 0.0) {                                      // Saturn's rings, with Saturn's shadow
+            float ra = uniRingAlpha(rr, rfw);
+            if (ra > 0.002) {
+                float3 L6 = normalize(-qR);
+                float3 oc = qR - pS;
+                float b = dot(oc, L6);
+                float sd = sqrt(max(dot(oc, oc) - b * b, 0.0)) / UNI_RAD[6];
+                float shadow = b < 0.0 ? smoothstep(1.03, 0.97, sd) : 0.0;
+                float lit = (0.35 + 0.65 * abs(dot(ringN, L6))) * (1.0 - 0.8 * shadow);
+                float3 rc = mix(float3(0.60, 0.53, 0.43), float3(0.93, 0.85, 0.68), smoothstep(1.5, 2.2, rr)) * lit;
+                LC = float4(rc * ra, ra); dC = tR;
             }
         }
+
+        // sort the three alpha layers far → near, then lay the additive ones into the gaps
+        if (dA < dB) { float4 l = LA; LA = LB; LB = l; float d = dA; dA = dB; dB = d; }
+        if (dB < dC) { float4 l = LB; LB = LC; LC = l; float d = dB; dB = dC; dC = d; }
+        if (dA < dB) { float4 l = LA; LA = LB; LB = l; float d = dA; dA = dB; dB = d; }
+        col += uniAddIn(G, dG, PL, dPl, dA, 1e30);
+        col = col * (1.0 - LA.a) + LA.rgb;
+        col += uniAddIn(G, dG, PL, dPl, dB, dA);
+        col = col * (1.0 - LB.a) + LB.rgb;
+        col += uniAddIn(G, dG, PL, dPl, dC, dB);
+        col = col * (1.0 - LC.a) + LC.rgb;
+        col += uniAddIn(G, dG, PL, dPl, -1e30, dC);
+        col += bandDither(px);
         return float4(col, 1.0);
     }
 
