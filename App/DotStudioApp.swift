@@ -11,6 +11,22 @@ struct DotStudioApp: App {
     @StateObject private var updates = UpdateController()
 
     init() {
+        if ProcessInfo.processInfo.environment["DOTSTUDIO_DIAG"] != nil {
+            // Headless storage check: prints what the app can do with its library folder, then exits.
+            let store = SharedStore(role: .app)
+            let fm = FileManager.default
+            var out = "baseDir: \(store.baseDir.path)\n"
+            out += "exists: \(fm.fileExists(atPath: store.baseDir.path)) writable: \(fm.isWritableFile(atPath: store.baseDir.path))\n"
+            out += "library exists: \(fm.fileExists(atPath: store.libraryURL.path))\n"
+            do {
+                let probe = store.baseDir.appendingPathComponent(".probe")
+                try Data("x".utf8).write(to: probe, options: .atomic)
+                try fm.removeItem(at: probe)
+                out += "probe write: OK\n"
+            } catch { out += "probe write FAILED: \(error)\n" }
+            FileHandle.standardOutput.write(Data(out.utf8))
+            exit(0)
+        }
         if let dir = ProcessInfo.processInfo.environment["DOTSTUDIO_SHOTS"] {
             Shots.run(outDir: dir)   // renders the gallery and exits
         }

@@ -1,9 +1,16 @@
-//  SharedStore.swift — where presets + media live, shared across the sandbox.
+//  SharedStore.swift — where presets + media live, shared between app and saver.
 //
-//  The screensaver runs inside the sandboxed `legacyScreenSaver` host. The app
-//  is NOT sandboxed, so it writes presets + media directly into that host's
-//  container; from inside the saver the very same folder is just its own
-//  Application Support directory. No entitlements required.
+//  The library lives in ~/Library/Application Support/DotStudio. The app (not
+//  sandboxed) owns and writes it. The screensaver runs inside Apple's sandboxed
+//  `legacyScreenSaver` host, whose entitlements allow read-only access to the
+//  whole filesystem (`temporary-exception.files.absolute-path.read-only: /`), so
+//  it reads the same folder by its real path.
+//
+//  Before 1.3 the app wrote into the host's own container instead. macOS's
+//  "access data from other apps" protection blocks that (EPERM) unless the user
+//  approves — and an ad-hoc-signed app is a "new app" after every update, so the
+//  approval never stuck. The old container is now only a read fallback for the
+//  saver and a one-time migration source for the app.
 
 import Foundation
 
@@ -13,12 +20,37 @@ final class SharedStore {
     static let folderName = "DotStudio"
     static let legacyHost = "com.apple.ScreenSaver.Engine.legacyScreenSaver"
 
+    /// The user's real home — inside the sandbox `homeDirectoryForCurrentUser`
+    /// points at the container, so ask the password database.
+    static var realHome: URL {
+        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+            return URL(fileURLWithPath: String(cString: dir), isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+    }
+
+    /// ~/Library/Application Support/DotStudio — the shared library folder.
+    static var sharedDir: URL {
+        realHome.appendingPathComponent("Library/Application Support/\(folderName)", isDirectory: true)
+    }
+
+    /// Pre-1.3 location, inside the screensaver host's container.
+    static var legacyContainerDir: URL {
+        realHome.appendingPathComponent(
+            "Library/Containers/\(legacyHost)/Data/Library/Application Support/\(folderName)", isDirectory: true)
+    }
+
     let baseDir: URL
     let mediaDir: URL
     let libraryURL: URL
+    /// Somewhere this process may write (debug log, corrupt-library backups). The
+    /// saver can only read `baseDir`, so it logs into its own container.
+    let writableDir: URL
     /// Debug logging is opt-in: `touch debug.enabled` next to library.json.
     /// Checked once at init so shipping saver launches don't touch a log file.
     let debugEnabled: Bool
+    /// Why the most recent save failed (shown in the app's alert).
+    private(set) var lastSaveError: String?
 
     init(role: StoreRole) {
         let fm = FileManager.default
@@ -26,20 +58,43 @@ final class SharedStore {
         case .app where ProcessInfo.processInfo.environment["DOTSTUDIO_STORE_DIR"] != nil:
             // Dev/test override: keep headless renders away from the real library.
             baseDir = URL(fileURLWithPath: ProcessInfo.processInfo.environment["DOTSTUDIO_STORE_DIR"]!, isDirectory: true)
+            writableDir = baseDir
         case .app:
-            // Write into the screensaver host's sandbox container.
-            let home = fm.homeDirectoryForCurrentUser
-            baseDir = home
-                .appendingPathComponent("Library/Containers/\(SharedStore.legacyHost)/Data/Library/Application Support/\(SharedStore.folderName)", isDirectory: true)
+            baseDir = SharedStore.sharedDir
+            writableDir = baseDir
+            SharedStore.migrateFromContainer(to: baseDir)
         case .saver:
-            // Inside the sandbox this resolves to the container's Application Support.
-            let appSup = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            baseDir = appSup.appendingPathComponent(SharedStore.folderName, isDirectory: true)
+            let own = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+                .appendingPathComponent(SharedStore.folderName, isDirectory: true)
+            let shared = SharedStore.sharedDir
+            // Prefer the shared folder; fall back to the container for a pre-1.3 app.
+            baseDir = fm.fileExists(atPath: shared.appendingPathComponent("library.json").path) ? shared : own
+            writableDir = own
+            try? fm.createDirectory(at: own, withIntermediateDirectories: true)
         }
         mediaDir = baseDir.appendingPathComponent("media", isDirectory: true)
         libraryURL = baseDir.appendingPathComponent("library.json")
-        try? fm.createDirectory(at: mediaDir, withIntermediateDirectories: true)
+        if role == .app { try? fm.createDirectory(at: mediaDir, withIntermediateDirectories: true) }
         debugEnabled = fm.fileExists(atPath: baseDir.appendingPathComponent("debug.enabled").path)
+            || fm.fileExists(atPath: writableDir.appendingPathComponent("debug.enabled").path)
+    }
+
+    /// One-time move of a pre-1.3 library out of the screensaver's container.
+    /// Best effort: macOS may refuse to let us read it, and then we start fresh.
+    private static func migrateFromContainer(to dir: URL) {
+        let fm = FileManager.default
+        let newLib = dir.appendingPathComponent("library.json")
+        guard !fm.fileExists(atPath: newLib.path) else { return }
+        let old = legacyContainerDir
+        guard let data = try? Data(contentsOf: old.appendingPathComponent("library.json")) else { return }
+        try? fm.createDirectory(at: dir.appendingPathComponent("media"), withIntermediateDirectories: true)
+        if let media = try? fm.contentsOfDirectory(at: old.appendingPathComponent("media"),
+                                                   includingPropertiesForKeys: nil) {
+            for f in media {
+                try? fm.copyItem(at: f, to: dir.appendingPathComponent("media").appendingPathComponent(f.lastPathComponent))
+            }
+        }
+        try? data.write(to: newLib, options: .atomic)
     }
 
     // MARK: Library
@@ -77,7 +132,7 @@ final class SharedStore {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyyMMdd-HHmmss"
         let stamp = fmt.string(from: libraryModified() ?? Date())
-        let dst = baseDir.appendingPathComponent("library.json.backup-\(stamp)")
+        let dst = writableDir.appendingPathComponent("library.json.backup-\(stamp)")
         if FileManager.default.fileExists(atPath: dst.path) { return dst }   // already saved
         do {
             try FileManager.default.copyItem(at: libraryURL, to: dst)
@@ -93,9 +148,13 @@ final class SharedStore {
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         do {
             let data = try enc.encode(library)
+            try FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
             try data.write(to: libraryURL, options: .atomic)
+            lastSaveError = nil
             return true
         } catch {
+            lastSaveError = (error as NSError).localizedDescription
+                + " [\((error as NSError).domain) \((error as NSError).code)]"
             debug("library.json save FAILED: \(error)")
             return false
         }
@@ -109,7 +168,7 @@ final class SharedStore {
 
     func debug(_ message: String) {
         guard debugEnabled else { return }
-        let url = baseDir.appendingPathComponent("debug.log")
+        let url = writableDir.appendingPathComponent("debug.log")
         let line = message + "\n"
         if let h = try? FileHandle(forWritingTo: url) {
             h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close()
