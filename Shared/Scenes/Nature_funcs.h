@@ -128,7 +128,7 @@ static inline float3 nature_curtainLight(float x, float alt, float k, constant F
     float hb = 96.0 + 5.0 * sin(x * 0.021 + k * 7.3 + ts * 0.01) + 3.0 * sin(x * 0.067 - k * 2.1);  // lower hem
     float dy = alt - hb;
     // Light scattered in the air around the sheet: a soft halo, also below the hem.
-    float3 halo = P.cG * exp(dy < 10.0 ? (dy - 10.0) / 10.0 : (10.0 - dy) / 35.0) * 0.035;
+    float3 halo = P.cG * exp(dy < 10.0 ? (dy - 10.0) / 10.0 : (10.0 - dy) / 45.0) * 0.07;
     if (dy < -10.0) return halo * patch;
     // Field-aligned rays: three octaves of 1D noise along the sheet, drifting sideways.
     float drift = ts * (0.35 + 0.5 * P.act);
