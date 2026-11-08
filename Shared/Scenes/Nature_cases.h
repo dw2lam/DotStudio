@@ -84,14 +84,14 @@
             float3 glint = P.esun * Tsun * sunUp * Fh * D * spark / (4.0 * max(dot(n, v), 0.08)) * 0.1;
             // Light scattered up out of the water body.
             float3 deep = srgbToLinear(u.colorA.rgb);
-            float3 skyAmb = nature_oceanAtmos(float3(0.0, 1.0, 0.0), P);
-            float3 body = deep * (skyAmb * 1.2 + P.esun * Tsun * 0.04 * max(P.sd.y + 0.1, 0.0));
+            // Skylight on the water ≈ the sky it reflects (already in hand), a bit bluer.
+            float3 hz = nature_oceanAtmos(normalize(float3(rd.x, 0.004, rd.z)), P);
+            float3 body = deep * (sky * float3(0.9, 1.0, 1.15) + P.esun * Tsun * 0.04 * max(P.sd.y + 0.1, 0.0));
             // Smith-style masking: on rough water at grazing angles, much of the mirror is
             // hidden behind wave crests, so the far sea sits darker than the sky it reflects.
             float G = 1.0 / (1.0 + 0.5 * sqrt(unres + 0.0015) / max(-rd.y, 0.004));
             col = refl * F0 * G + body * (1.0 - F0 * G) + glint;
             // Haze over distance, toward the horizon's own colour.
-            float3 hz = nature_oceanAtmos(normalize(float3(rd.x, 0.004, rd.z)), P);
             col = mix(col, hz, 1.0 - exp(-dist * (0.00004 + 0.00012 * haze)));
         }
         // Partial white balance toward the low sun (as a camera would): gold, not red.
@@ -255,7 +255,7 @@
             // water rather than a dark bead.
             float2 sample = D.c - D.o * 0.045;
             float3 seen = nature_street(sample, aspect, bBack * 0.3, ts, night, lamp, true);
-            float3 soft = nature_street(D.c + D.o * 0.01, aspect, bBack, ts, night, lamp);
+            float3 soft = nature_street(D.c + D.o * 0.01, aspect, bBack, ts, night, lamp, true);
             float l = length(D.o);
             float rim = smoothstep(1.0, 0.8, l);                            // thin dark refracting rim
             col = mix(seen, soft, 0.5) * (0.55 + 0.75 * rim) * 1.15;
