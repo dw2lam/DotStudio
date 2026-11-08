@@ -3,7 +3,11 @@
 //  always shows what ships. Build + run with tools/gallery/render.sh.
 //
 //  usage: gallery <outDir> [--photo file.jpg] [--times 1.6,9] [--only substr] [--pack]
-//                          [--size 1600x1000] [--bench]
+//                          [--size 1600x1000] [--bench] [--gpubench] [--solo] [--set key=val,key=val]
+//  --set overrides params on each preset's first effect (e.g. --set tilt=70,scale=1.4).
+//  --gpubench times just the first effect's fragment pass with GPU timestamps
+//  (no alloc/readback, immune to CPU load): the number to compare shader costs by.
+//  --solo keeps only each preset's first effect (benchmark one shader, not its post chain).
 
 import AppKit
 import Metal
@@ -17,6 +21,9 @@ var times: [Float] = [1.6]
 var only: String?
 var includePack = false
 var bench = false
+var overrides: [String: Double] = [:]
+var solo = false
+var gpuBench = false
 var W = 1600, H = 1000
 while !args.isEmpty {
     let a = args.removeFirst()
@@ -26,6 +33,13 @@ while !args.isEmpty {
     case "--only": only = args.removeFirst().lowercased()
     case "--pack": includePack = true
     case "--bench": bench = true
+    case "--solo": solo = true
+    case "--gpubench": gpuBench = true
+    case "--set":
+        for kv in args.removeFirst().split(separator: ",") {
+            let p = kv.split(separator: "=")
+            if p.count == 2, let v = Double(p[1]) { overrides[String(p[0])] = v }
+        }
     case "--size":
         let p = args.removeFirst().split(separator: "x").compactMap { Int($0) }
         if p.count == 2 { W = p[0]; H = p[1] }
@@ -40,6 +54,14 @@ let lib = DefaultPresets.makeLibrary()
 var presets = lib.presets
 if includePack { presets += DefaultPresets.coolPack() }
 if let only { presets = presets.filter { $0.name.lowercased().contains(only) } }
+if solo {
+    for i in presets.indices where presets[i].effects.count > 1 { presets[i].effects = [presets[i].effects[0]] }
+}
+if !overrides.isEmpty {
+    for i in presets.indices where !presets[i].effects.isEmpty {
+        presets[i].effects[0].params.merge(overrides) { _, new in new }
+    }
+}
 
 var source = lib.source
 var photoTex: MTLTexture?
@@ -52,18 +74,88 @@ if let photo {
 }
 try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
 
-if bench {
-    // Min-of-8 wall time per full offscreen render (includes alloc + readback floor,
-    // so compare against a trivial preset such as Matrix Rain).
+if gpuBench {
+    // One fullscreen pass of each preset's first effect, encoded the way MetalRenderer does,
+    // 3 frames per command buffer; GPU time from the command buffer's own timestamps.
+    let dev = renderer.device
+    let libURL = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
+        .appendingPathComponent("default.metallib")
+    guard let queue = dev.makeCommandQueue(), let lib = try? dev.makeLibrary(URL: libURL),
+          let vfn = lib.makeFunction(name: "fx_vertex"), let ffn = lib.makeFunction(name: "fx_fragment") else {
+        print("gpubench: no metallib at \(libURL.path)"); exit(1)
+    }
+    let pd = MTLRenderPipelineDescriptor()
+    pd.vertexFunction = vfn; pd.fragmentFunction = ffn
+    pd.colorAttachments[0].pixelFormat = .bgra8Unorm
+    let pso = try! dev.makeRenderPipelineState(descriptor: pd)
+    let sd = MTLSamplerDescriptor()
+    sd.minFilter = .linear; sd.magFilter = .linear
+    sd.sAddressMode = .clampToEdge; sd.tAddressMode = .clampToEdge
+    let samp = dev.makeSamplerState(descriptor: sd)!
+    let tex = PlanetTextures(device: dev, queue: queue)
+    let td = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: W, height: H, mipmapped: false)
+    td.usage = [.renderTarget, .shaderRead]; td.storageMode = .private
+    let target = dev.makeTexture(descriptor: td)!, input = dev.makeTexture(descriptor: td)!
+    let astro = MetalRenderer.astro(location: renderer.location)
     for p in presets {
-        var best = Double.infinity
-        for i in 0..<8 {
-            let t0 = CFAbsoluteTimeGetCurrent()
-            _ = renderer.renderThumbnail(preset: p, source: source, width: W, height: H, time: Float(i) * 0.7,
-                                         sourceTexOverride: photoTex)
-            best = min(best, (CFAbsoluteTimeGetCurrent() - t0) * 1000)
+        guard let inst = p.effects.first(where: { $0.enabled }) else { continue }
+        var u = FXUniforms()
+        inst.pack(into: &u)
+        u.resolution = simd_float2(Float(W), Float(H))
+        if inst.kind == .universe {
+            u.p1 = simd_float4(astro.sun.x, astro.sun.y, astro.sun.z, 0)
+            u.p2 = simd_float4(astro.userLon, astro.userLat, astro.hasLoc ? 1 : 0, (inst.params["orbits"] ?? 1) > 0.5 ? 1 : 0)
         }
-        print(String(format: "%6.1f ms  %@", best, p.name))
+        var samples: [Double] = []
+        for rep in 0..<14 {
+            let cmd = queue.makeCommandBuffer()!
+            for f in 0..<3 {
+                u.time = Float(rep * 3 + f) * 1.7
+                let rpd = MTLRenderPassDescriptor()
+                rpd.colorAttachments[0].texture = target
+                rpd.colorAttachments[0].loadAction = .dontCare
+                rpd.colorAttachments[0].storeAction = .store
+                let enc = cmd.makeRenderCommandEncoder(descriptor: rpd)!
+                enc.setRenderPipelineState(pso)
+                enc.setFragmentBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
+                enc.setFragmentTexture(input, index: 0)
+                enc.setFragmentTexture(input, index: 1)
+                enc.setFragmentTexture(tex.earthDay, index: 2)
+                enc.setFragmentTexture(tex.earthNight, index: 3)
+                enc.setFragmentTexture(tex.planets, index: 4)
+                enc.setFragmentTexture(input, index: 5)
+                enc.setFragmentSamplerState(samp, index: 0)
+                enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+                enc.endEncoding()
+            }
+            cmd.commit(); cmd.waitUntilCompleted()
+            if rep >= 2 { samples.append((cmd.gpuEndTime - cmd.gpuStartTime) * 1000 / 3) }
+        }
+        samples.sort()
+        print(String(format: "%6.2f ms GPU  (median %5.2f)  %@ [%@]", samples[0], samples[samples.count / 2],
+                     p.name, inst.kind.displayName))
+    }
+    exit(0)
+}
+
+if bench {
+    // Wall time per full offscreen render (includes the alloc + readback floor, so compare
+    // presets against each other, not against a frame budget). 4 warm-up renders let the
+    // GPU clock ramp, then min and median of 24 renders spread over a minute of scene time.
+    for p in presets {
+        for i in 0..<4 {
+            _ = renderer.renderThumbnail(preset: p, source: source, width: W, height: H, time: Float(i),
+                                         sourceTexOverride: photoTex)
+        }
+        var ms: [Double] = []
+        for i in 0..<24 {
+            let t0 = CFAbsoluteTimeGetCurrent()
+            _ = renderer.renderThumbnail(preset: p, source: source, width: W, height: H, time: Float(i) * 2.5,
+                                         sourceTexOverride: photoTex)
+            ms.append((CFAbsoluteTimeGetCurrent() - t0) * 1000)
+        }
+        ms.sort()
+        print(String(format: "%6.1f ms  (median %5.1f)  %@", ms[0], ms[ms.count / 2], p.name))
     }
     exit(0)
 }
