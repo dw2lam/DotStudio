@@ -81,6 +81,23 @@ enum UIShots {
                  AddEffectPicker(source: model.library.source, thumbnailer: model.thumbnailer) { _ in })
             snap("source", CGSize(width: 340, height: 300), dark: dark,
                  SourceEditor(source: .constant(model.library.source), model: model).padding(16))
+
+            // Welcome sheet, one PNG per step (and per setup state on "Turn It On").
+            // Rendered standalone — ContentView never presents it under UI shots.
+            let sheet = OnboardingView.size
+            snap("onboarding-1-welcome", sheet, dark: dark,
+                 OnboardingView(initialStep: .welcome, livePreview: false))
+            snap("onboarding-2-pick", sheet, dark: dark,
+                 OnboardingView(initialStep: .pick, livePreview: false))
+            for (status, tag) in [(Installer.Status.notInstalled, "not-installed"),
+                                  (.notChosen, "not-chosen"), (.ready, "ready")] {
+                snap("onboarding-3-enable-\(tag)", sheet, dark: dark,
+                     OnboardingView(initialStep: .enable, livePreview: false, statusOverride: status))
+            }
+            snap("onboarding-4-done", sheet, dark: dark,
+                 OnboardingView(initialStep: .done, livePreview: false, statusOverride: .ready))
+            snap("onboarding-4-done-skipped", sheet, dark: dark,
+                 OnboardingView(initialStep: .done, livePreview: false, statusOverride: .notInstalled))
         }
         FileHandle.standardOutput.write(Data("ui shots done\n".utf8))
         exit(0)

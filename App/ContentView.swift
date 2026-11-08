@@ -8,6 +8,10 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
+    @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
+
+    /// Offscreen UI renders (Shots.swift) must never present the sheet or touch the flag.
+    private static let isRenderingShots = ProcessInfo.processInfo.environment["DOTSTUDIO_UI_SHOTS"] != nil
 
     var body: some View {
         ZStack {
@@ -25,6 +29,16 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.refreshSetupStatus()   // user may have just picked us in System Settings
         }
+        .sheet(isPresented: $model.showOnboarding, onDismiss: {
+            hasCompletedOnboarding = true   // finishing, skipping, or Esc all count
+        }) {
+            OnboardingView()
+                .environmentObject(model)
+        }
+        .onAppear { presentOnboardingIfNeeded() }
+        .onChange(of: model.storeAlert == nil) { _, clear in
+            if clear { presentOnboardingIfNeeded() }   // wait out a launch-time library alert
+        }
         .alert(item: $model.storeAlert) { alert in
             if let backup = alert.backupURL {
                 return Alert(
@@ -38,6 +52,12 @@ struct ContentView: View {
             return Alert(title: Text(alert.title), message: Text(alert.message),
                          dismissButton: .default(Text("OK")))
         }
+    }
+
+    private func presentOnboardingIfNeeded() {
+        guard !hasCompletedOnboarding, !Self.isRenderingShots,
+              !model.showOnboarding, model.storeAlert == nil else { return }
+        model.showOnboarding = true
     }
 }
 
