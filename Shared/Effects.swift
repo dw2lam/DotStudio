@@ -78,6 +78,15 @@ enum EffectKind: String, Codable, CaseIterable {
     case gameboy, neonEdges, fisheye, swirl, ripple, toon, thermal, truchet, ledPanel, nes8bit, starfield, universe, blackhole
     // modern pack: scenes + looks
     case meshGradient, aurora, topography, liquidChrome, silk, risograph, grainWash, glass
+    // Scene packs — metadata lives in Shared/Scenes/<Pack>.swift (SceneCatalog), shaders in
+    // Shared/Scenes/<Pack>_cases.h. One line per pack; shader ids 50–53, 54–57, 58–61, 62–65.
+    case typeClock, flipClock, wordClock, dateGlow            // Clocks   50–53
+
+    case flowLines, lavaLamp, inkFluid, fireflies             // Flowing  54–57
+
+    case rainGlass, oceanHorizon, nightSky, snowfall          // Nature   58–61
+
+    case synthGrid, pipes, polyTrails, demoTunnel             // Retro    62–65
 
     var displayName: String {
         switch self {
@@ -129,6 +138,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .risograph: return "Risograph"
         case .grainWash: return "Grain Wash"
         case .glass: return "Glass"
+        default: return SceneCatalog.spec(self)?.name ?? rawValue
         }
     }
 
@@ -183,6 +193,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .risograph: return "Two-ink riso print with grain and misregistration."
         case .grainWash: return "Dreamy soft focus with film grain and an optional color wash."
         case .glass:     return "Looks through fluted, tiled or liquid glass."
+        default: return SceneCatalog.spec(self)?.blurb ?? ""
         }
     }
 
@@ -199,6 +210,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .glass, .noiseField, .kaleidoscope, .mirror,
              .fisheye, .swirl, .ripple:                                   return .distort
         case .grainWash, .grain, .bloom, .posterize, .thermal, .vignette: return .colorLight
+        default: return .scenes
         }
     }
 
@@ -252,6 +264,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .ascii:     return 18
         case .matrix:    return 19
         case .pixelSort: return 20
+        default: return SceneCatalog.spec(self)?.shaderID ?? 0
         }
     }
 
@@ -375,6 +388,7 @@ enum EffectKind: String, Codable, CaseIterable {
                                  ParamSpec("size", "Size", 10, 200, def: 44),
                                  ParamSpec("refract", "Refraction", 0, 1, def: 0.5),
                                  ParamSpec("frost", "Frost", 0, 1, def: 0.3)]
+        default: return SceneCatalog.spec(self)?.params ?? []
         }
     }
 
@@ -396,7 +410,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .silk:         return RGBA(0.03, 0.03, 0.06)       // ground
         case .risograph:    return RGBA(1.0, 0.28, 0.53)        // fluorescent pink ink
         case .grainWash:    return RGBA(0.12, 0.08, 0.24)       // shadow wash
-        default: return nil
+        default: return SceneCatalog.spec(self)?.colorA
         }
     }
     var defaultColorB: RGBA? {
@@ -413,7 +427,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .silk:         return RGBA(0.98, 0.78, 0.55)       // champagne strands
         case .risograph:    return RGBA(0.0, 0.47, 0.75)        // riso medium blue
         case .grainWash:    return RGBA(1.0, 0.80, 0.64)        // highlight wash
-        default: return nil
+        default: return SceneCatalog.spec(self)?.colorB
         }
     }
 
@@ -428,7 +442,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .aurora: return "Sky"
         case .topography, .silk: return "Ground"
         case .liquidChrome, .grainWash: return "Shadow"
-        default: return "Background"
+        default: return SceneCatalog.spec(self)?.colorALabel ?? "Background"
         }
     }
     var colorBLabel: String {
@@ -440,7 +454,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .topography: return "Lines"
         case .silk: return "Strands"
         case .liquidChrome, .grainWash: return "Highlight"
-        default: return "Foreground"
+        default: return SceneCatalog.spec(self)?.colorBLabel ?? "Foreground"
         }
     }
 
@@ -450,7 +464,7 @@ enum EffectKind: String, Codable, CaseIterable {
         switch self {
         case .starfield, .universe, .blackhole,
              .meshGradient, .aurora, .topography, .liquidChrome, .silk: return true
-        default: return false
+        default: return SceneCatalog.spec(self) != nil
         }
     }
 
@@ -540,6 +554,13 @@ extension EffectInstance {
         case .risograph: u.p0 = .init(g("screen"), g("cell"), g("misreg"), g("paper"))
         case .grainWash: u.p0 = .init(g("soft"), g("grain"), g("tint"), 0)
         case .glass:     u.p0 = .init(g("style"), g("size"), g("refract"), g("frost"))
+        default:
+            // Scene packs: params fill p0.xyzw, p1.xyzw, p2.xyzw in catalog order.
+            var v = (kind.params.prefix(12).map { g($0.key) })
+            while v.count < 12 { v.append(0) }
+            u.p0 = .init(v[0], v[1], v[2], v[3])
+            u.p1 = .init(v[4], v[5], v[6], v[7])
+            u.p2 = .init(v[8], v[9], v[10], v[11])
         }
     }
 }

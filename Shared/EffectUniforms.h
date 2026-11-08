@@ -32,6 +32,10 @@ typedef struct {
     FX_FLOAT2 srcSize;      // source texture size in pixels (for cover-fit)
     FX_INT    fillMode;     // 0 = fit, 1 = cover, 2 = stretch
     FX_INT    glyphCount;   // number of glyphs in the ascii atlas
+
+    FX_FLOAT4 clock;        // local wall time: (hour 0–24 with fraction, minute 0–60 with fraction,
+                            //                   second 0–60 with fraction, weekday 1=Sun…7)
+    FX_FLOAT4 date;         // (year, month 1–12, day 1–31, day of year 1–366)
 } FXUniforms;
 
 #endif /* EffectUniforms_h */

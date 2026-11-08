@@ -325,6 +325,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             u.resolution = res
             u.time = time
             u.glyphCount = Int32(GlyphAtlas.count)
+            (u.clock, u.date) = MetalRenderer.wallClock()
             u.srcSize = simd_float2(Float(fragInput.width), Float(fragInput.height))
             u.fillMode = Int32(source.fillMode)
 
@@ -366,6 +367,18 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     }
 
     // MARK: Astronomy (Universe effect)
+
+    /// Local wall-clock time + date for clock/time-aware scenes (see FXUniforms.clock/.date).
+    static func wallClock(_ now: Date = Date()) -> (simd_float4, simd_float4) {
+        let cal = Calendar.current
+        let c = cal.dateComponents([.year, .month, .day, .hour, .minute, .second, .nanosecond, .weekday], from: now)
+        let sec = Float(c.second ?? 0) + Float(c.nanosecond ?? 0) / 1e9
+        let min = Float(c.minute ?? 0) + sec / 60
+        let hour = Float(c.hour ?? 0) + min / 60
+        let doy = Float(cal.ordinality(of: .day, in: .year, for: now) ?? 1)
+        return (simd_float4(hour, min, sec, Float(c.weekday ?? 1)),
+                simd_float4(Float(c.year ?? 2026), Float(c.month ?? 1), Float(c.day ?? 1), doy))
+    }
 
     /// Live sun direction (view space) + the user's longitude, from the wall clock and
     /// the Mac's time zone — no Location permission needed.
