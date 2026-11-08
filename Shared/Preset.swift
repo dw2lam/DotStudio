@@ -18,7 +18,19 @@ struct RGBA: Codable, Equatable, Hashable {
     static let cyan = RGBA(0.2, 0.9, 1.0)
 }
 
-enum SourceKind: String, Codable, CaseIterable { case gradient, image, video }
+enum SourceKind: String, Codable, CaseIterable {
+    case gradient, image, video
+    /// A slowly panning, cross-fading photo slideshow: the built-in curated set, or the
+    /// user's own photos when `SourceSpec.mediaFilenames` is non-empty.
+    case collection
+
+    /// Unknown kinds (a library written by a newer build) decode as a gradient instead
+    /// of failing the whole library.
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = SourceKind(rawValue: raw) ?? .gradient
+    }
+}
 
 struct SourceSpec: Codable, Equatable, Hashable {
     var kind: SourceKind = .gradient
@@ -28,6 +40,25 @@ struct SourceSpec: Codable, Equatable, Hashable {
     var gradientAngle: Double = 1.1
     var gradientDrift: Double = 1.0
     var fillMode: Int = 1                 // 0 fit, 1 cover, 2 stretch
+
+    // Collection (slideshow) settings. Optional so older libraries still decode.
+    /// The user's own slideshow photos (files in media/); nil or empty = the built-in set.
+    var mediaFilenames: [String]?
+    /// Seconds each photo holds before cross-fading to the next; nil = default.
+    var slideSeconds: Double?
+    /// Ken Burns pan/zoom strength, 0 (still) – 1; nil = default.
+    var motion: Double?
+
+    static let defaultSlideSeconds = 24.0
+    static let defaultMotion = 1.0
+    var slideInterval: Double { max(slideSeconds ?? SourceSpec.defaultSlideSeconds, 4) }
+    var motionAmount: Double { min(max(motion ?? SourceSpec.defaultMotion, 0), 1) }
+    var usesBuiltInPhotos: Bool { kind == .collection && (mediaFilenames ?? []).isEmpty }
+
+    /// The built-in photo slideshow: the default canvas for Looks.
+    static var builtInPhotos: SourceSpec {
+        var s = SourceSpec(); s.kind = .collection; return s
+    }
 }
 
 struct EffectInstance: Codable, Identifiable, Equatable, Hashable {
@@ -84,7 +115,7 @@ struct Library: Codable, Equatable {
     var presets: [Preset] = []
     var source: SourceSpec = SourceSpec()
     var activeID: UUID?
-    var version: Int = 2
+    var version: Int = 3          // 3 = slideshow source era (see AppModel.migrate)
     var locationLat: Double?     // resolved device location (for the Universe marker)
     var locationLon: Double?
     /// Saver render resolution as a fraction of native (1 = full Retina). Optional so

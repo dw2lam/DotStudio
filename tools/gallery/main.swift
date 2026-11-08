@@ -8,6 +8,7 @@
 //  --gpubench times just the first effect's fragment pass with GPU timestamps
 //  (no alloc/readback, immune to CPU load): the number to compare shader costs by.
 //  --solo keeps only each preset's first effect (benchmark one shader, not its post chain).
+//  --slides renders one frame per built-in slideshow photo; --looks skips the Scenes.
 
 import AppKit
 import Metal
@@ -24,6 +25,7 @@ var bench = false
 var overrides: [String: Double] = [:]
 var solo = false
 var gpuBench = false
+var looksOnly = false
 var W = 1600, H = 1000
 while !args.isEmpty {
     let a = args.removeFirst()
@@ -35,6 +37,13 @@ while !args.isEmpty {
     case "--bench": bench = true
     case "--solo": solo = true
     case "--gpubench": gpuBench = true
+    case "--looks": looksOnly = true
+    case "--slides":
+        // One frame per built-in photo, mid-hold (the slideshow is a pure function of time).
+        let s = SourceSpec.builtInPhotos
+        let n = CollectionSource.builtInPhotoURLs().count
+        let fade = min(4.0, s.slideInterval * 0.35)
+        times = (0..<max(n, 1)).map { Float(Double($0) * s.slideInterval + s.slideInterval * 0.5 - fade) }
     case "--set":
         for kv in args.removeFirst().split(separator: ",") {
             let p = kv.split(separator: "=")
@@ -54,6 +63,7 @@ let lib = DefaultPresets.makeLibrary()
 var presets = lib.presets
 if includePack { presets += DefaultPresets.coolPack() }
 if let only { presets = presets.filter { $0.name.lowercased().contains(only) } }
+if looksOnly { presets = [Preset(name: "Source")] + presets.filter { !$0.isScene } }
 if solo {
     for i in presets.indices where presets[i].effects.count > 1 { presets[i].effects = [presets[i].effects[0]] }
 }

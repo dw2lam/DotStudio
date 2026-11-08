@@ -419,6 +419,29 @@ static inline float3 uniShade(int i, float3 c, float3 n0, float3 rd, float fp, f
 #include "Scenes/Nature_funcs.h"
 #include "Scenes/Retro_funcs.h"
 
+// ---------------------------------------------------------------- slideshow source
+
+// Cover-fit a photo, then zoom (kb.x ≥ 1) and pan (kb.yz in −1…1 of the travel the
+// zoom leaves free), so the frame never shows past the photo's edge.
+static inline float3 kenBurnsSample(texture2d<float> tex, sampler s, float2 uv, float outA,
+                                    float2 size, float4 kb) {
+    float srcA = size.x / max(size.y, 1.0);
+    float2 cover = (srcA > outA) ? float2(outA / srcA, 1.0) : float2(1.0, srcA / outA);
+    float2 span = cover / max(kb.x, 1.0);
+    float2 center = 0.5 + clamp(kb.yz, -1.0, 1.0) * 0.5 * (1.0 - span);
+    return tex.sample(s, center + (uv - 0.5) * span).rgb;
+}
+
+// Glass (49) LIQUID: the surface of a slowly flowing sheet of hand-rolled glass, in
+// units of one ripple. Warped sines for the broad swell + gradient noise for the
+// irregular, hand-made unevenness.
+static inline float liquidGlassHeight(float2 p, float ts) {
+    float2 q = p + 0.55 * float2(sin(p.y * 0.61 + ts), cos(p.x * 0.53 - ts * 0.7));
+    q += 0.30 * float2(sin(q.y * 1.31 - ts * 0.5), cos(q.x * 1.17 + ts * 0.6));
+    float h = sin(q.x * 0.9 + q.y * 0.4) * cos(q.y * 0.8 - q.x * 0.3);
+    return h + 0.45 * gnoise(q * 0.8 + float2(ts * 0.4, -ts * 0.3));
+}
+
 // ---------------------------------------------------------------- fragment
 
 fragment float4 fx_fragment(VOut in [[stage_in]],
@@ -439,6 +462,15 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
     // -------- source generators ----------------------------------------
     if (u.effect == 0) {                   // image / video source with fill mode
         int mode = u.fillMode;
+        if (mode == 3) {                   // SLIDESHOW — Ken Burns-framed photo A (src)
+                                           // cross-fading into photo B (fadePrev slot)
+            float outA = res.x / res.y;
+            float3 a = kenBurnsSample(src, samp, uv, outA, u.srcSize, u.p0);
+            if (u.p0.w <= 0.0) return float4(a, 1.0);
+            float3 b = kenBurnsSample(fadePrev, samp, uv, outA, u.p2.xy, u.p1);
+            float3 m = mix(srgbToLinear(a), srgbToLinear(b), u.p0.w);   // linear-light dissolve
+            return float4(linearToSrgb(m), 1.0);
+        }
         if (mode == 2 || u.srcSize.x < 1.0 || u.srcSize.y < 1.0) {
             return src.sample(samp, uv);   // stretch (or unknown size)
         }
@@ -1501,7 +1533,13 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
                 float a = fi * 2.39996323 + rot;
                 sum += src.sample(samp, uv + float2(cos(a), sin(a)) * r / res).rgb;
             }
-            c = sum / float(N);
+            // Soft focus, not out of focus: keep part of the sharp image under the blur
+            // and let the blurred highlights bloom over it (Orton-style halation).
+            float3 blur = sum / float(N);
+            float keep = 0.45 * smoothstep(0.75, 4.0, R) ;
+            c = mix(blur, base.rgb, keep);
+            float3 glow = blur * blur;
+            c += glow * (1.0 - c) * 0.45 * soft;
         }
         float l = luma(c);
         float3 washed = oklabToSrgb(mix(srgbToOklab(u.colorA.rgb), srgbToOklab(u.colorB.rgb),
@@ -1531,43 +1569,54 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
             off = -sin(f * 3.14159265) * refr * S * 1.1;
             hl = smoothstep(0.18, 0.0, length(f + 0.2)) * 0.14;
             shade = smoothstep(0.34, 0.5, max(abs(f.x), abs(f.y))) * 0.2;
-        } else {                         // LIQUID — merging metaball lens drifting over the image
-            float aspect = res.x / res.y;
-            float2 p = px / res.y;
-            float F = 0.0; float2 G = float2(0.0);
-            for (int i = 0; i < 4; ++i) {
-                float fi = float(i);
-                float2 c = float2(aspect * (0.5 + 0.30 * sin(t * 0.06 * (1.0 + 0.3 * fi) + fi * 2.1)),
-                                  0.5 + 0.26 * cos(t * 0.08 * (1.0 + 0.2 * fi) + fi * 1.3));
-                float rr = (S / res.y) * (1.6 + 0.45 * fi);
-                float2 d = p - c;
-                float d2 = dot(d, d) + 1e-5;
-                float wv = rr * rr / d2;
-                F += wv; G += -2.0 * wv * d / d2;
-            }
-            float ed = F - 1.0;
-            float aaF = fwidth(F) * 1.2 + 1e-4;
-            inside = smoothstep(-aaF, aaF, ed);
-            float2 nrm = -normalize(G + 1e-6);                     // outward
-            float bend = exp(-max(ed, 0.0) * 1.6);
-            off = -nrm * bend * refr * res.y * 0.07 * inside;
-            float rim = smoothstep(aaF * 3.0 + 0.10, 0.0, abs(ed - 0.04)) * inside;
-            hl = rim * (0.12 + 0.30 * max(dot(nrm, normalize(float2(-0.6, -0.8))), 0.0));
-            shade = (1.0 - inside) * smoothstep(0.55, 1.0, F) * 0.16;      // contact shadow
-            frost *= inside;
+        } else {                         // LIQUID — looking through a slowly flowing sheet of
+                                         // hand-rolled glass: the whole frame swims and bends,
+                                         // with soft caustic light where the surface focuses
+            float2 q = px / S;
+            float ts = t * 0.07;
+            float e = 0.04;
+            float h0 = liquidGlassHeight(q, ts);
+            float hx = liquidGlassHeight(q + float2(e, 0.0), ts);
+            float hy = liquidGlassHeight(q + float2(0.0, e), ts);
+            float2 g = float2(hx - h0, hy - h0) / e;               // surface slope
+            off = -g * refr * S * 0.3;
+            float3 n = normalize(float3(-g * 0.35, 1.0));
+            float spec = pow(max(dot(n, normalize(float3(-0.45, -0.6, 0.66))), 0.0), 40.0);
+            float hxx = liquidGlassHeight(q - float2(e, 0.0), ts);
+            float hyy = liquidGlassHeight(q - float2(0.0, e), ts);
+            float curv = (hx + hxx + hy + hyy - 4.0 * h0) / (e * e);   // < 0 on crests → light focuses
+            hl = spec * 0.16 + smoothstep(0.3, 2.5, -curv) * 0.09;
+            shade = smoothstep(0.3, 2.5, curv) * 0.12;
         }
         float disp = 0.03 + frost * 0.08;
         float fr = frost * S * 0.14;
         float jr = (ign(px) + 0.5) * 6.2831853;
         float3 c = float3(0.0);
-        for (int j = 0; j < 4; ++j) {
-            float a = jr + float(j) * 1.5707963;
-            float2 o = off + float2(cos(a), sin(a)) * fr * (0.5 + 0.5 * float(j & 1));
-            c.r += src.sample(samp, uv + o * (1.0 + disp) / res).r;
-            c.g += src.sample(samp, uv + o / res).g;
-            c.b += src.sample(samp, uv + o * (1.0 - disp) / res).b;
+        if (style == 0) {
+            // Reeds frost along their curvature: a stratified horizontal smear, so each
+            // reed shows soft colour bands instead of a sharp, mosaic-like strip.
+            // The scene behind sits out of focus too: a softer vertical spread.
+            float span = frost * S * 1.2;
+            float jx = hash21(px), jy = hash21(px + 17.31);   // white jitter: no IGN diagonals
+            for (int j = 0; j < 8; ++j) {
+                float sx = (float(j & 3) + jx) / 4.0 - 0.5;
+                float sy = (float(j >> 2) + jy) / 2.0 - 0.5;
+                float2 o = off + float2(sx * span, sy * span * 0.7);
+                c.r += src.sample(samp, uv + o * (1.0 + disp) / res).r;
+                c.g += src.sample(samp, uv + o / res).g;
+                c.b += src.sample(samp, uv + o * (1.0 - disp) / res).b;
+            }
+            c /= 8.0;
+        } else {
+            for (int j = 0; j < 4; ++j) {
+                float a = jr + float(j) * 1.5707963;
+                float2 o = off + float2(cos(a), sin(a)) * fr * (0.5 + 0.5 * float(j & 1));
+                c.r += src.sample(samp, uv + o * (1.0 + disp) / res).r;
+                c.g += src.sample(samp, uv + o / res).g;
+                c.b += src.sample(samp, uv + o * (1.0 - disp) / res).b;
+            }
+            c *= 0.25;
         }
-        c *= 0.25;
         c = mix(c, c * 0.95 + 0.025, inside);      // glass body
         c = c * (1.0 - shade) + hl;
         return float4(c, 1.0);
