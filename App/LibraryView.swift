@@ -2,7 +2,7 @@
 //
 //  Styles split into two kinds:
 //    • Scenes — self-contained generative pieces (Universe, Black Hole…). Pick and go.
-//    • Looks  — effect stacks that restyle the shared source (gradient/photo/video).
+//    • Looks  — effect stacks that restyle the shared source (slideshow/photo/video/gradient).
 
 import SwiftUI
 import UniformTypeIdentifiers
@@ -31,7 +31,7 @@ struct LibraryView: View {
                 }
 
                 section(title: "Looks",
-                        subtitle: "Effects that restyle your source — a gradient, photo, or video.",
+                        subtitle: "Effects that restyle your source — a photo slideshow, a photo, a video or a gradient.",
                         presets: looks) {
                     sourceButton
                 } newTile: {
@@ -93,7 +93,7 @@ struct LibraryView: View {
             }
         }
         .buttonStyle(.bordered)
-        .help("The gradient, photo, or video every Look restyles")
+        .help("The slideshow, photo, video or gradient every Look restyles")
         .popover(isPresented: $showSource, arrowEdge: .bottom) {
             SourceEditor(source: model.sourceBinding, model: model)
                 .padding(16)
@@ -493,7 +493,7 @@ struct SourceSwatch: View {
         case .gradient:
             LinearGradient(colors: [Color(source.colorA), Color(source.colorB)],
                            startPoint: .leading, endPoint: .trailing)
-        case .image, .video:
+        case .image, .video, .collection:
             if let img = model.thumbnailer.image(for: SourceSwatch.sourceOnly, source: source) {
                 Image(nsImage: img).resizable().scaledToFill()
             } else {
@@ -506,6 +506,7 @@ struct SourceSwatch: View {
 extension SourceSpec {
     var displayName: String {
         switch kind {
+        case .collection: return (mediaFilenames ?? []).isEmpty ? "Built-in Photos" : "Your Photos"
         case .gradient: return "Gradient"
         case .image: return mediaFilename == nil ? "Photo (none)" : "Photo"
         case .video: return mediaFilename == nil ? "Video (none)" : "Video"

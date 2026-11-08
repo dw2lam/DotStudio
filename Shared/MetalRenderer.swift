@@ -34,6 +34,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private(set) var preset: Preset?
     private var source = SourceSpec()
     private var media: MediaSource?
+    private var collection: CollectionSource?           // .collection sources (slideshow)
+    // Thumbnail/export slideshows (no eviction), keyed by decode size class.
+    private var thumbCollections: [Int: CollectionSource] = [:]
     private let store: SharedStore
     var location: (lat: Double, lon: Double)?      // resolved device location (Universe marker)
 
@@ -87,6 +90,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
         let sd = MTLSamplerDescriptor()
         sd.minFilter = .linear; sd.magFilter = .linear
+        sd.mipFilter = .linear   // only slideshow photos carry mips; every other texture has one level
         sd.sAddressMode = .clampToEdge; sd.tAddressMode = .clampToEdge
         sampler = device.makeSamplerState(descriptor: sd)!
 
@@ -143,14 +147,38 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     private func loadMedia(for source: SourceSpec) {
         media = nil
+        if source.kind == .collection {
+            // Interval/motion edits keep the decoded photos; a new photo list reloads.
+            if let c = collection, c.filenames == (source.mediaFilenames ?? []) {
+                c.update(source)
+            } else {
+                collection = CollectionSource(spec: source, store: store, device: device, live: true)
+                if collection == nil { store.debug("slideshow has no photos (builtIn=\(source.usesBuiltInPhotos))") }
+            }
+            return
+        }
+        collection = nil
         guard source.kind != .gradient, let name = source.mediaFilename else { return }
         let url = store.mediaURL(name)
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         switch source.kind {
         case .image: media = ImageSource(url: url, device: device)
         case .video: media = VideoSource(url: url, device: device)
-        case .gradient: break
+        case .gradient, .collection: break
         }
+    }
+
+    /// A non-evicting slideshow for one-off renders, decoded at a size suited to `width`.
+    private func thumbCollection(for source: SourceSpec, width: Int, height: Int) -> CollectionSource? {
+        let long = max(width, height)
+        let maxPixel = long <= 640 ? 1024 : long <= 1280 ? 1600 : 3200
+        if let c = thumbCollections[maxPixel], c.filenames == (source.mediaFilenames ?? []) {
+            c.update(source)
+            return c
+        }
+        let c = CollectionSource(spec: source, store: store, device: device, live: false, maxPixel: maxPixel)
+        thumbCollections[maxPixel] = c
+        return c
     }
 
     // MARK: MTKViewDelegate
@@ -193,7 +221,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
             let now = CACurrentMediaTime()
             let t = Float(now - startTime)
-            let sTex = media?.currentTexture()
+            // Slideshow state comes from the source clock, so both chains of a preset
+            // crossfade show the same photo.
+            // Scenes ignore the source, so an idle slideshow doesn't decode photos.
+            let wantsSource = !preset.isScene || (outgoing.map { !$0.preset.isScene } ?? false)
+            let slides = wantsSource ? collection?.frame(at: now - startTime, sync: false) : nil
+            let sTex = media?.currentTexture() ?? slides?.texA
             if !loggedFirstFrame {
                 loggedFirstFrame = true
                 store.debug("first draw size=\(drawableSize) effects=\(preset.effects.count) srcTexNil=\(sTex == nil) sourceKind=\(source.kind.rawValue)")
@@ -213,12 +246,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                         encodePasses(cmd, finalDescriptor: offscreenDescriptor(fo), pingA: texA, pingB: texB,
                                      size: drawableSize, time: Float(now - out.startTime),
                                      preset: out.preset, source: source, sourceTex: sTex,
-                                     packedUniforms: out.packed)
+                                     slides: slides, packedUniforms: out.packed)
                         // Incoming chain → fadeNew. The shared ping-pong is safe: the chains
                         // encode sequentially and each result is parked before the next starts.
                         encodePasses(cmd, finalDescriptor: offscreenDescriptor(fn), pingA: texA, pingB: texB,
                                      size: drawableSize, time: t, preset: preset, source: source,
-                                     sourceTex: sTex, packedUniforms: packedUniforms)
+                                     sourceTex: sTex, slides: slides, packedUniforms: packedUniforms)
                         encodeBlend(cmd, final: final, newTex: fn, oldTex: fo,
                                     progress: Float(progress), size: drawableSize)
                         blended = true
@@ -228,7 +261,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             if !blended {
                 encodePasses(cmd, finalDescriptor: final, pingA: texA, pingB: texB,
                              size: drawableSize, time: t, preset: preset, source: source,
-                             sourceTex: sTex, packedUniforms: packedUniforms)
+                             sourceTex: sTex, slides: slides, packedUniforms: packedUniforms)
             }
             cmd.present(drawable)
             cmd.commit()
@@ -284,6 +317,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private func encodePasses(_ cmd: MTLCommandBuffer, finalDescriptor: MTLRenderPassDescriptor,
                               pingA: MTLTexture, pingB: MTLTexture, size: CGSize, time: Float,
                               preset: Preset, source: SourceSpec, sourceTex: MTLTexture?,
+                              slides: SlideFrame? = nil,
                               packedUniforms packed: [FXUniforms]? = nil) {
         let res = simd_float2(Float(size.width), Float(size.height))
         let useGradient = (source.kind == .gradient) || (sourceTex == nil)
@@ -335,6 +369,15 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                     u.p0 = simd_float4(Float(source.gradientAngle), Float(source.gradientDrift), 0, 0)
                     u.colorA = source.colorA.simd
                     u.colorB = source.colorB.simd
+                } else if let s = slides {
+                    // Slideshow: fillMode 3 = two Ken Burns-framed photos, A (slot 0)
+                    // cross-fading into B (slot 5). p0 = (zoomA, panA, mix), p1 = (zoomB, panB).
+                    u.effect = 0
+                    u.fillMode = 3
+                    u.srcSize = simd_float2(Float(s.texA.width), Float(s.texA.height))
+                    u.p0 = simd_float4(s.kbA.x, s.kbA.y, s.kbA.z, s.texB == nil ? 0 : s.mix)
+                    u.p1 = s.kbB
+                    u.p2 = simd_float4(Float(s.texB?.width ?? 1), Float(s.texB?.height ?? 1), 0, 0)
                 } else {
                     u.effect = 0   // passthrough source-fit
                     u.srcSize = simd_float2(Float(sourceTex?.width ?? input.width),
@@ -359,7 +402,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             enc.setFragmentTexture(planetTex.earthDay, index: 2)
             enc.setFragmentTexture(planetTex.earthNight, index: 3)
             enc.setFragmentTexture(planetTex.planets, index: 4)
-            enc.setFragmentTexture(dummy, index: 5)   // fadePrev; only real during a crossfade
+            // fadePrev: real only during a preset crossfade, or the slideshow's incoming photo.
+            enc.setFragmentTexture((i == 0 ? slides?.texB : nil) ?? dummy, index: 5)
             enc.setFragmentSamplerState(sampler, index: 0)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             enc.endEncoding()
@@ -483,10 +527,16 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         if thumbTex == nil, source.kind == .image, let name = source.mediaFilename {
             thumbTex = ImageSource(url: store.mediaURL(name), device: device)?.currentTexture()
         }
+        // Slideshow: the frame at `time`, photos decoded on the spot.
+        var slides: SlideFrame?
+        if thumbTex == nil, source.kind == .collection, !preset.isScene {
+            slides = thumbCollection(for: source, width: width, height: height)?.frame(at: Double(time), sync: true)
+            thumbTex = slides?.texA
+        }
 
         encodePasses(cmd, finalDescriptor: desc, pingA: pingA, pingB: pingB,
                      size: CGSize(width: width, height: height), time: time,
-                     preset: preset, source: source, sourceTex: thumbTex)
+                     preset: preset, source: source, sourceTex: thumbTex, slides: slides)
         cmd.commit()
         cmd.waitUntilCompleted()
 

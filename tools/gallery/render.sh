@@ -8,6 +8,9 @@ BIN="${GALLERY_BUILD:-$ROOT/.dd/gallery}"
 mkdir -p "$BIN"
 xcrun -sdk macosx metal -O2 -ffast-math -I "$ROOT/Shared" -o "$BIN/default.metallib" "$ROOT/Shared/Shaders.metal"
 cp "$ROOT"/Shared/PlanetTextures/*.jpg "$BIN/" 2>/dev/null || true
+# Built-in slideshow photos (the default Looks canvas), found via Bundle.main/Photos.
+rm -rf "$BIN/Photos" && mkdir -p "$BIN/Photos"
+cp "$ROOT"/Shared/Photos/*.jpg "$BIN/Photos/" 2>/dev/null || true
 xcrun -sdk macosx swiftc -O -import-objc-header "$ROOT/Shared/Bridging.h" -I "$ROOT/Shared" \
   "$ROOT"/Shared/*.swift "$ROOT"/Shared/Scenes/*.swift "$ROOT/tools/gallery/main.swift" -o "$BIN/gallery"
 "$BIN/gallery" "$@"

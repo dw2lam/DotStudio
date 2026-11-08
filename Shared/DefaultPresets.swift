@@ -2,7 +2,7 @@
 //
 //  Two kinds of style:
 //   • Scenes — self-contained generative pieces (first effect isScene); ignore the source.
-//   • Looks  — effect stacks that restyle the one shared source (gradient / image / video).
+//   • Looks  — effect stacks that restyle the one shared source (slideshow / photo / video / gradient).
 
 import Foundation
 
@@ -60,43 +60,60 @@ enum DefaultPresets {
         ] + SceneCatalog.presets
     }
 
-    /// Looks that restyle the shared source.
+    /// Looks that restyle the shared source. Tuned on the built-in photo slideshow
+    /// (Shared/Photos): render with `tools/gallery/render.sh <dir> --looks --slides`.
     static func looks() -> [Preset] {
         [
-            Preset(name: "ASCII",
-                   effects: [fx(.ascii, ["cell": 12, "color": 1], a: .black, b: .crtGreen)]),
-            Preset(name: "Green Phosphor",
-                   effects: [fx(.dither, ["cell": 3, "mono": 1], a: .black, b: .crtGreen),
-                             fx(.scanlines, ["intensity": 0.35])]),
-            Preset(name: "Floyd–Steinberg",
-                   effects: [fx(.dither, ["algo": 4, "cell": 2, "mono": 1], a: .paper, b: .ink)]),
-            Preset(name: "Atkinson",
-                   effects: [fx(.dither, ["algo": 5, "cell": 2, "mono": 1], a: .black, b: .crtGreen)]),
+            Preset(name: "Film",
+                   effects: [fx(.grainWash, ["soft": 0.0, "grain": 0.09, "tint": 0.22],
+                                a: RGBA(0.06, 0.10, 0.16), b: RGBA(1.0, 0.90, 0.76)),
+                             fx(.vignette, ["amount": 0.45, "radius": 0.95])]),
             Preset(name: "Riso Duotone",
                    effects: [fx(.risograph, ["screen": 0, "cell": 2, "misreg": 5, "paper": 0.5],
                                 a: risoPink, b: risoBlue)]),
+            Preset(name: "Cyanotype",
+                   effects: [fx(.grainWash, ["soft": 0.12, "grain": 0.12, "tint": 1],
+                                a: prussian, b: cream)]),
+            Preset(name: "Floyd–Steinberg",
+                   effects: [fx(.dither, ["algo": 4, "cell": 2, "mono": 1], a: .ink, b: .paper)]),
+            Preset(name: "Atkinson",
+                   effects: [fx(.dither, ["algo": 5, "cell": 2, "mono": 1], a: .black, b: .crtGreen)]),
+            // Typewriter ink on paper: dark-ground ASCII drops every shadow to empty space,
+            // which blacks out night and low-key photos.
+            Preset(name: "ASCII",
+                   effects: [fx(.ascii, ["cell": 10, "color": 0], a: .paper, b: .ink)]),
+            Preset(name: "Amber CRT",
+                   effects: [fx(.phosphor, ["amount": 1, "gain": 1.45], b: .amber),
+                             fx(.scanlines, ["spacing": 3, "intensity": 0.55]),
+                             fx(.bloom, ["thr": 0.45, "inten": 0.9, "rad": 3]),
+                             fx(.vignette, ["amount": 0.7, "radius": 0.85])]),
             Preset(name: "Riso Halftone",
                    effects: [fx(.risograph, ["screen": 1, "cell": 6, "misreg": 7, "paper": 0.6],
                                 a: risoRed, b: risoBlue)]),
             Preset(name: "Soft Focus",
-                   effects: [fx(.grainWash, ["soft": 0.55, "grain": 0.12, "tint": 0.35],
+                   effects: [fx(.grainWash, ["soft": 0.55, "grain": 0.08, "tint": 0.3],
                                 a: RGBA(0.12, 0.08, 0.26), b: RGBA(1.0, 0.82, 0.66))]),
-            Preset(name: "Cyanotype",
-                   effects: [fx(.grainWash, ["soft": 0.12, "grain": 0.12, "tint": 1],
-                                a: prussian, b: cream)]),
             Preset(name: "Fluted Glass",
-                   effects: [fx(.glass, ["style": 0, "size": 44, "refract": 0.5, "frost": 0.3])]),
+                   effects: [fx(.glass, ["style": 0, "size": 40, "refract": 0.4, "frost": 0.6])]),
             Preset(name: "Liquid Glass",
-                   effects: [fx(.glass, ["style": 2, "size": 90, "refract": 0.6, "frost": 0.25])]),
+                   effects: [fx(.glass, ["style": 2, "size": 140, "refract": 0.5, "frost": 0.1])]),
         ]
+    }
+
+    /// Earlier default canvases (gradients). A library still on one, untouched, moves to
+    /// the built-in photos (AppModel.migrate).
+    static var legacyDefaultSources: [SourceSpec] {
+        [gradient(RGBA(0.10, 0.07, 0.28), RGBA(1.0, 0.71, 0.50), angle: 0.9),   // dusk (1.1–1.3)
+         gradient(.navy, .cyan, angle: 0.9),
+         SourceSpec()]
     }
 
     static func makeLibrary() -> Library {
         let sc = scenes(), lk = looks()
         var lib = Library()
-        // A dusk gradient with a full tonal range, so dithers/prints have shadows to chew
-        // on and the color looks (riso, wash, glass) have two hues to separate.
-        lib.source = gradient(RGBA(0.10, 0.07, 0.28), RGBA(1.0, 0.71, 0.50), angle: 0.9)
+        // The built-in photo slideshow: real subjects, texture and a full tonal range for
+        // every Look to chew on (a flat gradient made most of them read as noise).
+        lib.source = .builtInPhotos
         lib.presets = sc + lk
         lib.activeID = sc.first(where: { $0.name == "Aurora" })?.id ?? sc.first?.id
         return lib

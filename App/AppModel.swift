@@ -99,6 +99,11 @@ final class AppModel: ObservableObject {
             if let candidate { lib.source = candidate }
             lib.version = 2
         }
+        if lib.version < 3 {
+            // An untouched default gradient becomes the built-in photo slideshow.
+            if DefaultPresets.legacyDefaultSources.contains(lib.source) { lib.source = .builtInPhotos }
+            lib.version = 3
+        }
         for i in lib.presets.indices { lib.presets[i].source = nil }   // strip legacy field
         return lib
     }
@@ -465,5 +470,33 @@ final class AppModel: ObservableObject {
                 title: "Couldn't Import \(kind == .video ? "Video" : "Image")",
                 message: "“\(url.lastPathComponent)” couldn't be copied into your library: \(error.localizedDescription)")
         }
+    }
+
+    /// Make the slideshow play the user's own photos (copied into the media folder).
+    func importSlideshowPhotos(_ urls: [URL]) {
+        var names: [String] = []
+        var failures: [String] = []
+        for url in urls {
+            let ok = url.startAccessingSecurityScopedResource()
+            defer { if ok { url.stopAccessingSecurityScopedResource() } }
+            do { names.append(try store.importMedia(from: url)) } catch { failures.append(url.lastPathComponent) }
+        }
+        if !names.isEmpty {
+            library.source.kind = .collection
+            library.source.mediaFilenames = names
+            save()
+        }
+        if !failures.isEmpty {
+            storeAlert = StoreAlert(
+                title: "Couldn't Import \(failures.count == 1 ? "a Photo" : "\(failures.count) Photos")",
+                message: failures.joined(separator: ", ") + " couldn't be copied into your library.")
+        }
+    }
+
+    /// Switch the slideshow back to the built-in photo set.
+    func useBuiltInPhotos() {
+        library.source.kind = .collection
+        library.source.mediaFilenames = nil
+        save()
     }
 }

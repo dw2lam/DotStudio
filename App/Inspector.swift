@@ -369,23 +369,75 @@ struct SourceEditor: View {
                 .font(.caption).foregroundStyle(.secondary)
 
             Picker("Kind", selection: $source.kind) {
-                Text("Gradient").tag(SourceKind.gradient)
+                Text("Slideshow").tag(SourceKind.collection)
                 Text("Photo").tag(SourceKind.image)
                 Text("Video").tag(SourceKind.video)
+                Text("Gradient").tag(SourceKind.gradient)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
 
             switch source.kind {
+            case .collection: slideshowControls
             case .gradient: gradientControls
             case .image, .video: mediaControls
             }
         }
         .fileImporter(isPresented: $importing,
                       allowedContentTypes: source.kind == .video ? [.movie, .mpeg4Movie, .quickTimeMovie] : [.image],
-                      allowsMultipleSelection: false) { result in
-            if case .success(let urls) = result, let url = urls.first { importFile(url, kind: source.kind) }
+                      allowsMultipleSelection: source.kind == .collection) { result in
+            guard case .success(let urls) = result, !urls.isEmpty else { return }
+            if source.kind == .collection { model.importSlideshowPhotos(urls) }
+            else if let url = urls.first { importFile(url, kind: source.kind) }
         }
+    }
+
+    /// Built-in photos (or the user's own), slowly panning and cross-fading.
+    private var slideshowControls: some View {
+        let own = !(source.mediaFilenames ?? []).isEmpty
+        return VStack(alignment: .leading, spacing: 10) {
+            Color.clear
+                .frame(maxWidth: .infinity)
+                .aspectRatio(16.0 / 10.0, contentMode: .fit)
+                .overlay(SourceSwatch(source: source))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(dropTargeted ? Color.accentColor : .clear, lineWidth: 2))
+                .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
+                    loadDroppedImages(providers) { urls in model.importSlideshowPhotos(urls) }
+                    return true
+                }
+            Text(own ? "Your photos · \(source.mediaFilenames?.count ?? 0)"
+                     : "Built-in photos · curated, public domain")
+                .font(.caption).foregroundStyle(.secondary)
+            ParamRow(spec: ParamSpec("hold", "Seconds Each", 6, 120, def: SourceSpec.defaultSlideSeconds),
+                     value: Binding(get: { source.slideInterval }, set: { source.slideSeconds = $0 }))
+            ParamRow(spec: ParamSpec("motion", "Pan & Zoom", 0, 1, def: SourceSpec.defaultMotion),
+                     value: Binding(get: { source.motionAmount }, set: { source.motion = $0 }))
+            HStack {
+                Button(own ? "Choose Other Photos…" : "Use Your Own Photos…") { importing = true }
+                if own {
+                    Button("Use Built-in Photos") { model.useBuiltInPhotos() }
+                }
+            }
+            .controlSize(.small)
+        }
+    }
+
+    /// Image files among dropped items, delivered together on the main queue.
+    private func loadDroppedImages(_ providers: [NSItemProvider], _ done: @escaping ([URL]) -> Void) {
+        let group = DispatchGroup()
+        var urls: [URL] = []
+        let lock = NSLock()
+        for p in providers {
+            group.enter()
+            _ = p.loadObject(ofClass: URL.self) { url, _ in
+                defer { group.leave() }
+                guard let url, let type = UTType(filenameExtension: url.pathExtension), type.conforms(to: .image) else { return }
+                lock.lock(); urls.append(url); lock.unlock()
+            }
+        }
+        group.notify(queue: .main) { if !urls.isEmpty { done(urls) } }
     }
 
     private var gradientControls: some View {

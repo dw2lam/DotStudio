@@ -31,7 +31,13 @@ targets:
     platform: macOS
     sources:
       - Saver
-      - Shared
+      - path: Shared
+        excludes: ["Photos/**"]
+      # Built-in slideshow photos ship ONCE, inside the saver (Resources/Photos). The app
+      # reads them from its embedded DotStudio.saver (CollectionSource.builtInPhotoURLs).
+      - path: Shared/Photos
+        type: folder
+        buildPhase: resources
     settings:
       base:
         PRODUCT_NAME: DotStudio
@@ -48,7 +54,8 @@ targets:
     platform: macOS
     sources:
       - App
-      - Shared
+      - path: Shared
+        excludes: ["Photos/**"]
     dependencies:
       - target: DotStudioSaver
         embed: true

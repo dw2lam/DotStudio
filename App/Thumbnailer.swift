@@ -49,6 +49,7 @@ final class Thumbnailer {
 
         guard let cg = renderer?.renderThumbnail(preset: preset, source: source,
                                                  width: width, height: height,
+                                                 time: thumbTime(preset, source),
                                                  sourceTexOverride: override) else {
             return cache[preset.id]
         }
@@ -56,6 +57,15 @@ final class Thumbnailer {
         cache[preset.id] = img
         keys[preset.id] = key
         return img
+    }
+
+    /// Thumbnail time. For a slideshow, each Look gets its own photo (stable per name), so
+    /// the gallery shows off the set instead of one picture eleven times.
+    private func thumbTime(_ preset: Preset, _ source: SourceSpec) -> Float {
+        guard source.kind == .collection, !preset.isScene else { return 1.2 }
+        var h: UInt32 = 2166136261
+        for b in preset.name.utf8 { h = (h ^ UInt32(b)) &* 16777619 }   // FNV-1a: stable across launches
+        return Float(Double(h % 101) * source.slideInterval + 1.2)
     }
 
     /// A small swatch of one effect applied alone to the current source (Add Effect picker).
