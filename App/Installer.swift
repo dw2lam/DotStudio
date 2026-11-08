@@ -62,7 +62,14 @@ enum Installer {
               let installed = Bundle(url: installedURL)?.infoDictionary?["CFBundleVersion"] as? String,
               bundled.compare(installed, options: .numeric) == .orderedDescending
         else { return }
-        _ = install()
+        if case .success = install() {
+            // macOS keeps the old saver code loaded until its host restarts; the
+            // user is in the app, not the screensaver, so restart it now.
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+            p.arguments = ["-q", "legacyScreenSaver"]
+            try? p.run()
+        }
     }
 
     @discardableResult

@@ -3,11 +3,10 @@
 //  panel; this is only setup, transitions, performance, and updates.
 
 import SwiftUI
-import Sparkle
 
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
-    let updater: SPUUpdater
+    @EnvironmentObject var updates: UpdateController
 
     var body: some View {
         Form {
@@ -18,7 +17,10 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 460)
-        .onAppear { model.refreshSetupStatus() }
+        .onAppear {
+            model.refreshSetupStatus()
+            updates.refreshStatus()
+        }
     }
 
     // MARK: Setup
@@ -83,10 +85,82 @@ struct SettingsView: View {
 
     private var updatesSection: some View {
         Section("Updates") {
-            Toggle("Check for updates automatically", isOn: autoCheck)
-            LabeledContent("Version",
-                           value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")
-            Button("Check for Updates…") { updater.checkForUpdates() }
+            HStack(alignment: .center, spacing: 12) {
+                updateIcon
+                    .font(.title2)
+                    .frame(width: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(updateHeadline).font(.body.weight(.medium))
+                    Text(updateDetail).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button(updateButtonTitle) { updates.primaryAction() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(isUpdateReady || isUpdateAvailable ? .accentColor : .secondary)
+                    .disabled(!updates.canCheck && !isUpdateReady)
+            }
+            .padding(.vertical, 2)
+            Toggle("Check for updates automatically", isOn: Binding(
+                get: { updates.automaticallyChecks },
+                set: { updates.automaticallyChecks = $0 }))
+            Toggle("Download and install updates automatically", isOn: Binding(
+                get: { updates.automaticallyInstalls },
+                set: { updates.automaticallyInstalls = $0 }))
+                .disabled(!updates.automaticallyChecks)
+            Text("New versions come from DotStudio's GitHub releases. They download in the background and install the next time you quit — the screensaver updates along with the app.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var isUpdateReady: Bool {
+        if case .readyToInstall = updates.state { return true } else { return false }
+    }
+    private var isUpdateAvailable: Bool {
+        if case .available = updates.state { return true } else { return false }
+    }
+
+    @ViewBuilder private var updateIcon: some View {
+        switch updates.state {
+        case .checking, .downloading:
+            ProgressView().controlSize(.small)
+        case .readyToInstall, .available:
+            Image(systemName: "arrow.down.circle.fill").foregroundStyle(Color.accentColor)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        case .idle, .upToDate:
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        }
+    }
+
+    private var updateHeadline: String {
+        switch updates.state {
+        case .checking: return "Checking for updates…"
+        case .downloading(let v): return "Downloading DotStudio \(v)…"
+        case .available(let v): return "DotStudio \(v) is available"
+        case .readyToInstall(let v): return "DotStudio \(v) is ready to install"
+        case .failed: return "Couldn't check for updates"
+        case .idle, .upToDate: return "DotStudio \(updates.currentVersion) is up to date"
+        }
+    }
+
+    private var updateDetail: String {
+        switch updates.state {
+        case .readyToInstall: return "Restart now, or it installs when you quit."
+        case .available: return "You're on \(updates.currentVersion)."
+        case .failed(let why): return why
+        case .downloading: return "This happens in the background."
+        default:
+            guard let d = updates.lastChecked else { return "Version \(updates.currentVersion)" }
+            let rel = RelativeDateTimeFormatter().localizedString(for: d, relativeTo: Date())
+            return "Version \(updates.currentVersion) · checked \(rel)"
+        }
+    }
+
+    private var updateButtonTitle: String {
+        switch updates.state {
+        case .readyToInstall: return "Restart to Update"
+        case .available: return "Update Now"
+        default: return "Check Now"
         }
     }
 
@@ -95,10 +169,5 @@ struct SettingsView: View {
     private var qualityBinding: Binding<Double> {
         Binding(get: { model.library.renderScale ?? 1.0 },
                 set: { model.library.renderScale = $0 >= 1.0 ? nil : $0; model.save() })
-    }
-
-    private var autoCheck: Binding<Bool> {
-        Binding(get: { updater.automaticallyChecksForUpdates },
-                set: { updater.automaticallyChecksForUpdates = $0 })
     }
 }
