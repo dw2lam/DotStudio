@@ -258,6 +258,18 @@ enum EffectKind: String, Codable, CaseIterable {
     }
 
     var usesColors: Bool { defaultColorA != nil || defaultColorB != nil }
+
+    /// A self-contained generative piece that ignores the source (Universe, Black Hole…).
+    /// Styles that start with one are "Scenes": ready to use, few knobs, no Source tab.
+    var isScene: Bool {
+        switch self {
+        case .starfield, .universe, .blackhole: return true
+        default: return false
+        }
+    }
+
+    /// Still decodable from old libraries/share files, but no longer offered in the Add menu.
+    var isRetired: Bool { false }
 }
 
 // MARK: - Uniform packing

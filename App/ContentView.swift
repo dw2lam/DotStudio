@@ -186,6 +186,11 @@ struct ContentView: View {
             } else {
                 Button { model.setActive(id) } label: { Label("Use as Screensaver", systemImage: "play.circle") }
             }
+            Divider().frame(height: 16)
+            Button { model.exportSelectedAsImage() } label: { Label("Save Image", systemImage: "photo") }
+                .help("Capture a frame as a PNG at screen resolution")
+            Button { model.setSelectedAsWallpaper() } label: { Label("Set as Wallpaper", systemImage: "photo.on.rectangle.angled") }
+                .help("Capture a frame and set it as your desktop wallpaper")
             Spacer()
             Stepper(value: binding.fps, in: 15...60, step: 5) {
                 Text("\(binding.wrappedValue.fps) fps").monospacedDigit().font(.caption)

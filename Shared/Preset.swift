@@ -57,6 +57,11 @@ struct Preset: Codable, Identifiable, Equatable, Hashable {
     var source: SourceSpec?
 }
 
+extension Preset {
+    /// Scene = the first enabled effect generates its own image (no source needed).
+    var isScene: Bool { effects.first(where: { $0.enabled })?.kind.isScene ?? false }
+}
+
 /// Sun-driven day/night preset scheduling.
 struct ScheduleSpec: Codable, Equatable {
     var enabled: Bool = false

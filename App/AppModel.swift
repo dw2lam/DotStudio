@@ -239,6 +239,30 @@ final class AppModel: ObservableObject {
         return (doc.preset, skipped, doc.source)
     }
 
+    // MARK: Still-image export / wallpaper
+
+    /// Save the selected screensaver as a PNG (rendered at screen resolution).
+    func exportSelectedAsImage() {
+        guard let sel = selected else { return }
+        do {
+            try Exporter.exportImagePanel(preset: sel, library: library, store: store)
+        } catch {
+            storeAlert = StoreAlert(title: "Couldn't Export Image",
+                                    message: error.localizedDescription)
+        }
+    }
+
+    /// Render the selected screensaver and set it as the desktop wallpaper.
+    func setSelectedAsWallpaper() {
+        guard let sel = selected else { return }
+        do {
+            try Exporter.setAsWallpaper(preset: sel, library: library, store: store)
+        } catch {
+            storeAlert = StoreAlert(title: "Couldn't Set Wallpaper",
+                                    message: error.localizedDescription)
+        }
+    }
+
     // MARK: Media
 
     func importMedia(_ url: URL, kind: SourceKind) {

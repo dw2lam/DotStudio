@@ -38,6 +38,12 @@ struct DotStudioApp: App {
                 Button("Export Screensaver…") { model.exportSelected() }
                     .keyboardShortcut("e")
                     .disabled(model.selectedID == nil)
+                Divider()
+                Button("Export as Image…") { model.exportSelectedAsImage() }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+                    .disabled(model.selectedID == nil)
+                Button("Set as Wallpaper") { model.setSelectedAsWallpaper() }
+                    .disabled(model.selectedID == nil)
             }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { updater.checkForUpdates(nil) }
