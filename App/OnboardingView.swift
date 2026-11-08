@@ -1,7 +1,7 @@
 //  OnboardingView.swift — first-launch welcome sheet (also Help ▸ Welcome to DotStudio…).
 //
-//  Four short steps: what DotStudio is, pick what plays, turn the screensaver on
-//  in System Settings, and a couple of tips. ContentView presents it and records
+//  Four short steps: what DotStudio is, pick a preset or create your own, turn the
+//  screensaver on in System Settings, and where to go to keep creating. ContentView presents it and records
 //  completion (`hasCompletedOnboarding`) when the sheet goes away, however that happens.
 
 import SwiftUI
@@ -11,19 +11,39 @@ struct OnboardingView: View {
         case welcome, pick, enable, done
     }
 
+    /// The pick step's two on-screen tabs.
+    enum PickMode: String, CaseIterable, Identifiable {
+        case presets = "Presets", create = "Create Your Own"
+        var id: String { rawValue }
+    }
+
     @EnvironmentObject var model: AppModel
 
     @State private var step: Step
     @State private var forward = true
+    @State private var pickMode: PickMode
+    /// The style being built in "Create Your Own" (not in the library until Continue).
+    @State private var draft = OnboardingView.starterDraft
+    @State private var nameEdited = false
+    /// Name it was saved under, once "Create & Continue" has added it to the library.
+    @State private var createdName: String?
     /// Live Metal hero on the welcome step. Off for offscreen UI shots, where Metal renders black.
     private let livePreview: Bool
     /// Pins the setup status (UI shots only — the real status comes from the model).
     private let statusOverride: Installer.Status?
 
-    static let size = CGSize(width: 640, height: 520)
+    static let size = CGSize(width: 760, height: 600)
 
-    init(initialStep: Step = .welcome, livePreview: Bool = true, statusOverride: Installer.Status? = nil) {
+    static var starterDraft: Preset {
+        var p = Preset(name: "My Risograph")
+        p.effects = [EffectInstance(.risograph)]
+        return p
+    }
+
+    init(initialStep: Step = .welcome, pickMode: PickMode = .presets,
+         livePreview: Bool = true, statusOverride: Installer.Status? = nil) {
         _step = State(initialValue: initialStep)
+        _pickMode = State(initialValue: pickMode)
         self.livePreview = livePreview
         self.statusOverride = statusOverride
     }
@@ -59,9 +79,9 @@ struct OnboardingView: View {
     private func page(_ step: Step) -> some View {
         switch step {
         case .welcome: WelcomePage(livePreview: livePreview)
-        case .pick: PickPage()
+        case .pick: PickPage(mode: $pickMode, draft: $draft, nameEdited: $nameEdited, livePreview: livePreview)
         case .enable: EnablePage(status: status, polling: statusOverride == nil)
-        case .done: DonePage(status: status)
+        case .done: DonePage(status: status, createdName: createdName, onCreate: openEditor)
         }
     }
 
@@ -93,8 +113,17 @@ struct OnboardingView: View {
             Button("Get Started") { go(to: .pick) }
                 .defaultPrimary()
         case .pick:
-            Button("Continue") { go(to: .enable) }
+            if pickMode == .create {
+                Button(createdName == nil ? "Create & Continue" : "Save & Continue") {
+                    createdName = model.saveCreated(draft)
+                    draft.name = createdName ?? draft.name
+                    go(to: .enable)
+                }
                 .defaultPrimary()
+            } else {
+                Button("Continue") { go(to: .enable) }
+                    .defaultPrimary()
+            }
         case .enable:
             // Until it's on, the step's own Install / Open button holds the Return key.
             if status == .ready {
@@ -122,6 +151,16 @@ struct OnboardingView: View {
 
     private func close() {
         model.showOnboarding = false   // ContentView's onDismiss records completion
+    }
+
+    /// Done step's "keep creating": leave the sheet and land in the full editor —
+    /// on the style made here, or on a fresh Look.
+    private func openEditor() {
+        let made = createdName != nil ? draft.id : nil
+        close()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            if let made, model.preset(made) != nil { model.edit(made) } else { model.addPreset() }
+        }
     }
 }
 
@@ -287,30 +326,158 @@ private struct WelcomePage: View {
     }
 }
 
-// MARK: - 2. Pick
+// MARK: - 2. Pick or create
 
 private struct PickPage: View {
     @EnvironmentObject var model: AppModel
+    @Binding var mode: OnboardingView.PickMode
+    @Binding var draft: Preset
+    @Binding var nameEdited: Bool
+    let livePreview: Bool
     @State private var picks: [Preset] = []
 
     var body: some View {
-        VStack(spacing: 22) {
-            PageHeader(title: "Pick Your Screensaver",
-                       subtitle: "Choose one to start. You can switch, or rotate through several, any time.")
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 16), count: 3), spacing: 16) {
-                ForEach(picks) { preset in
-                    PickTile(preset: preset,
-                             selected: model.library.activeID == preset.id) {
-                        withAnimation(.easeOut(duration: 0.15)) { model.useAsScreensaver(preset.id) }
-                    }
+        VStack(spacing: 16) {
+            PageHeader(title: "Make Your Screensaver",
+                       subtitle: "Start from a preset, or create your own. You can change it any time.")
+            Picker("Mode", selection: $mode.animation(.easeOut(duration: 0.18))) {
+                ForEach(OnboardingView.PickMode.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 320)
+
+            Group {
+                switch mode {
+                case .presets: presetGrid
+                case .create: CreatePanel(draft: $draft, nameEdited: $nameEdited, livePreview: livePreview)
                 }
             }
+            .frame(maxHeight: .infinity, alignment: .top)
         }
         .padding(.horizontal, 36)
-        .padding(.top, 30)
+        .padding(.top, 24)
+        .padding(.bottom, 16)
         .frame(maxHeight: .infinity, alignment: .top)
         // Freeze the list on appear so tiles don't reshuffle when the pick changes.
         .onAppear { if picks.isEmpty { picks = model.onboardingPicks() } }
+    }
+
+    private var presetGrid: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 16), count: 3), spacing: 16) {
+            ForEach(picks) { preset in
+                PickTile(preset: preset,
+                         selected: model.library.activeID == preset.id) {
+                    withAnimation(.easeOut(duration: 0.15)) { model.useAsScreensaver(preset.id) }
+                }
+            }
+        }
+        .padding(.top, 4)
+    }
+}
+
+/// "Create Your Own": live preview + name on the left; the same Effect / Canvas
+/// pickers as the editor on the right. Picking a Scene makes it a Scene.
+private struct CreatePanel: View {
+    @EnvironmentObject var model: AppModel
+    @Binding var draft: Preset
+    @Binding var nameEdited: Bool
+    let livePreview: Bool
+    @State private var tab: Tab = .effect
+
+    enum Tab: String, CaseIterable, Identifiable {
+        case effect = "Effect", canvas = "Canvas"
+        var id: String { rawValue }
+    }
+
+    private var kind: EffectKind? { draft.effects.first?.kind }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 20) {
+            VStack(alignment: .leading, spacing: 12) {
+                preview
+                TextField("Name", text: nameBinding)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.title3)
+                if let kind {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Label(kind.displayName, systemImage: kind.category.symbol)
+                            .font(.headline)
+                        Text(kind.blurb)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Text(draft.isScene
+                     ? "This is a Scene — it draws itself. Add layers and tune it later in the editor."
+                     : "This is a Look — it restyles your canvas. Layer more effects later in the editor.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(width: 330)
+
+            VStack(spacing: 10) {
+                Picker("Section", selection: $tab) {
+                    ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                Group {
+                    switch tab {
+                    case .effect:
+                        AddEffectPicker(source: model.library.source, thumbnailer: model.thumbnailer,
+                                        prompt: "Search effects and scenes",
+                                        selected: kind, size: nil, scenesLast: true) { pick($0) }
+                    case .canvas:
+                        if draft.isScene {
+                            VStack(spacing: 8) {
+                                Image(systemName: "sparkles").font(.title).foregroundStyle(.secondary)
+                                Text("Scenes don't use a canvas.").font(.headline)
+                                Text("Pick a Look in Effect to restyle a gradient, photo or video.")
+                                    .font(.callout).foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.center)
+                            }
+                            .padding(24)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else {
+                            ScrollView {
+                                SourceEditor(source: model.sourceBinding, model: model)
+                                    .padding(14)
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.background.secondary))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.07)))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+    }
+
+    private var preview: some View {
+        ThumbCard(preset: draft, cornerRadius: 12)
+            .overlay {
+                if livePreview {
+                    MetalPreview(preset: draft, source: model.library.source,
+                                 location: model.locationTuple, store: model.store)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .allowsHitTesting(false)
+                }
+            }
+            .shadow(color: .black.opacity(0.25), radius: 10, y: 5)
+    }
+
+    private var nameBinding: Binding<String> {
+        Binding(get: { draft.name }, set: { draft.name = $0; nameEdited = true })
+    }
+
+    private func pick(_ kind: EffectKind) {
+        draft.effects = [EffectInstance(kind)]
+        if !nameEdited { draft.name = "My \(kind.displayName)" }
     }
 }
 
@@ -528,34 +695,65 @@ private struct SettingsPath: View {
 
 private struct DonePage: View {
     let status: Installer.Status
+    /// Set when the user made a style in "Create Your Own".
+    let createdName: String?
+    let onCreate: () -> Void
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 22) {
             Image(systemName: status == .ready ? "checkmark.seal.fill" : "sparkles")
-                .font(.system(size: 50, weight: .regular))
+                .font(.system(size: 46, weight: .regular))
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(status == .ready ? Color.green : Color.accentColor)
-                .padding(.top, 6)
+                .padding(.top, 4)
             PageHeader(title: status == .ready ? "You're All Set" : "Ready When You Are",
                        subtitle: status == .ready
                            ? "DotStudio will play the next time your screensaver starts."
                            : "Turn on the screensaver any time from the banner at the top of the gallery.")
-            VStack(alignment: .leading, spacing: 16) {
-                Tip(symbol: "cursorarrow.click.2", tint: .blue,
-                    title: "Make it yours",
-                    detail: "Double-click any tile to customize its colors and effects.")
+
+            createCard
+
+            VStack(alignment: .leading, spacing: 14) {
                 Tip(symbol: "arrow.triangle.2.circlepath", tint: .orange,
                     title: "Mix it up",
                     detail: "Use Playback to rotate through styles, or switch between day and night.")
-                Tip(symbol: "play.rectangle.fill", tint: .purple,
-                    title: "Preview anytime",
-                    detail: "Hover a tile and click Preview to see it full screen.")
+                Tip(symbol: "cursorarrow.click.2", tint: .purple,
+                    title: "Edit anything",
+                    detail: "Double-click any tile to change its effects, colors and motion.")
             }
-            .frame(maxWidth: 440, alignment: .leading)
+            .frame(maxWidth: 520, alignment: .leading)
         }
         .padding(.horizontal, 44)
-        .padding(.top, 34)
+        .padding(.top, 30)
         .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    /// The app is about making styles — end on that, not just on "done".
+    private var createCard: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "paintbrush.pointed.fill")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.accentColor.gradient))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(createdName.map { "Keep shaping \u{201C}\($0)\u{201D}" } ?? "Create your own")
+                    .font(.headline)
+                Text(createdName == nil
+                     ? "Stack effects on a gradient, photo or video — or build a Scene from scratch."
+                     : "Open it in the editor to layer more effects and tune colors and motion.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            Button(createdName == nil ? "Create a Style" : "Open in Editor", action: onCreate)
+                .controlSize(.large)
+        }
+        .padding(16)
+        .frame(maxWidth: 560)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.accentColor.opacity(0.09)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.accentColor.opacity(0.25)))
     }
 }
 

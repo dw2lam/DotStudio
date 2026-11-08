@@ -255,12 +255,21 @@ struct AddEffectPicker: View {
     let thumbnailer: Thumbnailer
     var include: (EffectKind) -> Bool = { _ in true }
     var prompt = "Search effects"
+    /// Highlights one cell (onboarding's creator); nil in the editor's add-popover.
+    var selected: EffectKind? = nil
+    /// Popover size; nil lets the picker fill its container.
+    var size: CGSize? = CGSize(width: 430, height: 500)
+    /// List Looks before Scenes (onboarding starts people on a Look).
+    var scenesLast = false
     let onPick: (EffectKind) -> Void
     @State private var query = ""
 
     private var groups: [(EffectCategory, [EffectKind])] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        return EffectCategory.allCases.compactMap { cat in
+        let cats = scenesLast
+            ? EffectCategory.allCases.filter { !$0.isScenes } + EffectCategory.allCases.filter(\.isScenes)
+            : EffectCategory.allCases
+        return cats.compactMap { cat in
             let kinds = EffectKind.allCases.filter {
                 $0.category == cat && !$0.isRetired && include($0) &&
                 (q.isEmpty || $0.displayName.lowercased().contains(q) || cat.rawValue.lowercased().contains(q)
@@ -276,6 +285,7 @@ struct AddEffectPicker: View {
                 .textFieldStyle(.roundedBorder)
                 .padding(12)
             Divider()
+            ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
                     ForEach(groups, id: \.0) { cat, kinds in
@@ -287,6 +297,7 @@ struct AddEffectPicker: View {
                                     Button { onPick(kind) } label: { cell(kind) }
                                         .buttonStyle(.plain)
                                         .help(kind.blurb)
+                                        .id(kind)
                                 }
                             }
                         }
@@ -298,25 +309,47 @@ struct AddEffectPicker: View {
                 }
                 .padding(12)
             }
+            .onAppear {
+                // Show the current pick, not the top of the list.
+                guard let selected else { return }
+                DispatchQueue.main.async { proxy.scrollTo(selected, anchor: .center) }
+            }
+            }
         }
-        .frame(width: 430, height: 500)
+        .frame(width: size?.width, height: size?.height)
     }
 
     private func cell(_ kind: EffectKind) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Group {
-                if let img = thumbnailer.effectImage(kind, source: source) {
-                    Image(nsImage: img).resizable().scaledToFill()
-                } else {
-                    Color.black
+        let isSelected = kind == selected
+        return VStack(alignment: .leading, spacing: 4) {
+            swatch(kind)
+                .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 2.5))
+                .overlay(alignment: .topTrailing) {
+                    if isSelected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, Color.accentColor)
+                            .padding(4)
+                    }
                 }
-            }
-            .aspectRatio(16.0 / 10.0, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(.primary.opacity(0.12)))
-            Text(kind.displayName).font(.caption).foregroundStyle(.primary).lineLimit(1)
+            Text(kind.displayName).font(.caption.weight(isSelected ? .semibold : .regular))
+                .foregroundStyle(.primary).lineLimit(1)
         }
         .contentShape(Rectangle())
+    }
+
+    private func swatch(_ kind: EffectKind) -> some View {
+        Group {
+            if let img = thumbnailer.effectImage(kind, source: source) {
+                Image(nsImage: img).resizable().scaledToFill()
+            } else {
+                Color.black
+            }
+        }
+        .aspectRatio(16.0 / 10.0, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(.primary.opacity(0.12)))
     }
 }
 
