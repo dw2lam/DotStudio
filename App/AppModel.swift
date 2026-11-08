@@ -67,7 +67,7 @@ final class AppModel: ObservableObject {
         if !store.save(library) && storeAlert == nil {
             storeAlert = StoreAlert(
                 title: "Couldn't Save Changes",
-                message: "Your latest edit couldn't be written to disk. Check free space and permissions on your home folder.")
+                message: "Your latest edit couldn't be written to disk.\n\n\(store.lastSaveError ?? "Unknown error")")
         }
     }
 
