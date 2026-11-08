@@ -237,8 +237,8 @@ private struct ThumbCard: View {
 /// always including whatever is active now. Falls back gracefully for edited libraries.
 private extension AppModel {
     func onboardingPicks(scenes sceneCount: Int = 4, looks lookCount: Int = 2) -> [Preset] {
-        let preferredScenes = ["Aurora", "Black Hole", "Universe", "Silk", "Liquid Chrome", "Afterglow", "Hyperspace"]
-        let preferredLooks = ["Riso Duotone", "Liquid Glass", "Soft Focus", "Green Phosphor"]
+        let preferredScenes = ["Liquid Chrome", "Aurora", "Flip Clock", "Lava Lamp", "Universe", "Neon Horizon", "Golden Hour"]
+        let preferredLooks = ["Riso Duotone", "Film", "Cyanotype", "Soft Focus"]
         let all = library.presets
 
         func pick(_ names: [String], _ count: Int, scene: Bool) -> [Preset] {

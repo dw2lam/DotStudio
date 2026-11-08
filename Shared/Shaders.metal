@@ -710,7 +710,7 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         // Source-color mode: the glyph carries the source hue at near-full brightness
         // (density already encodes luminance), so dark-but-colorful areas still read.
         float3 fg = colorMode
-            ? min(c / max(max(c.r, max(c.g, c.b)), 0.08), 1.0) * (0.3 + 0.7 * sqrt(lv0))
+            ? min(c / max(max(c.r, max(c.g, c.b)), 0.08), 1.0) * (0.5 + 0.5 * sqrt(lv0))
             : u.colorB.rgb;
         return float4(mix(u.colorA.rgb, fg, ink), 1.0);
     }
