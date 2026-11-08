@@ -40,7 +40,8 @@ struct EffectStackView: View {
                     }
                     .controlSize(.large)
                     .popover(isPresented: $showAdd, arrowEdge: .leading) {
-                        AddEffectPicker(source: model.library.source, thumbnailer: model.thumbnailer) { kind in
+                        AddEffectPicker(source: model.library.source, thumbnailer: model.thumbnailer,
+                                        include: { !$0.isScene }) { kind in
                             let e = EffectInstance(kind)
                             preset.effects.append(e)
                             expanded = [e.id]
@@ -122,6 +123,7 @@ struct EffectRow: View {
 
                 Text(effect.kind.displayName)
                     .font(.body.weight(.medium))
+                    .help(effect.kind.blurb)
                     .foregroundStyle(effect.enabled ? .primary : .secondary)
                     .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { isExpanded.toggle() } }
                 if effect.kind.isScene {
@@ -167,8 +169,8 @@ struct EffectRow: View {
     private var colorsRow: some View {
         HStack(alignment: .top, spacing: 8) {
             Text("Colors").font(.callout).frame(width: 92, alignment: .leading).padding(.top, 3)
-            if effect.kind.defaultColorA != nil { swatch("Background", isA: true) }
-            if effect.kind.defaultColorB != nil { swatch("Ink", isA: false) }
+            if effect.kind.defaultColorA != nil { swatch(effect.kind.colorALabel, isA: true) }
+            if effect.kind.defaultColorB != nil { swatch(effect.kind.colorBLabel, isA: false) }
             Spacer()
         }
     }
@@ -178,7 +180,7 @@ struct EffectRow: View {
             ColorPicker(title, selection: colorBinding(isA: isA)).labelsHidden()
             Text(title).font(.caption2).foregroundStyle(.secondary).fixedSize()
         }
-        .help(isA ? "Background / dark tone" : "Foreground / ink tone")
+        .help(title)
     }
 
     private func paramBinding(_ spec: ParamSpec) -> Binding<Double> {
@@ -261,7 +263,8 @@ struct AddEffectPicker: View {
         return EffectCategory.allCases.compactMap { cat in
             let kinds = EffectKind.allCases.filter {
                 $0.category == cat && !$0.isRetired && include($0) &&
-                (q.isEmpty || $0.displayName.lowercased().contains(q) || cat.rawValue.lowercased().contains(q))
+                (q.isEmpty || $0.displayName.lowercased().contains(q) || cat.rawValue.lowercased().contains(q)
+                 || $0.blurb.lowercased().contains(q))
             }
             return kinds.isEmpty ? nil : (cat, kinds)
         }
@@ -277,11 +280,13 @@ struct AddEffectPicker: View {
                 LazyVStack(alignment: .leading, spacing: 18) {
                     ForEach(groups, id: \.0) { cat, kinds in
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(cat.rawValue).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            Label(cat.rawValue, systemImage: cat.symbol)
+                                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 12) {
                                 ForEach(kinds, id: \.self) { kind in
                                     Button { onPick(kind) } label: { cell(kind) }
                                         .buttonStyle(.plain)
+                                        .help(kind.blurb)
                                 }
                             }
                         }
