@@ -146,7 +146,7 @@
             col *= 1.0 - 0.55 * pow(ax, 4.0);
             float edgeY = 0.75 + 0.25 * smoothstep(-0.5, 0.5, p.y);
             col += float3(1.0, 0.97, 0.94) * edgeY * (0.07 * smoothstep(0.03, 0.0, abs(xc + 0.74))
-                                                     + 0.035 * exp(-abs(xc + 0.58) * 9.0)
+                                                     + 0.012 * exp(-abs(xc + 0.58) * 12.0)
                                                      + 0.035 * smoothstep(0.02, 0.0, abs(xc - 0.86)));
             col += warm * 0.06 * heat * smoothstep(0.8, 1.0, ax) * smoothstep(0.2, -0.5, p.y);
         }
