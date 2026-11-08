@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.3.0 — A new DotStudio: gallery, scenes, and making your own
+
+### New
+- **A gallery-first app.** Every style is a tile; the Playback bar on top picks
+  what plays (One Style, Rotate, Day & Night). Double-click any tile to open the
+  editor — a big live preview with Effects and Source side by side.
+- **Welcome guide.** Pick a preset or create your own on the spot, then turn the
+  screensaver on with a live checklist. Reopen it from Help → Welcome to DotStudio.
+- **Scenes and Looks.** Scenes draw themselves; Looks restyle your canvas — now a
+  built-in slideshow of public-domain photos that slowly pans and cross-fades, or
+  your own photos and video.
+- **New scenes**
+  - *Clocks* — Glass & Plaster type clocks, a 3D Flip Clock, a Word Clock, and
+    Window Light (sunlight drifting across a wall with the real sun).
+  - *Flowing* — Lava Lamp, Currents, Fireflies.
+  - *Nature* — Golden Hour, Night Sky (with tonight's real moon phase),
+    First Snow, and a completely rebuilt Aurora.
+  - *Retro* — Neon Horizon, Pipeworks, Light Tunnel, Light Ribbons.
+  - *Universe* is now a 3D solar system on a slowly orbiting camera.
+- **Automatic updates.** DotStudio checks GitHub hourly, downloads new versions in
+  the background and installs them when you quit (or Settings → Updates →
+  Restart to Update). The screensaver updates along with the app.
+
+### Fixed / improved
+- **"Couldn't Save Changes" is gone.** The library now lives in
+  `~/Library/Application Support/DotStudio` instead of the screensaver's sandbox
+  container, which macOS blocks after every app update.
+- Looks were re-tuned on real photos (ASCII, Atkinson, Floyd–Steinberg, Soft
+  Focus, Fluted Glass); dated and duplicate effects were retired from the menus
+  (old libraries still open and render them).
+- The default library is a curated 28; everything else is in File → Add Built-in
+  Styles.
+
+> **Installing:** DotStudio isn't notarized. Open it once, then go to
+> System Settings → Privacy & Security and click **Open Anyway**. From 1.3.0 on,
+> updates install themselves.
+
 ## 1.2.0 — Rotation, day/night, and a trustworthy foundation
 
 ### New
