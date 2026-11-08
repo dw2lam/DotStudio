@@ -49,11 +49,6 @@ static inline float vnoise(float2 p) {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-static inline float fbm(float2 p) {
-    float a = 0.5, f = 0.0;
-    for (int i = 0; i < 5; ++i) { f += a * vnoise(p); p *= 2.02; a *= 0.5; }
-    return f;
-}
 
 // 3D value noise + fbm (for the black-hole accretion disk & nebula).
 static inline float hash31(float3 p) {
@@ -83,6 +78,89 @@ static inline float3 blackbody(float tempK) {
 }
 static inline float3 aces(float3 x) {
     return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
+
+// ---- Oklab: perceptual color mixing for gradients/palettes (inputs are display sRGB).
+static inline float3 srgbToLinear(float3 c) {
+    c = clamp(c, 0.0, 1.0);
+    return select(pow((c + 0.055) / 1.055, float3(2.4)), c / 12.92, c <= 0.04045);
+}
+static inline float3 linearToSrgb(float3 c) {
+    c = max(c, 0.0);
+    return select(1.055 * pow(c, float3(1.0 / 2.4)) - 0.055, c * 12.92, c <= 0.0031308);
+}
+static inline float3 srgbToOklab(float3 s) {
+    float3 c = srgbToLinear(s);
+    float l = 0.4122214708 * c.r + 0.5363325363 * c.g + 0.0514459929 * c.b;
+    float m = 0.2119034982 * c.r + 0.6806995451 * c.g + 0.1073969566 * c.b;
+    float q = 0.0883024619 * c.r + 0.2817188376 * c.g + 0.6299787005 * c.b;
+    l = pow(max(l, 0.0), 1.0 / 3.0); m = pow(max(m, 0.0), 1.0 / 3.0); q = pow(max(q, 0.0), 1.0 / 3.0);
+    return float3(0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * q,
+                  1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * q,
+                  0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * q);
+}
+static inline float3 oklabToSrgb(float3 c) {
+    float l = c.x + 0.3963377774 * c.y + 0.2158037573 * c.z;
+    float m = c.x - 0.1055613458 * c.y - 0.0638541728 * c.z;
+    float q = c.x - 0.0894841775 * c.y - 1.2914855480 * c.z;
+    l = l * l * l; m = m * m * m; q = q * q * q;
+    return linearToSrgb(float3( 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * q,
+                               -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * q,
+                               -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * q));
+}
+// Rotate an Oklab color's hue by `a` radians (keeps lightness and chroma).
+static inline float3 oklabHue(float3 c, float a) {
+    float cs = cos(a), sn = sin(a);
+    return float3(c.x, cs * c.y - sn * c.z, sn * c.y + cs * c.z);
+}
+// PCG3D integer hash → three uniform floats in [0,1). No lattice artifacts, unlike
+// the fract-based hash21, so it's the one to use for per-pixel grain/dither.
+static inline float3 pcg3(float3 pf) {
+    uint3 v = uint3(int3(floor(pf)) + int3(1 << 20));
+    v = v * 1664525u + 1013904223u;
+    v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+    v ^= v >> 16u;
+    v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+    return float3(v) * (1.0 / 4294967296.0);
+}
+// Film grain: triangular-distributed, animated at 24 fps, in [-1, 1].
+static inline float filmGrain(float2 px, float t) {
+    float3 h = pcg3(float3(px, floor(t * 24.0)));
+    return h.x + h.y - 1.0;
+}
+// Tiny static dither (±0.5 LSB-ish) to break 8-bit banding in smooth dark gradients.
+static inline float bandDither(float2 px) {
+    float3 h = pcg3(float3(px, 7.0));
+    return (h.x + h.y - 1.0) / 255.0;
+}
+// Gradient (Perlin-style) noise in ~[-0.7, 0.7]: smooth, isotropic contours
+// (value noise contours look boxy).
+static inline float2 ghash(float2 p) {
+    p = float2(dot(p, float2(127.1, 311.7)), dot(p, float2(269.5, 183.3)));
+    return -1.0 + 2.0 * fract(sin(p) * 43758.5453123);
+}
+static inline float gnoise(float2 p) {
+    float2 i = floor(p), f = fract(p);
+    float2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    float a = dot(ghash(i), f);
+    float b = dot(ghash(i + float2(1, 0)), f - float2(1, 0));
+    float c = dot(ghash(i + float2(0, 1)), f - float2(0, 1));
+    float d = dot(ghash(i + float2(1, 1)), f - float2(1, 1));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+static inline float gfbm(float2 p, int oct) {
+    const float2x2 R = float2x2(0.8, 0.6, -0.6, 0.8);
+    float a = 0.5, s = 0.0;
+    for (int i = 0; i < oct; ++i) { s += a * gnoise(p); p = R * p * 2.03; a *= 0.5; }
+    return s;
+}
+// Liquid Chrome height field: a few domain-warped sines (cheap, smooth, glossy).
+static inline float chromeHeight(float2 p, float ts) {
+    float2 q = p + 0.65 * float2(sin(p.y * 0.83 + ts), cos(p.x * 0.71 - ts * 0.8));
+    q += 0.35 * float2(sin(q.y * 1.7 - ts * 0.6), cos(q.x * 1.5 + ts * 0.7));
+    return sin(q.x * 1.15 + ts * 0.6) * 0.5
+         + sin(q.y * 1.45 - ts * 0.5) * 0.4
+         + sin((q.x + q.y) * 0.9 + ts * 0.9) * 0.3;
 }
 
 // Ordered dither matrices, normalized to [-0.5, 0.5].
@@ -428,12 +506,22 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         int2 cellPx = int2(floor(px / cell));
         float2 cellCenterUV = (float2(cellPx) + 0.5) * cell / res;
         float3 c = src.sample(samp, cellCenterUV).rgb;
-        float lv = luma(c);
+        float lv0 = luma(c), lv = lv0;
+        // The atlas runs dense → sparse. Light ink on a dark ground must put the densest
+        // glyphs on the brightest areas (otherwise highlights render as empty space);
+        // the gamma keeps mid-tones legible instead of collapsing to dots.
+        bool colorMode = u.p0.z > 0.5;
+        float inkL = colorMode ? 1.0 : luma(u.colorB.rgb);
+        if (inkL > luma(u.colorA.rgb)) lv = 1.0 - pow(lv0, 0.6);
         int gi = clamp(int(lv * float(u.glyphCount)), 0, u.glyphCount - 1);
         float2 local = (px - float2(cellPx) * cell) / cell;     // [0,1]
         float2 auv = float2((float(gi) + local.x) / float(u.glyphCount), local.y);
         float ink = glyphs.sample(samp, auv).r;
-        float3 fg = (u.p0.z > 0.5) ? c : u.colorB.rgb;          // tint or source color
+        // Source-color mode: the glyph carries the source hue at near-full brightness
+        // (density already encodes luminance), so dark-but-colorful areas still read.
+        float3 fg = colorMode
+            ? min(c / max(max(c.r, max(c.g, c.b)), 0.08), 1.0) * (0.3 + 0.7 * sqrt(lv0))
+            : u.colorB.rgb;
         return float4(mix(u.colorA.rgb, fg, ink), 1.0);
     }
 
@@ -873,6 +961,372 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
             acc += bg * (1.0 - alpha);
         }
         return float4(aces(acc), 1.0);
+    }
+
+    // ================================================================ modern pack
+
+    case 42: { // MESH GRADIENT (scene) — five drifting color points blended in Oklab,
+               // domain-warped for organic edges, finished with film grain.
+               // p0 = (speed, softness, hueSpread, grain); colorA deep, colorB light.
+        float speed = u.p0.x, soft = max(u.p0.y, 0.3), spread = u.p0.z, grainAmt = u.p0.w;
+        float ts = t * speed * 0.09;
+        float aspect = res.x / res.y;
+        float2 p = (uv - 0.5) * float2(aspect, 1.0);
+        float2 w = float2(vnoise(p * 1.5 + float2(ts * 1.3, -ts)),
+                          vnoise(p * 1.5 + float2(4.1 - ts, 2.7 + ts * 1.1))) - 0.5;
+        p += w * 0.5;
+
+        float3 A = srgbToOklab(u.colorA.rgb), B = srgbToOklab(u.colorB.rgb);
+        float3 st[5];
+        st[0] = A;
+        st[1] = B;
+        // Accents are analogous neighbours of the two key colors, so any A/B pair
+        // yields a coherent five-color field (no muddy complementary midpoints).
+        st[2] = oklabHue(B, -spread * 2.0);
+        st[2].x = mix(A.x, B.x, 0.75); st[2].yz *= 1.1;
+        st[3] = oklabHue(B, spread * 1.2);
+        st[3].x = min(B.x + 0.07, 0.97); st[3].yz *= 0.85;
+        st[4] = oklabHue(A, -spread * 1.5);
+        st[4].x = mix(A.x, B.x, 0.25); st[4].yz *= 1.2;
+
+        float expo = 1.5 / soft;
+        float3 acc = float3(0.0); float wsum = 0.0;
+        for (int i = 0; i < 5; ++i) {
+            float fi = float(i);
+            float2 c = float2(cos(fi * 1.2566 + ts * (0.55 + 0.11 * fi)),
+                              sin(fi * 1.6336 + ts * (0.47 + 0.17 * fi))) * float2(0.40 * aspect, 0.36);
+            float2 d = p - c;
+            float wi = pow(dot(d, d) + 0.012, -expo);
+            acc += st[i] * wi; wsum += wi;
+        }
+        float3 col = oklabToSrgb(acc / wsum);
+        col += filmGrain(px, t) * grainAmt;
+        return float4(col, 1.0);
+    }
+
+    case 43: { // AURORA (scene) — three folded light curtains with vertical rays over a ridge.
+               // p0 = (speed, glow, height, stars); colorA sky, colorB aurora.
+        float speed = u.p0.x, inten = u.p0.y, height = max(u.p0.z, 0.2), starsAmt = u.p0.w;
+        float ts = t * speed;
+        float aspect = res.x / res.y;
+        float2 p = float2((uv.x - 0.5) * aspect, 1.0 - uv.y);     // y: 0 bottom → 1 top
+        float3 sky = u.colorA.rgb;
+        float3 ac = u.colorB.rgb;
+        float3 acL = srgbToOklab(ac);
+        // Curtain tops fade toward violet (as real high-altitude aurora does), whatever the base hue.
+        float3 topC = oklabToSrgb(mix(acL, srgbToOklab(float3(0.50, 0.28, 0.90)), 0.7) * float3(0.85, 1.0, 1.0));
+
+        float3 col = sky * (0.6 + 2.2 * (1.0 - p.y) * (1.0 - p.y));
+        col += ac * 0.04 * exp(-max(p.y - 0.12, 0.0) * 4.0);   // faint horizon airglow
+
+        // ridge silhouette
+        float rx = p.x * 1.3 + 7.0;
+        float ridge = 0.10 + 0.07 * vnoise(float2(rx * 0.9, 0.5)) + 0.035 * vnoise(float2(rx * 3.1, 2.5))
+                    + 0.012 * vnoise(float2(rx * 11.0, 4.5));
+
+        // stars
+        float3 stars = float3(0.0);
+        for (int L = 0; L < 2; ++L) {
+            float s = 45.0 + float(L) * 40.0;
+            float2 g = p * s;
+            float2 cell = floor(g), f = fract(g) - 0.5;
+            float2 j = (hash22(cell + float(L) * 19.0) - 0.5) * 0.7;
+            float h = hash21(cell + float(L) * 7.0);
+            float tw = 0.65 + 0.35 * sin(t * (1.0 + h * 3.0) + h * 40.0);
+            float rad = (1.1 + 0.9 * (1.0 - float(L))) * s / res.y;    // ~1–2 px stars at any size
+            float st = smoothstep(rad, rad * 0.3, length(f - j)) * step(0.9, h);
+            stars += float3(0.85, 0.9, 1.0) * st * tw * (0.35 + 0.65 * hash21(cell + 3.0));
+        }
+
+        // Each curtain is a ribbon: a bright, crisp lower hem that follows a slow
+        // meandering curve, fading upward into rays; brightness gathers in patches
+        // along its length (gaps between them keep it from reading as a wall).
+        float3 acc = float3(0.0);
+        for (int i = 0; i < 3; ++i) {
+            float k = float(i);
+            float x = p.x * (0.8 + 0.25 * k) + k * 2.3;
+            float xw = x + 0.45 * sin(x * 0.7 + ts * 0.05 + k * 1.3) + 0.2 * sin(x * 1.9 - ts * 0.08 + k * 0.7);
+            float yb = 0.36 + 0.11 * k + 0.09 * sin(xw * 1.1 + ts * 0.04 + k) + 0.035 * sin(xw * 2.9 - ts * 0.06 + k * 2.1);
+            float dy = p.y - yb;
+            float hgt = 0.17 * height * (1.0 - 0.15 * k);
+            float bottom = smoothstep(-0.01, 0.012, dy);
+            float body = exp(-max(dy, 0.0) / hgt);
+            float hem = exp(-max(dy, 0.0) / 0.018) * 0.9;
+            float r1 = vnoise(float2(xw * 26.0 + k * 7.0, ts * 0.10 + k));
+            float r2 = vnoise(float2(xw * 70.0 + k * 3.0, ts * 0.16 + k * 3.0));
+            float rays = 0.55 + 0.45 * r1 + 0.25 * (r2 - 0.5);
+            float patch = smoothstep(0.28, 0.8, vnoise(float2(xw * 1.1 - ts * 0.15, k * 4.0 + ts * 0.03)));
+            float a = bottom * (body * rays + hem) * patch * (1.0 - 0.3 * k);
+            float3 c = mix(ac, topC, smoothstep(0.02, hgt * 1.8, dy));
+            acc += c * a;
+            acc += ac * 0.05 * exp(-max(dy, 0.0) / 0.3) * bottom * patch * (1.0 - 0.3 * k);   // airglow above
+        }
+        float3 aur = 1.0 - exp(-acc * inten * 1.5);
+        col += stars * starsAmt * (1.0 - clamp(luma(aur) * 2.5, 0.0, 1.0));
+        col += aur;
+
+        float aa = 1.5 / res.y;
+        float ground = smoothstep(ridge + aa, ridge - aa, p.y);
+        float3 land = sky * 0.3 + ac * 0.025 * smoothstep(ridge - 0.06, ridge, p.y);
+        col = mix(col, land, ground);
+        col += bandDither(px) * 2.0;
+        return float4(col, 1.0);
+    }
+
+    case 44: { // TOPOGRAPHY (scene) — isolines of a slowly evolving warped-fbm terrain,
+               // every 5th an index contour, with optional hillshade relief.
+               // p0 = (lines, scale, speed, relief); colorA ground, colorB lines.
+        float lines = max(u.p0.x, 2.0), sc = max(u.p0.y, 0.2), speed = u.p0.z, fillAmt = u.p0.w;
+        float aspect = res.x / res.y;
+        float2 p = (uv - 0.5) * float2(aspect, 1.0) * sc * 1.5;
+        float ts = t * speed * 0.03;
+        float2 w = float2(gfbm(p * 0.6 + float2(0.0, ts), 3), gfbm(p * 0.6 + float2(5.2, 1.3 - ts), 3));
+        float h = gfbm(p + 1.1 * w + float2(ts * 0.5, -ts * 0.3) + 3.7, 4);
+        h = h * 0.75 + 0.5;                                       // ≈ 0..1, no clamping (no plateaus)
+
+        float v = h * lines;
+        float fw = max(fwidth(v), 1e-4);
+        float lw = max(res.y / 1000.0, 0.8);
+        float d = abs(fract(v + 0.5) - 0.5) / fw;                // distance to isoline, in px
+        bool major = fmod(floor(v + 0.5) + 1000.0, 5.0) < 0.5;
+        float width = major ? lw * 1.8 : lw * 1.0;
+        float line = clamp(width * 0.5 + 0.5 - d, 0.0, 1.0);
+        line *= smoothstep(0.6, 0.25, fw);                        // fade where lines would crowd
+        float alpha = major ? 0.95 : 0.62;
+
+        float gk = res.y * 0.5 / sc;
+        float3 n = normalize(float3(-dfdx(h) * gk, dfdy(h) * gk, 1.0));
+        float shade = dot(n, normalize(float3(-0.55, 0.55, 0.63)));
+        float3 ground = u.colorA.rgb;
+        float3 tinted = mix(ground, u.colorB.rgb, 0.04 + 0.10 * clamp(h, 0.0, 1.0));
+        float3 col = mix(ground, tinted * (0.72 + 0.45 * shade), fillAmt);
+        col = mix(col, u.colorB.rgb, line * alpha);
+        col += bandDither(px);
+        return float4(col, 1.0);
+    }
+
+    case 45: { // LIQUID CHROME (scene) — a rippling mirror surface reflecting a studio
+               // environment (hard horizon + softboxes), optional thin-film iridescence.
+               // p0 = (speed, scale, iridescence); colorA shadow, colorB highlight.
+        float speed = u.p0.x, sc = max(u.p0.y, 0.2), iris = u.p0.z;
+        float ts = t * speed * 0.2;
+        float aspect = res.x / res.y;
+        float2 p = (uv - 0.5) * float2(aspect, 1.0) * sc * 3.0;
+        const float e = 0.015;
+        float h  = chromeHeight(p, ts);
+        float hx = chromeHeight(p + float2(e, 0.0), ts);
+        float hy = chromeHeight(p + float2(0.0, e), ts);
+        float3 n = normalize(float3(-(hx - h) / e * 0.8, (hy - h) / e * 0.8, 1.0));
+        // Camera looks slightly down, so flat metal mirrors the bright sky above the horizon;
+        // every tilt sweeps the reflection across horizon, strip lights and ground.
+        float3 r = reflect(normalize(float3(0.0, 0.28, -1.0)), n);
+
+        float3 A = u.colorA.rgb, B = u.colorB.rgb;
+        float ey = r.y;
+        float3 skyc = mix(B, mix(A, B, 0.45), smoothstep(0.02, 0.9, ey));
+        float3 grnd = mix(mix(A, B, 0.22), A, smoothstep(-0.01, -0.35, ey));
+        float3 c = mix(grnd, skyc, smoothstep(-0.008, 0.008, ey));
+        c = mix(c, A, smoothstep(0.035, 0.0, abs(ey - 0.55)) * 0.85);          // dark rafter band
+        c += B * smoothstep(0.025, 0.0, abs(ey - 0.30)) * 0.8;                  // strip light
+        c += B * smoothstep(0.05, 0.0, abs(ey + 0.42)) * 0.35;                  // floor bounce
+        c += B * 0.6 * pow(max(dot(r, normalize(float3(-0.55, 0.45, 0.70))), 0.0), 64.0);
+        float fres = pow(1.0 - n.z, 2.0);
+        c = mix(c, mix(A, B, 0.6), fres * 0.3);
+
+        float ph = h * 0.35 + dot(n.xy, float2(0.9, 0.5)) * 1.1 + ts * 0.15;
+        float3 irc = 0.5 + 0.5 * cos(6.2831853 * (ph + float3(0.0, 0.33, 0.67)));
+        c = mix(c, c * (0.35 + 1.25 * irc) + irc * 0.06, iris);
+        c += bandDither(px) * 2.0;
+        return float4(c, 1.0);
+    }
+
+    case 46: { // SILK (scene) — flow field rendered by animated line-integral convolution:
+               // fine noise smeared along a slowly turning vector field, with pulses
+               // travelling down the streamlines. p0 = (speed, scale, sheen); A ground, B strands.
+        float speed = u.p0.x, sc = max(u.p0.y, 0.2), sheen = u.p0.z;
+        float k = res.y / 1000.0;
+        float aspect = res.x / res.y;
+        float ts = t * speed;
+        float2 q = (uv - 0.5) * float2(aspect, 1.0);
+        const int M = 7;                     // 2×7 taps ≈ Black Hole's per-pixel budget
+        float stepPx = 3.5 * k;              // step ≲ noise feature size, or strands bead
+        float fieldScale = 1.6 / sc;
+        float noiseScale = 1.0 / (3.5 * k);
+        float acc = 0.0, wsum = 0.0;
+        for (int dir = -1; dir <= 1; dir += 2) {
+            float2 pp = px;
+            float2 v = float2(1.0, 0.0);
+            for (int i = 0; i < M; ++i) {
+                if ((i & 1) == 0) {          // the field is smooth: re-evaluate every other step
+                    float2 fq = (pp / res.y - float2(0.5 * aspect, 0.5)) * fieldScale;
+                    float th = sin(fq.x * 1.3 + sin(fq.y * 1.9 + ts * 0.05) * 1.4 + ts * 0.03)
+                             + 0.8 * cos(fq.y * 1.1 - sin(fq.x * 2.3 - ts * 0.04) + 0.6)
+                             + 0.35 * sin((fq.x + fq.y) * 3.1 + ts * 0.07);
+                    v = float2(cos(th * 1.7), sin(th * 1.7));
+                }
+                float fi = float(i) / float(M);
+                float wgt = (1.0 - fi) * (0.6 + 0.4 * sin(6.2831853 * (fi * float(dir) * 0.5 - ts * 0.18)));
+                acc += vnoise(pp * noiseScale) * wgt; wsum += wgt;
+                pp += v * stepPx * float(dir);
+            }
+        }
+        float lic = acc / max(wsum, 1e-4);
+        float s = smoothstep(0.32, 0.70, lic);
+        // broad folds of light across the cloth
+        float tone = smoothstep(0.15, 0.85, gnoise(q * 1.4 + float2(ts * 0.02, -ts * 0.015)) * 0.9 + 0.5);
+        float3 Bl = srgbToOklab(u.colorB.rgb);
+        float3 strand = oklabToSrgb(oklabHue(Bl, (tone - 0.5) * sheen * 1.4));
+        float3 col = mix(u.colorA.rgb, strand, s * mix(0.25, 1.0, tone));
+        col += bandDither(px);
+        return float4(col, 1.0);
+    }
+
+    case 47: { // RISOGRAPH — separates the source into two spot inks (least-squares on
+               // absorbance), screens each (stochastic grain or rotated halftone),
+               // misregisters ink 2, then overprints both on textured paper.
+               // p0 = (screen, dotSize, misregistration, paper); colorA ink 1, colorB ink 2.
+        int screenMode = int(u.p0.x + 0.5);
+        float k = res.y / 1000.0;
+        float cell = max(u.p0.y * k, 1.0);
+        float misreg = u.p0.z * k;
+        float paperAmt = u.p0.w;
+        float3 inkA = u.colorA.rgb, inkB = u.colorB.rgb;
+        float3 kA = 1.0 - inkA, kB = 1.0 - inkB;
+        float a11 = dot(kA, kA) + 0.03, a12 = dot(kA, kB), a22 = dot(kB, kB) + 0.03;
+        float det = max(a11 * a22 - a12 * a12, 1e-4);
+        float2 offB = float2(misreg, -misreg * 0.6)
+                    + float2(sin(t * 0.21), cos(t * 0.17)) * misreg * 0.15;   // slow drum drift
+        float2 pB = px - offB;
+
+        float mA, mB;
+        if (screenMode == 1) {   // HALFTONE: 15° and 75° screens
+            float2x2 RA = float2x2(cos(0.26), -sin(0.26), sin(0.26), cos(0.26));
+            float2x2 RB = float2x2(cos(1.31), -sin(1.31), sin(1.31), cos(1.31));
+            float cs = cell * 1.6;
+            float2 rpA = RA * px, rpB = RB * pB;
+            float2 gA = (floor(rpA / cs) + 0.5) * cs, gB = (floor(rpB / cs) + 0.5) * cs;
+            float3 DA = 1.0 - src.sample(samp, (transpose(RA) * gA) / res).rgb;
+            float3 DB = 1.0 - src.sample(samp, (transpose(RB) * gB) / res).rgb;
+            float bAA = dot(kA, DA), bBA = dot(kB, DA), bAB = dot(kA, DB), bBB = dot(kB, DB);
+            float covA = smoothstep(0.06, 0.94, (a22 * bAA - a12 * bBA) / det);
+            float covB = smoothstep(0.06, 0.94, (a11 * bBB - a12 * bAB) / det);
+            float rough = (vnoise(px / (1.3 * k)) - 0.5) * 0.10;
+            float rA = sqrt(covA) * 0.74 + rough, rB = sqrt(covB) * 0.74 - rough;
+            float aa = 1.2 / cs;
+            mA = smoothstep(rA + aa, rA - aa, length((rpA - gA) / cs));
+            mB = smoothstep(rB + aa, rB - aa, length((rpB - gB) / cs));
+        } else {                 // GRAIN: stochastic screen, clumped like riso masters
+            float2 cA = floor(px / cell), cB = floor(pB / cell);
+            float3 DA = 1.0 - src.sample(samp, (cA + 0.5) * cell / res).rgb;
+            float3 DB = 1.0 - src.sample(samp, (cB + 0.5) * cell / res).rgb;
+            float bAA = dot(kA, DA), bBA = dot(kB, DA), bAB = dot(kA, DB), bBB = dot(kB, DB);
+            float covA = smoothstep(0.06, 0.94, (a22 * bAA - a12 * bBA) / det);
+            float covB = smoothstep(0.06, 0.94, (a11 * bBB - a12 * bAB) / det);
+            float tA = fract(ign(cA) + 0.5 + (pcg3(float3(cA, 3.0)).x - 0.5) * 0.25);
+            float tB = fract(ign(cB + 31.0) + 0.5 + (pcg3(float3(cB, 9.0)).x - 0.5) * 0.25);
+            mA = step(tA, covA * 0.98);
+            mB = step(tB, covB * 0.98);
+        }
+        // uneven ink laydown (drum pressure) + overprint (inks are translucent → multiply)
+        float dA = 0.86 + 0.14 * vnoise(px / (160.0 * k) + 3.0);
+        float dB = 0.86 + 0.14 * vnoise(px / (160.0 * k) + 11.0);
+        float3 paper = float3(0.965, 0.952, 0.918);
+        paper *= 1.0 + (vnoise(px / (2.2 * k)) - 0.5) * 0.07 * paperAmt
+                     + (vnoise(px / (14.0 * k)) - 0.5) * 0.05 * paperAmt;
+        float3 col = paper * mix(float3(1.0), inkA, mA * dA) * mix(float3(1.0), inkB, mB * dB);
+        float fleck = step(0.9994, hash21(floor(px / (1.6 * k)) + 0.5)) * paperAmt;
+        col = mix(col, col * inkB, fleck);
+        return float4(col, 1.0);
+    }
+
+    case 48: { // GRAIN WASH — big soft-focus blur (spiral taps, noise-rotated), optional
+               // Oklab color wash from shadows (A) to highlights (B), then film grain.
+               // p0 = (softness, grain, wash)
+        float soft = u.p0.x, grainAmt = u.p0.y, tint = u.p0.z;
+        float R = soft * soft * 0.11 * res.y;
+        float3 c = base.rgb;
+        if (R > 0.75) {
+            const int N = 18;                // grain hides the undersampling
+            // Rotation jitter shared by 2×2 pixel quads: keeps neighbouring taps on
+            // nearby texels (texture-cache friendly) while still breaking up ghosting.
+            float rot = (ign(floor(px * 0.5)) + 0.5) * 6.2831853;
+            float3 sum = float3(0.0);
+            for (int i = 0; i < N; ++i) {
+                float fi = float(i) + 0.5;
+                float r = sqrt(fi / float(N)) * R;
+                float a = fi * 2.39996323 + rot;
+                sum += src.sample(samp, uv + float2(cos(a), sin(a)) * r / res).rgb;
+            }
+            c = sum / float(N);
+        }
+        float l = luma(c);
+        float3 washed = oklabToSrgb(mix(srgbToOklab(u.colorA.rgb), srgbToOklab(u.colorB.rgb),
+                                        smoothstep(0.02, 0.98, l)));
+        c = mix(c, washed, tint);
+        c += filmGrain(px, t) * grainAmt * (0.35 + 2.6 * l * (1.0 - l));
+        return float4(c, 1.0);
+    }
+
+    case 49: { // GLASS — refract the source through fluted reeds, pillow tiles, or a
+               // drifting liquid-glass lens; with dispersion, frost and specular.
+               // p0 = (style, size, refraction, frost)
+        int style = int(u.p0.x + 0.5);
+        float k = res.y / 1000.0;
+        float S = max(u.p0.y * k, 4.0);
+        float refr = u.p0.z, frost = u.p0.w;
+        float2 off = float2(0.0);
+        float hl = 0.0, shade = 0.0, inside = 1.0;
+        if (style == 0) {                // FLUTED — vertical cylindrical reeds
+            float f = fract(px.x / S) - 0.5;
+            float nx = sin(f * 3.14159265);
+            off = float2(-nx * refr * S * 1.1, 0.0);
+            hl = smoothstep(0.09, 0.0, abs(f + 0.24)) * 0.16 + smoothstep(0.05, 0.0, abs(f - 0.38)) * 0.06;
+            shade = smoothstep(0.32, 0.5, abs(f)) * 0.16;
+        } else if (style == 1) {         // TILES — square pillow lenses
+            float2 f = fract(px / S) - 0.5;
+            off = -sin(f * 3.14159265) * refr * S * 1.1;
+            hl = smoothstep(0.18, 0.0, length(f + 0.2)) * 0.14;
+            shade = smoothstep(0.34, 0.5, max(abs(f.x), abs(f.y))) * 0.2;
+        } else {                         // LIQUID — merging metaball lens drifting over the image
+            float aspect = res.x / res.y;
+            float2 p = px / res.y;
+            float F = 0.0; float2 G = float2(0.0);
+            for (int i = 0; i < 4; ++i) {
+                float fi = float(i);
+                float2 c = float2(aspect * (0.5 + 0.30 * sin(t * 0.06 * (1.0 + 0.3 * fi) + fi * 2.1)),
+                                  0.5 + 0.26 * cos(t * 0.08 * (1.0 + 0.2 * fi) + fi * 1.3));
+                float rr = (S / res.y) * (1.6 + 0.45 * fi);
+                float2 d = p - c;
+                float d2 = dot(d, d) + 1e-5;
+                float wv = rr * rr / d2;
+                F += wv; G += -2.0 * wv * d / d2;
+            }
+            float ed = F - 1.0;
+            float aaF = fwidth(F) * 1.2 + 1e-4;
+            inside = smoothstep(-aaF, aaF, ed);
+            float2 nrm = -normalize(G + 1e-6);                     // outward
+            float bend = exp(-max(ed, 0.0) * 1.6);
+            off = -nrm * bend * refr * res.y * 0.07 * inside;
+            float rim = smoothstep(aaF * 3.0 + 0.10, 0.0, abs(ed - 0.04)) * inside;
+            hl = rim * (0.12 + 0.30 * max(dot(nrm, normalize(float2(-0.6, -0.8))), 0.0));
+            shade = (1.0 - inside) * smoothstep(0.55, 1.0, F) * 0.16;      // contact shadow
+            frost *= inside;
+        }
+        float disp = 0.03 + frost * 0.08;
+        float fr = frost * S * 0.14;
+        float jr = (ign(px) + 0.5) * 6.2831853;
+        float3 c = float3(0.0);
+        for (int j = 0; j < 4; ++j) {
+            float a = jr + float(j) * 1.5707963;
+            float2 o = off + float2(cos(a), sin(a)) * fr * (0.5 + 0.5 * float(j & 1));
+            c.r += src.sample(samp, uv + o * (1.0 + disp) / res).r;
+            c.g += src.sample(samp, uv + o / res).g;
+            c.b += src.sample(samp, uv + o * (1.0 - disp) / res).b;
+        }
+        c *= 0.25;
+        c = mix(c, c * 0.95 + 0.025, inside);      // glass body
+        c = c * (1.0 - shade) + hl;
+        return float4(c, 1.0);
     }
 
     case 38: { // BLIT — crisp nearest upscale of a precomputed dither grid
