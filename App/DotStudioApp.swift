@@ -7,10 +7,8 @@ import Sparkle
 struct DotStudioApp: App {
     @StateObject private var model = AppModel()
 
-    /// Sparkle auto-updates (app-side only — the saver never links Sparkle).
-    private let updater = SPUStandardUpdaterController(startingUpdater: true,
-                                                       updaterDelegate: nil,
-                                                       userDriverDelegate: nil)
+    /// Sparkle auto-updates from GitHub Releases (app-side only — the saver never links Sparkle).
+    @StateObject private var updates = UpdateController()
 
     init() {
         if let dir = ProcessInfo.processInfo.environment["DOTSTUDIO_SHOTS"] {
@@ -28,6 +26,7 @@ struct DotStudioApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(model)
+                .environmentObject(updates)
         }
         .windowStyle(.titleBar)
         .commands {
@@ -76,13 +75,15 @@ struct DotStudioApp: App {
                     .disabled(model.selectedID == nil)
             }
             CommandGroup(after: .appInfo) {
-                Button("Check for Updates…") { updater.checkForUpdates(nil) }
+                Button("Check for Updates…") { updates.primaryAction() }
+                    .disabled(!updates.canCheck)
             }
         }
 
         Settings {
-            SettingsView(updater: updater.updater)
+            SettingsView()
                 .environmentObject(model)
+                .environmentObject(updates)
         }
     }
 }

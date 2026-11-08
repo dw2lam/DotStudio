@@ -16,6 +16,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history: the build number is the commit count
 
       - name: Install xcodegen
         run: brew install xcodegen
@@ -29,10 +31,14 @@ jobs:
       - name: Build (version from tag)
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          # Sparkle orders updates by CFBundleVersion — the commit count only ever
+          # grows, and is always above local dev builds (project.yml says 1).
+          BUILD=$(git rev-list --count HEAD)
+          echo "version=$VERSION build=$BUILD"
           xcodebuild -project DotStudio.xcodeproj -scheme DotStudio -configuration Release \
             -derivedDataPath build/DD \
             MARKETING_VERSION="$VERSION" \
-            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            CURRENT_PROJECT_VERSION="$BUILD" \
             build
 
       - name: Verify build
@@ -60,8 +66,8 @@ jobs:
           SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
         run: |
           if [ -z "$SPARKLE_ED_PRIVATE_KEY" ]; then
-            echo "::warning::SPARKLE_ED_PRIVATE_KEY secret not set — skipping appcast; auto-update feed won't include this release"
-            exit 0
+            echo "::error::SPARKLE_ED_PRIVATE_KEY secret not set — without an appcast, installed apps can't auto-update to this release"
+            exit 1
           fi
           SPARKLE_VERSION=2.9.4
           curl -sL -o sparkle.tar.xz "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
@@ -81,5 +87,5 @@ jobs:
           gh release create "$GITHUB_REF_NAME" $ASSETS \
             --title "DotStudio ${GITHUB_REF_NAME#v}" \
             --generate-notes \
-            --notes "> **First launch:** DotStudio isn't notarized — right-click the app and choose **Open** the first time.
+            --notes "> **New install:** DotStudio isn't notarized. Drag it to Applications, open it once, then go to **System Settings → Privacy & Security** and click **Open Anyway**. Already installed? It updates itself — no download needed.
           $(awk "/^## ${GITHUB_REF_NAME#v}/{f=1;next} /^## /{f=0} f" CHANGELOG.md 2>/dev/null || true)"

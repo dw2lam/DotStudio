@@ -46,6 +46,7 @@ struct LibraryView: View {
         .navigationTitle("DotStudio")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                UpdateReadyButton()
                 Menu {
                     Button("New Look") { model.addPreset() }
                     Menu("New Scene") {
