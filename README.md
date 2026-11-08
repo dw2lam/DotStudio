@@ -46,11 +46,12 @@ then flip through 36 GPU effects to see it dithered, halftoned, turned into Matr
 ### Option A — download (recommended)
 1. Grab **`DotStudio.dmg`** from the [latest release](https://github.com/dw2lam/dotstudio/releases/latest).
 2. Open it and drag **DotStudio** into **Applications**.
-3. **First launch:** right-click the app and choose **Open** — DotStudio isn't notarized, so macOS warns on a plain double-click the first time.
-4. Launch DotStudio → click **Install Screensaver** → **Open Wallpaper Settings**.
-5. In **Wallpaper → Screen Saver**, pick **DotStudio** once.
+3. **First launch:** open DotStudio once — macOS blocks it because it isn't notarized. Go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway**.
+4. The welcome guide walks you through picking a style and turning the screensaver on (**Wallpaper → Screen Saver → DotStudio**).
 
-That's the only time you touch System Settings — after that, switch screensavers from the app sidebar.
+That's the only time you touch System Settings — after that, everything happens in the app's gallery.
+
+**Updates are automatic.** DotStudio checks GitHub Releases hourly, downloads new versions in the background, and installs them when you quit (or click **Restart to Update** in Settings → Updates). The screensaver updates along with the app.
 
 ### Option B — build from source
 ```bash
