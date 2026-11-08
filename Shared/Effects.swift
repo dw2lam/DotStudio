@@ -366,7 +366,9 @@ enum EffectKind: String, Codable, CaseIterable {
         case .aurora:    return [ParamSpec("speed", "Speed", 0, 2, def: 0.6),
                                  ParamSpec("intensity", "Glow", 0.3, 2, def: 1),
                                  ParamSpec("height", "Curtain Height", 0.4, 1.6, def: 1),
-                                 ParamSpec("stars", "Stars", 0, 1, def: 0.6)]
+                                 ParamSpec("stars", "Stars", 0, 1, def: 0.6),
+                                 ParamSpec("lake", "Lake Reflection", 0, 1, def: 1),
+                                 ParamSpec("activity", "Activity", 0, 1, def: 0.5)]
         case .topography: return [ParamSpec("lines", "Lines", 8, 60, def: 30),
                                   ParamSpec("scale", "Terrain Scale", 0.5, 3, def: 1.2),
                                   ParamSpec("speed", "Speed", 0, 2, def: 0.5),
@@ -421,7 +423,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .wave, .edge, .neonEdges, .truchet: return .cyan
         case .ascii, .matrix, .phosphor: return .crtGreen
         case .meshGradient: return RGBA(1.0, 0.56, 0.42)        // coral
-        case .aurora:       return RGBA(0.30, 1.0, 0.62)        // aurora green
+        case .aurora:       return RGBA(0.32, 1.0, 0.50)        // oxygen green
         case .topography:   return RGBA(0.93, 0.90, 0.82)       // contour ink
         case .liquidChrome: return RGBA(0.92, 0.94, 1.0)        // highlight
         case .silk:         return RGBA(0.98, 0.78, 0.55)       // champagne strands
@@ -548,6 +550,7 @@ extension EffectInstance {
                          u.p1 = .init(g("speed"), g("stars"), g("angle"), 0)
         case .meshGradient: u.p0 = .init(g("speed"), g("scale"), g("hue"), g("grain"))
         case .aurora:    u.p0 = .init(g("speed"), g("intensity"), g("height"), g("stars"))
+                         u.p1 = .init(g("lake"), g("activity"), 0, 0)
         case .topography: u.p0 = .init(g("lines"), g("scale"), g("speed"), g("fill"))
         case .liquidChrome: u.p0 = .init(g("speed"), g("scale"), g("iris"), 0)
         case .silk:      u.p0 = .init(g("speed"), g("scale"), g("sheen"), 0)
