@@ -40,7 +40,7 @@ extension SceneCatalog {
             blurb: "Bouncing polygons paint translucent ribbons of light behind them.",
             shaderID: 64,
             params: [ParamSpec("speed", "Speed", 0, 2, def: 1),
-                     ParamSpec("shapes", "Shapes", 1, 3, step: 1, def: 2),
+                     ParamSpec("shapes", "Shapes", 1, 2, step: 1, def: 2),
                      ParamSpec("sides", "Sides", 3, 6, step: 1, def: 4),
                      ParamSpec("trail", "Trail Length", 0.2, 1, def: 0.7),
                      ParamSpec("echoes", "Echo Lines", 0, 1, def: 0.6),

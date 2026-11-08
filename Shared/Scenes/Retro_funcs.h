@@ -23,6 +23,13 @@ static inline float3 retro_hue(float3 lin, float a) {
     return srgbToLinear(oklabToSrgb(oklabHue(srgbToOklab(linearToSrgb(lin)), a)));
 }
 
+// Cheap hue rotation: rotate the colour about the grey axis (no colour-space round trip).
+static inline float3 retro_hueRGB(float3 c, float a) {
+    const float3 k = float3(0.57735027);
+    float cs = cos(a), sn = sin(a);
+    return max(c * cs + cross(k, c) * sn + k * dot(k, c) * (1.0 - cs), 0.0);
+}
+
 // ---------------------------------------------------------------- 62 Neon Horizon
 
 // Cheap 1D gradient noise in ~[-0.5, 0.5].
@@ -511,4 +518,90 @@ static inline bool retro_ballCull(bool valid, float3 a, float3 b, float3 c, floa
 }
 static inline uint retro_ballot(bool p) {
     return uint(ulong(simd_vote::vote_t(simd_ballot(p))));
+}
+
+// ---------------------------------------------------------------- 64 Light Ribbons
+
+#define RETRO_RB_ECHOES 16      // echoes in a trail (one per SIMD lane; must be <= 32)
+
+// Motion of one polygon vertex: a constant-velocity bounce inside the box [lo, hi] that
+// eases slightly into each wall. (ph = start phase, vel = box-widths per unit time.)
+static inline float2 retro_rbPos(float2 ph, float2 vel, float tau, float2 lo, float2 hi) {
+    float2 u = ph + vel * tau;
+    float2 tri = abs(fract(u * 0.5) * 2.0 - 1.0);
+    tri = mix(tri, tri * tri * (3.0 - 2.0 * tri), 0.35);
+    return lo + (hi - lo) * tri;
+}
+static inline void retro_rbParams(int sh, int v, thread float2& ph, thread float2& vel) {
+    float n = float(sh * 8 + v) + 1.0;
+    float3 h = fract(sin(n * float3(12.9898, 78.233, 37.719)) * 43758.5453);
+    float3 g = fract(sin(n * float3(93.989, 27.534, 61.17)) * 24634.6345);
+    ph = h.xy * 2.0;
+    vel = (0.10 + 0.12 * float2(h.z, g.x)) * float2(g.y < 0.5 ? -1.0 : 1.0, g.z < 0.5 ? -1.0 : 1.0);
+}
+
+// Inverse bilinear: (u, v) of p in the quad a-b-c-d (a to b = u, a to d = v), or (-1, -1).
+static inline float2 retro_invBilinear(float2 p, float2 a, float2 b, float2 c, float2 d) {
+    float2 e = b - a, f = d - a, g = a - b + c - d, h = p - a;
+    float k2 = g.x * f.y - g.y * f.x;
+    float k1 = (e.x * f.y - e.y * f.x) + (h.x * g.y - h.y * g.x);
+    float k0 = h.x * e.y - h.y * e.x;
+    float u, v;
+    if (abs(k2) < 1e-6) {
+        v = -k0 / k1;
+        u = (h.x * k1 + f.x * k0) / (e.x * k1 - g.x * k0);
+    } else {
+        float w = k1 * k1 - 4.0 * k0 * k2;
+        if (w < 0.0) return float2(-1.0);
+        w = sqrt(w);
+        float ik2 = 0.5 / k2;
+        v = (-k1 - w) * ik2;
+        float2 den = e + g * v;
+        u = abs(den.x) > abs(den.y) ? (h.x - f.x * v) / den.x : (h.y - f.y * v) / den.y;
+        if (u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0) {
+            v = (-k1 + w) * ik2;
+            den = e + g * v;
+            u = abs(den.x) > abs(den.y) ? (h.x - f.x * v) / den.x : (h.y - f.y * v) / den.y;
+        }
+    }
+    return (u >= 0.0 && u <= 1.0 && v >= 0.0 && v <= 1.0) ? float2(u, v) : float2(-1.0);
+}
+
+static inline float retro_segDist2D(float2 p, float2 a, float2 b) {
+    float2 pa = p - a, ba = b - a;
+    return length(pa - ba * clamp(dot(pa, ba) / max(dot(ba, ba), 1e-9), 0.0, 1.0));
+}
+
+struct RetroRibbon {
+    float3 head, tail, white;
+    float pix, sigma, margin, echoK, glowK, fillK, E;
+};
+
+// Light from echo L's patch (between echoes L and L+1) of one edge, at point q.
+static inline float3 retro_rbPatch(float2 q, float2 a0, float2 b0, float2 a1, float2 b1, float L,
+                                   float shapeHue, thread const RetroRibbon& s) {
+    float3 c = float3(0.0);
+    float2 uv = retro_invBilinear(q, a0, b0, b1, a1);
+    if (uv.x >= 0.0) {
+        float age = (L + uv.y) / s.E, fade = 1.0 - age;
+        float3 tint = mix(s.head, s.tail, smoothstep(0.0, 0.85, age));
+        float sheen = 0.75 + 0.25 * cos(uv.x * 6.2831853 + shapeHue);
+        c += tint * (fade * fade * s.fillK * sheen);
+    }
+    // the echo line itself: crisp core + soft glow (cut off at the culling margin)
+    float d = retro_segDist2D(q, a0, b0);
+    if (d < s.margin) {
+        float age0 = L / s.E, f0 = 1.0 - age0;
+        bool lead = L < 0.5;
+        float k = (lead ? 1.0 : s.echoK * 0.4) * f0 * f0;
+        float core = retro_lineCov(d, 0.55 * s.pix * (lead ? 1.7 : 1.0), s.pix);
+        float glow = exp(-d / s.sigma) * s.glowK * (1.0 - d / s.margin);
+        float3 lc = mix(mix(s.head, s.tail, smoothstep(0.0, 0.85, age0)), s.white, lead ? 0.55 : 0.15);
+        c += lc * k * (core * 2.2 + glow * (lead ? 0.5 : 0.3));
+        if (lead) {                                    // a spark on each leading vertex
+            float dv = length(q - a0);
+            c += s.white * exp(-dv / (s.sigma * 0.8)) * 0.6 * s.glowK;
+        }
+    }
+    return c;
 }
