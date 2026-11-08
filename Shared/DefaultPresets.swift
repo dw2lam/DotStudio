@@ -32,7 +32,8 @@ enum DefaultPresets {
     static func scenes() -> [Preset] {
         [
             Preset(name: "Universe",
-                   effects: [fx(.universe, ["scale": 1.0, "speed": 1, "stars": 1, "planets": 1, "orbits": 1],
+                   effects: [fx(.universe, ["scale": 1.0, "speed": 1, "stars": 1, "planets": 1, "orbits": 1,
+                                             "tilt": 24, "spin": 1],
                                 a: .black)]),
             Preset(name: "Black Hole",
                    effects: [fx(.blackhole, ["angle": 0.22, "mass": 0.4, "brightness": 5, "speed": 1, "stars": 1, "rot": -8.7, "disk": 1],
