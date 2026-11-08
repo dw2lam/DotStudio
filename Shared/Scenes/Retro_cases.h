@@ -393,3 +393,105 @@
         col *= 1.0 - 0.3 * dot(p, p);
         return float4(retro_out(col, px), 1.0);
     }
+
+    case 64: { // LIGHT RIBBONS — bouncing polygons (every vertex on its own path) leave a
+               // trail of 32 echoes; each edge sweeps a translucent ribbon between echoes
+               // (inverse-bilinear fill, colour ageing head → tail) with crisp glowing echo
+               // lines on top. A full SIMD group: lane e owns echo e, culls every edge patch
+               // against the group's pixel box, and a ballot hands each pixel the few
+               // patches that reach it. p0 = (speed, shapes, sides, trail), p1 = (echoes, glow);
+               // A leading edge, B trail.
+        float speed = u.p0.x;
+        int shapes = clamp(int(u.p0.y + 0.5), 1, 2), sides = clamp(int(u.p0.z + 0.5), 3, 6);
+        float dT = max(u.p0.w, 0.1) * 0.16;                   // echo spacing (motion time)
+        RetroRibbon s;
+        s.head = srgbToLinear(u.colorA.rgb); s.tail = srgbToLinear(u.colorB.rgb);
+        s.white = float3(1.0, 0.97, 0.94);
+        s.pix = 1.0 / res.y; s.E = float(RETRO_RB_ECHOES);
+        s.echoK = u.p1.x; s.glowK = u.p1.y; s.fillK = 0.12;
+        s.sigma = 0.0035 * (0.6 + 0.4 * s.glowK);
+        s.margin = s.sigma * 3.5 + 2.0 * s.pix;
+        float margin = s.margin;
+
+        float aspect = res.x / res.y;
+        float2 q = (px - 0.5 * res) * s.pix;
+        float2 lo = float2(-0.5 * aspect + 0.06, -0.44), hi = -lo;
+        float tau0 = t * speed;
+
+        // deep night backdrop
+        float3 col = mix(float3(0.006, 0.006, 0.014), float3(0.0015, 0.0015, 0.004), smoothstep(0.0, 0.9, length(q)));
+
+        ulong act = ulong(simd_vote::vote_t(simd_active_threads_mask()));
+        float3 light = float3(0.0);
+        if (act == 0xffffffffull) {
+            uint lane = simd_prefix_exclusive_sum(1u);
+            float2 tmin = simd_min(q), tmax = simd_max(q);
+            float2 tc = 0.5 * (tmin + tmax);
+            float trad = 0.5 * length(tmax - tmin) + margin;          // the group as a disc
+            float te = tau0 - float(lane) * dT, te1 = te - dT;
+            for (int sh = 0; sh < shapes; ++sh) {
+                float hueSh = float(sh) * 2.1;
+                RetroRibbon ss = s;
+                if (sh == 1) { ss.head = retro_hueRGB(s.head, 0.9); ss.tail = retro_hueRGB(s.tail, 0.9); }
+                float2 ph0, vl0; retro_rbParams(sh, 0, ph0, vl0);
+                float2 pa = ph0, va = vl0;
+                float2 F0 = retro_rbPos(ph0, vl0, te, lo, hi), F1 = retro_rbPos(ph0, vl0, te1, lo, hi);
+                float2 A0 = F0, A1 = F1;
+                for (int v = 0; v < sides; ++v) {
+                    float2 pb, vb, B0, B1;
+                    if (v + 1 == sides) { pb = ph0; vb = vl0; B0 = F0; B1 = F1; }
+                    else {
+                        retro_rbParams(sh, v + 1, pb, vb);
+                        B0 = retro_rbPos(pb, vb, te, lo, hi); B1 = retro_rbPos(pb, vb, te1, lo, hi);
+                    }
+                    // the patch of this edge owned by this lane (echo lane to lane+1): does it reach the group?
+                    // oriented box of the patch (along the edge / across it) vs the group disc
+                    float2 ax = B0 - A0;
+                    ax *= rsqrt(max(dot(ax, ax), 1e-10));
+                    float2 ay = float2(-ax.y, ax.x);
+                    float4 pu = float4(dot(A0, ax), dot(B0, ax), dot(A1, ax), dot(B1, ax));
+                    float4 pv = float4(dot(A0, ay), dot(B0, ay), dot(A1, ay), dot(B1, ay));
+                    float cu = dot(tc, ax), cv = dot(tc, ay);
+                    bool hit = lane < uint(RETRO_RB_ECHOES - 1)
+                            && cu > min(min(pu.x, pu.y), min(pu.z, pu.w)) - trad && cu < max(max(pu.x, pu.y), max(pu.z, pu.w)) + trad
+                            && cv > min(min(pv.x, pv.y), min(pv.z, pv.w)) - trad && cv < max(max(pv.x, pv.y), max(pv.z, pv.w)) + trad;
+                    uint m = uint(ulong(simd_vote::vote_t(simd_ballot(hit))));
+                    uint prevL = 99u; float2 c0 = 0.0, c1 = 0.0;
+                    while (m != 0u) {
+                        uint L = ctz(m); m &= m - 1u;
+                        float tl = tau0 - float(L) * dT, tl1 = tl - dT;
+                        // consecutive echoes share an edge: reuse the previous far edge as this near one
+                        float2 n0 = L == prevL + 1u ? c0 : retro_rbPos(pa, va, tl, lo, hi);
+                        float2 n1 = L == prevL + 1u ? c1 : retro_rbPos(pb, vb, tl, lo, hi);
+                        c0 = retro_rbPos(pa, va, tl1, lo, hi); c1 = retro_rbPos(pb, vb, tl1, lo, hi);
+                        light += retro_rbPatch(q, n0, n1, c0, c1, float(L), hueSh, ss);
+                        prevL = L;
+                    }
+                    pa = pb; va = vb; A0 = B0; A1 = B1;
+                }
+            }
+        } else {
+            // partial SIMD group: brute force every patch
+            for (int sh = 0; sh < shapes; ++sh) {
+                float hueSh = float(sh) * 2.1;
+                RetroRibbon ss = s;
+                if (sh == 1) { ss.head = retro_hueRGB(s.head, 0.9); ss.tail = retro_hueRGB(s.tail, 0.9); }
+                for (int v = 0; v < sides; ++v) {
+                    float2 pa, va, pb, vb;
+                    retro_rbParams(sh, v, pa, va);
+                    retro_rbParams(sh, v + 1 == sides ? 0 : v + 1, pb, vb);
+                    for (int L = 0; L < RETRO_RB_ECHOES - 1; ++L) {
+                        float tl = tau0 - float(L) * dT, tl1 = tl - dT;
+                        float2 A0 = retro_rbPos(pa, va, tl, lo, hi), B0 = retro_rbPos(pb, vb, tl, lo, hi);
+                        float2 A1 = retro_rbPos(pa, va, tl1, lo, hi), B1 = retro_rbPos(pb, vb, tl1, lo, hi);
+                        float2 bmin = min(min(A0, A1), min(B0, B1)) - margin, bmax = max(max(A0, A1), max(B0, B1)) + margin;
+                        if (all(q >= bmin) && all(q <= bmax))
+                            light += retro_rbPatch(q, A0, B0, A1, B1, float(L), hueSh, ss);
+                    }
+                }
+            }
+        }
+        col += light;
+        col += filmGrain(px, t) * 0.0025;
+        return float4(retro_out(col, px), 1.0);
+    }
