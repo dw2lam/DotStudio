@@ -9,5 +9,5 @@ mkdir -p "$BIN"
 xcrun -sdk macosx metal -O2 -ffast-math -I "$ROOT/Shared" -o "$BIN/default.metallib" "$ROOT/Shared/Shaders.metal"
 cp "$ROOT"/Shared/PlanetTextures/*.jpg "$BIN/" 2>/dev/null || true
 xcrun -sdk macosx swiftc -O -import-objc-header "$ROOT/Shared/Bridging.h" -I "$ROOT/Shared" \
-  "$ROOT"/Shared/*.swift "$ROOT/tools/gallery/main.swift" -o "$BIN/gallery"
+  "$ROOT"/Shared/*.swift "$ROOT"/Shared/Scenes/*.swift "$ROOT/tools/gallery/main.swift" -o "$BIN/gallery"
 "$BIN/gallery" "$@"

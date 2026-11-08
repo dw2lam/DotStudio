@@ -57,7 +57,7 @@ enum DefaultPresets {
             Preset(name: "Hyperspace",
                    effects: [fx(.starfield, ["speed": 1.5, "density": 12, "warp": 0.9, "size": 0.8],
                                 a: RGBA(0.01, 0.015, 0.04), b: RGBA(0.75, 0.88, 1.0))]),
-        ]
+        ] + SceneCatalog.presets
     }
 
     /// Looks that restyle the shared source.

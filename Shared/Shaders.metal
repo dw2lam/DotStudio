@@ -413,6 +413,12 @@ static inline float3 uniShade(int i, float3 c, float3 n0, float3 rd, float fp, f
     return col;
 }
 
+// ---------------------------------------------------------------- scene packs (helpers)
+#include "Scenes/Clocks_funcs.h"
+#include "Scenes/Flowing_funcs.h"
+#include "Scenes/Nature_funcs.h"
+#include "Scenes/Retro_funcs.h"
+
 // ---------------------------------------------------------------- fragment
 
 fragment float4 fx_fragment(VOut in [[stage_in]],
@@ -1572,6 +1578,12 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         float2 g = (floor(uv * gridSize) + 0.5) / gridSize;
         return src.sample(samp, g);
     }
+
+    // ---- scene packs (ids 50–65), one file each
+#include "Scenes/Clocks_cases.h"
+#include "Scenes/Flowing_cases.h"
+#include "Scenes/Nature_cases.h"
+#include "Scenes/Retro_cases.h"
 
     case 41: { // INTERNAL crossfade — set by the renderer during preset rotation,
                // never by an EffectInstance. src = incoming frame, fadePrev = outgoing.
