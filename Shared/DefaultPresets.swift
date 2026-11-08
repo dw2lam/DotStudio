@@ -77,12 +77,18 @@ enum DefaultPresets {
                                 a: prussian, b: cream)]),
             Preset(name: "Floyd–Steinberg",
                    effects: [fx(.dither, ["algo": 4, "cell": 2, "mono": 1], a: .ink, b: .paper)]),
+            // Classic 1-bit Mac dither: graphite on warm paper (neon green was harsh on photos).
             Preset(name: "Atkinson",
-                   effects: [fx(.dither, ["algo": 5, "cell": 2, "mono": 1], a: .black, b: .crtGreen)]),
-            // Typewriter ink on paper: dark-ground ASCII drops every shadow to empty space,
-            // which blacks out night and low-key photos.
+                   effects: [fx(.dither, ["algo": 5, "cell": 2, "mono": 1],
+                                a: RGBA(0.12, 0.11, 0.10), b: RGBA(0.93, 0.91, 0.86))]),
+            Preset(name: "Cobalt Print",
+                   effects: [fx(.dither, ["algo": 5, "cell": 3, "mono": 1],
+                                a: RGBA(0.07, 0.13, 0.42), b: RGBA(0.98, 0.95, 0.88))]),
+            // Source-colored glyphs on near-black: dense where bright, so the photo stays
+            // legible (ink-on-paper washed out on real photos).
             Preset(name: "ASCII",
-                   effects: [fx(.ascii, ["cell": 10, "color": 0], a: .paper, b: .ink)]),
+                   effects: [fx(.ascii, ["cell": 9, "color": 1], a: RGBA(0.02, 0.02, 0.03), b: .white),
+                             fx(.bloom, ["thr": 0.55, "inten": 0.5, "rad": 2])]),
             Preset(name: "Amber CRT",
                    effects: [fx(.phosphor, ["amount": 1, "gain": 1.45], b: .amber),
                              fx(.scanlines, ["spacing": 3, "intensity": 0.55]),
@@ -95,7 +101,7 @@ enum DefaultPresets {
                    effects: [fx(.grainWash, ["soft": 0.55, "grain": 0.08, "tint": 0.3],
                                 a: RGBA(0.12, 0.08, 0.26), b: RGBA(1.0, 0.82, 0.66))]),
             Preset(name: "Fluted Glass",
-                   effects: [fx(.glass, ["style": 0, "size": 40, "refract": 0.4, "frost": 0.6])]),
+                   effects: [fx(.glass, ["style": 0, "size": 24, "refract": 0.2, "frost": 0.4])]),
             Preset(name: "Liquid Glass",
                    effects: [fx(.glass, ["style": 2, "size": 140, "refract": 0.5, "frost": 0.1])]),
         ]
@@ -109,21 +115,41 @@ enum DefaultPresets {
          SourceSpec()]
     }
 
+    /// The default library: the strongest styles, by name, in gallery order. Every other
+    /// built-in style is one click away in Add Built-in Styles (coolPack).
+    static let featured: [String] = [
+        // Scenes
+        "Liquid Chrome", "Aurora", "Universe", "Topography", "Black Hole", "Afterglow",
+        "Glass Clock", "Flip Clock", "Word Clock", "Window Light",
+        "Lava Lamp", "Currents", "Fireflies",
+        "Golden Hour", "Night Sky", "First Snow",
+        "Neon Horizon", "Pipeworks", "Light Tunnel", "Light Ribbons",
+        // Looks
+        "Film", "Riso Duotone", "Cyanotype", "Floyd–Steinberg", "Atkinson", "ASCII", "Amber CRT", "Soft Focus",
+    ]
+
+    /// Built-in presets that don't hold up yet: kept out of both the library and the pack
+    /// (their effects stay available in Add Effect).
+    static let unlisted: Set<String> = ["Ink Bloom", "Sumi", "Ember Ribbons"]
+
+    private static var allBuiltIns: [Preset] { scenes() + looks() }
+
     static func makeLibrary() -> Library {
-        let sc = scenes(), lk = looks()
+        let all = allBuiltIns
+        let sc = featured.compactMap { n in all.first { $0.name == n } }
         var lib = Library()
         // The built-in photo slideshow: real subjects, texture and a full tonal range for
         // every Look to chew on (a flat gradient made most of them read as noise).
         lib.source = .builtInPhotos
-        lib.presets = sc + lk
-        lib.activeID = sc.first(where: { $0.name == "Aurora" })?.id ?? sc.first?.id
+        lib.presets = sc
+        lib.activeID = sc.first(where: { $0.name == "Liquid Chrome" })?.id ?? sc.first?.id
         return lib
     }
 
     /// Extra screensavers: the classic effects and a few more variations. Appendable
     /// to an existing library via AppModel.addDemoPack() (deduplicated by name).
     static func coolPack() -> [Preset] {
-        [
+        allBuiltIns.filter { !featured.contains($0.name) && !unlisted.contains($0.name) } + [
             Preset(name: "Matrix Rain",
                    effects: [fx(.matrix, ["cell": 14, "speed": 1.1, "reveal": 1], a: .black, b: .crtGreen)]),
             Preset(name: "Halftone",
