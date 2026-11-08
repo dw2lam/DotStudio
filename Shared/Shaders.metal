@@ -452,6 +452,7 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
                             texture2d<float> earthNight [[texture(3)]],
                             texture2d_array<float> planetTex [[texture(4)]],
                             texture2d<float> fadePrev [[texture(5)]],   // outgoing preset during a crossfade
+                            texture2d<float> textAtlas [[texture(6)]],  // Clocks pack SDF type (TextAtlas.swift)
                             sampler samp           [[sampler(0)]])
 {
     float2 uv  = in.uv;

@@ -404,6 +404,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             enc.setFragmentTexture(planetTex.planets, index: 4)
             // fadePrev: real only during a preset crossfade, or the slideshow's incoming photo.
             enc.setFragmentTexture((i == 0 ? slides?.texB : nil) ?? dummy, index: 5)
+            enc.setFragmentTexture(TextAtlas.texture(device, effect: u.effect) ?? dummy, index: 6)
             enc.setFragmentSamplerState(sampler, index: 0)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             enc.endEncoding()
