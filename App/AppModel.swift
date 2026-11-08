@@ -267,6 +267,22 @@ final class AppModel: ObservableObject {
         edit(p.id)
     }
 
+    /// Onboarding's "Create Your Own": add the draft (or update it if it was already
+    /// added, matched by id) and make it what plays. Returns the name it was saved under.
+    @discardableResult
+    func saveCreated(_ draft: Preset) -> String {
+        var p = draft
+        if let i = library.presets.firstIndex(where: { $0.id == draft.id }) {
+            library.presets[i] = p
+        } else {
+            p.name = uniqueName(p.name.trimmingCharacters(in: .whitespaces).isEmpty ? "My Style" : p.name)
+            library.presets.append(p)
+        }
+        useAsScreensaver(p.id)
+        save()
+        return p.name
+    }
+
     /// New Scene from a generator effect.
     func addScene(_ kind: EffectKind) {
         var p = Preset(name: uniqueName(kind.displayName))

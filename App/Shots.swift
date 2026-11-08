@@ -41,10 +41,11 @@ enum UIShots {
         try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
         let model = AppModel()
         model.storeAlert = nil
+        let updates = UpdateController()   // never starts Sparkle under UI shots
         let size = CGSize(width: 1280, height: 860)
 
         func snap<V: View>(_ name: String, _ size: CGSize, dark: Bool, _ view: V) {
-            let host = NSHostingView(rootView: view.environmentObject(model)
+            let host = NSHostingView(rootView: view.environmentObject(model).environmentObject(updates)
                 .frame(width: size.width, height: size.height))
             host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
             let win = NSWindow(contentRect: CGRect(origin: CGPoint(x: -30000, y: -30000), size: size),
@@ -89,6 +90,8 @@ enum UIShots {
                  OnboardingView(initialStep: .welcome, livePreview: false))
             snap("onboarding-2-pick", sheet, dark: dark,
                  OnboardingView(initialStep: .pick, livePreview: false))
+            snap("onboarding-2-create", sheet, dark: dark,
+                 OnboardingView(initialStep: .pick, pickMode: .create, livePreview: false))
             for (status, tag) in [(Installer.Status.notInstalled, "not-installed"),
                                   (.notChosen, "not-chosen"), (.ready, "ready")] {
                 snap("onboarding-3-enable-\(tag)", sheet, dark: dark,
