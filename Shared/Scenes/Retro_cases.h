@@ -50,14 +50,19 @@
         float cosT = -rd.y;
         float F = 0.04 + 0.96 * pow(1.0 - cosT, 5.0);
         // wet ripples break the mirror image into shimmering horizontal slivers
-        float2 wp = float2(q.x * tf, tf + travel);
-        float rip = gnoise(wp * float2(0.9, 3.2)) + 0.5 * gnoise(wp * float2(2.1, 7.5) + 3.1);
-        float2 qr = float2(q.x + rip * 0.02 * -qy, -qy * (1.0 + 0.6 * rip));
-        // one sky lookup per pixel: the sky itself above the horizon, its mirror image below
+        // (only below the horizon; the sky above never reads them)
         bool up = q.y > 0.0;
+        float2 qr = q;
+        float sliver = 1.0;
+        if (!up) {
+            float2 wp = float2(q.x * tf, tf + travel);
+            float rip = gnoise(wp * float2(0.9, 3.2)) + 0.5 * gnoise(wp * float2(2.1, 7.5) + 3.1);
+            qr = float2(q.x + rip * 0.02 * -qy, -qy * (1.0 + 0.6 * rip));
+            sliver = smoothstep(-0.25, 0.35, gnoise(wp * float2(0.35, 6.0) + float2(0.0, t * 0.3)));
+        }
+        // one sky lookup per pixel: the sky itself above the horizon, its mirror image below
         float3 sky = retro_synthSky(up ? q : qr, up ? pix : pix + 0.05 * -qy,
                                     up ? 1.0 : 1.0 + 1.2 * smoothstep(0.0, 0.25, -qy), up ? 1.0 : 0.0, s);
-        float sliver = smoothstep(-0.25, 0.35, gnoise(wp * float2(0.35, 6.0) + float2(0.0, t * 0.3)));
         float3 floorC = s.top * 0.3 + sky * F * 0.5 * (0.35 + 0.9 * sliver);
         floorC += s.neon * gridE;
         float fog = 1.0 - exp(-tf * 0.035 * (0.4 + hazeK));
