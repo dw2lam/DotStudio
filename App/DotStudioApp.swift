@@ -74,6 +74,9 @@ struct DotStudioApp: App {
                     .keyboardShortcut("d")
                     .disabled(model.selectedID == nil)
             }
+            CommandGroup(before: .help) {
+                Button("Welcome to DotStudio…") { model.showOnboarding = true }
+            }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { updates.primaryAction() }
                     .disabled(!updates.canCheck)
