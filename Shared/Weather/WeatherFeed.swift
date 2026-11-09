@@ -102,9 +102,10 @@ final class WeatherLink {
         return WeatherMix.lerp(from, target, k * k * (3 - 2 * k))
     }
 
-    /// Fills u.weather / weather2 / weather3 for a scene with a Weather menu (zero otherwise) and,
-    /// when the pass draws weather, binds the scene's weather pipeline on `encoder` (fx_wx_ocean /
-    /// fx_wx_shallows, Weather_fragment.h) in place of fx_fragment. `time` is the scene time the
+    /// Fills u.weather / weather2 / weather3 for a scene with a Weather menu (zero otherwise) and
+    /// binds the scene's own pipeline on `encoder` (Weather_fragment.h: its clear sky or its
+    /// weather, fixed or live — `functionName`) in place of fx_fragment. Call it after
+    /// MetalRenderer.fillLiveSky (Follow the Sun picks the live copy). `time` is the scene time the
     /// pass draws at (cloud drift is integrated against it); `chain`: which of the renderer's
     /// chains draws it (the outgoing and incoming chains of a crossfade — the hourly wrap's
     /// share their effect instances — each keep their own drift); `format`: the pass's target format.
@@ -112,9 +113,8 @@ final class WeatherLink {
               encoder: MTLRenderCommandEncoder? = nil, format: MTLPixelFormat? = nil) {
         guard WeatherLink.usesWeather(inst.kind) else { return }
         defer {
-            if u.weather2.w > 0.5, let encoder, let format,
-               let pso = WeatherLink.pipeline(for: inst.kind, device: encoder.device, format: format,
-                                              cumulus: WeatherLink.cumulus(u)) {
+            if let encoder, let format,
+               let pso = WeatherLink.pipeline(for: inst.kind, uniforms: u, device: encoder.device, format: format) {
                 encoder.setRenderPipelineState(pso)
             }
         }
@@ -148,7 +148,45 @@ final class WeatherLink {
     private static var libraries: [UInt64: MTLLibrary] = [:]
     /// The saver's pipeline archive (PipelineArchive.swift), which holds these pipelines too.
     private static var archives: [UInt64: MTLBinaryArchive] = [:]
-    static let functionNames = ["fx_wx_ocean", "fx_wx_ocean_cu", "fx_wx_shallows"]
+    /// Every function these pipelines are built from (PipelineArchive harvests them all).
+    static let functionNames = ["fx_ocean", "fx_ocean_live", "fx_wx_ocean", "fx_wx_ocean_live",
+                                "fx_wx_ocean_cu", "fx_wx_ocean_cu_live", "fx_shallows", "fx_wx_shallows"]
+
+    /// The fragment function a pass of `kind` draws with, from its packed uniforms (nil: not one
+    /// of these scenes — fx_fragment draws it). Weather (u.weather2.w) or the scene's clear sky;
+    /// for Ocean Horizon also the cumulus copy (`cumulus`) and the live sky (nature_live: Follow
+    /// the Sun on, and fillLiveSky's sky filled in) — each its own function: Weather_fragment.h.
+    static func functionName(for kind: EffectKind, uniforms u: FXUniforms) -> String? {
+        let wx = u.weather2.w > 0.5
+        switch kind {
+        case .oceanHorizon:
+            let name = wx ? (cumulus(u) ? "fx_wx_ocean_cu" : "fx_wx_ocean") : "fx_ocean"
+            return u.p1.y > 0.5 && u.sky.y > 0.5 ? name + "_live" : name
+        case .shallows:
+            return wx ? "fx_wx_shallows" : "fx_shallows"
+        default:
+            return nil
+        }
+    }
+
+    /// The functions `preset`'s scenes can switch between mid-animation: for a fixed Weather pick
+    /// just its own; following the live weather, the clear sky, the weather and (Ocean Horizon)
+    /// the cumulus copy — of the fixed or the live sky, as Follow the Sun is set.
+    static func functionNames(for preset: Preset) -> Set<String> {
+        var names = Set<String>()
+        for inst in preset.effects where inst.enabled && usesWeather(inst.kind) {
+            var u = FXUniforms()
+            inst.pack(into: &u)
+            if (inst.params["live"] ?? 0) > 0.5 { u.sky.y = 1 }      // (as fillLiveSky fills it)
+            let mixes = fixedCondition(inst).map { [WeatherMix.preset($0)] }
+                ?? [.clear, .preset(.rain), .preset(.partlyCloudy)]  // (clear sky, weather, cumulus)
+            for m in mixes {
+                pack(&u, mix: m, inst: inst, drift: 0)
+                if let n = functionName(for: inst.kind, uniforms: u) { names.insert(n) }
+            }
+        }
+        return names
+    }
 
     /// Hands over a renderer's library (the same metallib), so the pipelines don't load a
     /// second copy of it, and its pipeline archive if it has one.
@@ -158,34 +196,25 @@ final class WeatherLink {
         if let archive, archives[device.registryID] == nil { archives[device.registryID] = archive }
     }
 
-    /// Whether every weather pipeline `preset` can switch to (what prewarm builds) is built — or
-    /// can't be. A renderer that never waits on a compile (the screensaver's) holds its first
-    /// frame for them, so the weather never pops in a moment after the scene.
+    /// Whether every pipeline `preset` can switch to (what prewarm builds) is built — or can't be.
+    /// A renderer that never waits on a compile (the screensaver's) holds its first frame for
+    /// them, so neither the scene nor its weather waits on a compile once it is showing.
     static func pipelinesReady(for preset: Preset, device: MTLDevice, format: MTLPixelFormat) -> Bool {
-        let kinds = Set(preset.effects.filter { $0.enabled && usesWeather($0.kind) }.map(\.kind))
         var ready = true
-        for k in kinds {
-            for cumulus in k == .oceanHorizon ? [false, true] : [false] {
-                // Starts the build if nothing has (a style not applied yet, after a purge).
-                if pipeline(for: k, device: device, format: format, cumulus: cumulus, wait: false) != nil { continue }
-                let name = k == .shallows ? functionNames[2] : (cumulus ? functionNames[1] : functionNames[0])
-                psoLock.lock()
-                if case .failed? = slots["\(device.registryID)/\(format.rawValue)/\(name)"] {} else { ready = false }
-                psoLock.unlock()
-            }
+        for name in functionNames(for: preset) {
+            // Starts the build if nothing has (a style not applied yet, after a purge).
+            if pipeline(named: name, device: device, format: format, wait: false) != nil { continue }
+            psoLock.lock()
+            if case .failed? = slots["\(device.registryID)/\(format.rawValue)/\(name)"] {} else { ready = false }
+            psoLock.unlock()
         }
         return ready
     }
 
-    /// Builds, off the calling thread, the weather pipelines `preset`'s scenes can switch to
-    /// mid-animation (Ocean Horizon both its skies, Shallows its one), so no frame waits on a
-    /// compile when the weather turns.
+    /// Builds, off the calling thread, the pipelines `preset`'s scenes can switch to mid-animation
+    /// (functionNames(for:)), so no frame waits on a compile when the weather turns.
     static func prewarm(for preset: Preset, device: MTLDevice, format: MTLPixelFormat) {
-        let kinds = Set(preset.effects.filter { $0.enabled && usesWeather($0.kind) }.map(\.kind))
-        for k in kinds {
-            _ = pipeline(for: k, device: device, format: format, cumulus: false, wait: false)
-            if k == .oceanHorizon { _ = pipeline(for: k, device: device, format: format, cumulus: true, wait: false) }
-        }
+        for name in functionNames(for: preset) { _ = pipeline(named: name, device: device, format: format, wait: false) }
     }
 
     /// Frees the pipelines and libraries (the screensaver's teardown: its host process
@@ -204,13 +233,19 @@ final class WeatherLink {
         u.weather.x > 0.30 && u.weather.x < 0.95 && u.weather2.y < 0.6
     }
 
-    /// The weather pipeline for a scene, built on first use (then cached per GPU and format; a
-    /// failure is cached too). nil (no such function in the library) leaves fx_fragment drawing
-    /// the scene's clear sky. `wait: false` (prewarm) starts the build on a background queue
-    /// and returns nil unless it's already there.
-    static func pipeline(for kind: EffectKind, device: MTLDevice, format: MTLPixelFormat,
-                         cumulus: Bool = false, wait: Bool = true) -> MTLRenderPipelineState? {
-        let name = kind == .shallows ? functionNames[2] : (cumulus ? functionNames[1] : functionNames[0])
+    /// The pipeline a pass of `kind` with these (packed) uniforms draws with (functionName), or
+    /// nil: fx_fragment draws it (any other scene, or a pipeline that failed to build — its own
+    /// case of fx_fragment then draws the same frame).
+    static func pipeline(for kind: EffectKind, uniforms u: FXUniforms, device: MTLDevice,
+                         format: MTLPixelFormat) -> MTLRenderPipelineState? {
+        functionName(for: kind, uniforms: u).flatMap { pipeline(named: $0, device: device, format: format) }
+    }
+
+    /// The pipeline for one of `functionNames`, built on first use (then cached per GPU and
+    /// format; a failure is cached too). nil: no such function in the library. `wait: false`
+    /// (prewarm) starts the build on a background queue and returns nil unless it's already there.
+    static func pipeline(named name: String, device: MTLDevice, format: MTLPixelFormat,
+                         wait: Bool = true) -> MTLRenderPipelineState? {
         let key = "\(device.registryID)/\(format.rawValue)/\(name)"
         psoLock.lock()
         switch slots[key] {
