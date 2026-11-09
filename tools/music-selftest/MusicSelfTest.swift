@@ -205,6 +205,96 @@ enum MusicSelfTest {
         check(MusicArtworkResolver.largeSpotifyImage("https://i.scdn.co/image/ab67616d00001e02abc") == "https://i.scdn.co/image/ab67616d0000b273abc",
               "Spotify 300 px id → 640 px id")
 
+
+        say("\n[0b] Review fixes (unit): permission event, Apple Events read gate, heartbeat, overlay refresh")
+        check(MusicAppleEvents.requestEventClass == AEEventClass(0x636F_7265) && MusicAppleEvents.requestEventID == AEEventID(0x6765_7464)
+              && MusicAppleEvents.requestEventClass != AEEventClass(typeWildCard),
+              "the permission PROMPT is requested for a concrete event ('core'/'getd'), not typeWildCard")
+        var aeRead = MusicReport(source: .spotify, origin: .appleEvents)
+        aeRead.state = .playing; aeRead.hasTrackFields = true; aeRead.position = 0
+        check(MusicReport.acceptingAppleEventsRead(aeRead, errorCode: -1712) == nil, "an Apple Events read with a failed event (-1712 timeout) is dropped whole")
+        check(MusicReport.acceptingAppleEventsRead(nil, errorCode: 0) == nil
+              && MusicReport.acceptingAppleEventsRead(MusicReport(source: .spotify, origin: .appleEvents), errorCode: 0) == nil,
+              "…as is one without a recognisable play state")
+        let stripped = MusicReport.acceptingAppleEventsRead(aeRead, errorCode: 0)
+        check(stripped?.state == .playing && stripped?.hasTrackFields == false, "track fields that all came back nil are not track fields (no 'empty track' clear)")
+        var farRead = aeRead; farRead.title = "T"; farRead.duration = 100; farRead.position = 500
+        check(MusicReport.acceptingAppleEventsRead(farRead, errorCode: 0)?.position == nil, "a position far past the duration is dropped")
+
+        let nowT = Date().timeIntervalSince1970
+        var stream = MusicState(); stream.title = "Radio"; stream.isPlaying = true; stream.position = 0; stream.positionAt = nowT - 3600
+        stream.updatedAt = nowT
+        check(stream.isVisible(at: Date().addingTimeInterval(864_000), lingerMinutes: 5),
+              "a 1.3 writer's stream (no heartbeat field) still never goes stale (back-compatible)")
+        stream.heartbeat = 180
+        check(stream.isVisible(at: Date().addingTimeInterval(200), lingerMinutes: 5), "heartbeat 180 s: a stream 200 s after its last write is visible")
+        check(!stream.isVisible(at: Date().addingTimeInterval(400), lingerMinutes: 5), "…and stale ~2 heartbeats later (crash / force quit left it 'playing')")
+        var timed = stream; timed.duration = 3000; timed.positionAt = nowT
+        check(timed.isVisible(at: Date().addingTimeInterval(1200), lingerMinutes: 5), "the heartbeat rule leaves tracks with a duration alone")
+        let oldJSON = #"{"title":"Old","isPlaying":true,"updatedAt":1}"#
+        let decodedOld = try? JSONDecoder().decode(MusicState.self, from: Data(oldJSON.utf8))
+        check(decodedOld?.heartbeat == nil && decodedOld?.title == "Old", "music.json without 'heartbeat' decodes (add-only field)")
+        let roundTrip = (try? JSONEncoder().encode(stream)).flatMap { try? JSONDecoder().decode(MusicState.self, from: $0) }
+        check(roundTrip?.heartbeat == 180, "heartbeat round-trips through music.json")
+
+        // Overlay: same track id, new words (a stream's next song) must redraw — offscreen render.
+        let overlay = MusicOverlayLayer()
+        overlay.frame = CGRect(x: 0, y: 0, width: 1280, height: 800)
+        overlay.contentsScale = 1
+        overlay.reduceMotion = true
+        overlay.ambientMotion = false
+        var ost = MusicState(); ost.title = "First Song"; ost.artist = "Radio One"; ost.trackID = "music:00000000000000AA"
+        ost.isPlaying = true; ost.position = 0; ost.positionAt = Date().timeIntervalSince1970
+        func renderOverlay() -> Data? {
+            guard let ctx = CGContext(data: nil, width: 1280, height: 800, bitsPerComponent: 8, bytesPerRow: 1280 * 4,
+                                      space: MusicArtImage.srgb, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+            overlay.render(in: ctx)
+            return ctx.data.map { Data(bytes: $0, count: 1280 * 800 * 4) }
+        }
+        overlay.update(mode: .card(.bottomLeft), music: MusicSnapshot(state: ost, artwork: nil, revision: 1), settings: MusicSpec(), animated: false)
+        let textBefore = overlay.debugRects.filter { $0.kind == "text" }.map(\.rect)
+        let pixelsBefore = renderOverlay()
+        ost.title = "A Much Longer Second Song Title"; ost.artist = "Radio One Late Night"
+        overlay.update(mode: .card(.bottomLeft), music: MusicSnapshot(state: ost, artwork: nil, revision: 2), settings: MusicSpec(), animated: false)
+        let textAfter = overlay.debugRects.filter { $0.kind == "text" }.map(\.rect)
+        let pixelsAfter = renderOverlay()
+        check(!textBefore.isEmpty && textBefore != textAfter, "overlay: new title/artist under the same track id re-lays the text (\(textBefore.count) → \(textAfter.count) blocks)")
+        check(pixelsBefore != nil && pixelsBefore != pixelsAfter, "overlay: …and the offscreen render changes")
+        ost.album = "Late Album"
+        overlay.update(mode: .card(.bottomLeft), music: MusicSnapshot(state: ost, artwork: nil, revision: 3), settings: MusicSpec(), animated: false)
+        let textAlbum = overlay.debugRects.filter { $0.kind == "text" }.map(\.rect)
+        ost.duration = 200
+        overlay.update(mode: .card(.bottomLeft), music: MusicSnapshot(state: ost, artwork: nil, revision: 4), settings: MusicSpec(), animated: false)
+        let pixelsDuration = renderOverlay()
+        check(textAlbum != textAfter || pixelsDuration != pixelsAfter, "overlay: a late album / duration refreshes too")
+
+        say("\n[0c] Artwork resolver: bounded bookkeeping, Apple Events timeout, session released")
+        let pruneRes = MusicArtworkResolver(cacheDir: out.appendingPathComponent("cache-prune", isDirectory: true)) { _ in nil }
+        let pruneOK: Bool = awaitValue {
+            await pruneRes.noteMiss("old", at: Date().addingTimeInterval(-3600))
+            await pruneRes.noteMiss("new")
+            return await pruneRes.missCount == 1
+        } ?? false
+        check(pruneOK, "misses older than 30 min are pruned when another is recorded")
+        let invalidated: Bool = awaitValue { await pruneRes.invalidate(); return await pruneRes.isInvalidated } ?? false
+        check(invalidated, "invalidate() releases the resolver's URLSession")
+        var hangCfg = MusicArtworkResolver.Config()
+        hangCfg.simulateOffline = true
+        hangCfg.appleEventsTimeout = 1.0
+        hangCfg.debounce = 0.05
+        let hangRes = MusicArtworkResolver(cacheDir: out.appendingPathComponent("cache-hang", isDirectory: true), config: hangCfg) { _ in
+            try? await Task.sleep(nanoseconds: 30_000_000_000)   // a stuck Apple Events queue
+            return nil
+        }
+        var hreq = MusicArtRequest(source: .spotify, trackKey: "spotify|spotify:track:FAKEFAKEFAKEFAKEFAKEHG")
+        hreq.trackID = "spotify:track:FAKEFAKEFAKEFAKEFAKEHG"; hreq.useAppleEvents = true; hreq.pid = getpid()
+        let th = Date()
+        let hung = awaitOutcome(hangRes, hreq)
+        let hungSecs = Date().timeIntervalSince(th)
+        let hangStats: MusicArtStats? = awaitValue { await hangRes.currentStats() }
+        check(hung?.isFailure == true && hungSecs < 4 && hangStats?.appleEventTimeouts == 1,
+              "a stuck Apple Events art read is abandoned after its timeout and the public lookup still runs (\(String(format: "%.1f", hungSecs)) s)")
+
         say("\n[start]")
         check(m.start(store: store), "start(store:) monitors with default settings (card on by default)")
         check(m.isMonitoring, "isMonitoring")
@@ -341,7 +431,7 @@ enum MusicSelfTest {
         check(wait(15) { current?.title == "Mr. Brightside" && current?.artwork != nil }, "settles on the last track with its artwork")
         pump(1.0)
         let statsAfter = awaitStats(m)
-        let oembeds = (statsAfter?.spotifyRequests.count ?? 0) - (statsBefore?.spotifyRequests.count ?? 0)
+        let oembeds = (statsAfter?.spotifyRequestTotal ?? 0) - (statsBefore?.spotifyRequestTotal ?? 0)
         let skipWrites = (m.writer?.writeCount ?? 0) - writes1
         check(oembeds <= 2, "9 tracks in ~1 s → \(oembeds) oEmbed request(s) (debounced; only the settled track)")
         check(skipWrites <= 4, "9 tracks in ~1 s → \(skipWrites) music.json writes (coalesced)")
@@ -349,7 +439,7 @@ enum MusicSelfTest {
         snapshot("rapid-skips")
 
         // Apple: rapid Music skips with store ids — only the settled one is looked up.
-        let appleBefore = statsAfter?.appleRequests.count ?? 0
+        let appleBefore = statsAfter?.appleRequestTotal ?? 0
         for i in 0..<6 {
             music(["Name": "Store Skip \(i)", "Artist": "Rick Astley", "Album": "Whenever You Need Somebody (Deluxe Edition - 2022 Remaster)",
                    "Total Time": 200_000, "Player State": "Playing", "PersistentID": NSNumber(value: Int64(1000 + i)),
@@ -358,11 +448,15 @@ enum MusicSelfTest {
         }
         check(wait(15) { current?.title == "Store Skip 5" && m.state.artwork != nil }, "Music rapid skips settle with artwork")
         let appleStats = awaitStats(m)
-        let appleDelta = (appleStats?.appleRequests.count ?? 0) - appleBefore
+        let appleDelta = (appleStats?.appleRequestTotal ?? 0) - appleBefore
         check(appleDelta <= 2, "6 Music skips → \(appleDelta) iTunes request(s)")
         let times = (appleStats?.appleRequests ?? []).map(\.timeIntervalSince1970).sorted()
         let maxPerMinute = times.indices.map { i in times[i...].prefix { $0 - times[i] < 60 }.count }.max() ?? 0
         check(maxPerMinute <= 20, "iTunes requests in any 60 s window: \(maxPerMinute) (≤ 20)")
+        let pruned: MusicArtStats? = awaitValue { await m.resolver?.prune(now: Date().addingTimeInterval(61)); return await m.resolver?.currentStats() } ?? nil
+        check(pruned.map { $0.appleRequests.isEmpty && $0.spotifyRequests.isEmpty } == true
+              && pruned?.appleRequestTotal == appleStats?.appleRequestTotal && (pruned?.spotifyRequestTotal ?? 0) > 0,
+              "request-time stats keep only the last 60 s (all aged out a minute later; totals kept: \(pruned?.appleRequestTotal ?? 0) Apple / \(pruned?.spotifyRequestTotal ?? 0) Spotify)")
 
         say("\n[9] Rate limiter (unit)")
         var limiter = MusicRateLimiter(limit: 20, per: 60)
@@ -701,6 +795,149 @@ enum MusicSelfTest {
         check(wait(10) { current?.artwork != nil && e.artwork != nil }, "network back: the cover is retried and arrives — no new track or report needed")
         e.stop()
 
+        // ── Phase G: review fixes — permission prompt, failed reads, sleep/wake, heartbeat ──
+        func track(_ name: String, _ id: String, _ state: String, _ pos: Double, duration: Int = 240_000) -> [String: Any] {
+            ["Name": name, "Artist": "Tester", "Album": "Fixes", "Duration": duration,
+             "Track ID": "spotify:track:FAKEFAKEFAKEFAKEFAKE" + id, "Playback Position": pos, "Player State": state]
+        }
+        var optsG = optsB
+        optsG.art.networkEnabled = false
+        optsG.autoRequestsAutomation = false
+        optsG.appleEvents.dryRunStatus = [.spotify: .notDetermined]
+        optsG.appleEvents.dryRunAnswer = .denied
+        optsG.appleEvents.dryRunAnswerDelay = 3.0
+
+        say("\n[20] Click → Automation prompt answered 'Don't Allow' AFTER the 1.5 s window → back to the player's state")
+        prefix = "com.davidlam.DotStudio.selftest.\(getpid()).g1."
+        var optsG1 = optsG
+        optsG1.notificationPrefix = prefix
+        optsG1.pendingWindowWhileAsking = 0          // the window really closes before the answer
+        let g1 = MusicMonitor(options: optsG1)
+        check(g1.start(store: store), "start")
+        check(wait(3) { g1.spotify.automation == .notDetermined }, "Spotify: Automation not determined yet")
+        spotify(track("Denied A", "D1", "Playing", 30))
+        check(wait(3) { current?.title == "Denied A" && current?.isPlaying == true }, "Denied A playing")
+        let tg1 = Date().timeIntervalSince1970
+        check(g1.playPause() && g1.state.isPlaying == false && g1.isAskingAutomation(.spotify), "click: optimistic pause, macOS prompt up")
+        pump(2.0)
+        check(!g1.isControlPending && current?.isPlaying == false, "window closed (no hold), still showing the optimistic pause")
+        check(wait(3) { current?.isPlaying == true }, "denied ⇒ music.json back to PLAYING (the player never paused)")
+        s = current
+        check(s?.pausedAt == nil && near(s.map { $0.elapsed() }, 30 + (Date().timeIntervalSince1970 - tg1), 0.5),
+              "…position carried forward from the player's last report (\(String(format: "%.2f", s?.elapsed() ?? -1)) s)")
+        check(g1.spotify.automation == .denied && g1.appleEvents.sentCommands(.spotify).isEmpty, "Automation denied, no command sent")
+        g1.stop()
+
+        say("\n[20b] Same, default options: the window is held open while the prompt is up")
+        prefix = "com.davidlam.DotStudio.selftest.\(getpid()).g2."
+        var optsG2 = optsG
+        optsG2.notificationPrefix = prefix
+        let g2 = MusicMonitor(options: optsG2)
+        check(g2.start(store: store), "start")
+        spotify(track("Denied B", "D2", "Playing", 50))
+        check(wait(3) { current?.title == "Denied B" && current?.isPlaying == true && g2.spotify.automation == .notDetermined }, "Denied B playing")
+        check(g2.playPause() && g2.state.isPlaying == false, "click: optimistic pause")
+        pump(1.0)
+        spotify(track("Denied B", "D2", "Playing", 51))     // the player still says Playing
+        pump(1.0)
+        check(g2.isControlPending && g2.state.isPlaying == false, "2 s in, prompt still up: window held open, stale 'Playing' held back")
+        check(wait(3) { current?.isPlaying == true && !g2.isControlPending }, "denied ⇒ PLAYING again")
+        g2.stop()
+
+        say("\n[21] The prompt has its own queue: the other player, reads and art keep flowing; clicks meanwhile coalesce")
+        prefix = "com.davidlam.DotStudio.selftest.\(getpid()).g3."
+        var optsG3 = optsG
+        optsG3.notificationPrefix = prefix
+        optsG3.pidOverride = [.spotify: getpid(), .music: getpid()]
+        optsG3.autoRequestsAutomation = true
+        optsG3.appleEvents.dryRunAnswer = .allowed
+        let g3 = MusicMonitor(options: optsG3)
+        check(g3.start(store: store), "start (Spotify not determined, Music allowed)")
+        check(wait(3) { g3.spotify.automation == .notDetermined && g3.music.automation == .allowed }, "silent checks done")
+        spotify(track("Asking", "A3", "Playing", 10))
+        check(wait(3) { g3.isAskingAutomation(.spotify) }, "first sign of Spotify playback ⇒ the prompt is up")
+        let musicBefore = g3.appleEvents.attempts(.music)
+        music(["Name": "Other Player", "Artist": "Elsewhere", "Album": "Q", "Total Time": 200_000, "Player State": "Playing",
+               "PersistentID": NSNumber(value: Int64(0x5151))])
+        check(wait(1.0) { g3.appleEvents.attempts(.music) > musicBefore } && g3.isAskingAutomation(.spotify),
+              "while Spotify's prompt is up, Music's reads + art go out at once (\(g3.appleEvents.attempts(.music) - musicBefore) event(s) in ≤ 1 s)")
+        check(g3.next(.spotify) && g3.next(.spotify) && g3.next(.spotify), "3× Next while asking")
+        check(g3.playPause(.spotify) && g3.playPause(.spotify), "2× play/pause while asking (a net no-op)")
+        pump(0.3)
+        check(g3.appleEvents.sentCommands(.spotify).isEmpty && g3.appleEvents.permissionRequests(.spotify) == 1,
+              "nothing queued behind the prompt, and no second prompt (\(g3.appleEvents.permissionRequests(.spotify)) request)")
+        check(wait(4) { g3.spotify.automation == .allowed }, "prompt answered: allowed")
+        pump(0.5)
+        check(g3.appleEvents.sentCommands(.spotify) == [.next], "after the answer: ONE Next sent, the toggles cancelled (\(g3.appleEvents.sentCommands(.spotify).map(\.rawValue)))")
+
+        say("\n[22] A control stuck behind a hung player is dropped, not fired late")
+        let sentBefore = g3.appleEvents.sentCommands(.spotify).count
+        music(["Player State": "Stopped"])
+        spotify(track("Asking", "A3", "Playing", 20))
+        check(wait(3) { !g3.music.hasTrack && g3.activeSource == .spotify && g3.state.title == "Asking" && g3.state.isPlaying == true },
+              "Music stopped; Spotify active and playing")
+        pump(0.3)                                       // the Playing report lands before the click
+        g3.appleEvents.queue.async { Thread.sleep(forTimeInterval: 2.6) }     // a player that doesn't answer
+        check(g3.playPause(.spotify) && g3.state.isPlaying == false, "click while the queue is blocked: optimistic pause")
+        check(wait(5) { g3.state.isPlaying == true }, "the command waited > 2 s ⇒ dropped, and the card shows the player's state again")
+        pump(0.3)
+        check(g3.appleEvents.sentCommands(.spotify).count == sentBefore, "…nothing sent late")
+
+        say("\n[23] Apple Events reads with a failed event are not ingested")
+        let keep = g3.state
+        var badRead = MusicReport(source: .spotify, origin: .appleEvents)
+        badRead.state = .playing; badRead.hasTrackFields = true; badRead.position = 0      // nil title/id, position 0
+        g3.snapshotRead(badRead, errorCode: -1712, source: .spotify, reason: "test")
+        check(g3.state.title == keep.title && g3.state.trackID == keep.trackID && g3.state.position == keep.position,
+              "snapshot with a timed-out event: track, id and position untouched")
+        check(g3.positionRead((.playing, 0), errorCode: -609, source: .spotify) == false && g3.state.position == keep.position,
+              "position read with a failed event: dropped (bar doesn't jump to 0)")
+        g3.snapshotRead(badRead, errorCode: 0, source: .spotify, reason: "test")
+        check(g3.state.title == keep.title && g3.state.hasTrack, "nil track fields from a 'successful' read don't clear the track")
+        check(g3.positionRead((.paused, 25), errorCode: 0, source: .spotify) && g3.state.isPlaying == false && near(g3.state.position, 25, 0.01),
+              "a good read still applies (paused at 25 s)")
+
+        say("\n[24] Sleep / wake: the sleep isn't counted as playback")
+        spotify(track("Sleeper", "S4", "Playing", 30))
+        check(wait(3) { current?.title == "Sleeper" && current?.isPlaying == true }, "Sleeper playing at 30 s")
+        let atBefore = current?.positionAt ?? 0
+        let reads0 = g3.appleEvents.attempts(.spotify)
+        let tSleep = Date()
+        g3.systemWillSleep(at: tSleep)
+        g3.systemDidWake(at: tSleep.addingTimeInterval(600))
+        g3.flushWrites()
+        s = current
+        let wakeNow = Date().addingTimeInterval(600)
+        check(near(s?.positionAt, atBefore + 600, 0.5), "positionAt shifted by the 10 min sleep (written at once)")
+        check(near(s.map { $0.elapsed(at: wakeNow) }, 30 + Date().timeIntervalSince(tSleep) + (tSleep.timeIntervalSince1970 - atBefore), 1.0)
+              && s?.isVisible(at: wakeNow, lingerMinutes: 5) == true,
+              "at wake the bar is where it was (\(String(format: "%.1f", s?.elapsed(at: wakeNow) ?? -1)) s, not the end) and the card is visible")
+        check(wait(2) { g3.appleEvents.attempts(.spotify) > reads0 }, "Automation allowed ⇒ the exact state is re-read on wake")
+        g3.stop()
+
+        say("\n[25] Heartbeat: a playing stream's music.json stays fresh")
+        prefix = "com.davidlam.DotStudio.selftest.\(getpid()).g4."
+        var optsG4 = opts
+        optsG4.notificationPrefix = prefix
+        optsG4.observeWorkspace = false
+        optsG4.art.networkEnabled = false
+        optsG4.heartbeatInterval = 1.0
+        let g4 = MusicMonitor(options: optsG4)
+        check(g4.start(store: store), "start (heartbeat 1 s)")
+        music(["Name": "Night Radio", "Artist": "Live", "Player State": "Playing", "PersistentID": NSNumber(value: Int64(78))])
+        check(wait(3) { current?.title == "Night Radio" && current?.duration == nil }, "a stream is playing")
+        let u0 = current?.updatedAt ?? 0
+        check(current?.heartbeat == 1.0, "music.json promises the heartbeat (1 s)")
+        check(wait(3.5) { (current?.updatedAt ?? 0) >= u0 + 1.5 }, "updatedAt refreshed with no new report (\(String(format: "%.1f", (current?.updatedAt ?? 0) - u0)) s later)")
+        check(current?.isVisible(lingerMinutes: 5) == true && current?.isVisible(at: Date().addingTimeInterval(60), lingerMinutes: 5) == false,
+              "fresh = visible; a minute without a heartbeat = stale")
+        music(["Name": "Night Radio", "Artist": "Live", "Player State": "Paused", "PersistentID": NSNumber(value: Int64(78))])
+        check(wait(2) { current?.isPlaying == false }, "paused")
+        let hb = g4.heartbeats
+        pump(2.5)
+        check(g4.heartbeats == hb, "no heartbeat while paused")
+        g4.stop()
+
         say("\n[19] App quit clears music.json")
         prefix = "com.davidlam.DotStudio.selftest.\(getpid()).f."
         var optsF = opts
@@ -711,7 +948,9 @@ enum MusicSelfTest {
         check(f.start(store: store), "start")
         music(["Name": "Radio Station", "Artist": "Live", "Player State": "Playing", "PersistentID": NSNumber(value: Int64(77))])
         check(wait(3) { current?.title == "Radio Station" && current?.isPlaying == true && current?.duration == nil }, "a stream (no duration) is playing")
-        check(current?.isVisible(at: Date().addingTimeInterval(864_000), lingerMinutes: 5) == true, "(a stream never goes stale on its own)")
+        check(current?.isVisible(at: Date().addingTimeInterval(300), lingerMinutes: 5) == true
+              && current?.isVisible(at: Date().addingTimeInterval(864_000), lingerMinutes: 5) == false,
+              "a stream stays visible between heartbeats, and goes stale once they stop (crash / force quit)")
         NotificationCenter.default.post(name: NSApplication.willTerminateNotification, object: nil)
         s = current
         check(s?.hasTrack == false && s?.isPlaying != true && !f.isMonitoring, "willTerminate ⇒ empty music.json on disk before returning, monitoring off")

@@ -81,6 +81,11 @@ struct MusicState: Codable, Equatable {
     var isPodcast: Bool?
     /// Unix epoch seconds of the last write.
     var updatedAt: Double?
+    /// Seconds between the writer's keep-alive rewrites while playing (`updatedAt` refreshes
+    /// at least this often). Present ⇒ readers may treat a playing state whose `updatedAt` is
+    /// much older as stale (the app crashed or was force-quit without clearing). Absent (1.3
+    /// writers) ⇒ no such promise, no such rule.
+    var heartbeat: Double?
 }
 
 extension MusicState {
@@ -108,10 +113,20 @@ extension MusicState {
         if isPlaying == true {
             // A playing state whose track should have ended long ago is stale (app/player died).
             if let d = duration, d > 0, let at = positionAt, t - at > (d - (position ?? 0)) + 120 { return false }
+            // A stream never ends on its own: rely on the writer's heartbeat instead.
+            if isHeartbeatStale(at: now) { return false }
             return true
         }
         guard let paused = pausedAt ?? updatedAt else { return false }
         return t - paused < max(0, lingerMinutes) * 60
+    }
+
+    /// A playing state from a writer that promised a heartbeat but missed about two of them
+    /// (crash, force quit, kill -9 — nothing cleared music.json). Only for duration-less
+    /// streams; a track with a length goes stale by the rule above.
+    func isHeartbeatStale(at now: Date = Date()) -> Bool {
+        guard isPlaying == true, (duration ?? 0) <= 0, let hb = heartbeat, hb > 0, let at = updatedAt else { return false }
+        return now.timeIntervalSince1970 - at > 2 * hb + 30
     }
 
     /// "1:23" / "12:05" / "1:02:03".

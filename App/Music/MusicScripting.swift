@@ -1,6 +1,6 @@
 //  MusicScripting.swift — the Apple Events side of music detection: just enough of the
 //  Spotify and Music scripting dictionaries for DotStudio, plus one serial queue that owns
-//  every scripting handle.
+//  every scripting handle (and a separate one for the blocking permission prompt).
 //
 //  Rules (the reason this file exists rather than `tell application "Spotify"`):
 //  - Never launch a player. Handles are addressed by the pid of an ALREADY-RUNNING process
@@ -12,7 +12,9 @@
 //    comes back as nil through an error-sink delegate that records the error code.
 //  - Permission is checked with AEDeterminePermissionToAutomateTarget(askUserIfNeeded:
 //    false), which never shows a prompt. Only `requestPermission` (an explicit user action,
-//    or the first sign of playback) may ask.
+//    or the first sign of playback) may ask — on `permissionQueue`, never on `queue`: the
+//    ask blocks until the owner answers macOS's prompt, and reads, artwork and controls for
+//    BOTH players must keep flowing meanwhile.
 
 import AppKit
 import ScriptingBridge
@@ -144,10 +146,30 @@ final class MusicAppleEvents: @unchecked Sendable {   // queue-confined handles 
         var readTimeout: TimeInterval = 2
         /// Controls get a little longer: the player may be switching tracks.
         var commandTimeout: TimeInterval = 4
+        /// A control still waiting in `queue` this long after the click is dropped (a hung
+        /// player held the queue): firing it seconds later would surprise the owner.
+        var commandMaxQueueDelay: TimeInterval = 2
+        /// Dry-run only (tests): what the silent check reports per player (default allowed),
+        /// what the prompt is answered, and how long the owner takes to answer it.
+        var dryRunStatus: [MusicSource: MusicAutomationStatus] = [:]
+        var dryRunAnswer: MusicAutomationStatus = .allowed
+        var dryRunAnswerDelay: TimeInterval = 0
     }
+
+    /// The event the permission PROMPT is requested for. Not typeWildCard: wildcards are only
+    /// dependable for the silent check (ask false). With askUserIfNeeded true, macOS can answer
+    /// a wildcard request with errAEEventWouldRequireUserConsent WITHOUT ever showing the
+    /// prompt — the owner would never be asked and controls would never work. So ask for a
+    /// concrete event DotStudio really sends: Core Suite "get data" ('core'/'getd') — every
+    /// property read (player state, position, track, artwork) is exactly that event, and the
+    /// consent macOS records is per target app, so it covers play/pause/next/previous too.
+    static let requestEventClass = AEEventClass(kAECoreSuite)
+    static let requestEventID = AEEventID(kAEGetData)
 
     let config: Config
     let queue = DispatchQueue(label: "com.davidlam.DotStudio.music.appleevents", qos: .utility)
+    /// Only `requestPermissionOnQueue` runs here: it can block for as long as the prompt is up.
+    let permissionQueue = DispatchQueue(label: "com.davidlam.DotStudio.music.appleevents.permission", qos: .utility)
 
     // Queue-confined.
     private var handles: [pid_t: (app: SBApplication, sink: MusicScriptingErrorSink)] = [:]
@@ -156,8 +178,18 @@ final class MusicAppleEvents: @unchecked Sendable {   // queue-confined handles 
     private let statsLock = NSLock()
     private var eventCounts: [MusicSource: Int] = [:]
     private var permissionCounts: [MusicSource: Int] = [:]
+    private var requestCounts: [MusicSource: Int] = [:]
+    private var commandLog: [MusicSource: [MusicCommand]] = [:]
 
     init(config: Config) { self.config = config }
+
+    /// Permission PROMPT requests per player (a subset of `permissionChecks`).
+    func permissionRequests(_ source: MusicSource) -> Int { statsLock.lock(); defer { statsLock.unlock() }; return requestCounts[source] ?? 0 }
+    /// Controls actually handed to a player (or, in dry-run, that would have been), in order.
+    func sentCommands(_ source: MusicSource) -> [MusicCommand] { statsLock.lock(); defer { statsLock.unlock() }; return commandLog[source] ?? [] }
+    func noteCommand(_ cmd: MusicCommand, to source: MusicSource) {
+        statsLock.lock(); commandLog[source, default: []].append(cmd); statsLock.unlock()
+    }
 
     /// Apple Event operations attempted (or, in dry-run, that would have been sent) per player.
     func attempts(_ source: MusicSource) -> Int { statsLock.lock(); defer { statsLock.unlock() }; return eventCounts[source] ?? 0 }
@@ -212,25 +244,33 @@ final class MusicAppleEvents: @unchecked Sendable {   // queue-confined handles 
         dispatchPrecondition(condition: .onQueue(queue))
         guard config.enabled else { return .unknown }
         count(source, permission: true)
-        guard !config.dryRun else { return .allowed }   // dry-run exercises the "allowed" paths
+        guard !config.dryRun else { return config.dryRunStatus[source] ?? .allowed }   // dry-run: "allowed" by default
         guard NSRunningApplication(processIdentifier: pid)?.isTerminated == false else { return .unknown }
         let target = NSAppleEventDescriptor(processIdentifier: pid)
+        // Wildcards are fine (and broadest) for the silent check — see requestEventClass.
         let status = AEDeterminePermissionToAutomateTarget(
             target.aeDesc, AEEventClass(typeWildCard), AEEventID(typeWildCard), false)
         return MusicAutomationStatus(status: status)
     }
 
-    /// May show macOS's "DotStudio wants to control <player>" prompt and blocks the queue
-    /// until it's answered. Only for an explicit user action or the first sign of playback.
+    /// May show macOS's "DotStudio wants to control <player>" prompt and blocks until it's
+    /// answered — so it runs on `permissionQueue`, never `queue`. Only for an explicit user
+    /// action or the first sign of playback.
     func requestPermissionOnQueue(_ source: MusicSource, pid: pid_t) -> MusicAutomationStatus {
-        dispatchPrecondition(condition: .onQueue(queue))
+        dispatchPrecondition(condition: .onQueue(permissionQueue))
         guard config.enabled else { return .unknown }
         count(source, permission: true)
-        guard !config.dryRun else { return .allowed }
+        statsLock.lock(); requestCounts[source, default: 0] += 1; statsLock.unlock()
+        guard !config.dryRun else {
+            if config.dryRunAnswerDelay > 0 { Thread.sleep(forTimeInterval: config.dryRunAnswerDelay) }
+            return config.dryRunAnswer
+        }
         guard NSRunningApplication(processIdentifier: pid)?.isTerminated == false else { return .unknown }
         let target = NSAppleEventDescriptor(processIdentifier: pid)
+        // A concrete event, not typeWildCard (see requestEventClass): with ask true a wildcard
+        // may be refused as "would require consent" without the prompt ever appearing.
         let status = AEDeterminePermissionToAutomateTarget(
-            target.aeDesc, AEEventClass(typeWildCard), AEEventID(typeWildCard), true)
+            target.aeDesc, Self.requestEventClass, Self.requestEventID, true)
         return MusicAutomationStatus(status: status)
     }
 

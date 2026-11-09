@@ -208,6 +208,13 @@ final class MusicOverlayLayer: CALayer {
         var mode: Mode
         var track: String
         var art: ObjectIdentifier?
+        /// The text and the bar are laid out once per group, so metadata that changes under
+        /// the same track id (a stream's next song title, a late-arriving album, a duration
+        /// filled in later) must rebuild too — or the screen keeps the old words.
+        var title: String
+        var artist: String
+        var album: String
+        var hasDuration: Bool
         var size: CGSize
         var scale: CGFloat
         var insets: Insets
@@ -217,13 +224,16 @@ final class MusicOverlayLayer: CALayer {
         init(_ d: MusicDisplay, size: CGSize, scale: CGFloat, insets: Insets, cardSize: MusicSpec.CardSize) {
             mode = d.mode; track = d.trackKey
             art = d.art.map { ObjectIdentifier($0) }
+            title = d.title; artist = d.artist; album = d.album; hasDuration = d.hasDuration
             self.size = size; self.scale = scale; self.insets = insets
             if case .card = d.mode { self.cardSize = cardSize }
         }
 
-        /// Same place, same mode, a different song (or new artwork for it).
+        /// Same place, same mode, a different song (or new artwork for it) — a stream's next
+        /// song keeps its id but changes title/artist. A late album or duration only refreshes.
         func isTrackChange(to n: GroupKey) -> Bool {
-            mode == n.mode && (track != n.track || art != n.art) && size == n.size && scale == n.scale
+            mode == n.mode && (track != n.track || art != n.art || title != n.title || artist != n.artist)
+                && size == n.size && scale == n.scale
         }
     }
 }
