@@ -28,6 +28,7 @@ final class DotSaverView: ScreenSaverView {
     private var musicSettings = MusicSpec()
     private var lastMusicTick: CFTimeInterval = 0
     private var shownPreset: Preset?           // what reload() last applied (a legacy Now Playing style?)
+    private var fadedIn = false                // the Metal view has started fading in (fadeInIfDrawn)
 
     /// Every live instance in this host process. The host leaks instances (see
     /// teardownMetalStack), so each new activation sweeps the previous ones.
@@ -112,12 +113,19 @@ final class DotSaverView: ScreenSaverView {
         if let metalLayer = view.layer as? CAMetalLayer {
             metalLayer.maximumDrawableCount = 3
         }
-        guard let r = MetalRenderer(pixelFormat: view.colorPixelFormat, store: store) else {
+        // fastStart: the renderer never waits on a shader compile (the first start after an
+        // update used to sit ~3.5 s on the desktop while fx_fragment compiled, before this view
+        // existed). It builds its pipelines from the app's archive (Shared/PipelineArchive.swift)
+        // in milliseconds; without a current one they compile in the background and frames are
+        // skipped until they exist. Hidden until it draws (fadeInIfDrawn).
+        guard let r = MetalRenderer(pixelFormat: view.colorPixelFormat, store: store, pipelines: .fastStart) else {
             store.debug("MetalRenderer init returned nil — black screen")
             return
         }
         view.device = r.device
         view.delegate = r
+        view.alphaValue = 0
+        fadedIn = false
         renderer = r
         metalView = view
         addSubview(view)
@@ -176,6 +184,7 @@ final class DotSaverView: ScreenSaverView {
         if !DotSaverView.instances.allObjects.contains(where: { $0 !== self && $0.metalView != nil }) {
             TextAtlas.purge()
             WeatherLink.purge()
+            FXPipelines.purge()
         }
         shownPreset = nil
         activeID = nil
@@ -322,7 +331,31 @@ final class DotSaverView: ScreenSaverView {
                 animationTimeInterval = effectiveInterval()         // track battery/power changes
             }
             mv.draw()
+            fadeInIfDrawn()
         }
+    }
+
+    // MARK: Fade-in
+
+    static let fadeInSeconds: Double = 0.45
+
+    /// The Metal view starts hidden over this view's black and fades in once the renderer has
+    /// drawn a frame: never a flash of an empty drawable, and no hitch while pipelines build.
+    private func fadeInIfDrawn() {
+        guard !fadedIn, let mv = metalView, renderer?.hasDrawnFrame == true else { return }
+        fadedIn = true
+        store.debug("[\(logID)] first frame drawn — fading in")
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = DotSaverView.fadeInSeconds
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            mv.animator().alphaValue = 1
+        }
+    }
+
+    /// Black under the Metal view until it fades in (and wherever it doesn't cover).
+    override func draw(_ rect: NSRect) {
+        NSColor.black.setFill()
+        rect.fill()
     }
 
     /// Manually size the drawable: native pixels × renderScale. With
