@@ -5,10 +5,14 @@
 //  usage: gallery <outDir> [--photo file.jpg] [--times 1.6,9] [--only substr] [--pack]
 //                          [--size 1600x1000] [--bench] [--gpubench] [--solo] [--set key=val,key=val]
 //  --set overrides params on each preset's first effect (e.g. --set tilt=70,scale=1.4).
-//  --gpubench times just the first effect's fragment pass with GPU timestamps
+//  --gpubench times just the first effect's fragment pass with GPU timestamps (--benchtime T: every
+//  sample at scene time T, e.g. inside a lightning flash)
 //  (no alloc/readback, immune to CPU load): the number to compare shader costs by.
 //  --solo keeps only each preset's first effect (benchmark one shader, not its post chain).
 //  --slides renders one frame per built-in slideshow photo; --looks skips the Scenes.
+//  Weather (Ocean Horizon, Shallows): --weather rain[,thunderstorm,…] renders each preset under each
+//  condition (WeatherCondition raw values, or "live" = the real weather.json; also storm, overcast,
+//  partly) in place of the live feed — a scene's fixed Weather pick still wins.
 //  Wall clock (clock scenes, Ocean Horizon's Follow the Sun): --clock 06:40[,07:00,…] renders
 //  each preset at each local time on --date 2026-06-21 (default today), in --tz America/Toronto
 //  (default the Mac's), at --loc 43.7,-79.4 (default San Francisco; "none" = the no-location fallback).
@@ -61,6 +65,8 @@ var tag: String?
 var musicFadeBench = false
 var runChecks = false
 var frameBench = false
+var weathers: [String] = []
+var benchTime: Float?
 while !args.isEmpty {
     let a = args.removeFirst()
     switch a {
@@ -84,6 +90,8 @@ while !args.isEmpty {
             if p.count == 2, let v = Double(p[1]) { overrides[String(p[0])] = v }
         }
     case "--clock": clocks = args.removeFirst().split(separator: ",").map(String.init)
+    case "--weather": weathers = args.removeFirst().split(separator: ",").map(String.init)
+    case "--benchtime": benchTime = Float(args.removeFirst())
     case "--date": dateArg = args.removeFirst()
     case "--tz": tzArg = args.removeFirst()
     case "--loc":
@@ -112,6 +120,16 @@ while !args.isEmpty {
     }
 }
 
+/// --weather names → the mix every "Live" scene shows (nil = the real feed).
+func weatherMix(_ name: String) -> WeatherMix? {
+    let aliases = ["storm": "thunderstorm", "overcast": "cloudy", "partly": "partlyCloudy", "heavy": "heavyRain"]
+    if name == "live" { return nil }
+    guard let c = WeatherCondition(rawValue: aliases[name] ?? name) else {
+        print("unknown weather \(name): \(WeatherCondition.allCases.map(\.rawValue))"); exit(2)
+    }
+    return WeatherMix.preset(c)
+}
+if let w = weathers.first { WeatherLink.forced = weatherMix(w) }
 let store = SharedStore(role: .app)
 guard let renderer = MetalRenderer(pixelFormat: .bgra8Unorm, store: store) else { print("no renderer"); exit(1) }
 renderer.location = loc
@@ -350,6 +368,8 @@ if gpuBench {
         artTex = t
     }
     let pal = musicFeed.snapshot.palette
+    for wname in (weathers.isEmpty ? [nil] : weathers.map { Optional($0) }) {
+    if let wname { WeatherLink.forced = weatherMix(wname) }
     for p in presets {
         guard let inst = p.effects.first(where: { $0.enabled }) else { continue }
         var u = FXUniforms()
@@ -362,6 +382,10 @@ if gpuBench {
         let wall = clocks.first.flatMap(wallDate) ?? Date()
         (u.clock, u.date) = MetalRenderer.wallClock(wall)
         MetalRenderer.fillLiveSky(&u, inst: inst, now: wall, time: 0, location: renderer.location)
+        if WeatherLink.usesWeather(inst.kind) {
+            let mix = WeatherLink.fixedCondition(inst).map(WeatherMix.preset) ?? WeatherLink.forced ?? .clear
+            WeatherLink.pack(&u, mix: mix, inst: inst, drift: 0)
+        }
         if inst.kind == .nowPlaying {
             // Steady playback; --musicfade benches the 1.6 s track-change cross-fade instead
             // (both backgrounds rendered).
@@ -379,13 +403,15 @@ if gpuBench {
         for rep in 0..<14 {
             let cmd = queue.makeCommandBuffer()!
             for f in 0..<3 {
-                u.time = Float(rep * 3 + f) * 1.7
+                u.time = benchTime.map { $0 + Float(f) * 0.004 } ?? Float(rep * 3 + f) * 1.7
                 let rpd = MTLRenderPassDescriptor()
                 rpd.colorAttachments[0].texture = target
                 rpd.colorAttachments[0].loadAction = .dontCare
                 rpd.colorAttachments[0].storeAction = .store
                 let enc = cmd.makeRenderCommandEncoder(descriptor: rpd)!
-                enc.setRenderPipelineState(pso)
+                // (Weather: the scene's own weather pipeline, as WeatherLink binds it in the renderer.)
+                enc.setRenderPipelineState(u.weather2.w > 0.5
+                    ? (WeatherLink.pipeline(for: inst.kind, device: dev, format: .bgra8Unorm) ?? pso) : pso)
                 enc.setFragmentBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
                 enc.setFragmentTexture(input, index: 0)
                 enc.setFragmentTexture(input, index: 1)
@@ -404,8 +430,9 @@ if gpuBench {
             if rep >= 2 { samples.append((cmd.gpuEndTime - cmd.gpuStartTime) * 1000 / 3) }
         }
         samples.sort()
-        print(String(format: "%6.2f ms GPU  (median %5.2f)  %@ [%@]", samples[0], samples[samples.count / 2],
-                     p.name, inst.kind.displayName))
+        print(String(format: "%6.2f ms GPU  (median %5.2f)  %@ [%@]%@", samples[0], samples[samples.count / 2],
+                     p.name, inst.kind.displayName, wname.map { " @" + $0 } ?? ""))
+    }
     }
     exit(0)
 }
@@ -491,7 +518,10 @@ if bench {
 
 let clockList: [String?] = clocks.isEmpty ? [nil] : clocks
 let musicRun = !cardCorners.isEmpty || fullBackdrop != nil
+let weatherList: [String?] = weathers.isEmpty ? [nil] : weathers
 for p in presets {
+    for wname in weatherList {
+    if let wname { WeatherLink.forced = weatherMix(wname) }
     for clk in clockList {
     renderer.clockOverride = clk.flatMap(wallDate)
     let now = renderer.clockOverride ?? Date()
@@ -523,6 +553,7 @@ for p in presets {
         let name = p.name.replacingOccurrences(of: " ", with: "-").replacingOccurrences(of: "/", with: "-")
         let tl = t == t.rounded() ? "\(Int(t))" : String(format: "%.3f", t)
         var suffix = times.count > 1 ? "@" + tl : ""
+        if let wname, weatherList.count > 1 || WeatherLink.usesWeather(p.effects.first?.kind ?? .halftone) { suffix += "@" + wname }
         if let clk { suffix += "@" + clk.replacingOccurrences(of: ":", with: "") }
         if let corner { suffix += "@card-" + corner.rawValue }
         if let fb = fullBackdrop, !p.isMusicScene {
@@ -534,6 +565,7 @@ for p in presets {
         print(String(format: "%@%@ %@  %.0f ms", p.isScene ? "[scene] " : "[look]  ", p.name, suffix, ms))
         }
         }
+    }
     }
     }
 }

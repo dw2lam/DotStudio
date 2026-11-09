@@ -20,7 +20,7 @@ extension SceneCatalog {
             colorALabel: "Night", colorBLabel: "City Lights"),
         .oceanHorizon: SceneSpec(
             name: "Ocean Horizon",
-            blurb: "Open sea at golden hour, or live: the real sun and moon crossing the day.",
+            blurb: "Open sea at golden hour, or live: the real sun, moon and weather crossing the day.",
             shaderID: 59,
             params: [ParamSpec("speed", "Speed", 0, 2, def: 1),
                      ParamSpec("sun", "Sun Height", -2, 12, def: 4),
@@ -30,7 +30,11 @@ extension SceneCatalog {
                      // Live: the real sun and moon for this place and time (Sun Height is
                      // then ignored). Time Lapse = minutes per simulated day, 0 = real time.
                      ParamSpec("live", "Follow the Sun", 0, 1, def: 0, toggle: true),
-                     ParamSpec("lapse", "Time Lapse", 0, 60, step: 1, def: 0)],
+                     ParamSpec("lapse", "Time Lapse", 0, 60, step: 1, def: 0),
+                     // Weather: Live = the real weather here (Shared/Weather, fetched by the
+                     // app), or a fixed condition. Lightning: storms flash (rare, soft).
+                     ParamSpec(menu: "weather", "Weather", WeatherMix.menu, def: 0),
+                     ParamSpec("lightning", "Lightning", 0, 1, def: 1, toggle: true)],
             colorA: RGBA(0.02, 0.09, 0.13), colorB: RGBA(1.0, 0.85, 0.62),
             colorALabel: "Deep Water", colorBLabel: "Sunlight"),
         .nightSky: SceneSpec(
@@ -68,9 +72,11 @@ extension SceneCatalog {
             return Preset(name: name, effects: [e])
         }
         return [
-            scene("Golden Hour", .oceanHorizon),
-            scene("Tidewater", .oceanHorizon, ["live": 1]),
-            scene("Afterlight", .oceanHorizon, ["sun": -1.2, "waves": 0.3, "clouds": 0.75, "haze": 0.5],
+            // Golden Hour keeps its low gold sun whatever the sky does; the live weather
+            // changes the clouds, light and sea around it. Afterlight stays clear.
+            scene("Golden Hour", .oceanHorizon, ["weather": 0]),
+            scene("Tidewater", .oceanHorizon, ["live": 1, "weather": 0]),
+            scene("Afterlight", .oceanHorizon, ["sun": -1.2, "waves": 0.3, "clouds": 0.75, "haze": 0.5, "weather": 1],
                   a: RGBA(0.02, 0.06, 0.12), b: RGBA(1.0, 0.70, 0.62)),
             scene("Night Sky", .nightSky),
             scene("Rainy Window", .rainGlass),

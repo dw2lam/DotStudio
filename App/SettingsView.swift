@@ -25,6 +25,7 @@ struct SettingsView: View {
         Form {
             GeneralSettingsSection()
             MusicSettingsSlot()        // the Music section (MusicSlots.swift)
+            WeatherSettingsSection()   // live weather for the sea scenes (WeatherSettingsSection.swift)
             setupSection
             WallpaperSettingsSection()
             transitionsSection
