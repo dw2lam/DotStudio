@@ -271,6 +271,31 @@ static inline float sf_ncdf(float x) {
     float e = sqrt(max(1.0 - exp(-a2 * (1.2732395 + 0.147 * a2) / (1.0 + 0.147 * a2)), 0.0));
     return 0.5 + 0.5 * (x < 0.0 ? -e : e);
 }
+// One star of cell `cell` (j-th of the cell via jq), accepted with probability pj: its
+// energy-conserving Gaussian streak at this pixel (screen polar rpx, thp), × over.
+static inline float3 sf_star(float cell, float jq, float seed, float pj, float M, float thp, float rpx,
+                             float sig, float eq0, float pxs, float z, float vz, float flux, float over) {
+    float3 h = pcg3(float3(cell, jq, seed));
+    if (h.x >= pj) return float3(0.0);
+    float ths = (cell + 0.15 + 0.7 * h.y) * 6.2831853 / M - 3.14159265;
+    float dth = thp - ths;
+    dth -= 6.2831853 * floor(dth * 0.15915494 + 0.5);
+    float perp = rpx * dth;                   // (the angle is tiny wherever it counts)
+    if (abs(perp) > 3.7 * sig) return float3(0.0);
+    float g = exp(-perp * perp / (2.0 * sig * sig));
+    float rs = eq0 * sqrt(1.0 + h.z) * pxs;   // ∝ e^{2q} inside the cell
+    float rh = rs / z, rt = rs / (z + vz);
+    float ell = rh - rt;
+    float along = rh - rpx * (1.0 - 0.5 * dth * dth);
+    float a = ell > 0.02 * sig
+            ? (sf_ncdf(along / sig) - sf_ncdf((along - ell) / sig)) * 2.5066283 * sig / ell
+            : exp(-along * along / (2.0 * sig * sig));
+    float3 h2 = pcg3(float3(cell + 9137.0, jq, seed + 3.0));
+    float L2 = h2.x * h2.x * h2.x;
+    float L = (0.03 + 0.10 * h2.x + 1.4 * L2 * L2) * over;
+    float3 tint = mix(float3(0.82, 0.90, 1.10), float3(1.10, 0.96, 0.82), h2.y);
+    return tint * (L * flux * g * a);
+}
 
 // ---------------------------------------------------------------- Black Hole (40)
 // Light around a Schwarzschild black hole, followed along its true null geodesics: with
@@ -1360,31 +1385,14 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
                 float ith = floor(cth), fth = cth - ith;
                 float w = 6.2831853 / M * rpx;                // sector width here, px
                 int nn = (3.0 * sig > min(fth, 1.0 - fth) * w + 0.15 * w) ? 2 : 1;
-                for (int kk = 0; kk < nn * K; ++kk) {
-                    int k = kk / K, j = kk - k * K;
+                float over = max(lam / float(K), 1.0);
+                for (int k = 0; k < nn; ++k) {
                     float cell = ith + (k == 0 ? 0.0 : (fth < 0.5 ? -1.0 : 1.0));
                     cell -= M * floor(cell / M);
-                    float jq = iq + 64.0 * float(j);              // the j-th star of this cell
-                    float3 h = pcg3(float3(cell, jq, seed));
-                    if (h.x >= lam - float(j)) continue;          // P = clamp(λ − j, 0, 1)
-                    float ths = (cell + 0.15 + 0.7 * h.y) * 6.2831853 / M - 3.14159265;
-                    float dth = thp - ths;
-                    dth -= 6.2831853 * floor(dth * 0.15915494 + 0.5);
-                    float perp = rpx * dth;                   // (the angle is tiny wherever it counts)
-                    if (abs(perp) > 3.7 * sig) continue;
-                    float g = exp(-perp * perp / (2.0 * sig * sig));
-                    float rs = eq0 * sqrt(1.0 + h.z) * pxs;   // ∝ e^{2q} inside the cell
-                    float rh = rs / z, rt = rs / (z + vz);
-                    float ell = rh - rt;
-                    float along = rh - rpx * (1.0 - 0.5 * dth * dth);
-                    float a = ell > 0.02 * sig
-                            ? (sf_ncdf(along / sig) - sf_ncdf((along - ell) / sig)) * 2.5066283 * sig / ell
-                            : exp(-along * along / (2.0 * sig * sig));
-                    float3 h2 = pcg3(float3(cell + 9137.0, jq, seed + 3.0));
-                    float L2 = h2.x * h2.x * h2.x;
-                    float L = (0.03 + 0.10 * h2.x + 1.4 * L2 * L2) * max(lam / float(K), 1.0);
-                    float3 tint = mix(float3(0.82, 0.90, 1.10), float3(1.10, 0.96, 0.82), h2.y);
-                    acc += tint * (L * flux * g * a);
+                    acc += sf_star(cell, iq, seed, lam, M, thp, rpx, sig, eq0, pxs, z, vz, flux, over);
+                    for (int j = 1; j < K; ++j)                   // the j-th star: P = clamp(λ − j, 0, 1)
+                        acc += sf_star(cell, iq + 64.0 * float(j), seed, lam - float(j), M, thp, rpx, sig,
+                                       eq0, pxs, z, vz, flux, over);
                 }
             }
         }
