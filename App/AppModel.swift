@@ -113,6 +113,22 @@ final class AppModel: ObservableObject {
                 lib.presets[i].effects[j].params["weather"] = 1
             }
         }
+        // Sand Garden became Zen Garden (1.4): same scene kind, new compositions. Rename the
+        // built-in style and map its retired patterns (Rosette/Twist/Petals/Spiral) to Surprise.
+        // Runs until "Zen Garden" is recorded as seen (offerNewBuiltIns, just below), i.e. once,
+        // so a later rename back to "Sand Garden" by the user sticks.
+        if !(lib.seenBuiltIns ?? []).contains("Zen Garden") {
+            for i in lib.presets.indices where lib.presets[i].name == "Sand Garden"
+                && lib.presets[i].effects.first?.kind == .sandGarden {
+                lib.presets[i].name = "Zen Garden"
+                for j in lib.presets[i].effects.indices where lib.presets[i].effects[j].kind == .sandGarden {
+                    var p = lib.presets[i].effects[j].params
+                    if (p["pattern"] ?? 0) > 0.5 { p["pattern"] = 0 }
+                    if p["height"] == 18 { p["height"] = 26 }   // the old default light → the new one
+                    lib.presets[i].effects[j].params = p
+                }
+            }
+        }
         lib = offerNewBuiltIns(lib)
         if lib.version < 4 { lib.version = 4 }
         return lib
@@ -123,7 +139,7 @@ final class AppModel: ObservableObject {
     /// Featured built-ins every library gets once, even one from before seenBuiltIns existed.
     /// (Now Playing was one until music became a presentation over any style — it's retired:
     /// never added, and a library that has it keeps it.)
-    // The 1.4 highlights 1.3 users get once on upgrade (Glass Clock stays; Sunray joins it).
+    // The 1.4 highlights 1.3 users get once on upgrade.
     static let promotedBuiltIns = ["Tidewater", "Sunray", "Shallows"]
 
     /// New built-in styles reach existing libraries exactly once (runs on every launch):

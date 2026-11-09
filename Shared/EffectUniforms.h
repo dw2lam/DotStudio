@@ -59,6 +59,11 @@ typedef struct {
     FX_FLOAT4 weather2;     // (gusts m/s, fog 0–1 = visibility 20 km … 150 m (log), storm 0–1,
                             //  1 = weather differs from the scene's own clear sky)
     FX_FLOAT4 weather3;     // (cloud clock offset s (wind drift), lightning on 0/1, 0, 0)
+    // Per-scene data the CPU works out once a frame, where every pixel would otherwise derive
+    // the same values (Zen Garden: the rake cart and the head of its track — SandGarden.Cache
+    // .prepare in Studio2.swift, called from MetalRenderer.encodePasses). Zero for scenes that
+    // don't use it.
+    FX_FLOAT4 scene[16];
 } FXUniforms;
 
 #endif /* EffectUniforms_h */

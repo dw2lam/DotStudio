@@ -397,6 +397,7 @@ if let photo {
 try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
 
 if gpuBench {
+    let benchT0 = times.first ?? 0           // scene time of the first frame (--times): where a Zen Garden composition is
     // One fullscreen pass of each preset's first effect, encoded the way MetalRenderer does,
     // 3 frames per command buffer; GPU time from the command buffer's own timestamps.
     let dev = renderer.device
@@ -471,10 +472,13 @@ if gpuBench {
             u.musicRect = simd_float4(r.x, r.y, r.w, r.h)
         }
         var samples: [Double] = []
+        let sand = SandGarden.Cache()
         for rep in 0..<14 {
             let cmd = queue.makeCommandBuffer()!
             for f in 0..<3 {
-                u.time = benchTime.map { $0 + Float(f) * 0.004 } ?? Float(rep * 3 + f) * 1.7
+                u.time = benchTime.map { $0 + Float(f) * 0.004 } ?? (Float(rep * 3 + f) * 1.7 + benchT0)
+                var sceneData: MTLTexture?
+                if inst.kind == .sandGarden { sceneData = sand.prepare(&u, device: dev) }
                 let rpd = MTLRenderPassDescriptor()
                 rpd.colorAttachments[0].texture = target
                 rpd.colorAttachments[0].loadAction = .dontCare
@@ -491,7 +495,7 @@ if gpuBench {
                 enc.setFragmentTexture(tex.earthNight, index: 3)
                 enc.setFragmentTexture(tex.planets, index: 4)
                 enc.setFragmentTexture(input, index: 5)
-                enc.setFragmentTexture(TextAtlas.texture(dev, uniforms: u) ?? input, index: 6)   // Clocks: the real atlas
+                enc.setFragmentTexture(sceneData ?? TextAtlas.texture(dev, uniforms: u) ?? input, index: 6)   // Clocks: the real atlas
                 enc.setFragmentTexture(artTex, index: 7)
                 enc.setFragmentTexture(artTex, index: 8)
                 enc.setFragmentSamplerState(samp, index: 0)

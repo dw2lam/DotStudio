@@ -120,7 +120,7 @@ enum DefaultPresets {
     /// built-in style is one click away in Add Built-in Styles (coolPack).
     static let featured: [String] = [
         // Scenes
-        "Liquid Chrome", "Aurora", "Universe", "Topography", "Sand Garden", "Black Hole", "Afterglow",
+        "Liquid Chrome", "Aurora", "Universe", "Topography", "Zen Garden", "Black Hole", "Afterglow",
         "Sunray", "Flip Clock", "Word Clock", "Window Light",
         "Lava Lamp", "Currents", "Fireflies",
         "Golden Hour", "Tidewater", "Shallows", "Night Sky", "First Snow",
