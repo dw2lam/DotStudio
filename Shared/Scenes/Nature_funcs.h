@@ -129,31 +129,28 @@ static inline float nature_curl(float x, float k, float ts, thread float &d) {
 }
 
 // Emission collected where the ray crosses curtain k at along-sheet coordinate x,
-// altitude alt (km). Returns linear radiance before the path-length factor.
+// altitude alt (km). Returns linear radiance before the path-length factor. fx = the
+// pixel's footprint along the sheet (km): where a fold is seen nearly edge-on it spans
+// many rays, so the finer ray octaves fade to their mean instead of aliasing into moiré.
 static inline float3 nature_curtainLight(float x, float alt, float k, constant FXUniforms& u,
-                                         NatureAuroraP P) {
+                                         NatureAuroraP P, float fx) {
     float ts = P.ts;
     // Brightness gathers in patches along the sheet, breathing slowly.
-    // (Much of each sheet is dark at any moment: the light gathers into a few
-    // folds and draperies instead of running as continuous bands across the sky.)
-    float pn = 0.7 * nature_n1(x * 0.011 + k * 13.0 - ts * 0.022) + 0.15 + 0.15 * sin(x * 0.23 - k * 5.0 + ts * 0.031);
-    float patch = smoothstep(0.30, 0.80, pn);
+    float patch = smoothstep(0.18, 0.78, nature_n1(x * 0.011 + k * 13.0 - ts * 0.022));
     if (patch <= 0.0) return float3(0.0);
     patch *= 0.75 + 0.25 * sin(ts * 0.21 + x * 0.004 + k * 2.0);
     float hb = 96.0 + 5.0 * sin(x * 0.021 + k * 7.3 + ts * 0.01) + 3.0 * sin(x * 0.067 - k * 2.1);  // lower hem
     float dy = alt - hb;
     // Light scattered in the air around the sheet: a soft halo, also below the hem.
-    float3 halo = P.cG * exp(dy < 6.0 ? (dy - 6.0) / 4.0 : (6.0 - dy) / 45.0) * 0.07;
-    if (dy < -6.0) return halo * patch;
+    float3 halo = P.cG * exp(dy < 10.0 ? (dy - 10.0) / 10.0 : (10.0 - dy) / 45.0) * 0.07;
+    if (dy < -10.0) return halo * patch;
     // Field-aligned rays: three octaves of 1D noise along the sheet, drifting sideways.
     float drift = ts * (0.35 + 0.5 * P.act);
-    float r1 = nature_n1(x * 0.32 + drift + k * 31.0);
-    float r2 = nature_n1(x * 0.95 - drift * 1.6 + k * 17.0);
-    float r3 = nature_n1(x * 0.085 + drift * 0.3 + k * 5.0);
+    float r1 = mix(nature_n1(x * 0.32 + drift + k * 31.0), 0.5, smoothstep(0.25, 0.6, fx * 0.32));
+    float r2 = mix(nature_n1(x * 0.95 - drift * 1.6 + k * 17.0), 0.5, smoothstep(0.25, 0.6, fx * 0.95));
+    float r3 = mix(nature_n1(x * 0.085 + drift * 0.3 + k * 5.0), 0.5, smoothstep(0.25, 0.6, fx * 0.085));
     float q = 0.5 * r1 + 0.32 * r2 + 0.18 * r3;
-    // Rays bunch into bundles (~30 km) with quieter gaps between, rather than a uniform comb.
-    float bund = 0.5 + 0.28 * sin(x * 0.21 - drift * 1.3 + k * 11.0) + 0.22 * sin(x * 0.083 + drift * 0.4 + k * 3.0);
-    float ray = (0.25 + 1.8 * q * q * q) * (0.45 + 1.1 * bund);
+    float ray = 0.30 + 1.6 * q * q * q;
     // Broad brightness swells along the sheet (tens of km), under the fine rays.
     float swell = 1.0 + 0.4 * sin(x * 0.11 - drift * 0.5 + k * 3.0) + 0.25 * sin(x * 0.043 + k);
     // Rays reach different heights: a ragged, picket-fence top.
@@ -165,11 +162,8 @@ static inline float3 nature_curtainLight(float x, float alt, float k, constant F
     float red = smoothstep(40.0, 150.0, dy) * exp(-max(dy - 110.0, 0.0) / (60.0 * P.height)) * 0.14;
     red *= 0.25 + 1.5 * rh;
     float pink = exp(-((dy - 0.5) * (dy - 0.5)) / 5.0) * smoothstep(0.3, 1.0, P.act) * smoothstep(0.45, 0.9, patch) * 0.3;
-    // The hem glows most evenly, but still swells and fades along the sheet (~20 km);
-    // striations sharpen with height.
-    float hm = 0.5 + 0.3 * sin(x * 0.33 + drift * 2.2 + k * 7.0) + 0.2 * sin(x * 0.127 - drift * 0.9 + k * 2.0);
-    float hemMod = 0.30 + 0.70 * smoothstep(0.15, 0.85, hm);
-    float rr = mix(hemMod * (0.3 + 0.7 * ray), ray, smoothstep(2.0, 30.0, dy)) * swell;
+    // The hem glows fairly evenly; striations sharpen with height.
+    float rr = mix(0.6 + 0.4 * ray, ray, smoothstep(2.0, 30.0, dy)) * swell;
     return ((P.cG * g + P.cTop * red + P.cPink * pink) * rr + halo) * patch;
 }
 
@@ -180,10 +174,7 @@ static inline float3 nature_curtains(float3 rd, constant FXUniforms& u, NatureAu
     float tanE = rd.y / hl;
     float cosE = hl;
     float3 acc = float3(0.0);
-    // Ripple-blurred reflections skip the faint far sheet (it lies along the horizon, where
-    // the shore hides most of its mirror image).
-    int NK = P.soft > 0.0 ? 2 : 3;
-    for (int k = 0; k < NK; ++k) {
+    for (int k = 0; k < 3; ++k) {
         float fk = float(k);
         // Each sheet stands on z = Z − tilt·x + A·fold(x): tilted lines recede to the
         // horizon on one side and sweep overhead on the other, like real arcs.
@@ -196,8 +187,7 @@ static inline float3 nature_curtains(float3 rd, constant FXUniforms& u, NatureAu
         float s1 = min((Z + A) / D, 2200.0);
         if (s1 <= s0) continue;
         // Steps scale with how much fold the bracket spans (few near the centre column).
-        // (Ripple-blurred reflections and the faint far sheet get by with fewer.)
-        int N = int(clamp(ceil((s1 - s0) * abs(d2.x) / 24.0), 2.0, P.soft > 0.0 ? 3.0 : (k == 2 ? 4.0 : 7.0)));
+        int N = int(clamp(ceil((s1 - s0) * abs(d2.x) / 24.0), 2.0, 7.0));
         float ds = (s1 - s0) / float(N);
         // Cull sheets this ray passes entirely above or below.
         float a0 = s0 * tanE - s0 * s0 * (1.0 / 12742.0);
@@ -247,15 +237,21 @@ static inline float3 nature_curtains(float3 rd, constant FXUniforms& u, NatureAu
                 x = sc * d2.x;
                 float sl = tilt - A * (fd + cd);
                 // |cos| between the ray and the sheet's horizontal normal (sl, 1) → path length.
-                float cosT = abs(d2.x * sl + d2.y) * rsqrt(1.0 + sl * sl) * cosE;
-                float path = 1.0 / max(cosT, 0.11);
+                float isl = rsqrt(1.0 + sl * sl);
+                float cosH = abs(d2.x * sl + d2.y) * isl;           // in top view
+                float cosT = cosH * cosE;
+                // Edge-on folds blaze, but a real sheet has thickness: right at the tangent
+                // the two crossings merge and the light falls off smoothly, not as a 1 px
+                // hard edge (which aliased into dotted diagonal lines).
+                float path = smoothstep(0.0, 0.13, cosT) / max(cosT, 0.11);
                 float alt = sc * tanE - sc * sc * (1.0 / 12742.0);   // Earth curvature drop
+                float fx = P.pix * sc * isl / max(cosT, 0.02);       // the pixel's footprint in x, km
                 if (alt > 40.0 && alt < 140.0 + 300.0 * P.height)    // skip crossings that see nothing
-                    ck += nature_curtainLight(x, alt, fk, u, P) * path;
+                    ck += nature_curtainLight(x, alt, fk, u, P, fx) * path;
             }
             gp = g;
         }
-        acc += ck * (k == 0 ? 1.0 : (k == 1 ? 0.75 : 0.5));
+        acc += ck * (k == 0 ? 1.0 : (k == 1 ? 0.8 : 0.62));
     }
     return acc;
 }
@@ -268,7 +264,7 @@ static inline float3 nature_auroraLand(float az, float e, float pix) {
     // Far range, ~40 km off: ridged noise for sharp peaks, gathered into a massif.
     float massif = 0.25 + 0.75 * smoothstep(-0.7, 0.8, sin(az * 2.1 + 1.1));
     float mElev = 1.0, mtn = 0.0;
-    if (e < 0.010 + 0.077 * massif + pix) {                 // (the peaks can't reach higher)
+    if (e < 0.010 + 0.110 * massif + pix) {                 // (no peak can reach higher: n² ≤ 1.44)
         float x = az * 7.0 + 3.0;
         float m = 0.0, a = 0.5, f = 1.0;
         for (int i = 0; i < 4; ++i) {
@@ -293,14 +289,8 @@ static inline float3 nature_auroraLand(float az, float e, float pix) {
         float H = (0.010 + 0.016 * nature_h1(id + 77.0)) * (0.65 + 0.5 * dens);
         float y = e - base;
         float rel = clamp(1.0 - y / H, 0.0, 1.0);
-        // Whorls irregular in spacing and reach, each side its own (a regular sawtooth
-        // read as a cut-out Christmas tree), needle tufts, a slim spire.
-        float sd = id * 1.7 + (az < pxc ? 0.0 : 13.0);
-        float tp = (1.0 - rel) * (10.0 + 5.0 * nature_h1(id + 3.0)) + nature_h1(id + 9.0) + 0.6 * nature_n1((1.0 - rel) * 9.0 + sd);
-        float tier = tp - floor(tp);
-        float reach = 0.55 + 0.45 * nature_h1(floor(tp) * 1.3 + sd);
-        float prof = mix(0.62, 1.0, reach * sqrt(tier)) * (0.86 + 0.14 * nature_n1((1.0 - rel) * 70.0 + sd * 3.0));
-        float hw = H * 0.26 * rel * (0.75 + 0.25 * rel) * prof + pix * 0.4;
+        float tier = fract((H - y) / (H * 0.12) + nature_h1(id + 9.0));
+        float hw = H * 0.24 * rel * (0.55 + 0.45 * tier) + pix * 0.4;
         float dx = abs(az - pxc);
         float cov = smoothstep(hw + pix, hw - pix, dx) * step(y, H);
         forest = max(forest, cov);
@@ -318,10 +308,7 @@ static inline float3 nature_auroraView(float3 rd, constant FXUniforms& u, Nature
     // faint airglow band and light scattered from the aurora into the lower sky.
     float he = max(e, 0.0);
     float3 col = P.sky * (1.0 + 5.5 * exp(-he * 11.0));
-    // Diffuse aurora under the arcs: a faint, patchy green veil down to the horizon, so the
-    // discrete curtains' lower edges read as edges of light, not as dark ridgelines.
-    float dif = 0.45 + 1.1 * (0.5 + 0.5 * sin(az * 5.3 + P.ts * 0.012 + 1.0)) * (0.5 + 0.5 * sin(az * 13.1 - P.ts * 0.02 + 4.0));
-    col += P.cG * (0.010 * exp(-he * 10.0) + 0.009 * exp(-he * 3.5) * dif) * P.inten;
+    col += P.cG * 0.010 * exp(-he * 10.0) * P.inten;
     float ext = exp(-0.10 / (max(rd.y, 0.0) + 0.035));             // atmospheric extinction
 
     if (land.x < 0.999 && land.y < 0.999) {

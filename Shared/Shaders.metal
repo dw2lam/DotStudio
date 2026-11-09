@@ -345,6 +345,84 @@ static inline float4 bh_disk(float3 H, float fr, float ts, float rin, float rout
     float I = f * H.z;
     return float4(B * (I * I * I) * alpha * (0.25 + 0.75 * smoothstep(0.15, 0.95, n)), alpha);
 }
+// Total bending of a ray that never comes near the disk, from the camera (distance D) out to
+// the sky, for the same orbit equation the march integrates (u'' + u = 3/2·rs·u², with the
+// march's energy 1/b² − rs/D³). The swept angle is ∫du/√(…) on both legs; with u = u0(1−t²)
+// the integrand is 2√u0/√g(t), smooth, so a 4-point Gauss rule is exact to ~0.1 mrad — the
+// marched and analytic skies meet without a seam.
+static inline float bh_weakBend(float b, float rs, float D) {
+    float C = 1.0 / (b * b) - rs / (D * D * D);
+    float u0 = 1.0 / b;
+    for (int i = 0; i < 3; ++i)
+        u0 -= (C - u0 * u0 + rs * u0 * u0 * u0) / (-2.0 * u0 + 3.0 * rs * u0 * u0);
+    float tc = sqrt(max(1.0 - 1.0 / (D * u0), 0.0));
+    const float4 gx = float4(0.06943184, 0.33000948, 0.66999052, 0.93056816);
+    const float4 gw = float4(0.17392742, 0.32607258, 0.32607258, 0.17392742);
+    float s = 0.0;
+    for (int k = 0; k < 2; ++k) {
+        float4 tt = gx * (k == 0 ? 1.0 : tc);
+        float4 uu = u0 * (1.0 - tt * tt);
+        float4 g = (u0 + uu) - rs * (u0 * u0 + u0 * uu + uu * uu);
+        s += dot(gw, rsqrt(max(g, 1e-12))) * (k == 0 ? 1.0 : tc);
+    }
+    return 2.0 * sqrt(u0) * s - (3.14159265 - asin(min(b / D, 1.0)));
+}
+// The rest of the bending after the march stops at radius ~1.5 D (first order, straight
+// line from the exit point to infinity), so marched rays land on the same sky.
+static inline float3 bh_bendTail(float3 x, float3 d, float rs) {
+    float s0 = dot(x, d);
+    float3 cp = x - d * s0;
+    float be = max(length(cp), 1e-4);
+    float q = s0 * (2.0 * s0 * s0 + 3.0 * be * be) * pow(s0 * s0 + be * be, -1.5);
+    float al = rs / (2.0 * be) * (2.0 - q);
+    return d * cos(al) - (cp / be) * sin(al);
+}
+// One ray from the camera: up to three disk crossings (r, φ, g, weight) and the direction it
+// leaves along. Drift-kick-drift with a step ∝ r; outbound crossings (past periapsis) are the
+// lensed images and carry the coverage weight wRing (see case 40).
+struct BHRay { float4 H0, H1, H2; float3 v; };
+static inline BHRay bh_march(float3 ro, float3 rd, float b, float rs, float rin, float rout,
+                             float D, float sgn, float wRing) {
+    BHRay R;
+    R.H0 = float4(0.0); R.H1 = float4(0.0); R.H2 = float4(0.0);
+    float3 x = ro, v = rd;
+    float h2 = b * b;
+    int nh = 0;
+    if (b > rout + 3.0 * rs) {
+        // Never reaches the disk: the same bending, integrated in closed form.
+        float3 cp = ro - rd * dot(ro, rd);
+        float al = bh_weakBend(b, rs, D);
+        R.v = rd * cos(al) - normalize(cp) * sin(al);
+        return R;
+    }
+    for (int i = 0; i < 120; ++i) {
+        float r = length(x);
+        if (r < rs || (r > D * 1.5 && dot(x, v) > 0.0)) break;
+        float dt = clamp(0.115 * r, 0.02, 3.0);   // 2nd order: as accurate as 0.04·r kick-drift
+        float3 xm = x + v * (0.5 * dt);
+        float rm2 = dot(xm, xm);
+        v -= (1.5 * rs * h2 * dt * rsqrt(rm2) / (rm2 * rm2)) * xm;
+        float3 xn = xm + v * (0.5 * dt);
+        if (x.y * xn.y < 0.0 && nh < 3) {
+            float3 hp = mix(x, xn, x.y / (x.y - xn.y));
+            float hr = length(hp.xz);
+            if (hr > rin * 0.9 && hr < rout) {
+                float phi = atan2(hp.z, hp.x);
+                float beta = min(sqrt(rs / (2.0 * max(hr - rs, 0.5 * rs))), 0.7);
+                float3 vdir = float3(-sin(phi), 0.0, cos(phi)) * sgn;
+                float g = sqrt(max(1.0 - rs / hr, 0.02)) * sqrt(1.0 - beta * beta)
+                        / (1.0 + beta * dot(vdir, normalize(v)));   // photon leaves along −v
+                g = pow(g, 0.6);                    // beaming tempered: still clearly lopsided
+                float4 H = float4(hr, phi, g, dot(hp, v) > 0.0 ? wRing : 1.0);
+                if (nh == 0) R.H0 = H; else if (nh == 1) R.H1 = H; else R.H2 = H;
+                ++nh;
+            }
+        }
+        x = xn;
+    }
+    R.v = dot(x, x) > D * D ? bh_bendTail(x, normalize(v), rs) : v;
+    return R;
+}
 // Point stars + a faint galactic band on the sky, for a ray leaving along d. Lensing maps
 // image pixels to the sky through the Jacobian whose inverse is Ji (sky offset in the
 // tangent frame e1, e2 → image pixels): each star is splatted as a round ~1 px point in the
@@ -1243,10 +1321,14 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         float rpx = rp * pxs;
         float thp = atan2(s.y, s.x);
         float rho = log(rp);
-        float sigT = sz * res.y * 0.0008;                     // star PSF σ in px: same look at any size,
-        float sig = max(0.72 * min(sz, 1.0), sigT);           // never under-sampled; a small frame (a
-        float thumb = min(sigT / sig, 1.0);                   // thumbnail) dims them as downscaling would
-        thumb *= thumb;
+        // Star PSF: σ ∝ size and frame height (same look at any resolution), but never under
+        // ~0.7 px so a point is always sampled. Flux is what's conserved: ∝ size² for big
+        // stars, ∝ size below 1 (small stars stay visible as finer, dimmer points), and a σ
+        // clamped up to 0.7 px spreads the same flux thinner — a thumbnail or a tiny star
+        // looks like a downscale, not a snowstorm of 1 px dots.
+        float sig1 = res.y * 0.0008;
+        float sig = max(0.7, sz * sig1);
+        float thumb = (sz < 1.0 ? sz : sz * sz) * sig1 * sig1 / (sig * sig);
         float M0 = exp2(floor(log2(512.0 / max(sz, 1.0))));  // sectors in q's octave 0
         const float LQ = 0.34657359;                          // ln 2 / 2: two q-cells per octave
         const int NL = 8;
@@ -1269,17 +1351,22 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
             for (float iq = ia; iq <= ib; iq += 1.0) {
                 float M = clamp(M0 * exp2(floor(iq * 0.5)), 8.0, 16384.0);
                 float eq0 = exp(iq * LQ);
-                // P(star in cell) = density × ∫ e^{2q} dq dθ over the cell (e^{2·LQ} = 2).
-                float pc = min(Dk * eq0 * eq0 * 3.14159265 / M, 1.0);
+                // Expected stars per cell = density × ∫ e^{2q} dq dθ (e^{2·LQ} = 2). Where that
+                // passes 1 (dense fields, big stars → few wide sectors) a cell holds several
+                // stars, so the density stays uniform out to the frame edge (no central clump).
+                float lam = Dk * eq0 * eq0 * 3.14159265 / M;
+                int K = int(min(ceil(lam), 6.0));
                 float cth = (thp + 3.14159265) * M * 0.15915494;
                 float ith = floor(cth), fth = cth - ith;
                 float w = 6.2831853 / M * rpx;                // sector width here, px
                 int nn = (3.0 * sig > min(fth, 1.0 - fth) * w + 0.15 * w) ? 2 : 1;
-                for (int k = 0; k < nn; ++k) {
+                for (int kk = 0; kk < nn * K; ++kk) {
+                    int k = kk / K, j = kk - k * K;
                     float cell = ith + (k == 0 ? 0.0 : (fth < 0.5 ? -1.0 : 1.0));
                     cell -= M * floor(cell / M);
-                    float3 h = pcg3(float3(cell, iq, seed));
-                    if (h.x >= pc) continue;
+                    float jq = iq + 64.0 * float(j);              // the j-th star of this cell
+                    float3 h = pcg3(float3(cell, jq, seed));
+                    if (h.x >= lam - float(j)) continue;          // P = clamp(λ − j, 0, 1)
                     float ths = (cell + 0.15 + 0.7 * h.y) * 6.2831853 / M - 3.14159265;
                     float dth = thp - ths;
                     dth -= 6.2831853 * floor(dth * 0.15915494 + 0.5);
@@ -1293,9 +1380,9 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
                     float a = ell > 0.02 * sig
                             ? (sf_ncdf(along / sig) - sf_ncdf((along - ell) / sig)) * 2.5066283 * sig / ell
                             : exp(-along * along / (2.0 * sig * sig));
-                    float3 h2 = pcg3(float3(cell + 9137.0, iq, seed + 3.0));
+                    float3 h2 = pcg3(float3(cell + 9137.0, jq, seed + 3.0));
                     float L2 = h2.x * h2.x * h2.x;
-                    float L = 0.03 + 0.10 * h2.x + 1.4 * L2 * L2;
+                    float L = (0.03 + 0.10 * h2.x + 1.4 * L2 * L2) * max(lam / float(K), 1.0);
                     float3 tint = mix(float3(0.82, 0.90, 1.10), float3(1.10, 0.96, 0.82), h2.y);
                     acc += tint * (L * flux * g * a);
                 }
@@ -1304,7 +1391,8 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         float3 A = srgbToLinear(u.colorA.rgb), B = srgbToLinear(u.colorB.rgb);
         // Exposure follows the shutter: long streaks spread each star's light thin, so warp
         // opens up (as a camera would) to keep light-speed bright.
-        float3 col = A + B * (1.0 - exp(-acc * 1.8 * thumb * (1.0 + 2.6 * w2 * w2)));
+        // Starlight covers the background (linear mix), so light-ground palettes keep their stars.
+        float3 col = mix(A, B, 1.0 - exp(-acc * 1.8 * thumb * (1.0 + 6.0 * w2 * w2)));
         return float4(linearToSrgb(col) + bandDither(px), 1.0);
     }
 
@@ -1406,7 +1494,15 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
             if (bi < 0) continue;
             float bt = k == 0 ? t2 : t1, bc = k == 0 ? c2 : c1;
             float3 c = bi == 3 ? pE : bi == 6 ? pS : bi == 9 ? pM : uniBodyPos(bi, ta);
-            float3 n0 = normalize(ro + rd * bt - c);
+            // Shade a limb pixel at the middle of the strip of it the disc covers (not at the
+            // silhouette, where μ = 0): the edge then carries the limb's true average colour
+            // instead of a darker, redder 1 px rim.
+            float3 oc = ro - c;
+            float tca = -dot(oc, rd);
+            float3 pp = oc + rd * tca;
+            float dd = length(pp), R = UNI_RAD[bi];
+            float de = min(dd, R - 0.5 * bc * tca * pix);
+            float3 n0 = (pp / max(dd, 1e-6) * de - rd * sqrt(max(R * R - de * de, 0.0))) / R;
             float3 sc = uniShade(bi, c, n0, rd, bt * pix / UNI_RAD[bi], camR, camU, ts, t,
                                  eE, eN, eM, subLon, u.p2, moonM, ringN,
                                  earthDay, earthNight, planetTex, samp, haveTex);
@@ -1419,7 +1515,7 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
             float x = max(ds - UNI_RAD[0], 0.0);
             float3 glow = float3(1.0, 0.60, 0.26) * (0.60 * exp(-x * 6.0) + 0.20 * exp(-x * 1.3))
                         + float3(1.0, 0.45, 0.18) * 0.05 * exp(-ds * 0.32);
-            G = glow; dG = tc;
+            G = glow; dG = tc + UNI_RAD[0] * 0.05;           // the corona sits behind the disc's silhouette
         }
 
         if (tP > 0.0) {                                      // the ecliptic: dust disk, belt, orbits
@@ -1525,58 +1621,52 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         float pix = 2.0 / (res.y * F);
 
         float b = length(cross(ro, rd));            // impact parameter: conserved, decides capture
-        float bc = 2.5980762 * rs;
-        float shadow = clamp((bc - b) / max(fwidth(b), 1e-6) + 0.5, 0.0, 1.0);
-
-        // ---- march (kick-drift, step ∝ r) ----
-        float3 x = ro, v = rd;
-        float h2 = b * b;
-        float3 H0 = float3(0.0), H1 = float3(0.0), H2 = float3(0.0);   // (r, φ, g) per crossing
-        int nh = 0;
+        float fb = max(fwidth(b), 1e-6);
+        // Capture threshold: √27/2·rs, as the drift-kick-drift march realises it (0.75 %
+        // inside the exact value), so the shadow edge and the photon ring agree.
+        float bc = 2.5980762 * rs * 0.9926;
+        float shadow = clamp((bc - b) / fb + 0.5, 0.0, 1.0);
+        // Images that reach the camera only after the ray has rounded the hole (the photon
+        // ring, and the far side lensed under it) are squeezed into a band of b whose width
+        // shrinks like (b − bc). Once that band is narrower than this pixel's footprint in b
+        // the image is sub-pixel: point-sampling it would give a row of stray dots, so it is
+        // faded by its coverage instead.
+        float wRing = clamp((b - bc) * 0.6 / fb, 0.0, 1.0);
         float sgn = rotSpeed < 0.0 ? -1.0 : 1.0;
-        if (b > rout + 3.0 * rs) {
-            // Never reaches the disk: weak-field deflection 2rs/b toward the hole, no march.
-            float3 cp = ro - rd * dot(ro, rd);
-            float al = 2.0 * rs / b;
-            v = rd * cos(al) - normalize(cp) * sin(al);
-        } else {
-            for (int i = 0; i < 120; ++i) {
-                float r2 = dot(x, x);
-                float r = sqrt(r2);
-                if (r < rs || (r > D * 1.5 && dot(x, v) > 0.0)) break;
-                float dt = clamp(0.085 * r, 0.02, 3.0);
-                v -= (1.5 * rs * h2 / (r2 * r2 * r) * dt) * x;
-                float3 xn = x + v * dt;
-                if (x.y * xn.y < 0.0 && nh < 3) {
-                    float3 hp = mix(x, xn, x.y / (x.y - xn.y));
-                    float hr = length(hp.xz);
-                    if (hr > rin * 0.9 && hr < rout) {
-                        float phi = atan2(hp.z, hp.x);
-                        float beta = min(sqrt(rs / (2.0 * max(hr - rs, 0.5 * rs))), 0.7);
-                        float3 vdir = float3(-sin(phi), 0.0, cos(phi)) * sgn;
-                        float g = sqrt(max(1.0 - rs / hr, 0.02)) * sqrt(1.0 - beta * beta)
-                                / (1.0 + beta * dot(vdir, normalize(v)));   // photon leaves along −v
-                        g = pow(g, 0.6);                    // beaming tempered: still clearly lopsided
-                        float3 H = float3(hr, phi, g);
-                        if (nh == 0) H0 = H; else if (nh == 1) H1 = H; else H2 = H;
-                        ++nh;
-                    }
-                }
-                x = xn;
-            }
-        }
-        float3 dOut = normalize(v);
+
+        // ---- march ----
+        BHRay R = bh_march(ro, rd, b, rs, rin, rout, D, sgn, wRing);
+        float3 dOut = normalize(R.v);
 
         // ---- shade (uniform control flow again: footprints from screen derivatives) ----
         float T0 = 4400.0;
+        float f0 = fwidth(R.H0.x), f1 = max(fwidth(R.H1.x), f0), f2 = max(fwidth(R.H2.x), 0.5);
+        float2 gb = float2(dfdx(b), dfdy(b));
         float3 acc = float3(0.0);
         float A = 0.0;
-        float4 d0 = bh_disk(H0, fwidth(H0.x), ts, rin, rout, rotSpeed, T0);
-        acc += d0.rgb; A = d0.a;
-        float4 d1 = bh_disk(H1, max(fwidth(H1.x), fwidth(H0.x)), ts, rin, rout, rotSpeed, T0);
-        acc += (1.0 - A) * d1.rgb; A += (1.0 - A) * d1.a;
-        float4 d2 = bh_disk(H2, max(fwidth(H2.x), 0.5), ts, rin, rout, rotSpeed, T0);
-        acc += (1.0 - A) * d2.rgb; A += (1.0 - A) * d2.a;
+        // Where the photon ring is narrower than ~1.2 px (thumbnails, light holes) one sample
+        // per pixel would hit or miss it from pixel to pixel — a dashed ring. Those pixels
+        // trace four sub-rays across their footprint in b and average them instead.
+        bool ss = fb > 0.012 * bc && b > bc - fb && b < bc * 1.12 + fb;
+        int nS = ss ? 4 : 1;
+        float2 gdir = gb / max(length(gb), 1e-9) * (2.0 / res.y);
+        for (int k = 0; k < nS; ++k) {
+            BHRay S = R;
+            if (ss) {
+                float2 o = gdir * ((float(k) - 1.5) * 0.25);
+                float3 rk = normalize(fwd * F + rgt * (sp.x + o.x) + cup * (sp.y - o.y));
+                float bk = length(cross(ro, rk));
+                S = bh_march(ro, rk, bk, rs, rin, rout, D, sgn, clamp((bk - bc) * 2.4 / fb, 0.0, 1.0));
+            }
+            float4 d0 = bh_disk(S.H0.xyz, f0, ts, rin, rout, rotSpeed, T0) * S.H0.w;
+            float4 d1 = bh_disk(S.H1.xyz, f1, ts, rin, rout, rotSpeed, T0) * S.H1.w;
+            float4 d2 = bh_disk(S.H2.xyz, f2, ts, rin, rout, rotSpeed, T0) * S.H2.w;
+            float3 ak = d0.rgb + (1.0 - d0.a) * d1.rgb;
+            float Ak = d0.a + (1.0 - d0.a) * d1.a;
+            ak += (1.0 - Ak) * d2.rgb; Ak += (1.0 - Ak) * d2.a;
+            acc += ak; A += Ak;
+        }
+        acc /= float(nS); A /= float(nS);
         // Lensing Jacobian (sky radians per image pixel) in a tangent frame at dOut.
         float3 e1 = normalize(cross(dOut, abs(dOut.y) < 0.9 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0)));
         float3 e2 = cross(dOut, e1);
