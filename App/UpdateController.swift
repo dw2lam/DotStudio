@@ -140,6 +140,13 @@ struct UpdateReadyButton: View {
             Button { updates.primaryAction() } label: {
                 Label("Update to \(v)", systemImage: "arrow.down.circle.fill")
             }
+            // A toolbar shows a bare Label as its icon only: keep the title visible, as a pill
+            // that never truncates.
+            .labelStyle(.titleAndIcon)
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+            .lineLimit(1)
+            .fixedSize()
             .help("DotStudio \(v) is downloaded — click to restart and finish updating (or it installs when you quit)")
         }
     }

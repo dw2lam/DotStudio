@@ -18,6 +18,7 @@ struct OnboardingView: View {
     }
 
     @EnvironmentObject var model: AppModel
+    @Environment(\.layout) private var layout
 
     @State private var step: Step
     @State private var forward = true
@@ -32,7 +33,19 @@ struct OnboardingView: View {
     /// Pins the setup status (UI shots only — the real status comes from the model).
     private let statusOverride: Installer.Status?
 
+    /// The sheet at the default text size — and its minimum (UIShots renders it at this size).
     static let size = CGSize(width: 760, height: 600)
+    /// Side inset shared by every step AND the footer, so the content edges, the step dots and
+    /// the buttons sit on one grid and don't jump between steps. Local to this sheet: it is
+    /// always `.compact`, where `layout.pagePadding` (20) is too tight for a modal.
+    static let inset = Space.xl
+
+    /// Grows with the text (by half the text's growth, like component spacing), so bigger
+    /// text gets a bigger sheet and not only more scrolling. Never below `size`.
+    private var sheetSize: CGSize {
+        CGSize(width: max(Self.size.width, layout.scaled(Self.size.width)),
+               height: max(Self.size.height, layout.scaled(Self.size.height)))
+    }
 
     static var starterDraft: Preset {
         var p = Preset(name: "My Risograph")
@@ -60,11 +73,12 @@ struct OnboardingView: View {
                         removal: .offset(x: forward ? -36 : 36).combined(with: .opacity)))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
+            .clipped()   // the sideways page transition; every page scrolls, so content never overflows
 
             footer
         }
-        .frame(width: Self.size.width, height: Self.size.height)
+        .frame(minWidth: Self.size.width, idealWidth: sheetSize.width, maxWidth: sheetSize.width,
+               minHeight: Self.size.height, idealHeight: sheetSize.height, maxHeight: sheetSize.height)
         .background(Color(nsColor: .windowBackgroundColor))
         .background {
             // Esc closes the whole flow (counts as completed — the Screensaver card still offers setup).
@@ -88,55 +102,56 @@ struct OnboardingView: View {
     // MARK: Footer
 
     private var footer: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: layout.controlGap) {
             StepDots(count: Step.allCases.count, current: step.rawValue)
-            Spacer()
+            Spacer(minLength: layout.itemGap)
             if step == .enable && status != .ready {
-                Button("Skip for Now") { go(to: .done) }
+                // A link sits apart from the push buttons: two control gaps.
+                Button(scaled: "Skip for Now") { go(to: .done) }
                     .buttonStyle(.link)
-                    .padding(.trailing, 6)
+                    .padding(.trailing, layout.controlGap)
             }
             if step != .welcome {
-                Button("Back") { go(to: Step(rawValue: step.rawValue - 1)!) }
-                    .controlSize(.large)
+                Button(scaled: "Back") { go(to: Step(rawValue: step.rawValue - 1)!) }
+                    .adaptiveControlSize(.large)
             }
             primaryButton
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 18)
+        .padding(.horizontal, Self.inset)
+        .padding(.vertical, Space.m)
         .background(alignment: .top) { Divider() }
     }
 
     @ViewBuilder private var primaryButton: some View {
         switch step {
         case .welcome:
-            Button("Get Started") { go(to: .pick) }
+            Button(scaled: "Get Started") { go(to: .pick) }
                 .defaultPrimary()
         case .pick:
             if pickMode == .create {
-                Button(createdName == nil ? "Create & Continue" : "Save & Continue") {
+                Button(scaled: createdName == nil ? "Create & Continue" : "Save & Continue") {
                     createdName = model.saveCreated(draft)
                     draft.name = createdName ?? draft.name
                     go(to: .enable)
                 }
                 .defaultPrimary()
             } else {
-                Button("Continue") { go(to: .enable) }
+                Button(scaled: "Continue") { go(to: .enable) }
                     .defaultPrimary()
             }
         case .enable:
             // Until it's on, the step's own Install / Open button holds the Return key.
             if status == .ready {
-                Button("Continue") { go(to: .done) }
+                Button(scaled: "Continue") { go(to: .done) }
                     .defaultPrimary()
             } else {
-                Button("Continue") { go(to: .done) }
-                    .controlSize(.large)
+                Button(scaled: "Continue") { go(to: .done) }
+                    .adaptiveControlSize(.large)
                     .disabled(true)
                     .help("Turn on the screensaver above, or skip for now")
             }
         case .done:
-            Button("Start Using DotStudio") { close() }
+            Button(scaled: "Start Using DotStudio") { close() }
                 .defaultPrimary()
         }
     }
@@ -167,7 +182,7 @@ struct OnboardingView: View {
 private extension View {
     func defaultPrimary() -> some View {
         self.buttonStyle(.borderedProminent)
-            .controlSize(.large)
+            .adaptiveControlSize(.large)
             .keyboardShortcut(.defaultAction)
     }
 }
@@ -179,11 +194,11 @@ private struct StepDots: View {
     let current: Int
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: Space.xs) {
             ForEach(0..<count, id: \.self) { i in
                 Capsule()
                     .fill(i == current ? Color.accentColor : Color.primary.opacity(i < current ? 0.35 : 0.15))
-                    .frame(width: i == current ? 20 : 7, height: 7)
+                    .frame(width: i == current ? Space.l : Space.xs, height: Space.xs)
             }
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: current)
@@ -195,20 +210,43 @@ private struct StepDots: View {
 // MARK: - Shared bits
 
 private struct PageHeader: View {
+    @Environment(\.layout) private var layout
     let title: String
     let subtitle: String
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: layout.labelGap) {
             Text(title)
-                .font(.system(size: 26, weight: .bold))
+                .textRole(.pageTitle)
+                .wrapping(.center)
             Text(subtitle)
-                .font(.title3)
+                .textRole(.pageSubtitle)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
+                .wrapping(.center)
         }
-        .frame(maxWidth: 540)
+        .readableWidth(layout, alignment: .center)
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// A step's body. It scrolls when the text outgrows the sheet (the footer stays pinned), and
+/// every step shares the same side inset and top padding, so the header holds its place from
+/// step to step. `centered` centres short content in the height (the welcome step).
+private struct PageScroll<Content: View>: View {
+    var centered = false
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        GeometryReader { geo in
+            ScrollView(.vertical) {
+                content
+                    .padding(.horizontal, OnboardingView.inset)
+                    .padding(.vertical, Space.l)
+                    .frame(maxWidth: .infinity, minHeight: geo.size.height,
+                           alignment: centered ? .center : .top)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
     }
 }
 
@@ -216,7 +254,7 @@ private struct PageHeader: View {
 private struct ThumbCard: View {
     @EnvironmentObject var model: AppModel
     let preset: Preset
-    var cornerRadius: CGFloat = 10
+    var cornerRadius: CGFloat = Radius.tile   // like a gallery tile
 
     var body: some View {
         Group {
@@ -265,6 +303,7 @@ private extension AppModel {
 
 private struct WelcomePage: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.layout) private var layout
     let livePreview: Bool
     @State private var appeared = false
 
@@ -279,15 +318,14 @@ private struct WelcomePage: View {
     }
 
     var body: some View {
-        VStack(spacing: 34) {
-            heroStack
-                .frame(height: 200)
-            PageHeader(title: "Welcome to DotStudio",
-                       subtitle: "Living, generative screensavers for your Mac.")
+        PageScroll(centered: true) {
+            VStack(spacing: layout.sectionGap) {
+                heroStack
+                    .frame(height: 200)   // the front card (187.5) plus the tilted side cards' overhang
+                PageHeader(title: "Welcome to DotStudio",
+                           subtitle: "Living, generative screensavers for your Mac.")
+            }
         }
-        .frame(maxHeight: .infinity)
-        .padding(.bottom, 6)
-        .padding(.horizontal, 40)
         .onAppear {
             withAnimation(.spring(response: 0.6, dampingFraction: 0.8).delay(0.05)) { appeared = true }
         }
@@ -313,15 +351,15 @@ private struct WelcomePage: View {
     @ViewBuilder
     private func card(_ preset: Preset, live: Bool) -> some View {
         if live {
-            ThumbCard(preset: preset, cornerRadius: 12)
+            ThumbCard(preset: preset, cornerRadius: Radius.m)
                 .overlay {
                     MetalPreview(preset: preset, source: model.library.source,
                                  location: model.locationTuple, store: model.store)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: Radius.m, style: .continuous))
                         .allowsHitTesting(false)
                 }
         } else {
-            ThumbCard(preset: preset, cornerRadius: 12)
+            ThumbCard(preset: preset, cornerRadius: Radius.m)
         }
     }
 }
@@ -330,6 +368,7 @@ private struct WelcomePage: View {
 
 private struct PickPage: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.layout) private var layout
     @Binding var mode: OnboardingView.PickMode
     @Binding var draft: Preset
     @Binding var nameEdited: Bool
@@ -337,34 +376,48 @@ private struct PickPage: View {
     @State private var picks: [Preset] = []
 
     var body: some View {
-        VStack(spacing: 16) {
-            PageHeader(title: "Make Your Screensaver",
-                       subtitle: "Start from a preset, or create your own. You can change it any time.")
-            Picker("Mode", selection: $mode.animation(.easeOut(duration: 0.18))) {
-                ForEach(OnboardingView.PickMode.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 320)
-
-            Group {
-                switch mode {
-                case .presets: presetGrid
-                case .create: CreatePanel(draft: $draft, nameEdited: $nameEdited, livePreview: livePreview)
+        Group {
+            if mode == .create && !CreatePanel.stacks(layout) {
+                // Side by side: the effect picker scrolls on its own and fills the height
+                // under the header, so this page doesn't scroll as a whole. Same insets as
+                // PageScroll, so the header doesn't move when switching tabs.
+                VStack(spacing: layout.sectionGap) {
+                    header
+                    CreatePanel(draft: $draft, nameEdited: $nameEdited, livePreview: livePreview, stacked: false)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                }
+                .padding(.horizontal, OnboardingView.inset)
+                .padding(.vertical, Space.l)
+            } else {
+                PageScroll {
+                    VStack(spacing: layout.sectionGap) {
+                        header
+                        switch mode {
+                        case .presets: presetGrid
+                        case .create: CreatePanel(draft: $draft, nameEdited: $nameEdited, livePreview: livePreview, stacked: true)
+                        }
+                    }
                 }
             }
-            .frame(maxHeight: .infinity, alignment: .top)
         }
-        .padding(.horizontal, 36)
-        .padding(.top, 24)
-        .padding(.bottom, 16)
-        .frame(maxHeight: .infinity, alignment: .top)
         // Freeze the list on appear so tiles don't reshuffle when the pick changes.
         .onAppear { if picks.isEmpty { picks = model.onboardingPicks() } }
     }
 
+    private var header: some View {
+        VStack(spacing: layout.sectionGap) {
+            PageHeader(title: "Make Your Screensaver",
+                       subtitle: "Start from a preset, or create your own. You can change it any time.")
+            ScaledSegmentedPicker(title: "Mode", selection: $mode.animation(.easeOut(duration: 0.18)),
+                                  options: OnboardingView.PickMode.allCases.map { ($0.rawValue, $0) },
+                                  fills: true, alignment: .center)
+                .frame(maxWidth: layout.scaled(Space.grid(80)))   // 320: two equal segments
+        }
+    }
+
     private var presetGrid: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 16), count: 3), spacing: 16) {
+        LazyVGrid(columns: layout.columns(minimum: 200, spacing: layout.gridColumnGap),
+                  spacing: layout.gridRowGap) {
             ForEach(picks) { preset in
                 PickTile(preset: preset,
                          selected: model.library.activeID == preset.id) {
@@ -372,17 +425,32 @@ private struct PickPage: View {
                 }
             }
         }
-        .padding(.top, 4)
     }
 }
 
-/// "Create Your Own": live preview + name on the left; the same Effect / Canvas
-/// pickers as the editor on the right. Picking a Scene makes it a Scene.
+/// "Create Your Own": live preview + name, beside (or, at large text, above) the same
+/// Effect / Canvas pickers as the editor. Picking a Scene makes it a Scene.
 private struct CreatePanel: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.layout) private var layout
     @Binding var draft: Preset
     @Binding var nameEdited: Bool
     let livePreview: Bool
+    /// Stacked: a full-width row (preview beside the name and blurb) above the full-width
+    /// pickers, inside the page's scroll (the pickers get a fixed height). Side by side: the
+    /// pickers fill the height beside the details column.
+    let stacked: Bool
+
+    /// Side by side, the details column has a fixed height to fit in; from .xxLarge text on
+    /// (and whenever the layout prefers stacking) it no longer reliably does, so stack.
+    static func stacks(_ layout: LayoutMetrics) -> Bool {
+        layout.prefersStacking || layout.typeSize >= .xxLarge
+    }
+
+    /// The stacked preview's width at the default text size (grows with `layout.scaled`). Kept
+    /// small so the row stays short and the effect picker — the step's main control — starts
+    /// on the first screen.
+    private static let stackedPreviewWidth = Space.grid(60)   // 240
     @State private var tab: Tab = .effect
 
     enum Tab: String, CaseIterable, Identifiable {
@@ -393,78 +461,105 @@ private struct CreatePanel: View {
     private var kind: EffectKind? { draft.effects.first?.kind }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 20) {
-            VStack(alignment: .leading, spacing: 12) {
-                preview
-                TextField("Name", text: nameBinding)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.title3)
-                if let kind {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Label(kind.displayName, systemImage: kind.category.symbol)
-                            .font(.headline)
-                        Text(kind.blurb)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+        if stacked {
+            // Spans the page like the header and the preset grid: no empty half beside it.
+            VStack(alignment: .leading, spacing: layout.sectionGap) {
+                HStack(alignment: .top, spacing: layout.sectionGap) {
+                    preview
+                        .frame(width: layout.scaled(Self.stackedPreviewWidth))
+                    detailText
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                Text(draft.isScene
-                     ? "This is a Scene — it draws itself. Add layers and tune it later in the editor."
-                     : "This is a Look — it restyles your canvas. Layer more effects later in the editor.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                effectPanel
+                    .frame(height: layout.scaled(360))
             }
-            .frame(width: 330)
-
-            VStack(spacing: 10) {
-                Picker("Section", selection: $tab) {
-                    ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            HStack(alignment: .top, spacing: layout.sectionGap) {
+                VStack(alignment: .leading, spacing: layout.itemGap) {
+                    preview
+                    detailText
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-
-                Group {
-                    switch tab {
-                    case .effect:
-                        AddEffectPicker(source: model.library.source, thumbnailer: model.thumbnailer,
-                                        prompt: "Search effects and scenes",
-                                        selected: kind, size: nil, scenesLast: true) { pick($0) }
-                    case .canvas:
-                        if draft.isScene {
-                            VStack(spacing: 8) {
-                                Image(systemName: "sparkles").font(.title).foregroundStyle(.secondary)
-                                Text("Scenes don't use a canvas.").font(.headline)
-                                Text("Pick a Look in Effect to restyle a gradient, photo or video.")
-                                    .font(.callout).foregroundStyle(.secondary)
-                                    .multilineTextAlignment(.center)
-                            }
-                            .padding(24)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else {
-                            ScrollView {
-                                SourceEditor(source: model.sourceBinding, model: model)
-                                    .padding(14)
-                            }
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.background.secondary))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.07)))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .frame(width: layout.scaled(300)...layout.scaled(360), alignment: .top)
+                effectPanel
             }
         }
     }
 
+    /// Name, effect and what it makes — under the preview side by side, beside it stacked.
+    private var detailText: some View {
+        VStack(alignment: .leading, spacing: layout.itemGap) {
+            TextField("Name", text: nameBinding)
+                .textFieldStyle(.roundedBorder)
+                .textRole(.pageSubtitle)
+            if let kind {
+                VStack(alignment: .leading, spacing: layout.labelGap) {
+                    Label(kind.displayName, systemImage: kind.category.symbol)
+                        .textRole(.headline)
+                    Text(kind.blurb)
+                        .textRole(.callout)
+                        .foregroundStyle(.secondary)
+                        .wrapping()
+                }
+            }
+            Text(draft.isScene
+                 ? "A Scene draws itself. Add more layers in the editor."
+                 : "A Look restyles your canvas. Add more effects in the editor.")
+                .textRole(.caption)
+                .foregroundStyle(.secondary)
+                .wrapping()
+        }
+    }
+
+    private var effectPanel: some View {
+        VStack(spacing: layout.controlGap) {
+            ScaledSegmentedPicker(title: "Section", selection: $tab,
+                                  options: Tab.allCases.map { ($0.rawValue, $0) })
+
+            Group {
+                switch tab {
+                case .effect:
+                    AddEffectPicker(source: model.library.source, thumbnailer: model.thumbnailer,
+                                    prompt: "Search effects and scenes",
+                                    selected: kind, size: nil, scenesLast: true) { pick($0) }
+                case .canvas:
+                    if draft.isScene {
+                        VStack(spacing: layout.controlGap) {
+                            Image(systemName: "sparkles")
+                                .scaledFont { .scaled(.title, $0) }
+                                .foregroundStyle(.secondary)
+                            Text("Scenes don't use a canvas.")
+                                .textRole(.headline)
+                                .wrapping(.center)
+                            Text("Pick a Look in Effect to restyle a gradient, photo or video.")
+                                .textRole(.callout)
+                                .foregroundStyle(.secondary)
+                                .wrapping(.center)
+                        }
+                        .padding(layout.cardPadding)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        ScrollView {
+                            SourceEditor(source: model.sourceBinding, model: model)
+                                .padding(layout.cardPadding)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(.background.secondary))
+            .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).strokeBorder(Color.primary.opacity(0.07)))
+            .clipShape(RoundedRectangle(cornerRadius: Radius.m, style: .continuous))
+        }
+    }
+
     private var preview: some View {
-        ThumbCard(preset: draft, cornerRadius: 12)
+        ThumbCard(preset: draft, cornerRadius: Radius.m)
             .overlay {
                 if livePreview {
                     MetalPreview(preset: draft, source: model.library.source,
                                  location: model.locationTuple, store: model.store)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: Radius.m, style: .continuous))
                         .allowsHitTesting(false)
                 }
             }
@@ -482,6 +577,7 @@ private struct CreatePanel: View {
 }
 
 private struct PickTile: View {
+    @Environment(\.layout) private var layout
     let preset: Preset
     let selected: Bool
     let action: () -> Void
@@ -489,33 +585,35 @@ private struct PickTile: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: layout.controlGap) {
                 ThumbCard(preset: preset)
                     .overlay(alignment: .topTrailing) {
                         if selected {
                             Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 18, weight: .semibold))
+                                .scaledFont { .scaled(points: 18, $0, weight: .semibold) }
                                 .symbolRenderingMode(.palette)
                                 .foregroundStyle(.white, Color.accentColor)
                                 .shadow(color: .black.opacity(0.3), radius: 2)
-                                .padding(7)
+                                .padding(Space.xs)
                                 .transition(.scale.combined(with: .opacity))
                         }
                     }
-                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .overlay(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous)
                         .strokeBorder(selected ? Color.accentColor : .clear, lineWidth: 3))
                     .shadow(color: .black.opacity(hovering ? 0.22 : 0.1), radius: hovering ? 8 : 3, y: hovering ? 4 : 1)
                     .scaleEffect(hovering ? 1.02 : 1)
-                HStack(spacing: 6) {
+                // One weight for every tile: selection shows as the ring and the checkmark,
+                // so the name never shifts or re-truncates when the pick moves.
+                HStack(alignment: .firstTextBaseline, spacing: layout.controlGap) {
                     Text(preset.name)
-                        .font(.body.weight(selected ? .semibold : .medium))
-                        .lineLimit(1)
+                        .textRole(.itemTitle)
+                        .truncating(preset.name)
                     Spacer(minLength: 0)
                     Text(preset.isScene ? "Scene" : "Look")
-                        .font(.caption)
+                        .textRole(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize()
                 }
-                .padding(.horizontal, 2)
             }
             .contentShape(Rectangle())
         }
@@ -531,52 +629,53 @@ private struct PickTile: View {
 
 private struct EnablePage: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.layout) private var layout
     let status: Installer.Status
     /// Poll System Settings' choice while this step is visible (off for UI shots).
     let polling: Bool
 
     var body: some View {
-        VStack(spacing: 22) {
-            PageHeader(title: "Turn It On",
-                       subtitle: "macOS lets only you choose the screensaver. It takes a moment, once.")
+        PageScroll {
+            VStack(spacing: layout.sectionGap) {
+                PageHeader(title: "Turn It On",
+                           subtitle: "macOS lets only you choose the screensaver. It takes a moment, once.")
 
-            VStack(spacing: 0) {
-                SetupRow(number: 1,
-                         title: "Install the screensaver",
-                         detail: "Adds DotStudio to your Mac's screen savers, then opens Wallpaper settings for you.",
-                         done: status != .notInstalled) {
-                    if status == .notInstalled {
-                        // installScreensaver() opens Wallpaper settings itself when needed.
-                        Button("Install") { model.installScreensaver() }
-                            .buttonStyle(.borderedProminent)
-                            .keyboardShortcut(.defaultAction)
+                VStack(spacing: 0) {
+                    SetupRow(number: 1,
+                             title: "Install the screensaver",
+                             detail: "Adds DotStudio to your Mac's screen savers, then opens Wallpaper settings for you.",
+                             done: status != .notInstalled) {
+                        if status == .notInstalled {
+                            // installScreensaver() opens Wallpaper settings itself when needed.
+                            Button(scaled: "Install") { model.installScreensaver() }
+                                .buttonStyle(.borderedProminent)
+                                .keyboardShortcut(.defaultAction)
+                        }
+                    }
+                    SetupRow(number: 2,
+                             title: "Choose DotStudio",
+                             detail: nil,
+                             done: status == .ready) {
+                        if status == .notChosen {
+                            Button(scaled: "Open Wallpaper Settings") { Installer.openScreenSaverSettings() }
+                                .buttonStyle(.borderedProminent)
+                                .keyboardShortcut(.defaultAction)
+                        }
+                    } extra: {
+                        SettingsPath(items: ["System\u{00A0}Settings", "Wallpaper", "Screen\u{00A0}Saver", "DotStudio"])
+                            .opacity(status == .notInstalled ? 0.55 : 1)
                     }
                 }
-                Divider().padding(.leading, 52)
-                SetupRow(number: 2,
-                         title: "Choose DotStudio",
-                         detail: nil,
-                         done: status == .ready) {
-                    if status == .notChosen {
-                        Button("Open Wallpaper Settings") { Installer.openScreenSaverSettings() }
-                            .buttonStyle(.borderedProminent)
-                            .keyboardShortcut(.defaultAction)
-                    }
-                } extra: {
-                    SettingsPath(items: ["System\u{00A0}Settings", "Wallpaper", "Screen\u{00A0}Saver", "DotStudio"])
-                        .opacity(status == .notInstalled ? 0.55 : 1)
-                }
+                .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(.background.secondary))
+                .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).strokeBorder(Color.primary.opacity(0.07)))
+
+                statusLine
             }
-            .padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.background.secondary))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.07)))
-
-            statusLine
-                .animation(.easeOut(duration: 0.2), value: status)
+            // The status flips live on the poll. Row layout keeps the card's height (the
+            // button-height strut); stacked, a finished step's button row goes away, so the
+            // card and the status line under it ease into place instead of snapping.
+            .animation(.easeOut(duration: 0.2), value: status)
         }
-        .padding(.horizontal, 44)
-        .padding(.top, 30)
-        .frame(maxHeight: .infinity, alignment: .top)
         // ~1s poll while this step is on screen; cancelled when it goes away.
         // (ContentView also refreshes whenever the app becomes active.)
         .task {
@@ -588,29 +687,39 @@ private struct EnablePage: View {
         }
     }
 
+    /// One text role in every state; the colour and the icon carry the state.
     @ViewBuilder private var statusLine: some View {
         switch status {
         case .ready:
             Label("DotStudio is your screensaver.", systemImage: "checkmark.circle.fill")
-                .font(.body.weight(.semibold))
+                .textRole(.calloutEmphasis)
                 .foregroundStyle(.green)
+                .wrapping(.center)
                 .transition(.scale(scale: 0.9).combined(with: .opacity))
         case .notChosen:
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
+            HStack(spacing: layout.iconGap) {
+                ProgressView().adaptiveControlSize(.small)
                 Text("Waiting for you to choose DotStudio in System Settings…")
+                    .textRole(.callout)
                     .foregroundStyle(.secondary)
+                    .wrapping(.center)
             }
-            .font(.callout)
         case .notInstalled:
             Label("Not installed yet", systemImage: "circle.dashed")
-                .font(.callout)
+                .textRole(.callout)
                 .foregroundStyle(.secondary)
+                .wrapping(.center)
         }
     }
 }
 
+/// One numbered step in the "Turn It On" card. The badge centres on the TITLE line (detail
+/// and extra run full width under the title column), the title row is always as tall as the
+/// action button so the card doesn't shift when a button comes and goes, and at large text
+/// the button moves under the text instead of squeezing it.
 private struct SetupRow<Action: View, Extra: View>: View {
+    @Environment(\.layout) private var layout
+    @ScaledLength(relativeTo: .headline) private var badgeSize: CGFloat = Space.l
     let number: Int
     let title: String
     let detail: String?
@@ -625,53 +734,81 @@ private struct SetupRow<Action: View, Extra: View>: View {
         self.action = action; self.extra = extra
     }
 
+    /// From the badge's leading edge to the title column's.
+    private var textIndent: CGFloat { badgeSize + layout.itemGap }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center, spacing: 14) {
-                badge
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title).font(.headline)
-                    if let detail {
-                        Text(detail)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+        let stacked = layout.prefersStacking
+        VStack(alignment: .leading, spacing: layout.labelGap) {
+            HStack(alignment: .center, spacing: layout.itemGap) {
+                ZStack {
+                    if !stacked { buttonHeightStrut }
+                    badge
                 }
-                Spacer(minLength: 10)
-                action()
-                    .controlSize(.large)
+                Text(title)
+                    .textRole(.headline)
+                    .wrapping()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if !stacked {
+                    action().adaptiveControlSize(.large)
+                }
             }
-            // Full-width line under the title column (not squeezed by the button).
-            extra()
-                .padding(.leading, 40)
+            VStack(alignment: .leading, spacing: layout.itemGap) {
+                if let detail {
+                    Text(detail)
+                        .textRole(.callout)
+                        .foregroundStyle(.secondary)
+                        .wrapping()
+                }
+                extra()
+                if stacked {
+                    action().adaptiveControlSize(.large)
+                }
+            }
+            .padding(.leading, textIndent)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 14)
+        .padding(layout.cardPadding)
+        .overlay(alignment: .top) {
+            // Inset divider from the step above, starting exactly at the text column.
+            if number > 1 { Divider().padding(.leading, layout.cardPadding + textIndent) }
+        }
+    }
+
+    /// Zero-width, invisible stand-in for the action button: keeps the title row as tall as a
+    /// button whether or not this step shows one right now (the status flips live).
+    private var buttonHeightStrut: some View {
+        Button(scaled: " ") {}
+            .buttonStyle(.borderedProminent)
+            .adaptiveControlSize(.large)
+            .frame(width: 0)
+            .hidden()
+            .disabled(true)
+            .accessibilityHidden(true)
     }
 
     private var badge: some View {
-            ZStack {
-                Circle()
-                    .fill(done ? Color.green : Color.accentColor.opacity(0.14))
-                if done {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(.white)
-                        .transition(.scale.combined(with: .opacity))
-                } else {
-                    Text("\(number)")
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.accentColor)
-                }
+        ZStack {
+            Circle()
+                .fill(done ? Color.green : Color.accentColor.opacity(0.14))
+            if done {
+                Image(systemName: "checkmark")
+                    .scaledFont { .scaled(points: 12, $0, weight: .bold) }
+                    .foregroundStyle(.white)
+                    .transition(.scale.combined(with: .opacity))
+            } else {
+                Text("\(number)")
+                    .scaledFont { .scaled(points: 13, $0, weight: .semibold, design: .rounded) }
+                    .foregroundStyle(Color.accentColor)
             }
-            .frame(width: 26, height: 26)
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: done)
+        }
+        .frame(width: badgeSize, height: badgeSize)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: done)
     }
 }
 
 /// "⚙ System Settings › Wallpaper › Screen Saver › DotStudio" as one wrapping line.
 private struct SettingsPath: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
     let items: [String]
 
     var body: some View {
@@ -681,12 +818,12 @@ private struct SettingsPath: View {
             let word = last ? Text(item).fontWeight(.semibold).foregroundColor(.primary)
                             : Text(item).foregroundColor(.secondary)
             let sep = i == 0 ? Text(" ")
-                : Text("  ") + Text(Image(systemName: "chevron.right")).font(.caption2.weight(.bold))
+                : Text("  ") + Text(Image(systemName: "chevron.right")).font(.scaled(.caption2, typeSize, weight: .bold))
                     .foregroundColor(Color(nsColor: .tertiaryLabelColor)) + Text("  ")
             return line + sep + word
         }
-        .font(.callout)
-        .fixedSize(horizontal: false, vertical: true)
+        .textRole(.callout)
+        .wrapping()
         .accessibilityLabel("System Settings, Wallpaper, Screen Saver, DotStudio")
     }
 }
@@ -694,88 +831,114 @@ private struct SettingsPath: View {
 // MARK: - 4. Done
 
 private struct DonePage: View {
+    @Environment(\.layout) private var layout
+    /// The create card's icon tile. The tips' icon column is exactly as wide, so card and tip
+    /// icons centre on one line and all their text starts on one edge.
+    @ScaledLength(relativeTo: .headline) private var iconColumn: CGFloat = 44
     let status: Installer.Status
     /// Set when the user made a style in "Create Your Own".
     let createdName: String?
     let onCreate: () -> Void
 
     var body: some View {
-        VStack(spacing: 22) {
-            Image(systemName: status == .ready ? "checkmark.seal.fill" : "sparkles")
-                .font(.system(size: 46, weight: .regular))
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(status == .ready ? Color.green : Color.accentColor)
-                .padding(.top, 4)
-            PageHeader(title: status == .ready ? "You're All Set" : "Ready When You Are",
-                       subtitle: status == .ready
-                           ? "DotStudio will play the next time your screensaver starts."
-                           : "Turn on the screensaver any time from the Screensaver card at the top of the gallery.")
+        PageScroll {
+            VStack(spacing: layout.sectionGap) {
+                // The glyph's own side bearing and the title's ascent already add ~11 pt, so
+                // the tightest step keeps the icon visibly grouped with its header.
+                VStack(spacing: Space.xxs) {
+                    Image(systemName: status == .ready ? "checkmark.seal.fill" : "sparkles")
+                        .scaledFont { .scaled(points: 46, $0) }
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(status == .ready ? Color.green : Color.accentColor)
+                    PageHeader(title: status == .ready ? "You're All Set" : "Ready When You Are",
+                               subtitle: status == .ready
+                                   ? "DotStudio will play the next time your screensaver starts."
+                                   : "Turn it on any time from the Screensaver card in the gallery.")
+                }
 
-            createCard
-
-            VStack(alignment: .leading, spacing: 14) {
-                Tip(symbol: "arrow.triangle.2.circlepath", tint: .orange,
-                    title: "Mix it up",
-                    detail: "Add styles to the Screensaver card to rotate them, or pick a different one for night.")
-                Tip(symbol: "cursorarrow.click.2", tint: .purple,
-                    title: "Edit anything",
-                    detail: "Double-click any tile to change its effects, colors and motion.")
+                // Card and tips share one readable column and one inner grid.
+                VStack(alignment: .leading, spacing: layout.sectionGap) {
+                    createCard
+                    VStack(alignment: .leading, spacing: layout.itemGap) {
+                        Tip(symbol: "arrow.triangle.2.circlepath", tint: .orange, iconColumn: iconColumn,
+                            title: "Mix it up",
+                            detail: "Add styles to the Screensaver card to rotate them, or set one for night.")
+                        Tip(symbol: "cursorarrow.click.2", tint: .purple, iconColumn: iconColumn,
+                            title: "Edit anything",
+                            detail: "Double-click any tile to change its effects, colors and motion.")
+                    }
+                    .padding(.horizontal, layout.cardPadding)
+                }
+                .readableWidth(layout)
             }
-            .frame(maxWidth: 520, alignment: .leading)
         }
-        .padding(.horizontal, 44)
-        .padding(.top, 30)
-        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     /// The app is about making styles — end on that, not just on "done".
     private var createCard: some View {
-        HStack(spacing: 14) {
-            Image(systemName: "paintbrush.pointed.fill")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 44, height: 44)
-                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.accentColor.gradient))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(createdName.map { "Keep shaping \u{201C}\($0)\u{201D}" } ?? "Create your own")
-                    .font(.headline)
-                Text(createdName == nil
-                     ? "Stack effects on a gradient, photo or video — or build a Scene from scratch."
-                     : "Open it in the editor to layer more effects and tune colors and motion.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 12)
-            Button(createdName == nil ? "Create a Style" : "Open in Editor", action: onCreate)
-                .controlSize(.large)
+        let icon = Image(systemName: "paintbrush.pointed.fill")
+            .scaledFont { .scaled(points: 20, $0, weight: .semibold) }
+            .foregroundStyle(.white)
+            .frame(width: iconColumn, height: iconColumn)
+            .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Color.accentColor.gradient))
+        let text = VStack(alignment: .leading, spacing: layout.labelGap) {
+            Text(createdName.map { "Keep shaping \u{201C}\($0)\u{201D}" } ?? "Create your own")
+                .textRole(.headline)
+                .wrapping()
+            Text(createdName == nil
+                 ? "Stack effects on a gradient, photo or video — or build a Scene from scratch."
+                 : "Open it in the editor to layer more effects and tune colors and motion.")
+                .textRole(.callout)
+                .foregroundStyle(.secondary)
+                .wrapping()
         }
-        .padding(16)
-        .frame(maxWidth: 560)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.accentColor.opacity(0.09)))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.accentColor.opacity(0.25)))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        let button = Button(scaled: createdName == nil ? "Create a Style" : "Open in Editor", action: onCreate)
+            .adaptiveControlSize(.large)
+
+        return Group {
+            if layout.prefersStacking {
+                // Large text: the button drops under the text instead of squeezing it.
+                VStack(alignment: .leading, spacing: layout.itemGap) {
+                    HStack(alignment: .top, spacing: layout.itemGap) { icon; text }
+                    button.padding(.leading, iconColumn + layout.itemGap)
+                }
+            } else {
+                HStack(spacing: layout.itemGap) { icon; text; button }
+            }
+        }
+        .padding(layout.cardPadding)
+        .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Color.accentColor.opacity(0.09)))
+        .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).strokeBorder(Color.accentColor.opacity(0.25)))
     }
 }
 
 private struct Tip: View {
+    @Environment(\.layout) private var layout
+    @ScaledLength(relativeTo: .headline) private var tile: CGFloat = 34
     let symbol: String
     let tint: Color
+    /// Width of the icon column (the create card's icon tile), the smaller tile centred in it.
+    let iconColumn: CGFloat
     let title: String
     let detail: String
 
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(alignment: .top, spacing: layout.itemGap) {
             Image(systemName: symbol)
-                .font(.system(size: 16, weight: .semibold))
+                .scaledFont { .scaled(points: 16, $0, weight: .semibold) }
                 .foregroundStyle(.white)
-                .frame(width: 34, height: 34)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(tint.gradient))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.headline)
+                .frame(width: tile, height: tile)
+                .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous).fill(tint.gradient))
+                .frame(width: iconColumn)
+            VStack(alignment: .leading, spacing: layout.labelGap) {
+                Text(title)
+                    .textRole(.headline)
+                    .wrapping()
                 Text(detail)
-                    .font(.callout)
+                    .textRole(.callout)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .wrapping()
             }
         }
     }
