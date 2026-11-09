@@ -9,6 +9,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     let device: MTLDevice
     private let queue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
+    private var veilDownPipeline: MTLRenderPipelineState?
+    private var veilPipeline: MTLRenderPipelineState?
     private let sampler: MTLSamplerState
     private let glyphs: MTLTexture?
     private let dummy: MTLTexture
@@ -139,6 +141,24 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// Accessibility Reduce Motion: the Now Playing background drifts at a third of the speed.
     var reduceMotion = false
 
+    // Music backdrop (Full Screen music, MusicPresentation): eased between 0 (the plain style)
+    // and 1 (fully behind the music). `musicBackdropKind` is what's drawn while the amount is
+    // above 0 — kept through a fade-out after the target went back to `.none`.
+    private var musicBackdropTarget: MusicBackdrop = .none
+    private var musicBackdropKind: MusicBackdrop = .none
+    private var musicBackdropFrom: Double = 0
+    private var musicBackdropTo: Double = 0
+    private var musicBackdropBegan: CFTimeInterval = -.infinity
+    /// Tools only (the gallery's transition frames): draw the backdrop at exactly this amount.
+    var musicBackdropAmountOverride: Double?
+    /// The veil's Kawase pyramid (level k = 1/2^k of the frame) and the Album Art backdrop
+    /// while it cross-fades with the style. Freed once the backdrop is fully in or out.
+    private var veilLevels: [MTLTexture] = []
+    private var veilArt: MTLTexture?
+    /// While Album Art fades out after music stopped: hold the last cover and palette rather
+    /// than fading to the idle glow at the same time.
+    private var musicArtHeld = false
+
     /// - device: the GPU to render on (the live wallpaper uses the one driving its
     ///   display); nil = the system default.
     init?(pixelFormat: MTLPixelFormat, store: SharedStore, device preferredDevice: MTLDevice? = nil) {
@@ -169,6 +189,17 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         desc.colorAttachments[0].pixelFormat = pixelFormat
         guard let pso = try? device.makeRenderPipelineState(descriptor: desc) else { return nil }
         pipeline = pso
+        // The music veil's own small passes (Shaders.metal, "music veil").
+        func veilPSO(_ name: String) -> MTLRenderPipelineState? {
+            guard let f = library.makeFunction(name: name) else { return nil }
+            let d = MTLRenderPipelineDescriptor()
+            d.vertexFunction = vfn
+            d.fragmentFunction = f
+            d.colorAttachments[0].pixelFormat = pixelFormat
+            return try? device.makeRenderPipelineState(descriptor: d)
+        }
+        veilDownPipeline = veilPSO("fx_veil_down")
+        veilPipeline = veilPSO("fx_veil")
 
         func compute(_ name: String) -> MTLComputePipelineState? {
             library.makeFunction(name: name).flatMap { try? device.makeComputePipelineState(function: $0) }
@@ -302,7 +333,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             }
         }
         let snap = currentMusic
-        // Nothing playing (or paused past the linger) shows the idle background.
+        // Nothing playing (or paused past the linger) shows the idle background — except while
+        // an Album Art backdrop fades out, which keeps the cover it had.
+        if musicArtHeld && musicPrepared { return }
         let art = snap.state?.isVisible(at: wall, lingerMinutes: musicLingerMinutes) == true ? snap.artwork : nil
         if !fade {
             musicArtPrevTex = nil
@@ -342,7 +375,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                            now: CFTimeInterval, wall: Date) {
         let snap = currentMusic
         let flags = (musicArtTex != nil ? 1 : 0) + (musicArtPrevTex != nil ? 2 : 0)
-        let visible = snap.state?.isVisible(at: wall, lingerMinutes: musicLingerMinutes) == true
+        let visible = musicArtHeld || snap.state?.isVisible(at: wall, lingerMinutes: musicLingerMinutes) == true
         let progress = visible ? (snap.state?.progress(at: wall) ?? -1) : -1
         u.music = simd_float4(Float(flags), Float(progress), snap.state?.isPlaying == true ? 1 : 0,
                               Float(min(max(now - musicArtChangedAt, 0), 10_000)))
@@ -382,6 +415,158 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             blit.endEncoding()
         }
         return tex
+    }
+
+    // MARK: Music backdrop (Full Screen music)
+
+    /// How long the backdrop eases in and out — the overlay's full-screen fade matches it
+    /// (MusicOverlayLayer.fullFadeSeconds).
+    static let musicBackdropSeconds: Double = 1.4
+
+    /// What to draw behind Full Screen music (MusicPresentation.backdrop). The change eases
+    /// over `musicBackdropSeconds` from wherever the current one is (a reversal mid-fade
+    /// turns around smoothly); `animated: false` jumps. Switching between two backdrops while
+    /// one is up (a settings change) swaps them in place.
+    func setMusicBackdrop(_ b: MusicBackdrop, animated: Bool = true) {
+        guard b != musicBackdropTarget else { return }
+        let now = CACurrentMediaTime()
+        let current = musicBackdropAmount(at: now)
+        musicBackdropTarget = b
+        if b != .none { musicBackdropKind = b }
+        musicBackdropTo = b == .none ? 0 : 1
+        musicBackdropFrom = animated ? current : musicBackdropTo
+        musicBackdropBegan = animated ? now : -.infinity
+    }
+
+    /// 0 = the plain style … 1 = fully behind the music, eased (smoothstep — the overlay's
+    /// ease-in-ease-out to within a frame).
+    private func musicBackdropAmount(at now: CFTimeInterval) -> Double {
+        if let o = musicBackdropAmountOverride { return min(max(o, 0), 1) }
+        let k = min(max((now - musicBackdropBegan) / Self.musicBackdropSeconds, 0), 1)
+        let e = k * k * (3 - 2 * k)
+        return musicBackdropFrom + (musicBackdropTo - musicBackdropFrom) * e
+    }
+
+    /// The veil's blur, in Kawase levels: enough that the coarsest is ~`veilTexels` tall at
+    /// any resolution (fractional — the composite blends the two nearest levels), so the
+    /// blur looks the same from a gallery tile to 6K.
+    static let veilTexels: Double = 42
+    static func veilBlurLevels(height: Int) -> Double { max(log2(Double(max(height, 1)) / veilTexels), 1) }
+
+    /// The pyramid for a `w`×`h` frame, levels 1…n (reused while the size holds).
+    private func veilPyramid(_ w: Int, _ h: Int, levels n: Int, format: MTLPixelFormat,
+                             reuse: [MTLTexture]) -> [MTLTexture] {
+        var out: [MTLTexture] = []
+        for k in 1...max(n, 1) {
+            let lw = max((w + (1 << k) - 1) >> k, 1), lh = max((h + (1 << k) - 1) >> k, 1)
+            if k - 1 < reuse.count, reuse[k - 1].width == lw, reuse[k - 1].height == lh,
+               reuse[k - 1].pixelFormat == format {
+                out.append(reuse[k - 1]); continue
+            }
+            let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: format, width: lw, height: lh, mipmapped: false)
+            d.usage = [.shaderRead, .renderTarget]
+            d.storageMode = .private
+            guard let t = device.makeTexture(descriptor: d) else { break }
+            out.append(t)
+        }
+        return out
+    }
+
+    /// One internal pass (73, the music veil: its own fragment functions) into `target`.
+    private func encodeVeilPass(_ cmd: MTLCommandBuffer, target: MTLRenderPassDescriptor, size: CGSize,
+                                u inU: FXUniforms, src: MTLTexture, next: MTLTexture?, art: MTLTexture?) {
+        let down = inU.p0.w > 0.5
+        guard let pso = down ? veilDownPipeline : veilPipeline,
+              let enc = cmd.makeRenderCommandEncoder(descriptor: target) else { return }
+        var u = inU
+        u.effect = 73
+        u.resolution = simd_float2(Float(size.width), Float(size.height))
+        u.srcSize = simd_float2(Float(src.width), Float(src.height))
+        enc.setRenderPipelineState(pso)
+        enc.setFragmentBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
+        enc.setFragmentTexture(src, index: 0)
+        enc.setFragmentTexture(next ?? dummy, index: 5)
+        enc.setFragmentTexture(art ?? dummy, index: 8)
+        enc.setFragmentSamplerState(sampler, index: 0)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        enc.endEncoding()
+    }
+
+    /// The veil over `style` into `final`: a Kawase pyramid of the frame (only as deep as
+    /// this amount's blur needs), then one full-size composite that blends the two nearest
+    /// levels (progressive blur while it eases in), dims in linear light with a soft
+    /// highlight compression (a bright Look lands as low as a dark scene), vignettes, and —
+    /// for Album Art — cross-fades into `art`.
+    private func encodeVeil(_ cmd: MTLCommandBuffer, style: MTLTexture, final: MTLRenderPassDescriptor,
+                            size: CGSize, amount: Double, art: MTLTexture?, pyramid: inout [MTLTexture]) {
+        let w = Int(size.width), h = Int(size.height)
+        let blur = amount * Self.veilBlurLevels(height: h)
+        let need = Int(ceil(blur - 1e-6))
+        if need > 0 {
+            pyramid = veilPyramid(w, h, levels: need, format: style.pixelFormat, reuse: pyramid)
+        }
+        let levels = min(need, pyramid.count)
+        // Downsample: level k from level k − 1 (level 0 = the frame).
+        var down = FXUniforms()
+        down.p0 = simd_float4(0, 0, 0, 1)
+        for k in 0..<levels {
+            let src = k == 0 ? style : pyramid[k - 1]
+            let dst = pyramid[k]
+            encodeVeilPass(cmd, target: offscreenDescriptor(dst),
+                           size: CGSize(width: dst.width, height: dst.height), u: down, src: src, next: nil, art: nil)
+        }
+        // Composite: blend level ⌊blur⌋ (0 = the sharp frame) with the next.
+        let b = min(blur, Double(levels))
+        let lo = Int(b.rounded(.down)), frac = b - Double(lo)
+        let loTex = lo == 0 ? style : pyramid[lo - 1]
+        let hiTex: MTLTexture? = lo < levels ? pyramid[lo] : nil
+        var u = FXUniforms()
+        u.p0 = simd_float4(Float(amount), Float(hiTex == nil ? 0 : frac), art == nil ? 0 : 1, 0)
+        u.p1 = simd_float4(lo == 0 ? 1 : 0, 0, 0, 0)
+        encodeVeilPass(cmd, target: final, size: size, u: u, src: loTex, next: hiTex, art: art)
+    }
+
+    /// Tools only (gallery --veilbench): GPU milliseconds of the veil's own passes at a size —
+    /// the pyramid plus the composite, fully in, over a static frame — the median of `runs`
+    /// command buffers of `reps` veils each, from the buffers' GPU timestamps.
+    /// `reference: true` times one plain full-size pass instead (the internal crossfade, two
+    /// taps) — the floor any full-screen pass pays at this size, to read the veil against.
+    func benchmarkVeil(width: Int, height: Int, amount: Double = 1, reference: Bool = false,
+                       reps: Int = 24, runs: Int = 12) -> Double {
+        let fmt: MTLPixelFormat = .bgra8Unorm
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: fmt, width: width, height: height, mipmapped: false)
+        d.usage = [.shaderRead, .renderTarget]
+        d.storageMode = .private
+        guard let src = device.makeTexture(descriptor: d), let dst = device.makeTexture(descriptor: d) else { return -1 }
+        let size = CGSize(width: width, height: height)
+        var pyramid: [MTLTexture] = []
+        var ms: [Double] = []
+        for run in 0..<(runs + 3) {
+            guard let cmd = queue.makeCommandBuffer() else { return -1 }
+            for _ in 0..<reps {
+                if reference {
+                    encodeBlend(cmd, final: offscreenDescriptor(dst), newTex: src, oldTex: src, progress: 0.5, size: size)
+                } else {
+                    encodeVeil(cmd, style: src, final: offscreenDescriptor(dst), size: size, amount: amount, art: nil,
+                               pyramid: &pyramid)
+                }
+            }
+            cmd.commit()
+            cmd.waitUntilCompleted()
+            if run >= 3 { ms.append((cmd.gpuEndTime - cmd.gpuStartTime) * 1000 / Double(reps)) }
+        }
+        ms.sort()
+        return ms[ms.count / 2]
+    }
+
+    private func ensureVeilArt(width: Int, height: Int, format: MTLPixelFormat) -> MTLTexture? {
+        if let t = veilArt, t.width == width, t.height == height, t.pixelFormat == format { return t }
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: format, width: max(width, 1),
+                                                         height: max(height, 1), mipmapped: false)
+        d.usage = [.shaderRead, .renderTarget]
+        d.storageMode = .private
+        veilArt = device.makeTexture(descriptor: d)
+        return veilArt
     }
 
     /// Switch presets with a GPU crossfade. Falls back to a hard cut when there's
@@ -553,11 +738,57 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         if timeBase == .wallClock { syncWallClockOrigin(now, allowWrapFade: drewOnce && !settled) }
         drewOnce = true
         let t = Float(now - startTime)
-        // Now Playing: poll / upload artwork before any pass samples it.
-        if preset.isMusicScene || (outgoing?.preset.isMusicScene ?? false) {
+        // Full Screen music's backdrop: a held frame shows where its ease ends.
+        if settled, musicBackdropAmountOverride == nil {
+            musicBackdropFrom = musicBackdropTo
+            musicBackdropBegan = -.infinity
+        }
+        let backdrop = musicBackdropAmount(at: now)
+        if backdrop <= 0, musicBackdropTo <= 0, musicBackdropAmountOverride == nil {
+            musicBackdropKind = .none                  // fully out: free the veil's textures
+            veilLevels = []
+            veilArt = nil
+        }
+        var artPreset: Preset?
+        if backdrop > 0, case .albumArt(let layout) = musicBackdropKind {
+            artPreset = MusicPresentation.albumArtPreset(layout)
+        }
+        // Album Art fading out after the music stopped keeps the cover it had.
+        musicArtHeld = artPreset != nil && musicBackdropTo <= 0
+        // Now Playing (a style, or the Album Art backdrop): poll / upload artwork before any
+        // pass samples it.
+        if preset.isMusicScene || (outgoing?.preset.isMusicScene ?? false) || artPreset != nil {
             prepareMusic(cmd, now: now, wall: clockOverride ?? Date(), fade: !settled)
         } else {
             releaseMusic()
+        }
+        // Album Art fully up: the style is hidden behind it, so only the art is drawn.
+        if let art = artPreset, backdrop >= 1 {
+            veilArt = nil
+            veilLevels = []
+            if outgoing != nil, now - transitionBegan >= transitionDuration {
+                outgoing = nil                   // a style change behind the art finished unseen
+                fadeOld = nil; fadeNew = nil
+            }
+            encodePasses(cmd, finalDescriptor: final, pingA: texA, pingB: texB, size: drawableSize, time: t,
+                         preset: art, source: SourceSpec(), sourceTex: nil)
+            if let drawable {
+                if let onPresented { drawable.addPresentedHandler { onPresented($0.presentedTime) } }
+                cmd.present(drawable)
+            }
+            cmd.commit()
+            return cmd
+        }
+        // Easing in or out of the Album Art: draw it first (it uses the ping-pong textures the
+        // style then reuses), into its own texture for the veil's composite.
+        var artTex: MTLTexture?
+        if let art = artPreset,
+           let tex = ensureVeilArt(width: Int(ds.width), height: Int(ds.height), format: format) {
+            encodePasses(cmd, finalDescriptor: offscreenDescriptor(tex), pingA: texA, pingB: texB,
+                         size: drawableSize, time: t, preset: art, source: SourceSpec(), sourceTex: nil)
+            artTex = tex
+        } else {
+            veilArt = nil
         }
         // Slideshow state comes from the source clock (see slideClock): both chains of a
         // preset crossfade show the same photo; a time-base switch fades between the two
@@ -583,6 +814,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             store.debug("first draw size=\(drawableSize) effects=\(preset.effects.count) srcTexNil=\(sTex == nil) sourceKind=\(source.kind.rawValue)")
         }
 
+        // Behind Full Screen music the style renders offscreen — into a ping-pong texture its
+        // own last pass doesn't read — and the veil composites it into `final`.
+        let veiled = backdrop > 0 && veilPipeline != nil && veilDownPipeline != nil
+        // encodePasses: pass i < last writes pong[i % 2], the last (i = effects) reads pong[(i − 1) % 2].
+        let chainOut = preset.effects.filter(\.enabled).count % 2 == 0 ? texA : texB
+        var styleTex: MTLTexture = chainOut
         var blended = false
         if let out = outgoing {
             let progress = (now - transitionBegan) / max(transitionDuration, 0.001)
@@ -604,16 +841,22 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                     encodePasses(cmd, finalDescriptor: offscreenDescriptor(fn), pingA: texA, pingB: texB,
                                  size: drawableSize, time: t, preset: preset, source: source,
                                  sourceTex: sTex, slides: slides, packedUniforms: packedUniforms)
-                    encodeBlend(cmd, final: final, newTex: fn, oldTex: fo,
+                    // Both chains are parked: texA is free for the blend when veiled.
+                    encodeBlend(cmd, final: veiled ? offscreenDescriptor(texA) : final, newTex: fn, oldTex: fo,
                                 progress: Float(progress), size: drawableSize)
+                    styleTex = texA
                     blended = true
                 }
             }
         }
         if !blended {
-            encodePasses(cmd, finalDescriptor: final, pingA: texA, pingB: texB,
+            encodePasses(cmd, finalDescriptor: veiled ? offscreenDescriptor(chainOut) : final, pingA: texA, pingB: texB,
                          size: drawableSize, time: t, preset: preset, source: source,
                          sourceTex: sTex, slides: slides, packedUniforms: packedUniforms)
+        }
+        if veiled {
+            encodeVeil(cmd, style: styleTex, final: final, size: drawableSize, amount: backdrop,
+                       art: artTex, pyramid: &veilLevels)
         }
         if let drawable {
             if let onPresented { drawable.addPresentedHandler { onPresented($0.presentedTime) } }
@@ -987,9 +1230,21 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     // MARK: Thumbnails (offscreen, one frame, synchronous)
 
-    func renderThumbnail(preset: Preset, source: SourceSpec, width: Int, height: Int, time: Float = 1.2,
-                         sourceTexOverride: MTLTexture? = nil) -> CGImage? {
+    /// - musicBackdrop: Full Screen music's backdrop (a still of the screensaver while music
+    ///   shows): Album Art draws the living art instead of the style; the veil draws the style
+    ///   blurred and dimmed.
+    /// - backdropAmount: how far it has eased in (tools render frames of the transition).
+    func renderThumbnail(preset inPreset: Preset, source: SourceSpec, width: Int, height: Int, time: Float = 1.2,
+                         sourceTexOverride: MTLTexture? = nil, musicBackdrop: MusicBackdrop = .none,
+                         backdropAmount: Double = 1) -> CGImage? {
         let fmt: MTLPixelFormat = .bgra8Unorm
+        var preset = inPreset
+        let amount = musicBackdrop == .none ? 0 : min(max(backdropAmount, 0), 1)
+        var artPreset: Preset?
+        if case .albumArt(let layout) = musicBackdrop, amount > 0 {
+            if amount >= 1 { preset = MusicPresentation.albumArtPreset(layout) }
+            else { artPreset = MusicPresentation.albumArtPreset(layout) }
+        }
         guard let cmd = queue.makeCommandBuffer() else { return nil }
         let (a, b) = makeOffscreen(width: width, height: height, format: fmt)
         guard let pingA = a, let pingB = b else { return nil }
@@ -1020,13 +1275,33 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
 
         // Now Playing: the current artwork, settled (no cross-fade in a still).
-        if preset.isMusicScene {
+        if preset.isMusicScene || artPreset != nil {
             prepareMusic(cmd, now: CACurrentMediaTime(), wall: clockOverride ?? Date(), fade: false)
         }
 
-        encodePasses(cmd, finalDescriptor: desc, pingA: pingA, pingB: pingB,
-                     size: CGSize(width: width, height: height), time: time,
-                     preset: preset, source: source, sourceTex: thumbTex, slides: slides)
+        let size = CGSize(width: width, height: height)
+        if amount > 0, artPreset != nil || musicBackdrop == .veil, veilPipeline != nil, veilDownPipeline != nil {
+            // The art first (it borrows the ping-pong textures), then the style, then the veil.
+            var artTex: MTLTexture?
+            if let art = artPreset {
+                let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: fmt, width: width, height: height, mipmapped: false)
+                d.usage = [.shaderRead, .renderTarget]
+                d.storageMode = .private
+                if let t = device.makeTexture(descriptor: d) {
+                    encodePasses(cmd, finalDescriptor: offscreenDescriptor(t), pingA: pingA, pingB: pingB, size: size,
+                                 time: time, preset: art, source: SourceSpec(), sourceTex: nil)
+                    artTex = t
+                }
+            }
+            let out = preset.effects.filter(\.enabled).count % 2 == 0 ? pingA : pingB
+            encodePasses(cmd, finalDescriptor: offscreenDescriptor(out), pingA: pingA, pingB: pingB,
+                         size: size, time: time, preset: preset, source: source, sourceTex: thumbTex, slides: slides)
+            var pyramid: [MTLTexture] = []
+            encodeVeil(cmd, style: out, final: desc, size: size, amount: amount, art: artTex, pyramid: &pyramid)
+        } else {
+            encodePasses(cmd, finalDescriptor: desc, pingA: pingA, pingB: pingB, size: size, time: time,
+                         preset: preset, source: source, sourceTex: thumbTex, slides: slides)
+        }
         cmd.commit()
         cmd.waitUntilCompleted()
         return readBack(outTex)

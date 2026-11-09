@@ -12,9 +12,10 @@
 //  └───────────────────────────────────────────────────────────────────────────────────────┘
 //  ┌ MUSIC SLOT: Settings ─────────────────────────────────────────────────────────────────┐
 //  │ MusicSettingsSlot — the Music section, right after Settings › General: each player's  │
-//  │ status and permission (with its fix-it), what's playing with controls, the card       │
-//  │ (on / corner / size / also on the wallpaper), take-over, the paused linger, the       │
-//  │ source, and the privacy note. Same pieces as WallpaperSettingsSection.               │
+//  │ status and permission (with its fix-it), what's playing with controls, Show music     │
+//  │ (Off / Corner / Full Screen) and that mode's options — corner + size, or what's       │
+//  │ behind the music + layout — then, while music shows at all, also on the wallpaper,    │
+//  │ the paused linger and the source; the privacy note. As WallpaperSettingsSection.      │
 //  └───────────────────────────────────────────────────────────────────────────────────────┘
 
 import SwiftUI
@@ -125,7 +126,7 @@ struct MusicSettingsSection: View {
                 MusicPlayerRow(status: now.spotify, now: now, showsTrack: !showsTrack)
                 MusicPlayerRow(status: now.music, now: now, showsTrack: !showsTrack)
             } else {
-                Text("DotStudio isn't watching Spotify or Apple Music right now — turn on an option below.")
+                Text("DotStudio isn't watching Spotify or Apple Music right now — choose Corner or Full Screen below.")
                     .textRole(.caption)
                     .foregroundStyle(.secondary)
                     .wrapping()
@@ -133,32 +134,44 @@ struct MusicSettingsSection: View {
             if showsTrack {
                 MusicSettingsNowPlaying(now: now)
             }
-            Toggle("Show what's playing on the screensaver", isOn: binding(\.isCardEnabled) { $0.cardEnabled = $1 })
-                .formSwitchSize()
-            LabeledContent("Corner") {
-                SettingsPopUp(title: "Corner", selection: binding(\.corner) { $0.cardCorner = $1 },
-                              options: MusicSpec.Corner.allCases.map { ($0.label, $0) })
+            // "Show music", then only the options of the mode picked.
+            SettingsValueRow("Show music", valueWidth: segmentWidth) {
+                ScaledSegmentedPicker(title: "Show music", selection: binding(\.displayMode) { $0.setDisplay($1) },
+                                      options: MusicSpec.Display.allCases.map { ($0.label, $0) }, fills: true)
             }
-            .disabled(!spec.isCardEnabled)
-            SettingsValueRow("Card Size", valueWidth: segmentWidth) {
-                ScaledSegmentedPicker(title: "Card Size", selection: binding(\.cardSizePreference) { $0.cardSize = $1 },
-                                      options: MusicSpec.CardSize.allCases.map { ($0.label, $0) }, fills: true)
+            if spec.displayMode == .corner {
+                LabeledContent("Corner") {
+                    SettingsPopUp(title: "Corner", selection: binding(\.corner) { $0.cardCorner = $1 },
+                                  options: MusicSpec.Corner.allCases.map { ($0.label, $0) })
+                }
+                SettingsValueRow("Size", valueWidth: segmentWidth) {
+                    ScaledSegmentedPicker(title: "Size", selection: binding(\.cardSizePreference) { $0.cardSize = $1 },
+                                          options: MusicSpec.CardSize.allCases.map { ($0.label, $0) }, fills: true)
+                }
             }
-            .disabled(!spec.isCardEnabled)
-            // Part of the card: reads off (and is off — MusicSpec.drawsCardOnWallpaper) while the
-            // card is; the stored choice comes back with the card.
-            Toggle("Also on the live wallpaper", isOn: binding(\.drawsCardOnWallpaper) { $0.cardOnWallpaper = $1 })
-                .formSwitchSize()
-                .disabled(!spec.isCardEnabled)
-            Toggle("Switch to Now Playing while music plays", isOn: binding(\.takesOver) { $0.takeOver = $1 })
-                .formSwitchSize()
-            LabeledContent("Keep a paused song for") {
-                SettingsPopUp(title: "Keep a paused song for", selection: binding(\.linger) { $0.lingerMinutes = $1 },
-                              options: lingerOptions(spec.linger).map { (Self.lingerLabel($0), $0) })
+            if spec.displayMode == .fullScreen {
+                SettingsValueRow("Behind the music", valueWidth: segmentWidth) {
+                    ScaledSegmentedPicker(title: "Behind the music", selection: binding(\.backdrop) { $0.fullBackdrop = $1 },
+                                          options: MusicSpec.Backdrop.allCases.map { ($0.label, $0) }, fills: true)
+                }
+                SettingsValueRow("Layout", valueWidth: segmentWidth) {
+                    ScaledSegmentedPicker(title: "Layout", selection: binding(\.layout) { $0.fullLayout = $1 },
+                                          options: MusicSpec.FullLayout.allCases.map { ($0.label, $0) }, fills: true)
+                }
             }
-            SettingsValueRow("Source", valueWidth: segmentWidth) {
-                ScaledSegmentedPicker(title: "Source", selection: binding(\.sourcePreference) { $0.source = $1 },
-                                      options: MusicSpec.SourcePreference.allCases.map { ($0.label, $0) }, fills: true)
+            if spec.displayMode != .off {
+                // Reads off (and is off — MusicSpec.drawsOnWallpaper) only with Show music off,
+                // where it's hidden; the stored choice comes back with music.
+                Toggle("Also on the live wallpaper", isOn: binding(\.drawsOnWallpaper) { $0.cardOnWallpaper = $1 })
+                    .formSwitchSize()
+                LabeledContent("Keep a paused song for") {
+                    SettingsPopUp(title: "Keep a paused song for", selection: binding(\.linger) { $0.lingerMinutes = $1 },
+                                  options: lingerOptions(spec.linger).map { (Self.lingerLabel($0), $0) })
+                }
+                SettingsValueRow("Source", valueWidth: segmentWidth) {
+                    ScaledSegmentedPicker(title: "Source", selection: binding(\.sourcePreference) { $0.source = $1 },
+                                          options: MusicSpec.SourcePreference.allCases.map { ($0.label, $0) }, fills: true)
+                }
             }
             // The same switch as General's: the screensaver only knows what's playing while
             // DotStudio runs.
@@ -168,7 +181,7 @@ struct MusicSettingsSection: View {
             SettingsHeader("Music")
         } footer: {
             VStack(alignment: .leading, spacing: Space.xs) {
-                SettingsNote("While a song plays in Spotify or Apple Music, the screensaver shows it in a corner card, and the Now Playing style shows it full screen.")
+                SettingsNote("While a song plays in Spotify or Apple Music, the screensaver shows it over whatever style is playing — in a corner, or full screen over the album's living art or your screensaver, softly blurred. When the music stops, the screensaver is all that's left.")
                 // What closing the window does (AppPresence.windowClosed), as General says.
                 SettingsNote(presence.menuBarMode
                     ? "DotStudio has to be running to know what's playing — closing its window keeps it in the menu bar."

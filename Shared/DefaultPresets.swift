@@ -120,7 +120,7 @@ enum DefaultPresets {
     /// built-in style is one click away in Add Built-in Styles (coolPack).
     static let featured: [String] = [
         // Scenes
-        "Liquid Chrome", "Now Playing", "Aurora", "Universe", "Topography", "Sand Garden", "Black Hole", "Afterglow",
+        "Liquid Chrome", "Aurora", "Universe", "Topography", "Sand Garden", "Black Hole", "Afterglow",
         "Glass Clock", "Flip Clock", "Word Clock", "Window Light",
         "Lava Lamp", "Currents", "Fireflies",
         "Golden Hour", "Tidewater", "Shallows", "Night Sky", "First Snow",
@@ -133,7 +133,12 @@ enum DefaultPresets {
     /// (their effects stay available in Add Effect).
     static let unlisted: Set<String> = ["Ink Bloom", "Sumi", "Ember Ribbons"]
 
-    private static var allBuiltIns: [Preset] { scenes() + looks() }
+    /// Built-in styles that are no longer styles at all: the Now Playing scenes (music is now
+    /// a presentation over any style — MusicPresentation). Never offered or added; a library
+    /// that already has one keeps it working.
+    static var retired: Set<String> { Set(SceneCatalog.musicPresets.map(\.name)) }
+
+    private static var allBuiltIns: [Preset] { (scenes() + looks()).filter { !retired.contains($0.name) } }
 
     static func makeLibrary() -> Library {
         let sc = featuredPresets()

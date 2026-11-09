@@ -6,7 +6,7 @@
 import Foundation
 
 enum StyleTag: String, CaseIterable, Identifiable, Hashable {
-    case clocks, nature, flowing, retro, space, abstract, music
+    case clocks, nature, flowing, retro, space, abstract
 
     var id: String { rawValue }
 
@@ -18,7 +18,6 @@ enum StyleTag: String, CaseIterable, Identifiable, Hashable {
         case .retro: return "Retro"
         case .space: return "Space"
         case .abstract: return "Abstract"
-        case .music: return "Music"
         }
     }
 
@@ -30,7 +29,6 @@ enum StyleTag: String, CaseIterable, Identifiable, Hashable {
         case .retro: return "tv"
         case .space: return "moon.stars"
         case .abstract: return "scribble.variable"
-        case .music: return "music.note"
         }
     }
 
@@ -49,8 +47,6 @@ enum StyleTag: String, CaseIterable, Identifiable, Hashable {
         if SceneCatalog.retro[kind] != nil { tags.insert(.retro) }
         if spaceKinds.contains(kind) { tags.insert(.space) }
         if abstractKinds.contains(kind) { tags.insert(.abstract) }
-        // Now Playing styles (they show what Spotify / Music is playing).
-        if kind == .nowPlaying || preset.isMusicScene { tags.insert(.music) }
         // Looks: a CRT/console/tape effect anywhere in the stack makes it Retro.
         if !preset.isScene,
            preset.effects.contains(where: { $0.enabled && $0.kind.category == .retro }) {

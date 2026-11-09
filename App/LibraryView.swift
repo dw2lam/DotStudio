@@ -21,21 +21,13 @@ struct LibraryView: View {
     @State private var filter: GalleryFilter = DemoHooks.filter ?? .all
     @State private var query = DemoHooks.search ?? ""
     @FocusState private var searchFocused: Bool
-    /// A song shows (MusicNow) — with take-over on, that changes what "playing now" is. Only
-    /// its flips re-render the gallery, not every progress tick.
-    @State private var musicShows = false
 
     var body: some View {
-        let music = musicShows   // read here: the gallery re-renders when it flips
-        // Re-read once a minute so "playing now" follows the rotation and the sun.
+        // Re-read once a minute so "playing now" follows the rotation and the sun. (Music never
+        // changes what plays: it's presented over the style.)
         TimelineView(.everyMinute) { _ in
-            gallery(GalleryState(model: model, wallpaperID: wallpaper.styleID, musicShows: music))
+            gallery(GalleryState(model: model, wallpaperID: wallpaper.styleID))
         }
-        .onReceive(MusicNow.shared.objectWillChange.receive(on: DispatchQueue.main)) { _ in
-            let shows = model.musicShowsNow
-            if shows != musicShows { musicShows = shows }
-        }
-        .onAppear { musicShows = model.musicShowsNow }
         .toolbar {
             if model.editingID == nil {
                 ToolbarItemGroup(placement: .primaryAction) {

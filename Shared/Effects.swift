@@ -266,7 +266,8 @@ enum EffectKind: String, Codable, CaseIterable {
         case .starfield: return 37
         case .universe:  return 39
         case .blackhole: return 40
-        // 38 = dither-grid blit and 41 = preset crossfade are internal passes; never assign them.
+        // 38 = dither-grid blit, 41 = preset crossfade and 73 = music veil are internal passes;
+        // never assign them.
         case .meshGradient: return 42
         case .aurora:    return 43
         case .topography: return 44
@@ -505,7 +506,9 @@ enum EffectKind: String, Codable, CaseIterable {
              .voronoi,                    // edgeless, muddy mosaic; Hex Mosaic covers it
              .truchet,                    // novelty tile maze
              .toon,                       // dated cel-shade filter
-             .fisheye, .swirl, .ripple:   // Photo Booth-era warps; Glass replaces them
+             .fisheye, .swirl, .ripple,   // Photo Booth-era warps; Glass replaces them
+             .nowPlaying:                 // music is a presentation over any style now
+                                          // (MusicPresentation); 66 lives on as Album Art
             return true
         default: return false
         }

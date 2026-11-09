@@ -220,13 +220,13 @@ final class MusicMonitor: ObservableObject {
 
     /// The app's own reason to watch beyond the settings' features: a Now Playing style is in
     /// use (on the screensaver or wallpaper, or open in the editor) — it shows what's playing
-    /// even with the card and take-over off. Set before `start` / `apply` (MusicLifecycle).
+    /// even with Show music off. Set before `start` / `apply` (MusicLifecycle).
     var neededByStyles = false
 
     private func wanted(_ settings: MusicSpec) -> Bool { settings.needsMonitoring || neededByStyles }
 
-    /// Starts watching when the library's music settings need it (card, wallpaper card or
-    /// take-over) or `neededByStyles`. Returns whether monitoring is on. Safe to call repeatedly.
+    /// Starts watching when the library's music settings need it (Show music Corner or Full
+    /// Screen) or `neededByStyles`. Returns whether monitoring is on. Safe to call repeatedly.
     @discardableResult
     func start(store: SharedStore, settings: MusicSpec? = nil) -> Bool {
         let settings = settings ?? store.load()?.musicSettings ?? MusicSpec()

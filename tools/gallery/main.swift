@@ -12,10 +12,14 @@
 //  Wall clock (clock scenes, Ocean Horizon's Follow the Sun): --clock 06:40[,07:00,…] renders
 //  each preset at each local time on --date 2026-06-21 (default today), in --tz America/Toronto
 //  (default the Mac's), at --loc 43.7,-79.4 (default San Francisco; "none" = the no-location fallback).
-//  Music: DOTSTUDIO_MUSIC_FAKE=<fixture.json> feeds the Now Playing scene; --overlay composites the
-//  native-resolution foreground (MusicOverlayLayer, via layer.render(in:)) onto Now Playing presets;
-//  --card bottomLeft|bottomRight|topLeft|topRight|all composites the corner card onto every other
-//  preset; --cardsize small|medium|large picks the card's size (default medium, as in the app);
+//  Music (MusicPresentation decides, exactly as the saver does): DOTSTUDIO_MUSIC_FAKE=<fixture.json>
+//  feeds it. --card bottomLeft|bottomRight|topLeft|topRight|all renders Corner music over every
+//  preset; --cardsize small|medium|large picks its size (default medium, as in the app);
+//  --full art|veil renders Full Screen music (Album Art = living art, veil = the style blurred
+//  and dimmed) with --layout album|stage; --fade 0.25,0.5,0.75 renders those as frames of the
+//  ease in (time fractions of MetalRenderer.musicBackdropSeconds; the overlay's opacity follows);
+//  --legacy adds the legacy Now Playing styles (shader 66 as a style) and --overlay composites
+//  their foreground; --veilbench times live frames with and without each backdrop (GPU timestamps).
 //  --scale 2 sets the overlay's pixels per point (default 2 from 2400 px wide, else 1);
 //  --tag name appends "@name" to the file names. Fixtures: tools/music-fixtures/make.sh.
 //  --framebench times whole live frames (MetalRenderer.renderFrame: source, every effect and any
@@ -48,6 +52,11 @@ var overlay = false
 var cardCorners: [MusicSpec.Corner] = []
 var cardSize: MusicSpec.CardSize?
 var overlayScale: CGFloat?
+var fullBackdrop: MusicSpec.Backdrop?
+var fullLayout: MusicSpec.FullLayout?
+var fades: [Double] = []
+var legacy = false
+var veilBench = false
 var tag: String?
 var musicFadeBench = false
 var runChecks = false
@@ -89,6 +98,11 @@ while !args.isEmpty {
         let v = args.removeFirst()
         cardCorners = v == "all" ? MusicSpec.Corner.allCases : [MusicSpec.Corner(rawValue: v) ?? .bottomLeft]
     case "--cardsize": cardSize = MusicSpec.CardSize(rawValue: args.removeFirst())
+    case "--full": fullBackdrop = args.removeFirst() == "veil" ? .screensaver : .albumArt
+    case "--layout": fullLayout = MusicSpec.FullLayout(rawValue: args.removeFirst())
+    case "--fade": fades = args.removeFirst().split(separator: ",").compactMap { Double($0) }
+    case "--legacy": legacy = true
+    case "--veilbench": veilBench = true
     case "--scale": overlayScale = CGFloat(Double(args.removeFirst()) ?? 2)
     case "--tag": tag = args.removeFirst()
     case "--size":
@@ -105,30 +119,42 @@ let musicFeed = MusicFeed(baseDir: store.baseDir)
 musicFeed.poll()
 renderer.setMusic(musicFeed.snapshot)
 
-/// The music foreground composited over a Metal frame, the way the saver stacks its layers.
-func compositeMusic(_ cg: CGImage, preset: Preset, corner: MusicSpec.Corner?, now: Date) -> CGImage {
-    let mode: MusicOverlayLayer.Mode
-    if let inst = preset.musicScene {
-        mode = .full(MusicSceneOptions(inst))
-    } else if let corner {
-        mode = .card(corner)
-    } else {
-        return cg
-    }
+/// The music settings a render uses: Corner (`corner`), Full Screen (--full), else the defaults
+/// (legacy Now Playing styles show their own foreground whatever these say).
+func musicSettings(corner: MusicSpec.Corner?) -> MusicSpec {
+    var m = MusicSpec(cardCorner: corner, cardSize: cardSize, fullBackdrop: fullBackdrop, fullLayout: fullLayout)
+    m.setDisplay(fullBackdrop != nil ? .fullScreen : .corner)
+    return m
+}
+
+/// The music foreground composited over a Metal frame, the way the saver stacks its layers,
+/// at `alpha` (a frame of the full-screen fade).
+func compositeMusic(_ cg: CGImage, mode: MusicOverlayLayer.Mode, settings: MusicSpec, now: Date,
+                    alpha: CGFloat = 1) -> CGImage {
+    guard mode != .hidden, alpha > 0 else { return cg }
     let scale = overlayScale ?? (W >= 2400 ? 2 : 1)
     let layer = MusicOverlayLayer()
     layer.contentsScale = scale
     layer.frame = CGRect(x: 0, y: 0, width: CGFloat(W) / scale, height: CGFloat(H) / scale)
     layer.reduceMotion = true
-    layer.update(mode: mode, music: musicFeed.snapshot, settings: MusicSpec(cardSize: cardSize), now: now, animated: false)
+    layer.update(mode: mode, music: musicFeed.snapshot, settings: settings, now: now, animated: false)
     guard let ctx = CGContext(data: nil, width: W, height: H, bitsPerComponent: 8, bytesPerRow: 0,
                               space: CGColorSpace(name: CGColorSpace.sRGB)!,
                               bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
     else { return cg }
     ctx.draw(cg, in: CGRect(x: 0, y: 0, width: W, height: H))
+    ctx.setAlpha(alpha)
+    ctx.beginTransparencyLayer(auxiliaryInfo: nil)
     ctx.scaleBy(x: scale, y: scale)
     layer.render(in: ctx)
+    ctx.endTransparencyLayer()
     return ctx.makeImage() ?? cg
+}
+
+/// The overlay's opacity `k` of the way through the full-screen ease in (its own delayed
+/// ease-in-ease-out, as MusicOverlayGroup.appear runs it).
+func fadeInOpacity(_ k: Double) -> Double {
+    MusicOverlayLayer.fullFadeInOpacity(at: k * MetalRenderer.musicBackdropSeconds)
 }
 
 /// Live-path checks: what two renderers, a held wallpaper frame and a skipping listener see.
@@ -258,6 +284,7 @@ func wallDate(_ hhmm: String) -> Date? {
 let lib = DefaultPresets.makeLibrary()
 var presets = lib.presets
 if includePack { presets += DefaultPresets.coolPack() }
+if legacy { presets += SceneCatalog.musicPresets }
 if let only { presets = presets.filter { $0.name.lowercased().contains(only) } }
 if looksOnly { presets = [Preset(name: "Source")] + presets.filter { !$0.isScene } }
 if solo {
@@ -402,6 +429,44 @@ if frameBench {
     exit(0)
 }
 
+if veilBench {
+    // Live frames (MetalRenderer.renderFrame, the saver's path) with GPU timestamps: the plain
+    // style, then the same style behind Full Screen music — the veil (the style + pass 73) and
+    // Album Art (the living art alone) — fully eased in. The veil's own cost is the difference.
+    func frames(_ r: MetalRenderer) -> Double {
+        for _ in 0..<6 { _ = r.renderFrame(width: W, height: H); Thread.sleep(forTimeInterval: 0.03) }
+        _ = r.takeGPUSeconds()
+        var ms: [Double] = []
+        for _ in 0..<24 {
+            _ = r.renderFrame(width: W, height: H)
+            Thread.sleep(forTimeInterval: 0.01)
+            ms.append(r.takeGPUSeconds() * 1000)
+        }
+        ms.sort()
+        return ms[ms.count / 2]
+    }
+    print(String(format: "veil passes alone (pyramid + composite, fully in) at %dx%d: %.3f ms GPU (median); "
+                 + "mid-fade %.3f ms; one plain full-size pass for reference %.3f ms", W, H,
+                 renderer.benchmarkVeil(width: W, height: H), renderer.benchmarkVeil(width: W, height: H, amount: 0.5),
+                 renderer.benchmarkVeil(width: W, height: H, reference: true)))
+    print("GPU ms per frame at \(W)x\(H) (median of 24): plain · veil (Δ) · album art")
+    for p in presets where !p.isMusicScene {
+        guard let r = MetalRenderer(pixelFormat: .bgra8Unorm, store: store) else { continue }
+        r.location = loc
+        r.setMusic(musicFeed.snapshot)
+        r.measuresGPUTime = true
+        r.apply(p, source: source)
+        Thread.sleep(forTimeInterval: 0.4)               // a slideshow decodes its first photos
+        let plain = frames(r)
+        r.setMusicBackdrop(.veil, animated: false)
+        let veil = frames(r)
+        r.setMusicBackdrop(.albumArt(.album), animated: false)
+        let art = frames(r)
+        print(String(format: "%6.2f · %6.2f (+%5.2f) · %6.2f  %@", plain, veil, veil - plain, art, p.name))
+    }
+    exit(0)
+}
+
 if bench {
     // Wall time per full offscreen render (includes the alloc + readback floor, so compare
     // presets against each other, not against a frame budget). 4 warm-up renders let the
@@ -425,18 +490,34 @@ if bench {
 }
 
 let clockList: [String?] = clocks.isEmpty ? [nil] : clocks
+let musicRun = !cardCorners.isEmpty || fullBackdrop != nil
 for p in presets {
     for clk in clockList {
     renderer.clockOverride = clk.flatMap(wallDate)
+    let now = renderer.clockOverride ?? Date()
     for t in times {
-        let t0 = CFAbsoluteTimeGetCurrent()
-        guard let frame = renderer.renderThumbnail(preset: p, source: source, width: W, height: H, time: t,
-                                                   sourceTexOverride: photoTex) else { continue }
-        let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        // One render per music variant: each corner, or Full Screen, or none; for Full Screen
+        // each --fade frame too. MusicPresentation decides what shows, as in the saver.
         let corners: [MusicSpec.Corner?] = p.isMusicScene || cardCorners.isEmpty ? [nil] : cardCorners
         for corner in corners {
-        let cg = (overlay || corner != nil)
-            ? compositeMusic(frame, preset: p, corner: corner, now: renderer.clockOverride ?? Date()) : frame
+        let settings = musicSettings(corner: corner)
+        var pres = (musicRun || (overlay && p.isMusicScene))
+            ? MusicPresentation.resolve(settings: settings, music: musicFeed.snapshot, preset: p, now: now) : .none
+        if p.isMusicScene && !overlay { pres.overlay = .hidden }
+        let fadeList: [Double?] = fades.isEmpty || pres.backdrop == .none ? [nil] : fades.map { Optional($0) }
+        for k in fadeList {
+        let t0 = CFAbsoluteTimeGetCurrent()
+        var amount: Double = 1
+        if let k {
+            let c: Double = min(max(k, 0), 1)
+            amount = c * c * (3 - 2 * c)                  // the renderer's smoothstep ease
+        }
+        guard let frame = renderer.renderThumbnail(preset: p, source: source, width: W, height: H, time: t,
+                                                   sourceTexOverride: photoTex, musicBackdrop: pres.backdrop,
+                                                   backdropAmount: amount) else { continue }
+        let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        let alpha = CGFloat(k.map(fadeInOpacity) ?? 1)
+        let cg = compositeMusic(frame, mode: pres.overlay, settings: settings, now: now, alpha: alpha)
         let rep = NSBitmapImageRep(cgImage: cg)
         guard let data = rep.representation(using: .png, properties: [:]) else { continue }
         let name = p.name.replacingOccurrences(of: " ", with: "-").replacingOccurrences(of: "/", with: "-")
@@ -444,9 +525,14 @@ for p in presets {
         var suffix = times.count > 1 ? "@" + tl : ""
         if let clk { suffix += "@" + clk.replacingOccurrences(of: ":", with: "") }
         if let corner { suffix += "@card-" + corner.rawValue }
+        if let fb = fullBackdrop, !p.isMusicScene {
+            suffix += "@full-" + (fb == .albumArt ? "art" : "veil") + (fullLayout == .stage ? "-stage" : "")
+        }
+        if let k { suffix += String(format: "@fade%03d", Int((k * 100).rounded())) }
         if let tag { suffix += "@" + tag }
         try? data.write(to: URL(fileURLWithPath: outDir).appendingPathComponent("\(name)\(suffix).png"))
         print(String(format: "%@%@ %@  %.0f ms", p.isScene ? "[scene] " : "[look]  ", p.name, suffix, ms))
+        }
         }
     }
     }
