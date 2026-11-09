@@ -54,7 +54,7 @@ static inline float retro_ridge(float x, float seed) {
 
 struct RetroSynth {
     float3 neon, sunTop, sunMid, sunBot, top, haze, mtnDark;
-    float sunR, sunY, mtn, stripes, stars, clouds, t;
+    float sunR, sunY, mtn, stripes, stars, clouds, t, sunGain;
 };
 
 // One mountain layer over sky colour `col`: dark body with haze at its foot, ridge-echo
@@ -112,8 +112,8 @@ static inline float3 retro_synthSky(float2 q, float aa, float stretch, float wit
     float3 sunCol = mix(s.sunBot, s.sunMid, smoothstep(-0.55, 0.35, sv));
     sunCol = mix(sunCol, s.sunTop, smoothstep(0.35, 0.95, sv));
     float rg = length(q - float2(0.0, s.sunY));
-    col += s.sunBot * (exp(-max(rg - s.sunR, 0.0) * 14.0) * 0.22 + exp(-rg * 3.0) * 0.05);
-    col = mix(col, sunCol, disk);
+    col += s.sunBot * (exp(-max(rg - s.sunR, 0.0) * 14.0) * 0.22 + exp(-rg * 3.0) * 0.05) * (0.5 + 0.5 * s.sunGain);
+    col = mix(col, sunCol * s.sunGain, disk);
 
     // horizon glow
     col += s.haze * exp(-y / 0.03) * 0.5;
@@ -184,14 +184,22 @@ static inline float retro_tunChase(float ri, float t) {
 // Emitted light at perimeter coord u (0..1) and depth z. `widen` blurs the lights (glossy
 // reflections). Rings sit in every ringEvery-th seam and chase forward. Rails run along the
 // tunnel: two spiralling ones in the round tunnel, one per corner in the polygonal ones.
+// Every light is a glass tube: a white-hot filament core inside a saturated body, with a soft
+// halo around it (all box-filtered by the pixel footprint, so they stay crisp, never jaggy).
+static inline float3 retro_tunTube(float d, float w, float fd, float widen, float3 c) {
+    float fp = max(fd, 1e-4);
+    float wb = w + widen * 0.5;
+    float body = retro_lineCov(d, wb, fp) * (w / wb);
+    float core = retro_lineCov(d, w * 0.32 + widen * 0.15, fp) * (w / wb);
+    float halo = exp(-d / (w * 2.5 + 0.04 + widen)) * 0.10 + exp(-d / (0.22 + widen)) * 0.025;
+    return c * (body + halo) + (c * 0.35 + 0.65) * core * 1.4;
+}
+
 static inline float3 retro_tunEmit(float u, float z, float fz, float widen, thread const RetroTun& s) {
     float rs = s.ringEvery * s.plen;
     float ri = floor(z / rs + 0.5);
     float dz = abs(z - ri * rs);                                       // world distance to the ring
-    float w = 0.035 + widen;
-    float ring = retro_lineCov(dz, w, fz + 1e-4) * (0.035 / w);
-    ring += exp(-dz / (0.10 + widen)) * 0.06;
-    float3 e = s.neon * ring * retro_tunChase(ri, s.t) * 5.0;
+    float3 e = retro_tunTube(dz, 0.035, fz + 1e-4, widen, s.neon) * retro_tunChase(ri, s.t) * 5.0;
 
     float du, fu;
     if (s.shape == 0) {
@@ -203,13 +211,10 @@ static inline float3 retro_tunEmit(float u, float z, float fz, float widen, thre
         float f = fract(u * N);
         float faceW = 2.0 * tan(3.14159265 / N);
         du = min(f, 1.0 - f) * faceW;
-        fu = fwidth(u * N) * faceW;
+        fu = min(fwidth(u * N), fwidth(fract(u * N + 0.5))) * faceW;   // u wraps 1 → 0 at one corner
     }
-    float rw = 0.014 + widen * 0.5;
-    float rail = retro_lineCov(du, rw, max(fu, 1e-4)) * (0.014 / rw);
-    rail += exp(-du / (0.05 + widen)) * 0.05;
     float dash = smoothstep(0.3, 0.5, fract(z * 0.2 - s.t * (0.6 + s.speed))) * 0.85 + 0.15;
-    e += s.neon2 * rail * dash * 3.0;
+    e += retro_tunTube(du, 0.014, max(fu, 1e-4), widen, s.neon2) * dash * 3.0;
     return e * s.lights;
 }
 
@@ -231,8 +236,8 @@ static inline float3 retro_tunLight(float3 P, float3 n, float3 cam, thread const
 
 // ---------------------------------------------------------------- 63 Pipeworks
 
-#define RETRO_PIPE_RUNS 10
-#define RETRO_REFL_MAX 5.0      // pipe-in-pipe reflections beyond this fall back to the studio
+#define RETRO_PIPE_RUNS 8
+#define RETRO_REFL_MAX 3.6      // pipe-in-pipe reflections fade out toward this range (then the studio)
 
 struct RetroPipes {
     float3 G;          // lattice size in cells
@@ -265,7 +270,8 @@ static inline RetroWalk retro_walkInit(thread const RetroPipes& s, int k) {
     uint a0 = h0 >> 30;
     w.ax = a0 == 3u ? 0 : int(a0);
     w.used = 0.0;
-    w.grown = max(s.lt - float(k) * 0.9, 0.0) * s.rate;
+    float x = max(s.lt - float(k) * 0.3, 0.0);
+    w.grown = (x + 1.8 * (1.0 - exp(-x / 0.9))) * s.rate;     // a quick first burst, then steady growth
     return w;
 }
 // Next straight run, packed into a uint (0 = not grown yet): start cell (3×3 bits), axis
@@ -403,22 +409,26 @@ static inline float3 retro_palMix(float3 a, float3 b, float f) {
 }
 
 // Dark studio for reflections: a big overhead softbox, a tall strip light on the left and
-// a faint warm bounce, over a near-black gradient.
-static inline float3 retro_studio(float3 d) {
+// a faint warm bounce, over a near-black gradient. `soft` widens every light's falloff (what a
+// glossy rather than mirror surface sees).
+static inline float3 retro_studioS(float3 d, float soft) {
     float3 c = mix(float3(0.006, 0.007, 0.010), float3(0.020, 0.022, 0.028), smoothstep(-0.3, 0.8, d.y));
     // overhead softbox (rectangle in the direction's xz when looking up)
     float2 q = d.xz / max(d.y, 0.05);
-    float box = smoothstep(0.08, 0.0, max(abs(q.x + 0.25) - 0.75, abs(q.y - 0.1) - 0.45)) * step(0.0, d.y);
+    float bw = 0.08 + 0.45 * soft;
+    float box = smoothstep(bw, 0.0, max(abs(q.x + 0.25) - 0.75, abs(q.y - 0.1) - 0.45)) * smoothstep(-0.05 * soft, 0.0, d.y);
     c += float3(1.0, 0.98, 0.95) * box * 3.2;
     // vertical strip on the left
     float az = atan2(d.x, d.z);
-    float strip = smoothstep(0.05, 0.0, abs(az + 1.75) - 0.09) * smoothstep(0.75, 0.55, abs(d.y - 0.1));
-    c += float3(0.85, 0.92, 1.0) * strip * 2.2;
+    float sw = 0.05 + 0.30 * soft;
+    float strip = smoothstep(sw, 0.0, abs(az + 1.75) - 0.09) * smoothstep(0.75 + 0.3 * soft, 0.55 - 0.4 * soft, abs(d.y - 0.1));
+    c += float3(0.85, 0.92, 1.0) * strip * 2.2 * (1.0 - 0.45 * soft);
     // small warm kicker behind-right
-    float kick = smoothstep(0.06, 0.0, abs(az - 2.4) - 0.16) * smoothstep(0.35, 0.2, abs(d.y - 0.05));
-    c += float3(1.0, 0.75, 0.5) * kick * 1.1;
+    float kick = smoothstep(0.06 + 0.3 * soft, 0.0, abs(az - 2.4) - 0.16) * smoothstep(0.35 + 0.2 * soft, 0.2 - 0.2 * soft, abs(d.y - 0.05));
+    c += float3(1.0, 0.75, 0.5) * kick * 1.1 * (1.0 - 0.4 * soft);
     return c;
 }
+static inline float3 retro_studio(float3 d) { return retro_studioS(d, 0.0); }
 
 // Primary-ray test of one run (capsule a→b) plus its ball joint.
 static inline void retro_pipeP1(thread RetroPipeHit& H, float3 ro, float3 rd, float3 ipr, float aaM, float pixA,
@@ -540,7 +550,8 @@ static inline void retro_rbParams(int sh, int v, thread float2& ph, thread float
     vel = (0.10 + 0.12 * float2(h.z, g.x)) * float2(g.y < 0.5 ? -1.0 : 1.0, g.z < 0.5 ? -1.0 : 1.0);
 }
 
-// Inverse bilinear: (u, v) of p in the quad a-b-c-d (a to b = u, a to d = v), or (-1, -1).
+// Inverse bilinear: (u, v) of p in the quad a-b-c-d (a to b = u, a to d = v); outside the
+// quad the values run past [0, 1] (or (-9, -9) when there is no solution).
 static inline float2 retro_invBilinear(float2 p, float2 a, float2 b, float2 c, float2 d) {
     float2 e = b - a, f = d - a, g = a - b + c - d, h = p - a;
     float k2 = g.x * f.y - g.y * f.x;
@@ -552,7 +563,7 @@ static inline float2 retro_invBilinear(float2 p, float2 a, float2 b, float2 c, f
         u = (h.x * k1 + f.x * k0) / (e.x * k1 - g.x * k0);
     } else {
         float w = k1 * k1 - 4.0 * k0 * k2;
-        if (w < 0.0) return float2(-1.0);
+        if (w < 0.0) return float2(-9.0);
         w = sqrt(w);
         float ik2 = 0.5 / k2;
         v = (-k1 - w) * ik2;
@@ -564,7 +575,7 @@ static inline float2 retro_invBilinear(float2 p, float2 a, float2 b, float2 c, f
             u = abs(den.x) > abs(den.y) ? (h.x - f.x * v) / den.x : (h.y - f.y * v) / den.y;
         }
     }
-    return (u >= 0.0 && u <= 1.0 && v >= 0.0 && v <= 1.0) ? float2(u, v) : float2(-1.0);
+    return float2(u, v);                // unclamped: the caller antialiases the borders
 }
 
 static inline float retro_segDist2D(float2 p, float2 a, float2 b) {
@@ -582,11 +593,19 @@ static inline float3 retro_rbPatch(float2 q, float2 a0, float2 b0, float2 a1, fl
                                    float shapeHue, thread const RetroRibbon& s) {
     float3 c = float3(0.0);
     float2 uv = retro_invBilinear(q, a0, b0, b1, a1);
-    if (uv.x >= 0.0) {
-        float age = (L + uv.y) / s.E, fade = 1.0 - age;
+    // box-filtered coverage of the patch: half-pixel ramps on all four borders. The borders
+    // between consecutive echoes are shared, so their ramps sum to 1 (no seam); the outer ones
+    // (the paths the vertices trace) get a clean antialiased edge.
+    float lu = length(mix(b0 - a0, b1 - a1, clamp(uv.y, 0.0, 1.0)));
+    float lv = length(mix(a1 - a0, b1 - b0, clamp(uv.x, 0.0, 1.0)));
+    float2 cu = clamp(min(uv, 1.0 - uv) * float2(lu, lv) / s.pix + 0.5, 0.0, 1.0);
+    float cov = cu.x * cu.y;
+    if (cov > 0.0) {
+        float vv = clamp(uv.y, 0.0, 1.0);
+        float age = (L + vv) / s.E, fade = 1.0 - age;
         float3 tint = mix(s.head, s.tail, smoothstep(0.0, 0.85, age));
-        float sheen = 0.75 + 0.25 * cos(uv.x * 6.2831853 + shapeHue);
-        c += tint * (fade * fade * s.fillK * sheen);
+        float sheen = 0.75 + 0.25 * cos(clamp(uv.x, 0.0, 1.0) * 6.2831853 + shapeHue);
+        c += tint * (fade * fade * s.fillK * sheen * cov);
     }
     // the echo line itself: crisp core + soft glow (cut off at the culling margin)
     float d = retro_segDist2D(q, a0, b0);
