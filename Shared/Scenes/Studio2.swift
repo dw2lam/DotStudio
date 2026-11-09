@@ -77,8 +77,20 @@ enum SandGarden {
     static let texW = 1024
     static let countRow = 0, ringRow = 1, stoneRow = 257, shadowRow = 258, shadowRows = 40, texH = 298
     static let ringK = 32
-    /// Grid cell, cm: ~2, larger on a very wide bed so the grid stays within 4096 cells.
-    static func cellSize(bx: Double, by: Double) -> Float { Float(max(2.0, (4 * bx * by / 4000).squareRoot())) }
+    /// The count row and the rings hold exactly this many cells (STUDIO2_CELLS in the shader).
+    static let maxCells = 4096
+    /// The grid over a bed (half-extents bx × by, cm): the cell, ~2 cm, larger on a wide bed so
+    /// the grid stays within `maxCells` — the per-axis ceilings, not just the area, must fit
+    /// (2560×1080's area alone asks for 100 × 41 = 4100) — and its columns × rows.
+    static func grid(bx: Double, by: Double) -> (cell: Float, n: SIMD2<Int>) {
+        func dims(_ c: Float) -> SIMD2<Int> {
+            SIMD2(Int((2 * bx / Double(c)).rounded(.up)), Int((2 * by / Double(c)).rounded(.up)))
+        }
+        var c = Float(max(2.0, (4 * bx * by / 4000).squareRoot()))
+        var n = dims(c)
+        while n.x * n.y > maxCells { c *= 1.005; n = dims(c) }
+        return (c, n)
+    }
     static let maxVerts = 120_000
     static let compositionsPerHour: Float = 5        // at Speed 1×: twelve minutes a composition
     static let tines = 5
@@ -557,8 +569,7 @@ enum SandGarden {
             let a = plan(gi - 1, menu: menu), b = plan(gi, menu: menu)
             plans = plans.filter { $0.key >= gi - 1 }
             let G = garden!
-            cell = SandGarden.cellSize(bx: G.bx, by: G.by)
-            gridN = SIMD2(Int(ceil(2 * G.bx / Double(cell))), Int(ceil(2 * G.by / Double(cell))))
+            (cell, gridN) = SandGarden.grid(bx: G.bx, by: G.by)
             origin = SIMD2(Float(-G.bx), Float(-G.by))
             data.withUnsafeMutableBufferPointer { buf in
                 let base = buf.baseAddress!
@@ -667,6 +678,7 @@ enum SandGarden {
                 for cy in y0...y1 {
                     for cx in x0...x1 {
                         let c = cy * n + cx
+                        guard c < SandGarden.maxCells else { continue }   // never past the rings
                         let o = origin + SIMD2(Float(cx), Float(cy)) * cell
                         let solidHere = covered(o) && covered(o + SIMD2(cell, 0)) && covered(o + SIMD2(0, cell))
                             && covered(o + SIMD2(cell, cell))
@@ -743,27 +755,34 @@ enum SandGarden {
         private var order: [[Int]] = []
 
         /// Works out this frame's composition and cart from u.p0 (speed, pattern, rake width),
-        /// u.resolution, u.time, u.clock and u.date; fills u.scene; returns the data texture.
-        func prepare(_ u: inout FXUniforms, device: MTLDevice) -> MTLTexture? {
+        /// u.resolution and u.time at the wall-clock instant `wall`; fills u.scene; returns the
+        /// data texture.
+        func prepare(_ u: inout FXUniforms, wall: Date = Date(), device: MTLDevice) -> MTLTexture? {
             let speed = max(u.p0.x, 0)
             let menu = Int((u.p0.y + 0.5).rounded(.down))
             let groove = min(max(u.p0.z, 0.6), 1.6)
             let aspect = u.resolution.y > 0 ? u.resolution.x / u.resolution.y : 1.6
             let t = u.time
-            // Which composition, and how far along: a global index from the date and the hour the
-            // t origin falls in, so the sequence runs on across the hourly wrap (the outgoing
-            // frame at t ≥ 3600 with the new hour finds the same index) and never repeats.
-            let day = Int(u.date.x) * 366 + Int(u.date.w)
-            let hourIx = day * 24 + Int(((u.clock.x * 3600 - t) / 3600 + 0.25).rounded(.down))
+            let epoch = wall.timeIntervalSince1970
+            // Which composition, and how far along: a global index from the hour the t origin
+            // falls on — epoch hours, rounded to the nearest, so it holds steady in any time zone
+            // (+5:45 too) and runs on across the hourly wrap (the outgoing frame at t ≥ 3600 with
+            // the new hour finds the same index) — and never repeats.
+            let hourIx = Int(((epoch - Double(t)) / 3600).rounded())
             var gi: Int, phase: Float
+            var n = 0                                       // compositions an hour (0: still)
             if speed < 0.02 {
-                gi = day * 5 + 1; phase = 0.9999                   // still: today's garden, finished
+                // still: today's garden, finished (local days, counted on: no jump at New Year)
+                let local = epoch + Double(TimeZone.current.secondsFromGMT(for: wall))
+                gi = Int((local / 86400).rounded(.down)) * 5 + 1; phase = 0.9999
             } else {
-                let n = min(max((SandGarden.compositionsPerHour * speed).rounded(), 1), 15)
-                let tp = t * n / 3600
-                gi = hourIx * Int(n) + Int(tp.rounded(.down)); phase = tp - tp.rounded(.down)
+                n = Int(min(max((SandGarden.compositionsPerHour * speed).rounded(), 1), 15))
+                let tp = t * Float(n) / 3600
+                gi = hourIx * n + Int(tp.rounded(.down)); phase = tp - tp.rounded(.down)
             }
-            let key = [menu, Int(groove.bitPattern), Int((aspect * 100).rounded())]
+            // (speeds that run the same compositions share a state; two that don't — both
+            // chains of a crossfade — each keep their own rather than rebuilding every frame)
+            let key = [menu, Int(groove.bitPattern), Int((aspect * 100).rounded()), n]
             lock.lock(); defer { lock.unlock() }
             let st: State
             if let s = states[key] { st = s; order.removeAll { $0 == key } }
@@ -827,7 +846,7 @@ enum SandGarden {
                         p[6 + k] = simd_float4(Float(st.c.x), Float(st.c.y), Float(st.bound), Float(st.h))
                     }
                     p[12] = L.0; p[13] = L.1; p[14] = L.2
-                    p[15] = simd_float4(L.3.x, st.shadowRes, Float(st.shadowNX), 0)
+                    p[15] = simd_float4(L.3.x, st.shadowRes, Float(st.shadowNX), Float(st.gridN.y))
                 }
             }
             return st.texture(device)
