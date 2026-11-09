@@ -171,6 +171,12 @@ final class DotSaverView: ScreenSaverView {
         MusicArtwork.purge()           // process-wide scaled-cover cache (the host outlives us)
         MusicScrim.purge()             // …and the corner's scrim bitmaps
         MusicText.purge()              // …and the song text's typesetters
+        // The clocks' type atlas and the weather pipelines are shared by every view on every
+        // display: freed once the last live one goes (a view still drawing would rebuild them).
+        if !DotSaverView.instances.allObjects.contains(where: { $0 !== self && $0.metalView != nil }) {
+            TextAtlas.purge()
+            WeatherLink.purge()
+        }
         shownPreset = nil
         activeID = nil
         lastModified = nil

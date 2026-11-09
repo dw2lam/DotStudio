@@ -350,6 +350,61 @@ func liveChecks() -> Bool {
     lc.timeBase = .instance
     let afterSwitch = lc.animationTime()
     check(abs(afterSwitch - before) < 0.05, String(format: "wall clock → instance continues t (%.2f s → %.2f s)", before, afterSwitch))
+
+    // 6–8. The hourly wrap meets a style change, and the instance time base wraps: frames drawn
+    // back to back across each never step by more than a sliver of the wrap's own jump.
+    let lcA = Preset(name: "LC", effects: [EffectInstance(.liquidChrome)])
+    // (another style that looks the same: a step between frames is then the motion alone)
+    let lcB = Preset(name: "LC B", effects: [EffectInstance(.liquidChrome)])
+    func renderer(_ base: MetalRenderer.TimeBase, _ p: Preset, phase: Double) -> MetalRenderer {
+        let r = MetalRenderer(pixelFormat: .bgra8Unorm, store: store)!
+        r.timeBase = base
+        r.apply(p, source: SourceSpec())
+        // put the wall clock (or the instance t) `phase` seconds into the hour
+        let now = Date().timeIntervalSince1970
+        r.timeBaseSkew = phase - MetalRenderer.wallPhase(now)
+        if base == .instance { r.setInstanceTime(phase) }
+        return r
+    }
+    /// Frames back to back for `seconds`, running each event once its time (s) has passed:
+    /// the largest step between consecutive frames.
+    func maxStep(_ r: MetalRenderer, seconds: Double, events: [(Double, () -> Void)] = []) -> Double {
+        let t0 = CACurrentMediaTime()
+        var pending = events, last = r.renderFrame(width: w, height: h), worst = 0.0
+        while CACurrentMediaTime() - t0 < seconds {
+            while let e = pending.first, CACurrentMediaTime() - t0 >= e.0 { e.1(); pending.removeFirst() }
+            let f = r.renderFrame(width: w, height: h)
+            worst = max(worst, meanDiff(last, f))
+            last = f
+        }
+        return worst
+    }
+    // the wrap's own jump: the scene at the top of the hour vs at its start
+    let atTop = renderer(.instance, lcA, phase: 3599.5).renderFrame(width: w, height: h)
+    let atZero = renderer(.instance, lcA, phase: 0.0).renderFrame(width: w, height: h)
+    let wrapJump = meanDiff(atTop, atZero)
+    print(String(format: "info  the wrap's jump (t 3600 → 0, unfaded): mean |Δ| %.2f", wrapJump))
+
+    // 6. A rotation landing 0.3 s into the wall clock's wrap fade waits for it to finish.
+    let rot = renderer(.wallClock, lcA, phase: 3599.85)
+    let rotStep = maxStep(rot, seconds: 0.8, events: [(0.45, { rot.transition(to: lcB, source: SourceSpec(), duration: 1.5) })])
+    check(rotStep < wrapJump * 0.15, String(format: "a style change during the hourly wrap fade doesn't pop (largest step %.2f)", rotStep))
+    _ = maxStep(rot, seconds: 3.2)
+    check(rot.preset?.id == lcB.id, "…and the style change it held back runs once the wrap fade ends")
+
+    // 7. The wrap landing mid style change waits for it: the incoming style never jumps in time.
+    let during = renderer(.wallClock, lcA, phase: 3599.4)
+    during.transition(to: lcB, source: SourceSpec(), duration: 1.5)
+    let duringStep = maxStep(during, seconds: 1.0)
+    check(duringStep < wrapJump * 0.15, String(format: "the hourly wrap during a style change doesn't pop (largest step %.2f)", duringStep))
+    _ = maxStep(during, seconds: 3.0)
+    check(during.animationTime() < 10, String(format: "…and the wrap happens once it's done (t %.2f s)", during.animationTime()))
+
+    // 8. The instance time base wraps too (behind a fade), so t stays a precise Float.
+    let inst = renderer(.instance, lcA, phase: 3599.8)
+    let instStep = maxStep(inst, seconds: 0.6)
+    check(instStep < wrapJump * 0.15, String(format: "the instance time base's hourly wrap doesn't pop (largest step %.2f)", instStep))
+    check(inst.animationTime() < 10, String(format: "…and t wrapped (t %.2f s)", inst.animationTime()))
     return ok
 }
 if runChecks { exit(liveChecks() ? 0 : 1) }
@@ -478,7 +533,7 @@ if gpuBench {
             for f in 0..<3 {
                 u.time = benchTime.map { $0 + Float(f) * 0.004 } ?? (Float(rep * 3 + f) * 1.7 + benchT0)
                 var sceneData: MTLTexture?
-                if inst.kind == .sandGarden { sceneData = sand.prepare(&u, device: dev) }
+                if inst.kind == .sandGarden { sceneData = sand.prepare(&u, wall: wall, device: dev) }
                 let rpd = MTLRenderPassDescriptor()
                 rpd.colorAttachments[0].texture = target
                 rpd.colorAttachments[0].loadAction = .dontCare
