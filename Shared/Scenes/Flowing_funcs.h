@@ -82,13 +82,20 @@ static inline float3 flowing_lavaField(float2 p, float ts, int n, float size, fl
     return float3(f, g);
 }
 
-// Studio-ish environment seen in the glossy wax: a large window upper-left, a thin strip
-// right, and the warm lamp glow from below. r is a reflection vector (y up, z to viewer).
+// Studio-ish environment seen in the glossy wax: a large soft window upper-left, a tall thin
+// strip right, and the warm lamp glow from below. Softboxes have a hot plateau and a soft
+// shoulder (1 / (1 + d⁶)), so highlights read as light sources, not cut-out shapes.
+// r is a reflection vector (y up, z to viewer).
 static inline float3 flowing_lavaEnv(float3 r, float3 warm) {
-    float win = smoothstep(0.20, 0.12, abs(r.x + 0.36)) * smoothstep(0.26, 0.16, abs(r.y - 0.40));
-    float strip = smoothstep(0.035, 0.012, abs(r.x - 0.55)) * smoothstep(0.45, 0.25, abs(r.y - 0.15));
+    float2 d1 = (r.xy - float2(-0.36, 0.42)) / float2(0.24, 0.29);
+    float q1 = dot(d1, d1);
+    float win = 1.0 / (1.0 + q1 * q1 * q1);
+    float2 d2 = (r.xy - float2(0.55, 0.15)) / float2(0.05, 0.36);
+    float q2 = dot(d2, d2);
+    float strip = 1.0 / (1.0 + q2 * q2 * q2);
     float bulb = smoothstep(-0.25, -0.85, r.y);
-    return float3(1.0, 0.97, 0.93) * (win * 1.6 + strip * 0.9) + warm * bulb * 0.8;
+    float3 c = float3(1.0, 0.97, 0.93) * (win * (1.25 + 0.35 * smoothstep(0.0, -0.6, d1.y)) + strip * 0.45);
+    return c + warm * bulb * 0.8;
 }
 
 // ---------------------------------------------------------------- Ink Bloom (56)
@@ -108,6 +115,18 @@ static inline float2 flowing_inkVel(float2 x, float tau) {
     return v;
 }
 
+// Where did the water now at d sit before a vortex core at c turned it by the integrated
+// angle G·e^{−ρ²/rc²}? Rotation about a centre by any θ(ρ) is area-preserving, so ink carried
+// through it keeps its mass and rolls into spirals; the Gaussian keeps the swirl local (a
+// pair's far fields cancel). (Inverse = rotate by −θ.)
+static inline float2 flowing_untwirl(float2 d, float2 c, float G, float rc2) {
+    float2 v = d - c;
+    float r2 = dot(v, v);
+    float th = G * exp(-r2 / rc2);
+    float s = sin(th), co = cos(th);
+    return c + float2(co * v.x + s * v.y, co * v.y - s * v.x);
+}
+
 // ---------------------------------------------------------------- Fireflies (57)
 
 // One depth layer of fireflies: a jittered grid, one candidate fly per cell, each wandering
@@ -124,7 +143,9 @@ static inline float3 flowing_fireflyLayer(float2 p, float z, float cs, float t, 
         float2 c = cell0 + float2(dx, dy);
         float3 h = pcg3(float3(c + 512.0, seed));
         // meadow flies stay low; the near (bokeh) layer can be anywhere
-        float lowBias = mix(smoothstep(0.30, -0.15, (c.y + 0.5) * cs), 1.0, smoothstep(0.75, 1.0, z));
+        float cy = (c.y + 0.5) * cs;
+        float lowBias = mix(smoothstep(0.30, -0.15, cy), 1.0, smoothstep(0.75, 1.0, z));
+        lowBias = max(lowBias, 0.20 * smoothstep(0.30, 0.0, cy));   // a few wander up into the trees
         if (h.z > countK * lowBias) continue;
         float zf = clamp(z + (fract(h.y * 17.3) - 0.5) * 0.22, 0.0, 1.0);   // each fly its own depth
         float coc = blur * abs(zf - focus) * 0.075;             // circle of confusion (p units)
