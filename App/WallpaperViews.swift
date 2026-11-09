@@ -69,10 +69,24 @@ struct WallpaperSettingsSection: View {
                 get: { wallpaper.isActive },
                 set: { wallpaper.setEnabled($0) }))
                 .formSwitchSize()
+            // The screensaver's lineup instead of a style of its own (turning it on starts the
+            // wallpaper); persisted in wallpaper.json, with Library.syncTimeBase for the saver.
+            Toggle("Match Screensaver", isOn: Binding(
+                get: { wallpaper.isActive && wallpaper.followsScreensaver },
+                set: { wallpaper.setFollowsScreensaver($0) }))
+                .formSwitchSize()
             LabeledContent("Style") {
-                stylePicker
-                    .frame(maxWidth: popUpMaxWidth, alignment: .trailing)   // a long name truncates, never squeezes "Style"
-                    .help(wallpaper.settings.presetID.flatMap(model.preset)?.name ?? "None")
+                if wallpaper.followsScreensaver && wallpaper.isActive {
+                    Text("Matches your screensaver")
+                        .textRole(.body)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .help(wallpaper.currentPreset.map { "Now: \($0.name)" } ?? "")
+                } else {
+                    stylePicker
+                        .frame(maxWidth: popUpMaxWidth, alignment: .trailing)   // a long name truncates, never squeezes "Style"
+                        .help(wallpaper.settings.presetID.flatMap(model.preset)?.name ?? "None")
+                }
             }
             // Segmented pickers share one width so their leading edges line up.
             SettingsValueRow("Frame Rate", valueWidth: segmentWidth) {
@@ -99,6 +113,7 @@ struct WallpaperSettingsSection: View {
             // Under the card rather than a row in it; two short paragraphs, not one wall.
             VStack(alignment: .leading, spacing: Space.xs) {
                 SettingsNote("The wallpaper plays while DotStudio is open — closing the window keeps it running from the menu bar. On battery it plays at 30 fps, or holds a still frame if Freeze on battery is on.")
+                SettingsNote("Match Screensaver plays whatever the screensaver shows — same playlist, night style and music — in step, so the screensaver starts right where your desktop was.")
                 SettingsNote("It pauses whenever windows cover the desktop, the screen locks or sleeps, the screensaver starts, or Low Power Mode is on, and holds still when your Mac runs hot. Balanced quality renders at three-quarter resolution on Retina displays.")
             }
         }

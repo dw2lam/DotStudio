@@ -48,6 +48,7 @@ struct DotStudioApp: App {
         let model = AppModel()
         _model = StateObject(wrappedValue: model)
         WallpaperController.shared.attach(model: model)   // restored in applicationDidFinishLaunching
+        MusicLifecycle.shared.attach(model: model)        // started in applicationDidFinishLaunching
         AppPresence.shared.attach(model: model)
         // After an app update, silently refresh the installed .saver so the
         // screensaver actually gets the new code (takes effect next start).
@@ -142,6 +143,9 @@ struct DotStudioApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         WallpaperController.shared.restore()
+        // Watch Spotify / Music while the library's music options (or a Now Playing style)
+        // need it; re-applied on every library change (MusicUI.swift).
+        MusicLifecycle.shared.start()
         AppPresence.shared.didFinishLaunching()   // login launch → menu bar; else a regular Dock app
         if DemoHooks.isActive { DemoHooks.applyAtLaunch() }
     }
@@ -164,6 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        MusicLifecycle.shared.stop()   // clears music.json: the saver shows no stale track
         WallpaperController.shared.shutdown()
     }
 }

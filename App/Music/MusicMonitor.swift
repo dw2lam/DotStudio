@@ -12,8 +12,9 @@
 //  - A 1 s position poll runs only while some UI asks for it (begin/endPositionUpdates) and
 //    Apple Events are allowed; otherwise readers extrapolate `position + (now − positionAt)`.
 //
-//  Lifecycle (for the UI stage):
-//      MusicMonitor.shared.start(store:)          // no-op unless library.musicSettings.needsMonitoring
+//  Lifecycle (driven by MusicLifecycle, App/MusicUI.swift):
+//      MusicMonitor.shared.neededByStyles = …     // a Now Playing style is in use
+//      MusicMonitor.shared.start(store:)          // no-op unless needsMonitoring || neededByStyles
 //      MusicMonitor.shared.apply(settings:)       // on every library change (starts/stops, source pin)
 //      MusicMonitor.shared.stop()                 // clears music.json (also on app quit)
 //  Controls: playPause() / next() / previous() / skip(seconds:) — optimistic, with a 1.5 s
@@ -217,14 +218,21 @@ final class MusicMonitor: ObservableObject {
 
     // MARK: - Lifecycle
 
+    /// The app's own reason to watch beyond the settings' features: a Now Playing style is in
+    /// use (on the screensaver or wallpaper, or open in the editor) — it shows what's playing
+    /// even with the card and take-over off. Set before `start` / `apply` (MusicLifecycle).
+    var neededByStyles = false
+
+    private func wanted(_ settings: MusicSpec) -> Bool { settings.needsMonitoring || neededByStyles }
+
     /// Starts watching when the library's music settings need it (card, wallpaper card or
-    /// take-over). Returns whether monitoring is on. Safe to call repeatedly.
+    /// take-over) or `neededByStyles`. Returns whether monitoring is on. Safe to call repeatedly.
     @discardableResult
     func start(store: SharedStore, settings: MusicSpec? = nil) -> Bool {
         let settings = settings ?? store.load()?.musicSettings ?? MusicSpec()
         self.settings = settings
         self.store = store
-        guard settings.needsMonitoring else {
+        guard wanted(settings) else {
             if isMonitoring { stop() }
             return false
         }
@@ -298,9 +306,9 @@ final class MusicMonitor: ObservableObject {
     func apply(settings: MusicSpec) {
         let old = self.settings
         self.settings = settings
-        if settings.needsMonitoring, !isMonitoring, let store {
+        if wanted(settings), !isMonitoring, let store {
             start(store: store, settings: settings)
-        } else if !settings.needsMonitoring, isMonitoring {
+        } else if !wanted(settings), isMonitoring {
             stop()
         } else if old.sourcePreference != settings.sourcePreference {
             logger.write("monitor: source preference → \(settings.sourcePreference.rawValue)")

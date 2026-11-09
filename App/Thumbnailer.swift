@@ -30,6 +30,7 @@ final class Thumbnailer {
     func retain(ids: Set<UUID>) {
         cache = cache.filter { ids.contains($0.key) }
         keys = keys.filter { ids.contains($0.key) }
+        cardCache = cardCache.filter { ids.contains($0.key) }
     }
 
     func image(for preset: Preset, source: SourceSpec) -> NSImage? {
@@ -71,10 +72,30 @@ final class Thumbnailer {
         return img
     }
 
-    // MARK: Music (Now Playing tiles)
+    // MARK: Music (Now Playing tiles, the card on a still)
 
     private var musicToken: MusicFeedHub.Token?
     private var lastMusicKey: String?
+    private var cardCache: [UUID: (key: String, image: NSImage)] = [:]
+
+    /// The thumbnail with the music corner card drawn on it while a song shows — what the
+    /// screensaver looks like right now (the Screensaver card's still hero). Plain otherwise.
+    func image(for preset: Preset, source: SourceSpec, musicCard: MusicSpec?) -> NSImage? {
+        let base = image(for: preset, source: source)
+        guard let card = musicCard, card.isCardEnabled, !preset.isMusicScene, let base else { return base }
+        watchMusic()
+        let snap = MusicFeedHub.shared.snapshot(store: store)
+        guard snap.isVisible(settings: card) else { return base }
+        let key = [Self.musicKey(snap), card.corner.rawValue, card.cardSizePreference.rawValue,
+                   "\(ObjectIdentifier(base).hashValue)"].joined(separator: "|")
+        if let hit = cardCache[preset.id], hit.key == key { return hit.image }
+        var rect = CGRect(x: 0, y: 0, width: width, height: height)
+        guard let cg = base.cgImage(forProposedRect: &rect, context: nil, hints: nil),
+              let out = Self.composite(cg, mode: .card(card.corner), music: snap, settings: card) else { return base }
+        let img = NSImage(cgImage: out, size: base.size)
+        cardCache[preset.id] = (key, img)
+        return img
+    }
 
     /// What a Now Playing tile depends on: the track, its artwork and whether it's showing —
     /// not the progress, so a playing song doesn't re-render the gallery every second.
@@ -104,12 +125,12 @@ final class Thumbnailer {
 
     /// The music foreground (native-resolution CALayer tree) drawn over a rendered frame.
     static func composite(_ frame: CGImage, mode: MusicOverlayLayer.Mode, music: MusicSnapshot,
-                          scale: CGFloat = 2) -> CGImage? {
+                          settings: MusicSpec = MusicSpec(), scale: CGFloat = 2) -> CGImage? {
         let w = frame.width, h = frame.height
         let layer = MusicOverlayLayer()
         layer.contentsScale = scale
         layer.frame = CGRect(x: 0, y: 0, width: CGFloat(w) / scale, height: CGFloat(h) / scale)
-        layer.update(mode: mode, music: music, settings: MusicSpec(), animated: false)
+        layer.update(mode: mode, music: music, settings: settings, animated: false)
         guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
                                   space: CGColorSpace(name: CGColorSpace.sRGB)!,
                                   bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue

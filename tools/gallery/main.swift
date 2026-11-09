@@ -15,8 +15,9 @@
 //  Music: DOTSTUDIO_MUSIC_FAKE=<fixture.json> feeds the Now Playing scene; --overlay composites the
 //  native-resolution foreground (MusicOverlayLayer, via layer.render(in:)) onto Now Playing presets;
 //  --card bottomLeft|bottomRight|topLeft|topRight|all composites the corner card onto every other
-//  preset; --scale 2 sets the overlay's pixels per point (default 2 from 2400 px wide, else 1);
-//  --tag name appends "@name" to the file names.
+//  preset; --cardsize small|medium|large picks the card's size (default medium, as in the app);
+//  --scale 2 sets the overlay's pixels per point (default 2 from 2400 px wide, else 1);
+//  --tag name appends "@name" to the file names. Fixtures: tools/music-fixtures/make.sh.
 //  --checks runs the live-renderer checks (wall-clock time base, synced slideshow, held-frame
 //  track change, rapid skips) through MetalRenderer.renderFrame and exits non-zero on a failure.
 
@@ -43,6 +44,7 @@ var tzArg: String?
 var loc: (lat: Double, lon: Double)? = (37.77, -122.42)
 var overlay = false
 var cardCorners: [MusicSpec.Corner] = []
+var cardSize: MusicSpec.CardSize?
 var overlayScale: CGFloat?
 var tag: String?
 var musicFadeBench = false
@@ -82,6 +84,7 @@ while !args.isEmpty {
     case "--card":
         let v = args.removeFirst()
         cardCorners = v == "all" ? MusicSpec.Corner.allCases : [MusicSpec.Corner(rawValue: v) ?? .bottomLeft]
+    case "--cardsize": cardSize = MusicSpec.CardSize(rawValue: args.removeFirst())
     case "--scale": overlayScale = CGFloat(Double(args.removeFirst()) ?? 2)
     case "--tag": tag = args.removeFirst()
     case "--size":
@@ -113,7 +116,7 @@ func compositeMusic(_ cg: CGImage, preset: Preset, corner: MusicSpec.Corner?, no
     layer.contentsScale = scale
     layer.frame = CGRect(x: 0, y: 0, width: CGFloat(W) / scale, height: CGFloat(H) / scale)
     layer.reduceMotion = true
-    layer.update(mode: mode, music: musicFeed.snapshot, settings: MusicSpec(), now: now, animated: false)
+    layer.update(mode: mode, music: musicFeed.snapshot, settings: MusicSpec(cardSize: cardSize), now: now, animated: false)
     guard let ctx = CGContext(data: nil, width: W, height: H, bitsPerComponent: 8, bytesPerRow: 0,
                               space: CGColorSpace(name: CGColorSpace.sRGB)!,
                               bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)

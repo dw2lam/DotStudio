@@ -99,7 +99,8 @@ final class AppPresence: NSObject, ObservableObject {
         }
     }
 
-    /// The DotStudio menu-bar item is shown: menu-bar mode, or a live wallpaper to control.
+    /// The DotStudio menu-bar item is shown: menu-bar mode, a live wallpaper to control, or
+    /// music being watched (play / pause from the menu).
     @Published private(set) var showsMenuBarItem: Bool
 
     /// This launch came from the login item and started in the menu bar.
@@ -455,8 +456,10 @@ final class AppPresence: NSObject, ObservableObject {
         NSApp.terminate(nil)
     }
 
-    private func refreshMenuBarItem() {
-        let shows = menuBarMode || WallpaperController.shared.isActive
+    /// Menu-bar mode, a live wallpaper, or music being watched (its controls live in the
+    /// menu — MusicLifecycle calls this when that changes).
+    func refreshMenuBarItem() {
+        let shows = menuBarMode || WallpaperController.shared.isActive || MusicLifecycle.shared.isNeeded
         if shows != showsMenuBarItem { showsMenuBarItem = shows }
     }
 
@@ -573,8 +576,8 @@ final class AppPresence: NSObject, ObservableObject {
     /// script, by distributed notification (object = this process's pid, userInfo["command"]):
     /// open · settings · close (performClose on every app window, like the red ✕) ·
     /// wallpaper-stop · wallpaper:<style name> · menubar:on|off · add-built-ins · state ·
-    /// menu (log the menu-bar menu's screensaver + wallpaper items as AppKit builds them) ·
-    /// menu-pick:<submenu>/<item> (choose that item, as a click would).
+    /// menu (log the menu-bar menu's music, screensaver + wallpaper items as AppKit builds them) ·
+    /// menu-pick:<submenu>/<item> (choose that item, as a click would) · quit.
     private func listenForDevCommands() {
         guard DemoHooks.devCommands else { return }
         DistributedNotificationCenter.default().addObserver(
@@ -601,6 +604,7 @@ final class AppPresence: NSObject, ObservableObject {
             log("state menuBarItem=\(showsMenuBarItem) wallpaper=\(WallpaperController.shared.isActive) active=\(NSApp.isActive) hidden=\(NSApp.isHidden) putAway=\(Self.hiddenWindows.count) main=\(mainWindows().count) settings=\(Self.settingsWindow().map(Self.isOpen) ?? false) notice=\(shownNotice) noticeAnswered=\(AppPrefs.shared.bool(Self.stayNoticeKey, default: false)) setup=\(model.map { "\($0.setupStatus)" } ?? "?") all=[\(wins.joined(separator: ", "))]")
         case "add-built-ins": model?.addDemoPack()
         case "menu": devMenu(pick: nil)
+        case "quit": NSApp.terminate(nil)   // the menu's Quit (applicationWillTerminate runs)
         default:
             if command.hasPrefix("wallpaper:"), let p = model?.library.presets.first(where: { $0.name == String(command.dropFirst(10)) }) {
                 WallpaperController.shared.use(p.id)
@@ -614,12 +618,14 @@ final class AppPresence: NSObject, ObservableObject {
 // MARK: - Dev: the menu as AppKit builds it
 
 extension AppPresence {
-    /// The menu-bar menu's screensaver and wallpaper items, built into a real NSMenu the way
+    /// The menu-bar menu's music, screensaver and wallpaper items, built into a real NSMenu the way
     /// MenuBarExtra builds them (NSHostingMenu, macOS 15+), so a test can read titles, check
     /// marks and submenus — and choose an item — without opening a menu on screen.
     fileprivate func devMenu(pick: String?) {
         guard #available(macOS 15, *), let model else { return }
-        let menu = NSHostingMenu(rootView: Group { ScreensaverMenu(); Divider(); WallpaperMenu() }.environmentObject(model))
+        let menu = NSHostingMenu(rootView: Group {
+            MenuBarMusicSlot(); ScreensaverMenu(); Divider(); WallpaperMenu()
+        }.environmentObject(model))
         menu.update()
         func lines(_ m: NSMenu, _ depth: Int) -> [String] {
             m.items.flatMap { item -> [String] in

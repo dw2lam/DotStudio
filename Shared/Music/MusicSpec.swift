@@ -3,7 +3,8 @@
 //  Accessors resolve defaults; the stored fields stay nil until the user changes something.
 //
 //  Defaults (owner decisions 2026-11-09): the music card shows on every screensaver style while
-//  music plays; take-over is opt-in; card on the live wallpaper is opt-in; 5-minute paused linger.
+//  music plays; take-over is opt-in; card on the live wallpaper is opt-in; 5-minute paused linger;
+//  Medium card size.
 
 import Foundation
 
@@ -41,12 +42,32 @@ struct MusicSpec: Codable, Equatable {
         }
     }
 
+    /// How big the corner card is. The screensaver is read from across a room, so even Small
+    /// is larger than a desktop widget (MusicGeometry.Card has the proportions).
+    enum CardSize: String, Codable, CaseIterable, Identifiable {
+        case small, medium, large
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .small: return "Small"
+            case .medium: return "Medium"
+            case .large: return "Large"
+            }
+        }
+        init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = CardSize(rawValue: raw) ?? .medium
+        }
+    }
+
     var cardEnabled: Bool?
     var cardCorner: Corner?
     var cardOnWallpaper: Bool?
     var takeOver: Bool?
     var source: SourcePreference?
     var lingerMinutes: Double?
+    /// Added in 1.4 (optional: older builds ignore it and draw their own card size).
+    var cardSize: CardSize?
 
     // Resolved values (defaults applied).
     var isCardEnabled: Bool { cardEnabled ?? true }
@@ -55,6 +76,7 @@ struct MusicSpec: Codable, Equatable {
     var takesOver: Bool { takeOver ?? false }
     var sourcePreference: SourcePreference { source ?? .auto }
     var linger: Double { lingerMinutes ?? 5 }
+    var cardSizePreference: CardSize { cardSize ?? .medium }
 
     /// True when any feature needs the app to watch players (and therefore keep running).
     var needsMonitoring: Bool { isCardEnabled || takesOver || showsCardOnWallpaper }
