@@ -106,7 +106,7 @@ enum EffectKind: String, Codable, CaseIterable {
     case soapFilm
 
     // — new-scene slot 6 (shader id 72); rename the case freely on this line —
-    case studio6
+    case dialClock
 
     var displayName: String {
         switch self {

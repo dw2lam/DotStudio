@@ -13,7 +13,7 @@
 //  Weather (Ocean Horizon, Shallows): --weather rain[,thunderstorm,…] renders each preset under each
 //  condition (WeatherCondition raw values, or "live" = the real weather.json; also storm, overcast,
 //  partly) in place of the live feed — a scene's fixed Weather pick still wins.
-//  Wall clock (clock scenes, Ocean Horizon's Follow the Sun): --clock 06:40[,07:00,…] renders
+//  Wall clock (clock scenes, Ocean Horizon's Follow the Sun): --clock 06:40[,07:00:30.5,…] renders
 //  each preset at each local time on --date 2026-06-21 (default today), in --tz America/Toronto
 //  (default the Mac's), at --loc 43.7,-79.4 (default San Francisco; "none" = the no-location fallback).
 //  Music (MusicPresentation decides, exactly as the saver does): DOTSTUDIO_MUSIC_FAKE=<fixture.json>
@@ -294,10 +294,12 @@ func wallDate(_ hhmm: String) -> Date? {
     if let d = dateArg?.split(separator: "-").compactMap({ Int($0) }), d.count == 3 {
         dc.year = d[0]; dc.month = d[1]; dc.day = d[2]
     }
-    let hm = hhmm.split(separator: ":").compactMap { Int($0) }
-    guard hm.count == 2 else { return nil }
-    dc.hour = hm[0]; dc.minute = hm[1]
-    return cal.date(from: dc)
+    // HH:MM, or HH:MM:SS(.fff) for second-accurate clock frames (e.g. 11:59:58.5)
+    let parts = hhmm.split(separator: ":")
+    guard parts.count == 2 || parts.count == 3, let h = Int(parts[0]), let m = Int(parts[1]) else { return nil }
+    let s = parts.count == 3 ? (Double(parts[2]) ?? 0) : 0
+    dc.hour = h; dc.minute = m
+    return cal.date(from: dc)?.addingTimeInterval(s)
 }
 let lib = DefaultPresets.makeLibrary()
 var presets = lib.presets
