@@ -67,6 +67,7 @@ struct EffectStackView: View {
         .onAppear {
             // Open the first effect so the main knobs are right there.
             if expanded.isEmpty, let first = preset.effects.first { expanded = [first.id] }
+            if DemoHooks.expandAllEffects { expanded = Set(preset.effects.map(\.id)) }   // UI shots / design review
         }
     }
 
