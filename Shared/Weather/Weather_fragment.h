@@ -1,18 +1,41 @@
-//  Weather_fragment.h — the weather copies of Ocean Horizon (59) and Shallows (67) as fragment
-//  functions of their own, compiled in their own unit (Weather.metal, after Shaders.metal's
-//  helpers and scene code).
+//  Weather_fragment.h — Ocean Horizon (59) and Shallows (67) as fragment functions of their own,
+//  compiled in their own unit (Weather.metal, after Shaders.metal's helpers and scene code): the
+//  weather copies, and the scenes' own clear skies.
 //
 //  Why separate entry points: the über-shader fx_fragment is allocated registers for its heaviest
 //  path, so putting the weather copies anywhere inside it — even behind a uniform branch, even
 //  out of line — doubled the cost of the scenes' own clear skies (Golden Hour 8.8 → 17.8 ms at
-//  5120×2880). WeatherLink (Shared/Weather/WeatherFeed.swift) binds these pipelines for a pass
-//  whose u.weather2.w is 1; every other pass keeps fx_fragment, so clear weather draws exactly the
-//  scene it always was, at its old cost.
+//  5120×2880). The same holds the other way round: inside fx_fragment the clear skies pay for the
+//  heaviest of every other scene's registers (Golden Hour 9.0 ms there, ~4.7 ms in a function of
+//  its own). And within one function, two copies (Follow the Sun's live sky and the fixed one) pay
+//  for each other's: one copy per entry point halved the weather (Tidewater in fog 14.4 → 6.5 ms).
+//  So every combination is a function: clear or weather, fixed or live, with or without cumulus.
+//  WeatherLink (Shared/Weather/WeatherFeed.swift: functionName) binds the one a pass needs in
+//  place of fx_fragment; fx_fragment's own cases 59 and 67 stay as the fallback (a pipeline that
+//  failed to build) and draw the same frames (±1 level on a few pixels: compiled apart).
 
+// The scenes' clear skies (u.weather2.w is 0: the weather is the scene's own).
+fragment float4 fx_ocean(VOut in [[stage_in]], constant FXUniforms& u [[buffer(0)]]) {
+    float2 uv = in.uv, res = u.resolution, px = uv * res;
+    return nature_ocean(uv, res, px, u.time, u, false);
+}
+fragment float4 fx_ocean_live(VOut in [[stage_in]], constant FXUniforms& u [[buffer(0)]]) {
+    float2 uv = in.uv, res = u.resolution, px = uv * res;
+    return nature_ocean(uv, res, px, u.time, u, true);
+}
+fragment float4 fx_shallows(VOut in [[stage_in]], constant FXUniforms& u [[buffer(0)]]) {
+    float2 uv = in.uv, res = u.resolution, px = uv * res;
+    return studio1_shallows(uv, res, px, u.time, u);
+}
+
+// Weather (u.weather2.w is 1).
 fragment float4 fx_wx_ocean(VOut in [[stage_in]], constant FXUniforms& u [[buffer(0)]]) {
     float2 uv = in.uv, res = u.resolution, px = uv * res;
-    if (nature_live(u)) return nature_ocean(uv, res, px, u.time, u, true, true);
     return nature_ocean(uv, res, px, u.time, u, false, true);
+}
+fragment float4 fx_wx_ocean_live(VOut in [[stage_in]], constant FXUniforms& u [[buffer(0)]]) {
+    float2 uv = in.uv, res = u.resolution, px = uv * res;
+    return nature_ocean(uv, res, px, u.time, u, true, true);
 }
 
 // Partly cloudy: the same, with the fair-weather cumulus (nature_wxCumulus) and their shadows on
@@ -23,8 +46,11 @@ fragment float4 fx_wx_ocean(VOut in [[stage_in]], constant FXUniforms& u [[buffe
 // the hand-over between the two copies is seamless.
 fragment float4 fx_wx_ocean_cu(VOut in [[stage_in]], constant FXUniforms& u [[buffer(0)]]) {
     float2 uv = in.uv, res = u.resolution, px = uv * res;
-    if (nature_live(u)) return nature_ocean(uv, res, px, u.time, u, true, true, true);
     return nature_ocean(uv, res, px, u.time, u, false, true, true);
+}
+fragment float4 fx_wx_ocean_cu_live(VOut in [[stage_in]], constant FXUniforms& u [[buffer(0)]]) {
+    float2 uv = in.uv, res = u.resolution, px = uv * res;
+    return nature_ocean(uv, res, px, u.time, u, true, true, true);
 }
 
 fragment float4 fx_wx_shallows(VOut in [[stage_in]], constant FXUniforms& u [[buffer(0)]]) {
