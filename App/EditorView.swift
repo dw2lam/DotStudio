@@ -1,12 +1,18 @@
-//  EditorView.swift — edit one style: big live preview on the left, inspector on the right.
+//  EditorView.swift — edit one style: a big live preview floating over the style's own
+//  ambient wash, and a glass inspector on the right.
 
 import SwiftUI
 
 struct EditorView: View {
     @EnvironmentObject var model: AppModel
+    @ObservedObject private var wallpaper = WallpaperSlot.shared
+    @Environment(\.heroNamespace) private var hero
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let id: UUID
     @State private var tab: Tab = .effects
     @State private var confirmDelete = false
+    /// The live Metal view fades in once the zoom from the tile has landed.
+    @State private var live = false
 
     enum Tab: String, CaseIterable, Identifiable {
         case effects = "Effects", source = "Source"
@@ -19,14 +25,13 @@ struct EditorView: View {
         HStack(spacing: 0) {
             previewPane(preset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            Divider()
             inspector(binding)
-                .frame(width: 340)
-                .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                .frame(width: 344)
+                .glassCard(cornerRadius: 24)
+                .padding(.vertical, 14)
+                .padding(.trailing, 14)
+                .transition(reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
         }
-        .background(Color(nsColor: .windowBackgroundColor))
-        .navigationTitle(preset.name)
-        .navigationSubtitle(preset.isScene ? "Scene" : "Look")
         .toolbar { toolbar(preset) }
         .confirmationDialog("Delete “\(preset.name)”?", isPresented: $confirmDelete) {
             Button("Delete", role: .destructive) { model.delete(id) }
@@ -34,53 +39,51 @@ struct EditorView: View {
             Text("This can't be undone.")
         }
         .onChange(of: preset.isScene) { _, isScene in if isScene { tab = .effects } }
+        .onAppear {
+            if reduceMotion { live = true; return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45 * Motion.slow) {
+                withAnimation(.easeIn(duration: 0.3)) { live = true }
+            }
+        }
     }
 
     // MARK: Preview
 
     private func previewPane(_ preset: Preset) -> some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 20) {
             Spacer(minLength: 0)
-            MetalPreview(preset: preset, source: model.library.source,
-                         location: model.locationTuple, store: model.store)
-                .aspectRatio(screenAspect, contentMode: .fit)
-                .background(Color.black)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.primary.opacity(0.1)))
-                .shadow(color: .black.opacity(0.25), radius: 18, y: 8)
-            statusLine
+            ZStack {
+                StyleThumb(preset: preset)
+                    .heroGeometry(id, in: hero)
+                if live && !DemoHooks.stillPreviews {
+                    MetalPreview(preset: preset, source: model.library.source,
+                                 location: model.locationTuple, store: model.store)
+                        .transition(.opacity)
+                }
+            }
+            .aspectRatio(screenAspect, contentMode: .fit)
+            .background(Color.black)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(.white.opacity(0.12)))
+            // Layered shadow: a tight contact shadow plus a wide, soft lift.
+            .shadow(color: .black.opacity(0.18), radius: 3, y: 2)
+            .shadow(color: .black.opacity(0.30), radius: 34, y: 18)
+            .onTapGesture(count: 2) {
+                ScreensaverPreviewController.shared.present(
+                    preset: preset, source: model.library.source, store: model.store)
+            }
+            .help("Double-click for a full-screen preview")
+
+            DestinationBar(id: id)
             Spacer(minLength: 0)
         }
-        .padding(28)
+        .padding(.horizontal, 36)
+        .padding(.vertical, 24)
     }
 
     private var screenAspect: CGFloat {
         guard let f = NSScreen.main?.frame, f.height > 0 else { return 16.0 / 10.0 }
         return f.width / f.height
-    }
-
-    @ViewBuilder private var statusLine: some View {
-        let role = model.role(of: id)
-        HStack(spacing: 10) {
-            switch (model.playbackMode, role) {
-            case (.single, .active):
-                Label("This is your screensaver", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.secondary)
-            case (.rotate, .rotating):
-                Label("In your screensaver rotation", systemImage: "arrow.triangle.2.circlepath")
-                    .foregroundStyle(.secondary)
-            case (.dayNight, .day), (.dayNight, .night), (.dayNight, .dayAndNight):
-                RoleBadge(role: role)
-            default:
-                Button { model.useAsScreensaver(id) } label: {
-                    Label("Use as Screensaver", systemImage: "checkmark.circle")
-                }
-                .help(model.playbackMode == .single ? "Make this the style that plays"
-                      : "Switch to One Style mode and play this")
-            }
-        }
-        .font(.callout)
-        .frame(height: 24)
     }
 
     // MARK: Inspector
@@ -97,25 +100,30 @@ struct EditorView: View {
                     Text("Scenes draw themselves — the shared source isn't used.")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
-                    Picker("Section", selection: $tab) {
+                    Picker("Section", selection: $tab.animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion))) {
                         ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
                 }
             }
-            .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 10)
-            Divider()
+            .padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 12)
+            Divider().opacity(0.6)
 
-            if tab == .source && !isScene {
-                ScrollView {
-                    SourceEditor(source: model.sourceBinding, model: model)
-                        .padding(16)
+            ZStack {
+                if tab == .source && !isScene {
+                    ScrollView {
+                        SourceEditor(source: model.sourceBinding, model: model)
+                            .padding(16)
+                    }
+                    .transition(.opacity)
+                } else {
+                    EffectStackView(preset: binding, model: model)
+                        .transition(.opacity)
                 }
-            } else {
-                EffectStackView(preset: binding, model: model)
             }
         }
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     // MARK: Toolbar
@@ -142,14 +150,70 @@ struct EditorView: View {
                 Button("Duplicate") { model.duplicate(id).map { model.edit($0) } }
                 Button("Export Style…") { model.exportPreset(id) }
                 Divider()
+                if wallpaper.isAvailable {
+                    if wallpaper.styleID == id {
+                        Button("Stop Wallpaper") { wallpaper.stop() }
+                    } else {
+                        Button("Set as Wallpaper") { wallpaper.set(id) }
+                    }
+                }
                 Button("Save Image…") { model.exportSelectedAsImage(id) }
                 Button("Set as Desktop Picture") { model.setSelectedAsWallpaper(id) }
                 Divider()
                 Button("Delete…", role: .destructive) { confirmDelete = true }
             } label: {
-                Label("More", systemImage: "ellipsis.circle")
+                Label("More", systemImage: "ellipsis")
             }
             .help("Duplicate, export, or delete this style")
         }
+    }
+}
+
+/// Under the editor preview: where this style plays, as glass buttons.
+private struct DestinationBar: View {
+    @EnvironmentObject var model: AppModel
+    @ObservedObject private var wallpaper = WallpaperSlot.shared
+    let id: UUID
+
+    var body: some View {
+        let lineup = model.screensaverLineup
+        let only = lineup.playlist == [id]
+        let inPlaylist = lineup.playlist.contains(id)
+        GlassGroup(spacing: 10) {
+            HStack(spacing: 10) {
+                if only {
+                    Label("Your Screensaver", systemImage: "checkmark.circle.fill")
+                        .font(.callout.weight(.medium))
+                        .padding(.horizontal, 14).frame(height: 30)
+                        .glassSurface(.regular, in: Capsule())
+                } else {
+                    Button { Motion.run { model.playAsScreensaver(id) } } label: {
+                        Label("Play as Screensaver", systemImage: "play.fill")
+                    }
+                    .glassButton(.prominent)
+                    Button { Motion.run { model.togglePlaylist(id) } } label: {
+                        Label(inPlaylist ? "In Playlist" : "Add to Screensaver",
+                              systemImage: inPlaylist ? "checkmark" : "plus")
+                    }
+                    .glassButton()
+                    .help(inPlaylist ? "Remove from the screensaver playlist" : "Rotate this with the other styles in the playlist")
+                }
+                if lineup.night == id {
+                    Label("At Night", systemImage: "moon.fill")
+                        .font(.callout.weight(.medium))
+                        .padding(.horizontal, 14).frame(height: 30)
+                        .glassSurface(.regular, in: Capsule())
+                }
+                if wallpaper.isAvailable {
+                    Button { Motion.run { wallpaper.toggle(id) } } label: {
+                        Label(wallpaper.styleID == id ? "Stop Wallpaper" : "Set as Wallpaper",
+                              systemImage: "photo.artframe")
+                    }
+                    .glassButton()
+                }
+            }
+            .controlSize(.large)
+        }
+        .motion(Motion.smooth, value: lineup)
     }
 }

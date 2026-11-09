@@ -67,7 +67,7 @@ struct OnboardingView: View {
         .frame(width: Self.size.width, height: Self.size.height)
         .background(Color(nsColor: .windowBackgroundColor))
         .background {
-            // Esc closes the whole flow (counts as completed — the gallery banner still offers setup).
+            // Esc closes the whole flow (counts as completed — the Screensaver card still offers setup).
             Button("Close") { close() }
                 .keyboardShortcut(.cancelAction)
                 .opacity(0)
@@ -368,7 +368,7 @@ private struct PickPage: View {
             ForEach(picks) { preset in
                 PickTile(preset: preset,
                          selected: model.library.activeID == preset.id) {
-                    withAnimation(.easeOut(duration: 0.15)) { model.useAsScreensaver(preset.id) }
+                    withAnimation(.easeOut(duration: 0.15)) { model.playAsScreensaver(preset.id) }
                 }
             }
         }
@@ -709,14 +709,14 @@ private struct DonePage: View {
             PageHeader(title: status == .ready ? "You're All Set" : "Ready When You Are",
                        subtitle: status == .ready
                            ? "DotStudio will play the next time your screensaver starts."
-                           : "Turn on the screensaver any time from the banner at the top of the gallery.")
+                           : "Turn on the screensaver any time from the Screensaver card at the top of the gallery.")
 
             createCard
 
             VStack(alignment: .leading, spacing: 14) {
                 Tip(symbol: "arrow.triangle.2.circlepath", tint: .orange,
                     title: "Mix it up",
-                    detail: "Use Playback to rotate through styles, or switch between day and night.")
+                    detail: "Add styles to the Screensaver card to rotate them, or pick a different one for night.")
                 Tip(symbol: "cursorarrow.click.2", tint: .purple,
                     title: "Edit anything",
                     detail: "Double-click any tile to change its effects, colors and motion.")

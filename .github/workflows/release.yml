@@ -13,11 +13,25 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-15
+    # The app uses Liquid Glass (macOS 26 SDK APIs behind #available), so it needs
+    # Xcode 26+. macos-15 defaults to Xcode 16.4; macos-26 (arm64) defaults to 26.x.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # full history: the build number is the commit count
+
+      - name: Select newest Xcode 26
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+          SDK=$(xcrun --sdk macosx --show-sdk-version)
+          echo "macOS SDK $SDK"
+          if [ "${SDK%%.*}" -lt 26 ]; then
+            echo "::error::macOS $SDK SDK — Liquid Glass needs the macOS 26+ SDK"
+            exit 1
+          fi
 
       - name: Install xcodegen
         run: brew install xcodegen
