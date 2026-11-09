@@ -34,6 +34,12 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
     }
 
+    /// True for builds made outside the release workflow: project.yml's CURRENT_PROJECT_VERSION
+    /// placeholder ("1") survives only there; CI passes the commit count.
+    static var isLocalBuild: Bool {
+        (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) == "1"
+    }
+
     override init() {
         super.init()
         controller = SPUStandardUpdaterController(startingUpdater: false,
@@ -42,6 +48,10 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
         // Screenshot/render modes must never touch the network or the feed.
         let env = ProcessInfo.processInfo.environment
         guard env["DOTSTUDIO_SHOTS"] == nil, env["DOTSTUDIO_UI_SHOTS"] == nil else { return }
+        // Local builds carry project.yml's placeholder build number (CI stamps real ones), so
+        // Sparkle would see every published release as newer and "update" a dev build back to
+        // an older version — which can't read a newer library (it happened, 2026-11-09).
+        guard !Self.isLocalBuild else { return }
         controller.startUpdater()
         observation = updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] u, _ in
             DispatchQueue.main.async { self?.canCheck = u.canCheckForUpdates }
