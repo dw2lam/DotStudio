@@ -149,6 +149,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MusicLifecycle.shared.start()
         WeatherService.shared.start()             // live weather for the sea scenes (App/Weather)
         AppPresence.shared.didFinishLaunching()   // login launch → menu bar; else a regular Dock app
+        // The installed saver's pipelines, precompiled for this saver build / macOS / GPU (a few
+        // seconds of background work after an update; otherwise a quick check). Delayed so it
+        // never competes with the launch itself.
+        Installer.refreshPipelineArchive(delay: 8)
         if DemoHooks.isActive { DemoHooks.applyAtLaunch() }
     }
 

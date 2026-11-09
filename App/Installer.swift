@@ -84,9 +84,24 @@ enum Installer {
             try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
             if fm.fileExists(atPath: dst.path) { try fm.removeItem(at: dst) }
             try fm.copyItem(at: src, to: dst)
+            refreshPipelineArchive()
             return .success(dst)
         } catch {
             return .failure(error)
+        }
+    }
+
+    private static let archiveQueue = DispatchQueue(label: "DotStudio.pipelineArchive", qos: .utility)
+
+    /// Precompiles the installed saver's pipelines for this Mac (Shared/PipelineArchive.swift),
+    /// so its first start after an install or update shows a frame at once instead of compiling
+    /// fx_fragment for seconds. Runs at launch (macOS or the GPU may have changed) and after
+    /// every install; off the main thread, one at a time, a no-op while the archive is current.
+    static func refreshPipelineArchive(delay: TimeInterval = 0) {
+        archiveQueue.asyncAfter(deadline: .now() + delay) {
+            guard isInstalled else { return }
+            let outcome = PipelineArchive.refresh(saver: installedURL, baseDir: SharedStore.appBaseDir)
+            if outcome != .upToDate { NSLog("DotStudio: screensaver pipeline archive \(outcome)") }
         }
     }
 
