@@ -39,21 +39,36 @@ enum TextAtlas {
     /// Shader ids of the scenes that read the atlas (the Clocks pack).
     private static let users: Set<Int32> = Set(SceneCatalog.clocks.values.map { $0.shaderID })
 
-    private static let lock = NSLock()
-    // Per GPU: on a multi-GPU Mac the live wallpaper draws on the low-power GPU while
-    // previews use the default one, and a texture only belongs to its own device.
+    // Per GPU (keyed by registryID): a texture only belongs to its own device, and on a
+    // multi-GPU Mac (Mac Pro, eGPU) a wallpaper may draw on the GPU driving its display
+    // while previews use the default one. On a one-GPU Mac there is exactly one entry.
+    // The lock guards the tables only, never a build: a build takes seconds, and
+    // another GPU's caller (or one whose atlas is ready) must not wait on it. A second
+    // caller for the same GPU waits for the build in progress instead of repeating it.
+    private static let cond = NSCondition()
     private static var cached: [UInt64: MTLTexture] = [:]
     private static var failed: Set<UInt64> = []
+    private static var building: Set<UInt64> = []
 
-    /// The atlas when `effect` needs it (built on first use, ~0.1 s, then shared), else nil.
+    /// The atlas when `effect` needs it (built on first use, then shared), else nil.
     static func texture(_ device: MTLDevice, effect: Int32) -> MTLTexture? {
         guard users.contains(effect) else { return nil }
-        lock.lock(); defer { lock.unlock() }
         let key = device.registryID
-        if cached[key] == nil && !failed.contains(key) {
-            if let t = build(device: device) { cached[key] = t } else { failed.insert(key) }
-        }
-        return cached[key]
+        cond.lock()
+        while building.contains(key) { cond.wait() }
+        if let t = cached[key] { cond.unlock(); return t }
+        if failed.contains(key) { cond.unlock(); return nil }
+        building.insert(key)
+        cond.unlock()
+
+        let t = build(device: device)
+
+        cond.lock()
+        building.remove(key)
+        if let t { cached[key] = t } else { failed.insert(key) }
+        cond.broadcast()
+        cond.unlock()
+        return t
     }
 
     // MARK: - Build

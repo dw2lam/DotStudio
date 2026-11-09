@@ -15,8 +15,9 @@
 //
 //  Threads: this controller, the windows and the policy live on the main thread. All
 //  per-frame work — display links, uniforms, encoding, drawables, media decode and
-//  upload — runs on WallpaperRenderLoop's own utility-QoS thread (efficiency cores on
-//  Apple Silicon). The main thread hands it immutable snapshots and never waits on it.
+//  upload — runs on WallpaperRenderLoop's own thread (utility QoS, raised to
+//  user-initiated only above 60 Hz). The main thread hands it immutable snapshots and
+//  never waits on it.
 
 import AppKit
 import Combine
@@ -244,7 +245,6 @@ final class WallpaperController: ObservableObject {
     private func rebuildHosts(store: SharedStore) {
         let loop = makeRenderLoop(store: store)
         var seen = Set<CGDirectDisplayID>()
-        var device: MTLDevice?
         for screen in NSScreen.screens {
             guard let id = screen.displayID else { continue }
             seen.insert(id)
@@ -253,8 +253,7 @@ final class WallpaperController: ObservableObject {
                 configure(h)
                 continue
             }
-            if device == nil { device = hosts.values.first?.device ?? WallpaperGPU.preferred() }
-            guard let device else { continue }
+            guard let device = WallpaperGPU.device(for: id) else { continue }
             nextToken += 1
             let h = WallpaperHost(screen: screen, displayID: id, device: device, token: nextToken)
             hosts[id] = h

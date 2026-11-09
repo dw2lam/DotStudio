@@ -60,8 +60,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private var fadeOld: MTLTexture?
     private var fadeNew: MTLTexture?
 
-    /// - device: the GPU to render on (the live wallpaper picks the low-power one on
-    ///   multi-GPU Macs); nil = the system default.
+    /// - device: the GPU to render on (the live wallpaper uses the one driving its
+    ///   display); nil = the system default.
     init?(pixelFormat: MTLPixelFormat, store: SharedStore, device preferredDevice: MTLDevice? = nil) {
         guard let device = preferredDevice ?? MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue() else { return nil }
