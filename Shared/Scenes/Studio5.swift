@@ -5,11 +5,12 @@
 //  then the Newton / Michel-Lévy sequence (silver, straw, gold, magenta, peacock, emerald…)
 //  washing to silvery white where the film is thick. The thickness is a drainage profile
 //  carried by a slow incompressible flow (backward-advected over a fixed window, so it is
-//  continuous in time), with thin plumes breaking off the bottom margin. Colour is spectral:
-//  the two-beam Airy reflectance integrated against the CIE 1931 observer (tabulated over
-//  optical path), damped over each pixel's thickness footprint so steep high orders wash
-//  to white instead of aliasing.
-//  Film = Oil: a thin oil layer (n 1.50) on dark water (1.33), drifting with a current.
+//  continuous in time) that curls the bands into filaments, with thermals of thinner film
+//  rising off the bottom margin. Colour is spectral: the two-beam Airy reflectance
+//  integrated against the CIE 1931 observer (tabulated over optical path), damped over each
+//  pixel's thickness footprint so steep high orders wash to white instead of aliasing.
+//  Film = Oil: a sparse slick (n 1.50) on dark water (1.33) drifting with a current — silver
+//  margins, then bronze, violet-navy and teal first orders, gold and magenta where it pools.
 //  Shaders: Studio5_funcs.h (studio5_*), Studio5_cases.h.
 
 import Foundation
@@ -22,7 +23,7 @@ extension SceneCatalog {
             blurb: "A draining soap film in soft light: real interference colour, folded by slow eddies.",
             shaderID: 71,
             params: [ParamSpec("speed", "Speed", 0, 2, def: 1),
-                     ParamSpec("swirl", "Turbulence", 0, 1, def: 0.55),
+                     ParamSpec("swirl", "Turbulence", 0, 1, def: 0.65),
                      ParamSpec("drain", "Drainage", 0, 1, def: 0.5),
                      ParamSpec("plumes", "Plumes", 0, 1, def: 0.5),
                      ParamSpec(menu: "film", "Film", ["Soap", "Oil"], def: 0),
@@ -43,7 +44,7 @@ extension SceneCatalog {
     static var studio5Presets: [Preset] {
         [
             Preset(name: "Soap Film",
-                   effects: [soapFX(["speed": 1, "swirl": 0.55, "drain": 0.5, "plumes": 0.5, "film": 0,
+                   effects: [soapFX(["speed": 1, "swirl": 0.65, "drain": 0.5, "plumes": 0.5, "film": 0,
                                      "scale": 1, "panel": 0.6],
                                     a: RGBA(0.006, 0.006, 0.008), b: RGBA(1.0, 0.98, 0.95))]),
             Preset(name: "Oil Slick",
