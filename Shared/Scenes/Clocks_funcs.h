@@ -315,7 +315,7 @@ static inline float clocks_typeProfile(float d, float w, bool rod) {
 /// nearest one, off the figures), everything else is a union over every standing figure.
 struct ClkTypeField {
     float  d;        // top figure: signed distance (caps, + outside)
-    float2 g;        //             unit outward gradient
+    float2 g;        //             outward gradient: unit, fading to 0 on a stroke's crest
     float  pres;     //             presence 0..1
     float  m;        // the figures' share of the pixel (anti-aliased, × presence)
     float  shadow;   // shadow they cast on the ground 0..1 (penumbra hardens toward contact)
@@ -333,7 +333,12 @@ static inline ClkTypeField clocks_typeField(texture2d<float> A, sampler s, threa
     ClkTypeField F;
     F.d = CLK_FAR; F.g = float2(0.0); F.pres = 0.0; F.m = 0.0;
     F.shadow = 0.0; F.caus = 0.0; F.ao = 0.0; F.dim = 0.0;
-    float best = -1e9;
+    // The top surface and the runner-up: where two figures cross mid-change the surface is
+    // filleted between them over KF (in height units) instead of creasing — a hard switch
+    // there drew aliased dotted seams in the glass.
+    float best = -1e9, best2 = -1e9;
+    float d2 = CLK_FAR, pres2 = 0.0; float2 g2 = float2(0.0);
+    const float KF = 0.08;
     float shl = max(length(sh), 1e-4);
     const float RISE = 0.06;
     for (int i = 0; i < L.n; ++i) {
@@ -353,8 +358,12 @@ static inline ClkTypeField clocks_typeField(texture2d<float> A, sampler s, threa
             float yo = (st == 0) ? RISE * (1.0 - ee) : -RISE * ee;
             float2 o = float2(cx - adv * 0.5 * k, yo * k);
             float d0 = (clocks_gdist(A, s, G, (q - o) / k, fw) - bias) * k;
-            float dx = (clocks_gdist(A, s, G, (q + float2(eps, 0) - o) / k, fw) - bias) * k;
-            float dy = (clocks_gdist(A, s, G, (q + float2(0, eps) - o) / k, fw) - bias) * k;
+            // central differences: the gradient's length drops smoothly to 0 across a stroke's
+            // crest (forward differences flipped its direction there pixel by pixel)
+            float2 qo = (q - o) / k, ex = float2(eps / k, 0.0), ey = float2(0.0, eps / k);
+            float2 gr = float2(clocks_gdist(A, s, G, qo + ex, fw) - clocks_gdist(A, s, G, qo - ex, fw),
+                               clocks_gdist(A, s, G, qo + ey, fw) - clocks_gdist(A, s, G, qo - ey, fw)) * (k / (2.0 * eps));
+            gr *= 1.0 / max(length(gr), 1.0);
             float ds = (clocks_gdist(A, s, G, (q + sh * (pr * k) - o) / k, fw) - bias) * k;   // small figures stand off less
 
             float soft = aw + (1.0 - pr) * blurK * k;
@@ -362,18 +371,26 @@ static inline ClkTypeField clocks_typeField(texture2d<float> A, sampler s, threa
             // topmost surface wins (inside: presence × profile height; outside: the nearest)
             float key = (d0 < 0.0) ? pr * clocks_typeProfile(d0, pw * k, rod) + 1e-4 : -d0;
             if (key > best) {
+                best2 = best; d2 = F.d; g2 = F.g; pres2 = F.pres;
                 best = key;
-                float2 gr = float2(dx - d0, dy - d0);
-                F.d = d0; F.g = gr * rsqrt(max(dot(gr, gr), 1e-12)); F.pres = pr;
+                F.d = d0; F.g = gr; F.pres = pr;
                 F.dim = (i >= 5) ? 1.0 : 0.0;
+            } else if (key > best2) {
+                best2 = key; d2 = d0; g2 = gr; pres2 = pr;
             }
             // contact-hardening shadow: sharp at the figure's foot, softer the further it falls
             float far = clamp(max(d0, 0.0) / (shl * k), 0.25, 1.5);
             float pe = (0.004 + pen * far) * k * mix(0.6, 1.0, pr);
             F.shadow = max(F.shadow, pr * smoothstep(pe, -pe, ds));
-            F.caus = max(F.caus, pr * smoothstep(-0.015 * k, -0.045 * k, ds) * smoothstep(-0.13 * k, -0.06 * k, ds));
+            // focused light: a soft line down the middle of a stroke's shadow, not a lighter copy of it
+            F.caus = max(F.caus, pr * smoothstep(-0.025 * k, -0.068 * k, ds) * smoothstep(-0.14 * k, -0.078 * k, ds));
             F.ao = max(F.ao, pr * exp(-max(d0, 0.0) / (0.035 * k)));
         }
+    }
+    // fillet toward the runner-up only where both are figures (inside) and close in height
+    if (best2 > 0.0 && best - best2 < KF) {
+        float w = (0.5 - 0.5 * (best - best2) / KF) * saturate(best2 * 50.0);   // 0.5 on the seam → 0 at KF apart
+        F.d = mix(F.d, d2, w); F.g = mix(F.g, g2, w); F.pres = mix(F.pres, pres2, w);
     }
     return F;
 }
@@ -398,15 +415,19 @@ static inline float3 clocks_glassBg(float2 p, float t, float3 A, float3 B, float
 /// L and a weaker fill opposite. HDR: the key is ~20× the room. `lw` = fwidth of dot(r, L).
 static inline float3 clocks_glassEnv(float3 r, float3 L, float3 ground, float3 room, float lw) {
     float up = clamp(r.z, -1.0, 1.0);
-    float3 env = (up < 0.0) ? ground * 0.85 : mix(room * 1.25, room * 0.55, up);
+    float hz = smoothstep(-0.05, 0.05, up);                       // a soft horizon, never a seam
+    float3 env = mix(ground * 0.85, mix(room * 1.25, room * 0.55, max(up, 0.0)), hz);
     float c = dot(r, L);
-    float key = smoothstep(0.945 - lw, 0.985 + lw, c);           // ~10° soft disc, ~19° falloff
+    // ~10° soft disc, ~19° falloff; where the surface turns faster than a pixel can hold the
+    // disc's edge, it is widened and dimmed in step (its energy kept), so a sliver of the
+    // highlight on a tight curve fades instead of breaking into bright dots
+    float key = smoothstep(0.945 - lw, 0.985 + lw, c) * (0.05 / (0.05 + 2.0 * max(lw - 0.025, 0.0)));
     float3 Lf = normalize(float3(-L.xy, 0.25));
     float fill = smoothstep(0.80, 0.97, dot(r, Lf));
     // the studio wall on the key's side, lit by it: a broad bright band just above the horizon
     // that the rods' shoulders catch as a rim on the lit side
     float side = smoothstep(0.2, 0.9, dot(normalize(r.xy + 1e-5), normalize(L.xy + 1e-5)));
-    float wall = side * smoothstep(0.55, 0.12, abs(up - 0.18)) * step(0.0, up);
+    float wall = side * smoothstep(0.55, 0.12, abs(up - 0.18)) * hz;
     return env + float3(1.0, 0.98, 0.95) * (22.0 * key + 1.6 * wall) + room * (4.0 * fill);
 }
 
