@@ -63,6 +63,10 @@ struct WallpaperSettings: Codable, Equatable {
     var quality: Quality = .balanced
     /// On battery: freeze on a still frame (opt-in). Otherwise it plays at 30 fps.
     var freezeOnBattery = false
+    /// "Match Screensaver": show whatever the screensaver would (Playback.effectivePreset —
+    /// rotation, night style, music take-over) on the shared wall-clock time base, instead
+    /// of `presetID`. See WallpaperController.setFollowsScreensaver(_:).
+    var followsScreensaver = false
 
     init() {}
 
@@ -74,6 +78,7 @@ struct WallpaperSettings: Codable, Equatable {
         frameRate = (try? c.decode(FrameRate.self, forKey: .frameRate)) ?? .balanced
         quality = (try? c.decode(Quality.self, forKey: .quality)) ?? .balanced
         freezeOnBattery = (try? c.decode(Bool.self, forKey: .freezeOnBattery)) ?? false
+        followsScreensaver = (try? c.decode(Bool.self, forKey: .followsScreensaver)) ?? false
     }
 
     static func load(from url: URL) -> WallpaperSettings {
@@ -226,6 +231,9 @@ enum WallpaperPacing {
         case none                          // hold the last frame; no wake-ups
         case continuous(fps: Double)       // display-link paced
         case after(TimeInterval)           // one frame after this delay (clock ticks)
+
+        /// Frames follow each other continuously (a crossfade can play out).
+        var isContinuous: Bool { if case .continuous = self { return true } else { return false } }
     }
 
     static func profile(for preset: Preset, source: SourceSpec) -> Profile {

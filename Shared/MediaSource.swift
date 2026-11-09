@@ -105,6 +105,14 @@ struct SlideFrame {
     let mix: Float                // 0 = all A, 1 = all B
 }
 
+/// A position on a slideshow's timeline: seconds, and the photo-order seed (nil = the
+/// source's own start — random for a live source). Renderers on the wall-clock time base
+/// pass epoch seconds and seed 0, so every one of them shows the same photo and framing.
+struct SlideClock: Equatable {
+    var t: Double
+    var seed: Int?
+}
+
 /// A slowly panning, cross-fading photo slideshow: the built-in curated set (shipped in
 /// the .saver bundle) or the user's own photos from the media folder. Everything is a
 /// pure function of time, so the saver, previews and thumbnails agree; photos decode on
@@ -179,52 +187,62 @@ final class CollectionSource {
 
     /// The slideshow at `t` seconds. `sync` decodes missing photos on the spot
     /// (thumbnails/export); otherwise they load in the background and the frame shows
-    /// whatever is ready.
-    func frame(at t: Double, sync: Bool) -> SlideFrame? {
-        let F = fade
-        let tt = max(t, 0) + F                       // t = 0 opens fully on the first photo
-        let k = Int(floor(tt / interval))
-        let local = tt - Double(k) * interval
-        let x = min(max(local / F, 0), 1)
-        let m = Float(x * x * (3 - 2 * x))
-        let iPrev = index(k - 1), iCur = index(k)
+    /// whatever is ready. `seed` fixes the photo order (nil = this source's own start).
+    func frame(at t: Double, sync: Bool, seed: Int? = nil) -> SlideFrame? {
+        frames(at: [SlideClock(t: t, seed: seed)], sync: sync)[0]
+    }
 
+    /// Several timelines at once — the two chains of a crossfade between clocks (a renderer
+    /// switching time base). Evicts only photos none of them needs, so the two never take
+    /// turns throwing out each other's slides.
+    func frames(at clocks: [SlideClock], sync: Bool) -> [SlideFrame?] {
+        let F = fade
+        let steps: [(k: Int, local: Double, m: Float, seed: Int)] = clocks.map { c in
+            let tt = max(c.t, 0) + F                     // t = 0 opens fully on the first photo
+            let k = Int(floor(tt / interval))
+            let local = tt - Double(k) * interval
+            let x = min(max(local / F, 0), 1)
+            return (k, local, Float(x * x * (3 - 2 * x)), c.seed ?? offset)
+        }
         if evicts {
-            let keep: Set<Int> = [iPrev, iCur, index(k + 1)]
+            var keep = Set<Int>()
+            for s in steps { keep.formUnion([index(s.k - 1, s.seed), index(s.k, s.seed), index(s.k + 1, s.seed)]) }
             lock.lock()
             cache = cache.filter { keep.contains($0.key) }
             lock.unlock()
-            _ = texture(index(k + 1), sync: false)   // prefetch the next photo
+            for s in steps { _ = texture(index(s.k + 1, s.seed), sync: false) }   // prefetch the next photo
         }
+        return steps.map { s in
+            let iPrev = index(s.k - 1, s.seed), iCur = index(s.k, s.seed)
+            var cur = texture(iCur, sync: sync)
+            let prev = (s.m < 1) ? texture(iPrev, sync: sync) : nil
+            if cur == nil && prev == nil { cur = texture(iCur, sync: true) }   // first frame
+            let kbCur = kenBurns(slide: s.k, localTime: s.local, seed: s.seed)
+            let kbPrev = kenBurns(slide: s.k - 1, localTime: s.local + interval, seed: s.seed)
 
-        var cur = texture(iCur, sync: sync)
-        let prev = (m < 1) ? texture(iPrev, sync: sync) : nil
-        if cur == nil && prev == nil { cur = texture(iCur, sync: true) }   // first frame
-        let kbCur = kenBurns(slide: k, localTime: local)
-        let kbPrev = kenBurns(slide: k - 1, localTime: local + interval)
-
-        switch (prev, cur) {
-        case let (p?, c?) where m < 1:
-            return SlideFrame(texA: p, kbA: kbPrev, texB: c, kbB: kbCur, mix: m)
-        case let (_, c?):
-            return SlideFrame(texA: c, kbA: kbCur, texB: nil, kbB: kbCur, mix: 0)
-        case let (p?, nil):
-            return SlideFrame(texA: p, kbA: kbPrev, texB: nil, kbB: kbPrev, mix: 0)
-        default:
-            return nil
+            switch (prev, cur) {
+            case let (p?, c?) where s.m < 1:
+                return SlideFrame(texA: p, kbA: kbPrev, texB: c, kbB: kbCur, mix: s.m)
+            case let (_, c?):
+                return SlideFrame(texA: c, kbA: kbCur, texB: nil, kbB: kbCur, mix: 0)
+            case let (p?, nil):
+                return SlideFrame(texA: p, kbA: kbPrev, texB: nil, kbB: kbPrev, mix: 0)
+            default:
+                return nil
+            }
         }
     }
 
-    private func index(_ slide: Int) -> Int {
+    private func index(_ slide: Int, _ seed: Int) -> Int {
         let n = urls.count
-        return ((slide + offset) % n + n) % n
+        return ((slide % n + seed % n) % n + n) % n
     }
 
     /// Per-slide framing: zoom in or out by up to ~13%, drifting across the frame along a
     /// random direction. Seeded by the slide number, so a photo moves differently each
     /// time it comes round.
-    private func kenBurns(slide: Int, localTime: Double) -> simd_float4 {
-        let s = UInt64(bitPattern: Int64(slide &+ offset &* 7919))
+    private func kenBurns(slide: Int, localTime: Double, seed: Int) -> simd_float4 {
+        let s = UInt64(bitPattern: Int64(slide &+ seed &* 7919))
         func h(_ salt: UInt64) -> Double {
             var z = s &* 0x9E3779B97F4A7C15 &+ salt &* 0xBF58476D1CE4E5B9
             z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
