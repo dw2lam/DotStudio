@@ -40,6 +40,7 @@ struct DotStudioApp: App {
         if let dir = ProcessInfo.processInfo.environment["DOTSTUDIO_UI_SHOTS"] {
             UIShots.run(outDir: dir)  // renders the app's screens offscreen and exits
         }
+        PerfProbe.runIfRequested()    // DOTSTUDIO_PERF_PROBE: headless cost measurements, then exits
         if ProcessInfo.processInfo.environment["DOTSTUDIO_MIGRATE_ONLY"] != nil {
             // Headless migration check (pair with DOTSTUDIO_STORE_DIR): migrates library.json
             // the way a launch does, saves it, prints a summary, exits.

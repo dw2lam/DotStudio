@@ -832,6 +832,7 @@ final class MusicMonitor: ObservableObject {
     }
 
     private func heartbeatTick() {
+        Perf.count("tick:MusicMonitor.heartbeat")
         guard isMonitoring, sleptAt == nil, state.isPlaying == true else { return }
         heartbeats += 1
         commit(force: true)
@@ -1137,6 +1138,7 @@ final class MusicMonitor: ObservableObject {
     }
 
     private func pollTick() {
+        Perf.count("tick:MusicMonitor.poll")
         guard !pollInFlight, let source = activeSource else { return }
         pollInFlight = true
         pollTicks += 1

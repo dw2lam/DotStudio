@@ -71,6 +71,7 @@ final class AppModel: ObservableObject {
 
     /// Persist the library, surfacing a write failure instead of dropping it silently.
     func save() {
+        Perf.count("AppModel.save")
         if !store.save(library) && storeAlert == nil {
             storeAlert = StoreAlert(
                 title: "Couldn't Save Changes",
@@ -98,6 +99,7 @@ final class AppModel: ObservableObject {
     /// Offscreen renders and headless runs never go to the network.
     private static let locationDisabled = ProcessInfo.processInfo.environment["DOTSTUDIO_UI_SHOTS"] != nil
         || ProcessInfo.processInfo.environment["DOTSTUDIO_SHOTS"] != nil
+        || ProcessInfo.processInfo.environment["DOTSTUDIO_PERF_PROBE"] != nil
 
     /// Resolve the device location now (launch: also refreshes a cached one) and cache it in
     /// the library; then again about daily, or sooner with backoff after a failure.

@@ -53,6 +53,7 @@ struct StyleTile: View {
     private static let radius = Radius.tile
 
     var body: some View {
+        let _ = Perf.body("StyleTile")
         VStack(alignment: .leading, spacing: TileLabel.gapAbove) {
             ZStack {
                 // While this style is open in the editor, its image lives there.
@@ -165,6 +166,7 @@ struct TileLabel: View {
     var dimmed = false
 
     var body: some View {
+        let _ = Perf.body("TileLabel")
         VStack(alignment: .leading, spacing: layout.labelGap) {
             // Up to two lines, then "…" with the full name as a tooltip.
             Text(title)
@@ -191,6 +193,7 @@ struct TileBadgeCluster: View {
     let rotates: Bool
 
     var body: some View {
+        let _ = Perf.body("TileBadgeCluster")
         if !badges.isEmpty {
             FlowLayout(spacing: GlassBadge.spacing, lineSpacing: GlassBadge.spacing) {
                 if badges.onScreensaver {
@@ -229,6 +232,7 @@ struct GlassBadge: View {
     var tint: Color? = Color.accentColor.opacity(0.75)
 
     var body: some View {
+        let _ = Perf.body("GlassBadge")
         HStack(spacing: Space.xxs) {
             Image(systemName: symbol)
             if let text { Text(text).lineLimit(1) }
@@ -259,6 +263,7 @@ private struct TileActionBar: View {
     private var isOnly: Bool { lineup.playlist == [preset.id] }
 
     var body: some View {
+        let _ = Perf.body("TileActionBar")
         // Every action when the tile has room. On a narrow tile (or at large text sizes)
         // Preview and Edit fold into a "…" menu; narrower still, everything but Play does.
         ViewThatFits(in: .horizontal) {

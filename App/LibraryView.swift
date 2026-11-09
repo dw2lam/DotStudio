@@ -24,6 +24,7 @@ struct LibraryView: View {
     @FocusState private var searchFocused: Bool
 
     var body: some View {
+        let _ = Perf.body("LibraryView")
         // Re-read once a minute so "playing now" follows the rotation and the sun. (Music never
         // changes what plays: it's presented over the style.)
         TimelineView(.everyMinute) { _ in
@@ -94,7 +95,10 @@ private struct GalleryPage: View {
     @Binding var query: String
     var searchFocused: FocusState<Bool>.Binding
 
-    var body: some View { gallery(state) }
+    var body: some View {
+        let _ = Perf.body("GalleryPage")
+        gallery(state)
+    }
 
     /// Space above the cards, under the toolbar.
     private var topInset: CGFloat { layout.widthClass.pick(Space.m, Space.m, Space.l) }
@@ -232,6 +236,7 @@ private struct SectionHeader: View {
     @State private var showSource = false
 
     var body: some View {
+        let _ = Perf.body("SectionHeader")
         if section.kind == .looks {
             // The Source button sits on the title's line when it fits, else under the text.
             ViewThatFits(in: .horizontal) {
@@ -343,6 +348,7 @@ private struct FilterBar: View {
     }
 
     var body: some View {
+        let _ = Perf.body("FilterBar")
         AdaptiveStack(rowAlignment: .top, columnAlignment: .leading, spacing: layout.itemGap) {
             // The full prompt where it fits; a compact field says less rather than clip it.
             SearchField(text: $query, prompt: layout.isCompact && !layout.prefersStacking
@@ -561,6 +567,7 @@ struct SourceSwatch: View {
     static let sourceOnly = Preset(id: UUID(uuidString: "00000000-0000-0000-0000-00000000D07E")!, name: "Source")
 
     var body: some View {
+        let _ = Perf.body("SourceSwatch")
         switch source.kind {
         case .gradient:
             LinearGradient(colors: [Color(source.colorA), Color(source.colorB)],
