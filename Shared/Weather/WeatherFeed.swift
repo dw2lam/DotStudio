@@ -110,7 +110,8 @@ final class WeatherLink {
         guard WeatherLink.usesWeather(inst.kind) else { return }
         defer {
             if u.weather2.w > 0.5, let encoder, let format,
-               let pso = WeatherLink.pipeline(for: inst.kind, device: encoder.device, format: format) {
+               let pso = WeatherLink.pipeline(for: inst.kind, device: encoder.device, format: format,
+                                              cumulus: WeatherLink.cumulus(u)) {
                 encoder.setRenderPipelineState(pso)
             }
         }
@@ -134,10 +135,18 @@ final class WeatherLink {
     private static var psos: [String: MTLRenderPipelineState] = [:]
     private static var libraries: [UInt64: MTLLibrary] = [:]
 
+    /// Ocean Horizon's cover is in the fair-weather cumulus' range (partly cloudy, no fog): draw it
+    /// with fx_wx_ocean_cu, the copy that carries them (Weather_fragment.h). Matches nature_wxCu's
+    /// support (cover 0.30…0.95, fog under 0.6), outside which the heaps are nothing.
+    static func cumulus(_ u: FXUniforms) -> Bool {
+        u.weather.x > 0.30 && u.weather.x < 0.95 && u.weather2.y < 0.6
+    }
+
     /// The weather pipeline for a scene, built on first use (then cached per GPU and format).
     /// nil (no such function in the library) leaves fx_fragment drawing the scene's clear sky.
-    static func pipeline(for kind: EffectKind, device: MTLDevice, format: MTLPixelFormat) -> MTLRenderPipelineState? {
-        let name = kind == .shallows ? "fx_wx_shallows" : "fx_wx_ocean"
+    static func pipeline(for kind: EffectKind, device: MTLDevice, format: MTLPixelFormat,
+                         cumulus: Bool = false) -> MTLRenderPipelineState? {
+        let name = kind == .shallows ? "fx_wx_shallows" : (cumulus ? "fx_wx_ocean_cu" : "fx_wx_ocean")
         let key = "\(device.registryID)/\(format.rawValue)/\(name)"
         psoLock.lock(); defer { psoLock.unlock() }
         if let p = psos[key] { return p }
