@@ -82,11 +82,18 @@ struct OnboardingView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .background {
             // Esc closes the whole flow (counts as completed — the Screensaver card still offers setup).
+            // Only a key equivalent: not a control anyone can tab to or find with VoiceOver.
             Button("Close") { close() }
                 .keyboardShortcut(.cancelAction)
                 .opacity(0)
                 .allowsHitTesting(false)
+                .focusable(false)
+                .accessibilityHidden(true)
         }
+        // Errors from inside the sheet (installing the screensaver, importing photos) — the
+        // main window's alert would sit behind the sheet. ContentView stands down meanwhile.
+        .alert(item: Binding(get: { model.showOnboarding ? model.storeAlert : nil },
+                             set: { model.storeAlert = $0 })) { $0.alert }
     }
 
     @ViewBuilder
@@ -585,11 +592,21 @@ private struct PickTile: View {
     let selected: Bool
     let action: () -> Void
     @State private var hovering = false
+    /// Keyboard focus (Tab / Full Keyboard Access): the system ring would wrap the whole
+    /// tile and its caption, so the tile draws its own around the card.
+    @FocusState private var focused: Bool
 
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: layout.controlGap) {
                 ThumbCard(preset: preset)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: Radius.tile + 4, style: .continuous)
+                            .strokeBorder(Color(nsColor: .keyboardFocusIndicatorColor), lineWidth: 3)
+                            .padding(-4)
+                            .opacity(focused ? 1 : 0)
+                            .accessibilityHidden(true)
+                    }
                     .overlay(alignment: .topTrailing) {
                         if selected {
                             Image(systemName: "checkmark.circle.fill")
@@ -621,7 +638,8 @@ private struct PickTile: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .focusable(false)
+        .focusEffectDisabled()
+        .focused($focused)
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.15), value: hovering)
         .accessibilityAddTraits(selected ? .isSelected : [])

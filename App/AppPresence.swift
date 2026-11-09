@@ -218,10 +218,36 @@ final class AppPresence: NSObject, ObservableObject {
     /// applicationDidFinishLaunching.
     func didFinishLaunching() {
         decideLaunch(windowAppeared: false)
+        if startedHidden {
+            // macOS 14/15 may still be ordering the main window in when decideLaunch ran (from
+            // its onAppear, before it was visible, so mainWindows() skipped it). One run-loop
+            // turn later, put away every main window by identifier — visible or not. (macOS 27
+            // opens none for a login launch: nothing to do there.)
+            DispatchQueue.main.async { [weak self] in self?.putAwayLaunchWindows() }
+        }
         launched = true
         wallpaperWasActive = WallpaperController.shared.isActive
         refreshMenuBarItem()
         listenForDevCommands()
+    }
+
+    /// A menu-bar login launch: close any main window SwiftUI opened anyway, and stay (or go
+    /// back to) accessory if nothing else is open. Runs one turn after launch, before the user
+    /// can have asked for a window.
+    private func putAwayLaunchWindows() {
+        let strays = NSApp.windows.filter { w in
+            w.styleMask.contains(.titled) && !(w is WallpaperWindow)
+                && (w.identifier?.rawValue.hasPrefix(DotStudioApp.mainWindowID + "-") ?? false)
+        }
+        guard !strays.isEmpty else { return }
+        log("login launch: putting away \(strays.count) main window(s)")
+        // Ordered out first, so their close doesn't count as the user's (only visible windows do).
+        for w in strays { w.orderOut(nil); w.close() }
+        if !hasAppWindows(), NSApp.activationPolicy() != .accessory {
+            accessoryWork?.cancel(); accessoryWork = nil
+            NSApp.setActivationPolicy(.accessory)
+            log("policy accessory")
+        }
     }
 
     /// SwiftUI's openWindow / openSettings, captured from a view's environment (the main

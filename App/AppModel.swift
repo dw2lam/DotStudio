@@ -29,7 +29,8 @@ final class AppModel: ObservableObject {
     let store = SharedStore(role: .app)
     lazy var thumbnailer: Thumbnailer = {
         let t = Thumbnailer(store: store)
-        t.onUpdate = { [weak self] in self?.objectWillChange.send() }   // repaint when a video poster lands
+        t.onUpdate = { [weak self] in self?.objectWillChange.send() }   // repaint when a still lands
+        t.location = { [weak self] in self?.locationTuple }   // live sky, Universe, weather tiles
         return t
     }()
     @Published var library: Library
@@ -59,7 +60,13 @@ final class AppModel: ObservableObject {
         }
         selectedID = library.activeID ?? library.presets.first?.id
         save()
-        resolveLocation()
+        // A cached location resolved within the day waits out the rest of it; otherwise ask now.
+        let age = Date().timeIntervalSince1970 - UserDefaults.standard.double(forKey: Self.locationResolvedAtKey)
+        if locationTuple != nil, age >= 0, age < Self.locationRefreshInterval {
+            scheduleLocation(after: Self.locationRefreshInterval - age)
+        } else {
+            resolveLocation()
+        }
     }
 
     /// Persist the library, surfacing a write failure instead of dropping it silently.
@@ -76,15 +83,62 @@ final class AppModel: ObservableObject {
         return nil
     }
 
-    /// Resolve the device location once (IP geolocation) and cache it in the library.
+    // MARK: Location (IP geolocation, cached in the library for the saver)
+
+    /// A resolved location is refreshed about once a day (a laptop travels); a failed lookup
+    /// retries with backoff instead of leaving the sky, the Universe marker and the weather
+    /// without a place for the rest of the session.
+    static let locationRefreshInterval: TimeInterval = 24 * 3600
+    private static let locationBackoff: [TimeInterval] = [30, 120, 600, 1800, 3600]
+    private var locationWork: DispatchWorkItem?
+    private var locationInFlight = false
+    private var locationFailures = 0
+    private var locationAttempt = 0
+    private static let locationResolvedAtKey = "locationResolvedAt"
+    /// Offscreen renders and headless runs never go to the network.
+    private static let locationDisabled = ProcessInfo.processInfo.environment["DOTSTUDIO_UI_SHOTS"] != nil
+        || ProcessInfo.processInfo.environment["DOTSTUDIO_SHOTS"] != nil
+
+    /// Resolve the device location now (launch: also refreshes a cached one) and cache it in
+    /// the library; then again about daily, or sooner with backoff after a failure.
     private func resolveLocation() {
-        guard library.locationLat == nil else { return }
+        guard !Self.locationDisabled, !locationInFlight else { return }
+        locationWork?.cancel(); locationWork = nil
+        locationInFlight = true
+        locationAttempt += 1
+        let attempt = locationAttempt
         LocationFetcher.fetch { [weak self] lat, lon in
-            guard let self = self else { return }
-            self.library.locationLat = lat
-            self.library.locationLon = lon
-            self.save()
+            guard let self else { return }
+            // A late answer after its attempt was written off still counts.
+            self.locationInFlight = false
+            self.locationFailures = 0
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.locationResolvedAtKey)
+            if self.library.locationLat != lat || self.library.locationLon != lon {
+                self.library.locationLat = lat
+                self.library.locationLon = lon
+                self.save()
+            }
+            self.scheduleLocation(after: Self.locationRefreshInterval)
         }
+        // LocationFetcher only ever reports success (its request times out after 8 s): no answer
+        // by now is a failure — retry with backoff.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
+            guard let self, self.locationInFlight, self.locationAttempt == attempt else { return }
+            self.locationInFlight = false
+            let delay = Self.locationBackoff[min(self.locationFailures, Self.locationBackoff.count - 1)]
+            self.locationFailures += 1
+            self.scheduleLocation(after: delay)
+        }
+    }
+
+    private func scheduleLocation(after seconds: TimeInterval) {
+        locationWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.locationWork = nil
+            self?.resolveLocation()
+        }
+        locationWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
     }
 
     /// Bring a library written by an older build up to date (every launch; idempotent).
@@ -384,7 +438,11 @@ final class AppModel: ObservableObject {
             if after.night == id { after.night = nil }
             applyLineup(after, persist: false)
         }
-        if WallpaperSlot.shared.styleID == id { WallpaperSlot.shared.stop() }
+        // A wallpaper showing exactly this style stops. Not one matching the screensaver: its
+        // style is whatever the lineup shows now (WallpaperController.libraryChanged moves it on).
+        if !WallpaperController.shared.followsScreensaver, WallpaperSlot.shared.styleID == id {
+            WallpaperSlot.shared.stop()
+        }
         if editingID == id { editingID = nil }
         let neighbor = library.presets.indices.contains(idx) ? idx : library.presets.count - 1
         selectedID = neighbor >= 0 ? library.presets[neighbor].id : nil

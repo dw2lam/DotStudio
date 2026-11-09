@@ -41,8 +41,21 @@ else
   echo "Reusing $P12"
 fi
 
-SHA1=$(openssl pkcs12 -legacy -in "$P12" -nokeys -passin "file:$PASSFILE" 2>/dev/null \
-       | openssl x509 -noout -fingerprint -sha1 | sed 's/.*=//; s/://g')
+# Reusing needs the password next to the .p12. Without this check the pipeline below fails
+# under pipefail with its error sent to /dev/null, and the script just stops, saying nothing.
+if [[ ! -s "$PASSFILE" ]]; then
+  echo "error: $P12 exists but its password file $PASSFILE is missing or empty." >&2
+  echo "       Restore p12-password.txt from your backup of $DIR, or move the .p12 aside to create" >&2
+  echo "       a new identity (every user's privacy grants then reset once on the next update)." >&2
+  exit 1
+fi
+
+if ! SHA1=$(openssl pkcs12 -legacy -in "$P12" -nokeys -passin "file:$PASSFILE" 2>/dev/null \
+            | openssl x509 -noout -fingerprint -sha1 | sed 's/.*=//; s/://g') || [[ -z "$SHA1" ]]; then
+  echo "error: couldn't read the certificate in $P12 with the password in $PASSFILE" >&2
+  echo "       (wrong password, a damaged .p12, or an openssl without -legacy — use OpenSSL 3)." >&2
+  exit 1
+fi
 echo "Certificate SHA-1: $SHA1"
 
 base64 -i "$P12" | gh secret set SIGNING_P12_BASE64 -R "$REPO"
