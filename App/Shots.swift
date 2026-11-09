@@ -285,7 +285,7 @@ enum UIShots {
                         view: { _ in AnyView(SettingsSectionPreview { GeneralSettingsSection() }) }))
 
         // The DotStudio menu-bar menu, laid out as a plain column (menus can't render offscreen):
-        // wallpaper off, playing, paused, and a rotating screensaver playlist
+        // wallpaper off, playing, paused, a rotating screensaver playlist, and not set up
         s.append(Screen(name: "menu-off", frame: .fit(width: 320), view: { _ in AnyView(MenuPreview()) }))
         s.append(Screen(name: "menu-on", frame: .fit(width: 320), prepare: { st in
             WallpaperController.shared.update { $0.enabled = true; $0.presetID = st.wallpaper }
@@ -296,6 +296,10 @@ enum UIShots {
         }, view: { _ in AnyView(MenuPreview()) }))
         s.append(Screen(name: "menu-playlist", frame: .fit(width: 320),
                         prepare: { $0.lineup($0.playlist, night: $0.night) },
+                        view: { _ in AnyView(MenuPreview()) }))
+        // The screensaver isn't set up: the line says so and leads to the setup strip
+        s.append(Screen(name: "menu-setup", frame: .fit(width: 320),
+                        prepare: { $0.setup(.notChosen) },
                         view: { _ in AnyView(MenuPreview()) }))
         // The one-time "still running" popover (menu-bar mode off, wallpaper playing)
         s.append(Screen(name: "menu-notice", frame: .fit(width: 288, minHeight: 80), view: { _ in

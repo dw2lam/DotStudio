@@ -6,7 +6,8 @@ import SwiftUI
 // MARK: - Menu bar
 
 /// The live wallpaper's items in the DotStudio menu: what's on the desktop, switch style,
-/// pause / resume, stop — or, while it's off, "Use as Wallpaper" and a style to start with.
+/// pause / resume, stop — or, while it's off, "Set “X” as Wallpaper" and a style to start with.
+/// Same words as the rest of the app ("Set as Wallpaper"), in both states.
 struct WallpaperMenu: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var wallpaper = WallpaperController.shared
@@ -17,7 +18,7 @@ struct WallpaperMenu: View {
             if let status = wallpaper.statusText {
                 Text(status)
             }
-            MenuBarStylePicker(title: "Change Wallpaper", presets: model.library.presets,
+            MenuBarStylePicker(title: "Set as Wallpaper", presets: model.library.presets,
                                isChosen: { wallpaper.settings.presetID == $0 },
                                choose: { wallpaper.use($0) })
             Button(wallpaper.userPaused ? "Resume Wallpaper" : "Pause Wallpaper") { wallpaper.togglePause() }
@@ -25,15 +26,15 @@ struct WallpaperMenu: View {
         } else {
             Text("Wallpaper: Off")
             if let first = startStyle {
-                Button("Use \u{201C}\(menuName(first.name, limit: 24))\u{201D} as Wallpaper") { wallpaper.use(first.id) }
-                MenuBarStylePicker(title: "Choose Wallpaper", presets: model.library.presets,
+                Button("Set \u{201C}\(menuName(first.name, limit: 24))\u{201D} as Wallpaper") { wallpaper.use(first.id) }
+                MenuBarStylePicker(title: "Set as Wallpaper", presets: model.library.presets,
                                    isChosen: { _ in false },
                                    choose: { wallpaper.use($0) })
             }
         }
     }
 
-    /// What "Use as Wallpaper" starts: the style it played last, else what the screensaver plays.
+    /// What "Set “X” as Wallpaper" starts: the style it played last, else what the screensaver plays.
     private var startStyle: Preset? {
         wallpaper.settings.presetID.flatMap(model.preset)
             ?? model.library.activeID.flatMap(model.preset)

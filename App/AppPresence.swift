@@ -18,12 +18,17 @@
 //      loginwindow sends SMAppService.mainApp items; on macOS 27 SwiftUI then skips the
 //      window too) and there is a reason to live in the menu bar (menu-bar mode, or a
 //      wallpaper to restore) → stay accessory: no window, no Dock icon;
-//    • anything else → .regular before the app activates (no flicker, normal Dock launch).
+//    • anything else → .regular before the app activates (no flicker, normal Dock launch);
+//      a login launch with no reason to hide opens the main window itself, since SwiftUI
+//      didn't ("Open DotStudio at login" in Dock-app mode means its window).
 //
-//  "App windows" are titled windows that are visible or minimized: the main window(s),
-//  Settings, Sparkle's update windows, open/save panels and alerts. Not: the wallpaper's
-//  desktop windows, the status item, menus, popovers, floating utility panels (colours) or
-//  the borderless full-screen preview.
+//  "App windows" are titled windows that are visible, minimized, or put away by Hide (⌘H,
+//  another app's Hide Others): the main window(s), Settings, Sparkle's update windows,
+//  open/save panels and alerts. Not: the wallpaper's desktop windows, the status item, menus,
+//  popovers, floating utility panels (colours) or the borderless full-screen preview.
+//  A hidden app's windows report isVisible == false, and unhiding is asynchronous, so the
+//  windows on screen at Hide are remembered until AppKit has put them back; anything that
+//  shows a window waits for that (whenUnhidden) instead of opening a second main window.
 //
 //  AppKit's own applicationShouldTerminateAfterLastWindowClosed isn't used: it counts the
 //  wallpaper's desktop windows and the status item's window as open windows, so it would
@@ -89,6 +94,7 @@ final class AppPresence: NSObject, ObservableObject {
             guard menuBarMode != oldValue else { return }
             AppPrefs.shared.set(menuBarMode, Self.menuBarModeKey)
             log("menu-bar mode \(menuBarMode ? "on" : "off")")
+            if menuBarMode { closeNotice() }   // the "still running" notice is moot now
             refreshMenuBarItem()
         }
     }
@@ -104,7 +110,7 @@ final class AppPresence: NSObject, ObservableObject {
     private let inert = ProcessInfo.processInfo.environment["DOTSTUDIO_UI_SHOTS"] != nil
         || ProcessInfo.processInfo.environment["DOTSTUDIO_SHOTS"] != nil
 
-    private weak var model: AppModel?
+    fileprivate weak var model: AppModel?
     private var openMainWindowAction: (() -> Void)?
     private var openSettingsAction: (() -> Void)?
     private var wantsMainWindow = false
@@ -117,6 +123,11 @@ final class AppPresence: NSObject, ObservableObject {
     private var settleWork: DispatchWorkItem?
     private var notice: NSPopover?
     private var noticePanel: NSPanel?
+    /// The app windows on screen when DotStudio was hidden; they count as open (they come
+    /// back on unhide) until AppKit has put them back or they close.
+    private static let hiddenWindows = NSHashTable<NSWindow>.weakObjects()
+    private var unhideWaiters: [() -> Void] = []
+    private var unhideTimeout: DispatchWorkItem?
 
     private override init() {
         let on = AppPrefs.shared.bool(Self.menuBarModeKey, default: true)
@@ -142,7 +153,25 @@ final class AppPresence: NSObject, ObservableObject {
                 // Only a window the user could see: SwiftUI also creates and closes windows that
                 // never appear (e.g. while handling a document at launch).
                 guard let w = n.object as? NSWindow, Self.isAppWindow(w) else { return }
-                DispatchQueue.main.async { self?.windowClosed(w) }   // after AppKit has ordered it out
+                DispatchQueue.main.async {   // after AppKit has ordered it out
+                    Self.hiddenWindows.remove(w)
+                    self?.windowClosed(w)
+                }
+            },
+            // Synchronous (queue nil): the windows are still on screen when Hide is announced.
+            nc.addObserver(forName: NSApplication.willHideNotification, object: nil, queue: nil) { _ in
+                for w in NSApp.windows where w.isVisible && Self.isAppWindow(w) { Self.hiddenWindows.add(w) }
+            },
+            nc.addObserver(forName: NSApplication.didUnhideNotification, object: nil, queue: .main) { [weak self] _ in
+                Self.hiddenWindows.removeAllObjects()   // back on screen: isVisible tells the truth again
+                self?.runUnhideWaiters()
+            },
+            // The setup state can change in System Settings while no DotStudio window is open
+            // (the main window refreshes it on activation): refresh it as a menu opens, so the
+            // menu-bar menu's Screensaver line is current.
+            nc.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] n in
+                guard let menu = n.object as? NSMenu, menu !== NSApp.mainMenu, menu.supermenu == nil else { return }
+                self?.model?.refreshSetupStatus()
             },
             nc.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] n in
                 self?.windowShown(n.object as? NSWindow)
@@ -154,9 +183,9 @@ final class AppPresence: NSObject, ObservableObject {
     }
 
     /// The launch decision (see the header). Runs at the earliest of: the main window
-    /// appearing during launch, or didFinishLaunching — both inside the launch's first
-    /// Apple event, before the app activates.
-    func decideLaunch() {
+    /// appearing during launch (`windowAppeared`), or didFinishLaunching — both inside the
+    /// launch's first Apple event, before the app activates.
+    func decideLaunch(windowAppeared: Bool = true) {
         guard !launchDecided, !inert else { return }
         launchDecided = true
         let login = Self.launchedAsLoginItem()
@@ -170,13 +199,23 @@ final class AppPresence: NSObject, ObservableObject {
             if NSApp.activationPolicy() != .accessory { NSApp.setActivationPolicy(.accessory) }
         } else {
             NSApp.setActivationPolicy(.regular)
+            if login && !windowAppeared {
+                // A Dock app opened at login: SwiftUI skipped the window (macOS 27 does for
+                // login launches), which would leave a Dock icon with nothing behind it.
+                // Once the launch event is done, unless a window turned up after all.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.mainWindows().isEmpty else { return }
+                    self.log("login launch as a Dock app, no window → open the main window")
+                    self.showMainWindow()
+                }
+            }
         }
         log("launch login=\(login) wallpaper=\(wallpaper) menuBarMode=\(menuBarMode) → \(startedHidden ? "menu bar (accessory)" : "regular")")
     }
 
     /// applicationDidFinishLaunching.
     func didFinishLaunching() {
-        decideLaunch()
+        decideLaunch(windowAppeared: false)
         launched = true
         wallpaperWasActive = WallpaperController.shared.isActive
         refreshMenuBarItem()
@@ -201,43 +240,72 @@ final class AppPresence: NSObject, ObservableObject {
     func showMainWindow() {
         closeNotice()
         becomeRegular(activate: true)
-        if let w = mainWindows().first {
-            if w.isMiniaturized { w.deminiaturize(nil) }
-            w.makeKeyAndOrderFront(nil)
-        } else if let open = openMainWindowAction {
-            open()
-        } else if NSApp.delegate?.applicationOpenUntitledFile?(NSApp) == true {
-            // No view has handed over openWindow yet: SwiftUI's own "open untitled" opens the
-            // main WindowGroup's window.
-        } else {
-            wantsMainWindow = true   // opened as soon as a view registers openWindow
+        whenUnhidden { [weak self] in
+            guard let self else { return }
+            if let w = self.mainWindows().first {
+                if w.isMiniaturized { w.deminiaturize(nil) }
+                w.makeKeyAndOrderFront(nil)
+            } else if let open = self.openMainWindowAction {
+                open()
+            } else if NSApp.delegate?.applicationOpenUntitledFile?(NSApp) == true {
+                // No view has handed over openWindow yet: SwiftUI's own "open untitled" opens
+                // the main WindowGroup's window.
+            } else {
+                self.wantsMainWindow = true   // opened as soon as a view registers openWindow
+            }
+            self.bringToFront { [weak self] in self?.mainWindows().first }
+            self.settleSoon()
         }
-        bringToFront { [weak self] in self?.mainWindows().first }
-        settleSoon()
     }
 
     /// Settings… from the menu bar (⌘, inside the app goes through SwiftUI directly).
     func showSettings() {
         closeNotice()
         becomeRegular(activate: true)
-        if let w = Self.settingsWindow(), w.isVisible || w.isMiniaturized {
-            if w.isMiniaturized { w.deminiaturize(nil) }
-            w.makeKeyAndOrderFront(nil)
-        } else if let open = openSettingsAction {   // SwiftUI keeps a closed Settings window; let it reopen it
-            open()
-        } else {
-            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        whenUnhidden { [weak self] in
+            if let w = Self.settingsWindow(), Self.isOpen(w) {
+                if w.isMiniaturized { w.deminiaturize(nil) }
+                w.makeKeyAndOrderFront(nil)
+            } else if let open = self?.openSettingsAction {   // SwiftUI keeps a closed Settings window; let it reopen it
+                open()
+            } else {
+                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+            }
+            self?.bringToFront { Self.settingsWindow() }
+            self?.settleSoon()
         }
-        bringToFront { Self.settingsWindow() }
-        settleSoon()
     }
 
     /// Check for Updates… from the menu bar: Sparkle's windows need a regular, active app.
     func checkForUpdates(_ updates: UpdateController) {
         closeNotice()
         becomeRegular(activate: true)
-        updates.primaryAction()
-        settleSoon(after: 3)
+        whenUnhidden { [weak self] in
+            updates.primaryAction()
+            self?.settleSoon(after: 3)
+        }
+    }
+
+    /// Runs `body` once DotStudio isn't hidden: right away, or when AppKit has put its hidden
+    /// windows back. Callers have already started the unhide (becomeRegular(activate: true)
+    /// unhides; it's asynchronous). Until it lands the windows aren't visible and can't be
+    /// brought forward. Never waits more than a second.
+    private func whenUnhidden(_ body: @escaping () -> Void) {
+        guard NSApp.isHidden else { body(); return }
+        unhideWaiters.append(body)
+        log("hidden — waiting for unhide")
+        guard unhideTimeout == nil else { return }
+        let timeout = DispatchWorkItem { [weak self] in self?.runUnhideWaiters() }
+        unhideTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: timeout)
+    }
+
+    private func runUnhideWaiters() {
+        unhideTimeout?.cancel()
+        unhideTimeout = nil
+        let waiting = unhideWaiters
+        unhideWaiters = []
+        waiting.forEach { $0() }
     }
 
     /// A second launch, or a Dock click. Returns false when SwiftUI should open its default
@@ -261,12 +329,18 @@ final class AppPresence: NSObject, ObservableObject {
 
     // MARK: Policy
 
-    /// Every titled window of DotStudio's own that the user can see or get back (minimized).
+    /// Every titled window of DotStudio's own that the user can see or get back (minimized,
+    /// or hidden with the app).
     static func isAppWindow(_ w: NSWindow) -> Bool {
         if w is WallpaperWindow { return false }
         guard w.styleMask.contains(.titled) else { return false }      // status item, menus, popovers, preview
         if let panel = w as? NSPanel, panel.isFloatingPanel { return false }   // colour / font panels
-        return w.isVisible || w.isMiniaturized
+        return isOpen(w)
+    }
+
+    /// On screen, minimized, or put away by Hide (it comes back on unhide).
+    private static func isOpen(_ w: NSWindow) -> Bool {
+        w.isVisible || w.isMiniaturized || hiddenWindows.contains(w)
     }
 
     private func hasAppWindows(excluding gone: NSWindow? = nil) -> Bool {
@@ -277,7 +351,7 @@ final class AppPresence: NSObject, ObservableObject {
         NSApp.windows.filter { w in
             w.styleMask.contains(.titled) && !(w is WallpaperWindow)
                 && (w.identifier?.rawValue.hasPrefix(DotStudioApp.mainWindowID + "-") ?? false)
-                && (w.isVisible || w.isMiniaturized)
+                && Self.isOpen(w)
         }
     }
 
@@ -403,27 +477,35 @@ final class AppPresence: NSObject, ObservableObject {
 
     // MARK: "Still running" notice (menu-bar mode off, wallpaper on)
 
+    /// Until the owner has answered it once. It counts as seen only when answered (OK, Quit,
+    /// or the menu-bar-mode link): it stays up until then — through app switches, a locked
+    /// screen, time away — so it can't be used up unseen. Opening a window puts it away; it
+    /// comes back the next time the window closes with the wallpaper playing.
     private func showStayNoticeOnce() {
         guard !AppPrefs.shared.bool(Self.stayNoticeKey, default: false) else { return }
-        AppPrefs.shared.set(true, Self.stayNoticeKey)
         // After the Dock icon has gone, so the popover isn't dismissed by the switch.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.presentStayNotice() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            // Still true? (A window may have reopened, or the wallpaper stopped, meanwhile.)
+            guard let self, !self.menuBarMode, WallpaperController.shared.isActive, !self.hasAppWindows() else { return }
+            self.presentStayNotice()
+        }
     }
 
     private func presentStayNotice() {
         closeNotice()
         let anchor = Self.statusItemButton()
+        let answered = { AppPrefs.shared.set(true, Self.stayNoticeKey) }
         let view = MenuBarStayNotice(
-            quit: { NSApp.terminate(nil) },
-            keepRunning: { [weak self] in self?.closeNotice() },
-            turnOnMenuBarMode: { [weak self] in self?.menuBarMode = true; self?.closeNotice() },
+            quit: { answered(); NSApp.terminate(nil) },
+            keepRunning: { [weak self] in answered(); self?.closeNotice() },
+            turnOnMenuBarMode: { [weak self] in answered(); self?.menuBarMode = true; self?.closeNotice() },
             ownBackground: anchor == nil)
             .adaptiveLayout()
         let host = NSHostingController(rootView: view)
         host.sizingOptions = [.preferredContentSize]
         if let anchor {
             let pop = NSPopover()
-            pop.behavior = .transient
+            pop.behavior = .applicationDefined   // stays until answered (see showStayNoticeOnce)
             pop.animates = true
             pop.contentViewController = host
             pop.contentSize = host.view.fittingSize
@@ -448,7 +530,6 @@ final class AppPresence: NSObject, ObservableObject {
             noticePanel = panel
             log("stay notice shown as a panel (no status-item button found)")
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in self?.closeNotice() }
     }
 
     private func closeNotice() {
@@ -473,7 +554,7 @@ final class AppPresence: NSObject, ObservableObject {
 
     // MARK: Dev
 
-    private func log(_ message: String) {
+    fileprivate func log(_ message: String) {
         model?.store.debug("[presence \(String(format: "%.3f", CACurrentMediaTime()))] \(message) · policy=\(Self.policyName) windows=\(NSApp.windows.filter { Self.isAppWindow($0) }.count)")
     }
 
@@ -491,7 +572,9 @@ final class AppPresence: NSObject, ObservableObject {
     /// DOTSTUDIO_DEV_COMMANDS=1: drive the same code paths as the menu items from a test
     /// script, by distributed notification (object = this process's pid, userInfo["command"]):
     /// open · settings · close (performClose on every app window, like the red ✕) ·
-    /// wallpaper-stop · wallpaper:<style name> · menubar:on|off · add-built-ins · state.
+    /// wallpaper-stop · wallpaper:<style name> · menubar:on|off · add-built-ins · state ·
+    /// menu (log the menu-bar menu's screensaver + wallpaper items as AppKit builds them) ·
+    /// menu-pick:<submenu>/<item> (choose that item, as a click would).
     private func listenForDevCommands() {
         guard DemoHooks.devCommands else { return }
         DistributedNotificationCenter.default().addObserver(
@@ -514,12 +597,51 @@ final class AppPresence: NSObject, ObservableObject {
             let wins = NSApp.windows.map { w in
                 "#\(w.windowNumber) \(type(of: w))\(w.isVisible ? "+vis" : "")\(Self.isAppWindow(w) ? "+app" : "") '\(w.title)'"
             }
-            log("state menuBarItem=\(showsMenuBarItem) wallpaper=\(WallpaperController.shared.isActive) active=\(NSApp.isActive) main=\(mainWindows().count) settings=\(Self.settingsWindow()?.isVisible ?? false) all=[\(wins.joined(separator: ", "))]")
+            let shownNotice = notice.map { $0.isShown && ($0.contentViewController?.view.window?.isVisible ?? false) } ?? (noticePanel?.isVisible ?? false)
+            log("state menuBarItem=\(showsMenuBarItem) wallpaper=\(WallpaperController.shared.isActive) active=\(NSApp.isActive) hidden=\(NSApp.isHidden) putAway=\(Self.hiddenWindows.count) main=\(mainWindows().count) settings=\(Self.settingsWindow().map(Self.isOpen) ?? false) notice=\(shownNotice) noticeAnswered=\(AppPrefs.shared.bool(Self.stayNoticeKey, default: false)) setup=\(model.map { "\($0.setupStatus)" } ?? "?") all=[\(wins.joined(separator: ", "))]")
         case "add-built-ins": model?.addDemoPack()
+        case "menu": devMenu(pick: nil)
         default:
             if command.hasPrefix("wallpaper:"), let p = model?.library.presets.first(where: { $0.name == String(command.dropFirst(10)) }) {
                 WallpaperController.shared.use(p.id)
+            } else if command.hasPrefix("menu-pick:") {
+                devMenu(pick: String(command.dropFirst(10)))
             }
+        }
+    }
+}
+
+// MARK: - Dev: the menu as AppKit builds it
+
+extension AppPresence {
+    /// The menu-bar menu's screensaver and wallpaper items, built into a real NSMenu the way
+    /// MenuBarExtra builds them (NSHostingMenu, macOS 15+), so a test can read titles, check
+    /// marks and submenus — and choose an item — without opening a menu on screen.
+    fileprivate func devMenu(pick: String?) {
+        guard #available(macOS 15, *), let model else { return }
+        let menu = NSHostingMenu(rootView: Group { ScreensaverMenu(); Divider(); WallpaperMenu() }.environmentObject(model))
+        menu.update()
+        func lines(_ m: NSMenu, _ depth: Int) -> [String] {
+            m.items.flatMap { item -> [String] in
+                if item.isSeparatorItem { return [String(repeating: "  ", count: depth) + "───"] }
+                let mark = item.state == .on ? "✓ " : ""
+                let flags = (item.isSectionHeader ? " [header]" : "") + (item.isEnabled ? "" : " [disabled]")
+                var out = [String(repeating: "  ", count: depth) + mark + item.title + flags]
+                if let sub = item.submenu { sub.update(); out += lines(sub, depth + 1) }
+                return out
+            }
+        }
+        if let pick {
+            let parts = pick.split(separator: "/", maxSplits: 1).map(String.init)
+            guard parts.count == 2, let sub = menu.items.first(where: { $0.title == parts[0] })?.submenu else {
+                log("menu-pick: no submenu \(pick)"); return
+            }
+            sub.update()
+            guard let i = sub.items.firstIndex(where: { $0.title == parts[1] }) else { log("menu-pick: no item \(pick)"); return }
+            sub.performActionForItem(at: i)
+            log("menu-pick \(pick)")
+        } else {
+            log("menu:\n" + lines(menu, 1).joined(separator: "\n"))
         }
     }
 }
