@@ -66,14 +66,15 @@ enum DefaultPresets {
     static func looks() -> [Preset] {
         [
             Preset(name: "Film",
-                   effects: [fx(.grainWash, ["soft": 0.0, "grain": 0.09, "tint": 0.22],
+                   effects: [fx(.grainWash, ["soft": 0.0, "grain": 0.09, "tint": 0.22, "halation": 0.55],
                                 a: RGBA(0.06, 0.10, 0.16), b: RGBA(1.0, 0.90, 0.76)),
                              fx(.vignette, ["amount": 0.45, "radius": 0.95])]),
             Preset(name: "Riso Duotone",
                    effects: [fx(.risograph, ["screen": 0, "cell": 2, "misreg": 5, "paper": 0.5],
                                 a: risoPink, b: risoBlue)]),
             Preset(name: "Cyanotype",
-                   effects: [fx(.grainWash, ["soft": 0.12, "grain": 0.12, "tint": 1],
+                   // A print: static paper texture rather than film grain boiling at 24 fps.
+                   effects: [fx(.grainWash, ["soft": 0.12, "grain": 0.04, "tint": 1, "paper": 0.8],
                                 a: prussian, b: cream)]),
             Preset(name: "Floyd–Steinberg",
                    effects: [fx(.dither, ["algo": 4, "cell": 2, "mono": 1], a: .ink, b: .paper)]),
@@ -119,10 +120,10 @@ enum DefaultPresets {
     /// built-in style is one click away in Add Built-in Styles (coolPack).
     static let featured: [String] = [
         // Scenes
-        "Liquid Chrome", "Now Playing", "Aurora", "Universe", "Topography", "Sand Garden", "Black Hole", "Afterglow",
+        "Liquid Chrome", "Aurora", "Universe", "Topography", "Sand Garden", "Black Hole", "Afterglow",
         "Glass Clock", "Flip Clock", "Word Clock", "Window Light",
         "Lava Lamp", "Currents", "Fireflies",
-        "Golden Hour", "Tidewater", "Night Sky", "First Snow",
+        "Golden Hour", "Tidewater", "Shallows", "Night Sky", "First Snow",
         "Neon Horizon", "Pipeworks", "Light Tunnel", "Light Ribbons",
         // Looks
         "Film", "Riso Duotone", "Cyanotype", "Floyd–Steinberg", "Atkinson", "ASCII", "Amber CRT", "Soft Focus",
@@ -132,7 +133,12 @@ enum DefaultPresets {
     /// (their effects stay available in Add Effect).
     static let unlisted: Set<String> = ["Ink Bloom", "Sumi", "Ember Ribbons"]
 
-    private static var allBuiltIns: [Preset] { scenes() + looks() }
+    /// Built-in styles that are no longer styles at all: the Now Playing scenes (music is now
+    /// a presentation over any style — MusicPresentation). Never offered or added; a library
+    /// that already has one keeps it working.
+    static var retired: Set<String> { Set(SceneCatalog.musicPresets.map(\.name)) }
+
+    private static var allBuiltIns: [Preset] { (scenes() + looks()).filter { !retired.contains($0.name) } }
 
     static func makeLibrary() -> Library {
         let sc = featuredPresets()
@@ -187,6 +193,9 @@ enum DefaultPresets {
                    effects: [fx(.liquidChrome, ["speed": 0.4, "scale": 1.3, "iris": 0, "ripple": 0.2,
                                                 "rough": 0.06, "aniso": 0.3, "film": 0.6],
                                 a: RGBA(0.03, 0.02, 0.01), b: RGBA(1.0, 0.80, 0.50))]),
+            Preset(name: "Midnight Satin",
+                   effects: [fx(.silk, ["speed": 0.5, "scale": 1.15, "sheen": 0.7],
+                                a: RGBA(0.005, 0.008, 0.025), b: RGBA(0.16, 0.26, 0.62))]),
             Preset(name: "Lagoon",
                    effects: [fx(.meshGradient, ["speed": 0.5, "scale": 1.2, "hue": 0.3, "grain": 0.07],
                                 a: RGBA(0.02, 0.09, 0.19), b: RGBA(0.55, 0.90, 0.95))]),

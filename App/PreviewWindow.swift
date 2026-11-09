@@ -1,7 +1,8 @@
 //  PreviewWindow.swift — full-screen live preview of a screensaver, just like the
 //  System Settings "Preview" button. Renders the selected preset with the real
-//  Metal pipeline and exits on any key press or mouse input. Music shows as it would in
-//  the saver: a Now Playing style's foreground, or the corner card over any other style.
+//  Metal pipeline and exits on any key press or mouse input. Music shows exactly as it would
+//  in the saver (MusicPresentation): Corner, or Full Screen with its backdrop easing in and
+//  out as music starts and stops — and a legacy Now Playing style's own foreground.
 
 import AppKit
 import MetalKit
@@ -16,7 +17,7 @@ final class ScreensaverPreviewController: ObservableObject {
     static let shared = ScreensaverPreviewController()
 
     /// A Now Playing style is up full screen: MusicLifecycle keeps the players watched for it
-    /// (like a Now Playing style in the editor), whatever the card settings say.
+    /// (like a Now Playing style in the editor), whatever Show music says.
     @Published private(set) var musicScene = false
 
     private var window: NSWindow?
@@ -26,8 +27,8 @@ final class ScreensaverPreviewController: ObservableObject {
     private var armed = false
     private var musicToken: MusicFeedHub.Token?
 
-    /// - music: the library's music settings (card on/off, corner); nil = read them from
-    ///   the stored library.
+    /// - music: the library's music settings (Show music, corner, backdrop); nil = read them
+    ///   from the stored library.
     func present(preset: Preset, source: SourceSpec, store: SharedStore, music: MusicSpec? = nil) {
         dismiss()
         guard let screen = NSScreen.main else { return }
@@ -51,15 +52,17 @@ final class ScreensaverPreviewController: ObservableObject {
         let container = NSView(frame: CGRect(origin: .zero, size: frame.size))
         container.addSubview(mtk)
         let settings = music ?? store.load()?.musicSettings ?? MusicSpec()
-        let mode: MusicOverlayLayer.Mode = preset.musicScene.map { .full(MusicSceneOptions($0)) }
-            ?? (settings.isCardEnabled ? .card(settings.corner) : .hidden)
-        if mode != .hidden {
+        if preset.isMusicScene || settings.displayMode != .off {
             let ov = MusicOverlayView(frame: container.bounds)
             container.addSubview(ov, positioned: .above, relativeTo: mtk)
             r.musicLingerMinutes = settings.linger
+            var first = true   // music already playing is simply there; later changes ease
             musicToken = MusicFeedHub.shared.subscribe(store: store) { [weak r, weak ov] snap, changed in
                 if changed { r?.setMusic(snap) }
-                ov?.overlay.update(mode: mode, music: snap, settings: settings)
+                let p = MusicPresentation.resolve(settings: settings, music: snap, preset: preset)
+                r?.setMusicBackdrop(p.backdrop, animated: !first)
+                ov?.overlay.update(mode: p.overlay, music: snap, settings: settings, animated: !first)
+                first = false
             }
         }
 

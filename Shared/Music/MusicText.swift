@@ -1,6 +1,8 @@
 //  MusicText.swift — CoreText type for the music overlay: system font (SF Pro, with the
 //  system cascade for CJK, emoji and accents), wrapping to a line limit with an ellipsis on
-//  the last line, rendered to a bitmap at the display's native scale.
+//  the last line, rendered to a bitmap at the display's native scale with a soft shadow.
+//  The system font picks its optical size from the point size by itself: SF Pro Display for
+//  the big titles (20 pt and up), SF Pro Text for the small lines.
 
 import AppKit
 import CoreText
@@ -17,8 +19,10 @@ struct MusicTextStyle {
     var leading: CGFloat = 1.12
     var monospacedDigits = false
     var uppercase = false
-    /// A soft dark halo for type over busy imagery (Cover layout).
-    var halo: CGFloat = 0
+    /// The soft shadow under the type, as a strength (0 = none, 1 = the default): a tight,
+    /// faint contact shadow inside a wide, low-opacity one, so white type reads over bright
+    /// art and scenes without a visible dark halo around the letters.
+    var shadow: CGFloat = 1
 }
 
 /// Text laid out into lines, measured: `width` is the widest line's ink advance, `height` the
@@ -94,8 +98,15 @@ enum MusicText {
         return block
     }
 
-    /// Padding baked around the text bitmap (accents above the ascent, the halo).
-    static func pad(_ s: MusicTextStyle) -> CGFloat { ceil(s.size * 0.22 + s.halo * s.size * 0.6) }
+    /// Padding baked around the text bitmap (accents above the ascent, the shadow's reach).
+    static func pad(_ s: MusicTextStyle) -> CGFloat { ceil(s.size * 0.22 + (s.shadow > 0 ? s.size * 0.62 : 0)) }
+
+    /// The shadow's two layers, in points: (offset down, blur, opacity) — tight, then wide.
+    static func shadowLayers(_ s: MusicTextStyle) -> [(dy: CGFloat, blur: CGFloat, alpha: CGFloat)] {
+        guard s.shadow > 0 else { return [] }
+        return [(max(s.size * 0.025, 0.5), s.size * 0.10, 0.20 * s.shadow),
+                (s.size * 0.06, s.size * 0.48, 0.26 * s.shadow)]
+    }
 
     /// Render a block into a transparent bitmap `boxWidth` wide (lines aligned within it) at
     /// `scale` pixels per point. The image covers the box plus `pad` on every side.
@@ -112,10 +123,16 @@ enum MusicText {
         ctx.setAllowsFontSmoothing(false)
         ctx.setShouldSubpixelPositionFonts(true)
         ctx.textMatrix = .identity
-        if b.style.halo > 0 {
-            ctx.setShadow(offset: .zero, blur: b.style.size * b.style.halo,
-                          color: CGColor(gray: 0, alpha: 0.55))
+        // Shadows: nested transparency layers — the wide one is cast by the text plus its
+        // tight one. CG shadow geometry is in device pixels (unaffected by the CTM), so it's
+        // scaled here; a negative height is downward in a bitmap context.
+        let layers = MusicText.shadowLayers(b.style)
+        for l in layers.reversed() {
+            ctx.setShadow(offset: CGSize(width: 0, height: -l.dy * scale), blur: l.blur * scale,
+                          color: CGColor(gray: 0, alpha: l.alpha))
+            ctx.beginTransparencyLayer(auxiliaryInfo: nil)
         }
+        ctx.setShadow(offset: .zero, blur: 0, color: nil)
         for (i, line) in b.lines.enumerated() {
             let lw = b.lineWidths[i]
             var x = pad
@@ -129,6 +146,7 @@ enum MusicText {
             ctx.textPosition = CGPoint(x: x, y: y)
             CTLineDraw(line, ctx)
         }
+        for _ in layers { ctx.endTransparencyLayer() }   // composite (and cast) the shadows
         return ctx.makeImage()
     }
 }

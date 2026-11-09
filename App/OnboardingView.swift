@@ -871,7 +871,7 @@ private struct DonePage: View {
                             detail: "Double-click any tile to change its effects, colors and motion.")
                         Tip(symbol: "music.note", tint: .pink, iconColumn: iconColumn,
                             title: "Show what's playing",
-                            detail: "Play a song in Spotify or Apple Music and the screensaver shows it in a corner — or pick Now Playing for the full screen.")
+                            detail: "Play a song in Spotify or Apple Music and the screensaver shows it in a corner — or full screen, in Settings › Music.")
                     }
                     .padding(.horizontal, layout.cardPadding)
                 }

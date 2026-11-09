@@ -149,10 +149,10 @@ enum MusicGeometry {
     static let albumGap: CGFloat = 0.075      // artwork → text column
     static let albumText: CGFloat = 0.64      // text column width
 
-    /// The corner card: height and width in units, per Card Size. On a 16:10 screen Medium is
-    /// a quarter of the width with a title ≈ 2.3 % of the height; the old desktop-widget card
-    /// (0.112 × 0.42) had a 1.7 % title — too small to read from the sofa. Its type is a
-    /// fixed share of the card's height (MusicOverlayLayer.buildCard).
+    /// Corner music: the block's nominal height and widest extent in units, per size. On a
+    /// 16:10 screen Medium spans up to a quarter of the width with a title ≈ 2.4 % of the
+    /// height — read from the sofa (a desktop widget's 1.7 % is too small). The artwork, type
+    /// and bar are fixed shares of it (MusicOverlayLayer.buildCorner); there's no card.
     enum Card {
         static func size(_ s: MusicSpec.CardSize) -> (height: CGFloat, width: CGFloat) {
             switch s {
@@ -161,6 +161,12 @@ enum MusicGeometry {
             case .large: return (0.170, 0.486)    // ≈ 30 %
             }
         }
+        static let art: CGFloat = 0.80        // artwork side, × the block's height
+        static let gap: CGFloat = 0.17        // artwork → type, × the artwork side
+        static let title: CGFloat = 0.215     // title size, × the artwork side
+        static let artist: CGFloat = 0.19     // artist size, × the artwork side
+        static let bar: CGFloat = 0.022       // bar thickness, × the artwork side
+        static let margin: CGFloat = 0.058    // from the screen's edges, in units
     }
     /// Stage layout (Spotify TV): the type scale and gaps of the block the artwork heads, in
     /// units — the overlay draws with these, and `stageBlock` sums them, so the reserved
@@ -175,7 +181,6 @@ enum MusicGeometry {
         static let album: CGFloat = 0.023, albumGap: CGFloat = 0.008
         static let barGap: CGFloat = 0.042, bar: CGFloat = 0.0058
         static let times: CGFloat = 0.0158, timesGap: CGFloat = 0.014
-        static let caption: CGFloat = 0.0138, captionGap: CGFloat = 0.034
     }
 
     /// Height of one line of the system font (ascent + descent) per point of size — how
@@ -185,9 +190,9 @@ enum MusicGeometry {
         return f.map { (CTFontGetAscent($0) + CTFontGetDescent($0)) / 100 } ?? 1.18
     }()
 
-    /// The Stage block from the artwork's top to the caption's bottom, in units, for the
-    /// worst case (a two-line title) so the artwork never moves between tracks. Rows the
-    /// scene hides (album, progress) aren't reserved.
+    /// The Stage block from the artwork's top to the times' bottom, in units, for the worst
+    /// case (a two-line title) so the artwork never moves between tracks. Rows the scene
+    /// hides (album, progress) aren't reserved.
     static func stageBlock(_ o: MusicSceneOptions) -> CGFloat {
         typealias S = Stage
         var h = S.art + S.artGap
@@ -195,7 +200,7 @@ enum MusicGeometry {
         h += S.artistGap + S.artist * lineBox
         if o.showAlbum { h += S.albumGap + S.album * lineBox }
         if o.showProgress { h += S.barGap + S.bar + S.timesGap + S.times * lineBox }
-        return h + S.captionGap + S.caption * lineBox
+        return h
     }
 
     /// The artwork rect in the screen's own units, top-left origin (y down). For Cover the

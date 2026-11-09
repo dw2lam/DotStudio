@@ -91,19 +91,19 @@ enum EffectKind: String, Codable, CaseIterable {
     case nowPlaying                                           // Music    66
 
     // — new-scene slot 1 (shader id 67); rename the case freely on this line —
-    case studio1
+    case shallows
 
     // — new-scene slot 2 (shader id 68); rename the case freely on this line —
     case sandGarden
 
     // — new-scene slot 3 (shader id 69); rename the case freely on this line —
-    case studio3
+    case pleats
 
     // — new-scene slot 4 (shader id 70); rename the case freely on this line —
-    case studio4
+    case dichroic
 
     // — new-scene slot 5 (shader id 71); rename the case freely on this line —
-    case studio5
+    case soapFilm
 
     // — new-scene slot 6 (shader id 72); rename the case freely on this line —
     case studio6
@@ -209,7 +209,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .aurora:    return "Northern lights rippling above a dark ridge."
         case .topography: return "A living contour map with shaded relief."
         case .liquidChrome: return "Molten mirror metal, optionally iridescent."
-        case .silk:      return "A flow field of fine strands drifting like brushed silk."
+        case .silk:      return "Draped satin rippling in a slow breeze, its sheen sliding down the folds."
         case .risograph: return "Two-ink riso print with grain and misregistration."
         case .grainWash: return "Dreamy soft focus with film grain and an optional color wash."
         case .glass:     return "Looks through fluted, tiled or liquid glass."
@@ -266,7 +266,8 @@ enum EffectKind: String, Codable, CaseIterable {
         case .starfield: return 37
         case .universe:  return 39
         case .blackhole: return 40
-        // 38 = dither-grid blit and 41 = preset crossfade are internal passes; never assign them.
+        // 38 = dither-grid blit, 41 = preset crossfade and 73 = music veil are internal passes;
+        // never assign them.
         case .meshGradient: return 42
         case .aurora:    return 43
         case .topography: return 44
@@ -401,7 +402,7 @@ enum EffectKind: String, Codable, CaseIterable {
                                     ParamSpec("aniso", "Brushed", 0, 1, def: 0),
                                     ParamSpec("film", "Film Tone", 0, 1, def: 0.5)]
         case .silk:      return [ParamSpec("speed", "Speed", 0, 2, def: 0.6),
-                                 ParamSpec("scale", "Swirl Size", 0.4, 2.5, def: 1),
+                                 ParamSpec("scale", "Fold Size", 0.4, 2.5, def: 1),
                                  ParamSpec("sheen", "Sheen", 0, 1, def: 0.4)]
         case .risograph: return [ParamSpec(menu: "screen", "Screen", ["Grain", "Halftone"], def: 0),
                                  ParamSpec("cell", "Dot Size", 2, 16, def: 4),
@@ -409,7 +410,9 @@ enum EffectKind: String, Codable, CaseIterable {
                                  ParamSpec("paper", "Paper Texture", 0, 1, def: 0.5)]
         case .grainWash: return [ParamSpec("soft", "Softness", 0, 1, def: 0.6),
                                  ParamSpec("grain", "Grain", 0, 0.5, def: 0.16),
-                                 ParamSpec("tint", "Color Wash", 0, 1, def: 0)]
+                                 ParamSpec("tint", "Color Wash", 0, 1, def: 0),
+                                 ParamSpec("halation", "Halation", 0, 1, def: 0),
+                                 ParamSpec("paper", "Paper Texture", 0, 1, def: 0)]
         case .glass:     return [ParamSpec(menu: "style", "Glass", ["Fluted", "Tiles", "Liquid"], def: 0),
                                  ParamSpec("size", "Size", 10, 200, def: 44),
                                  ParamSpec("refract", "Refraction", 0, 1, def: 0.5),
@@ -433,7 +436,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .aurora:       return RGBA(0.015, 0.03, 0.07)      // night sky
         case .topography:   return RGBA(0.05, 0.06, 0.07)       // ground
         case .liquidChrome: return RGBA(0.03, 0.03, 0.05)       // shadow
-        case .silk:         return RGBA(0.03, 0.03, 0.06)       // ground
+        case .silk:         return RGBA(0.03, 0.03, 0.06)       // shadow
         case .risograph:    return RGBA(1.0, 0.28, 0.53)        // fluorescent pink ink
         case .grainWash:    return RGBA(0.12, 0.08, 0.24)       // shadow wash
         default: return SceneCatalog.spec(self)?.colorA
@@ -450,7 +453,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .aurora:       return RGBA(0.32, 1.0, 0.50)        // oxygen green
         case .topography:   return RGBA(0.93, 0.90, 0.82)       // contour ink
         case .liquidChrome: return RGBA(0.92, 0.94, 1.0)        // highlight
-        case .silk:         return RGBA(0.98, 0.78, 0.55)       // champagne strands
+        case .silk:         return RGBA(0.98, 0.78, 0.55)       // champagne satin
         case .risograph:    return RGBA(0.0, 0.47, 0.75)        // riso medium blue
         case .grainWash:    return RGBA(1.0, 0.80, 0.64)        // highlight wash
         default: return SceneCatalog.spec(self)?.colorB
@@ -466,8 +469,8 @@ enum EffectKind: String, Codable, CaseIterable {
         case .halftone, .crosshatch: return "Paper"
         case .meshGradient: return "Deep"
         case .aurora: return "Sky"
-        case .topography, .silk: return "Ground"
-        case .liquidChrome, .grainWash: return "Shadow"
+        case .topography: return "Ground"
+        case .liquidChrome, .grainWash, .silk: return "Shadow"
         default: return SceneCatalog.spec(self)?.colorALabel ?? "Background"
         }
     }
@@ -478,7 +481,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .meshGradient: return "Light"
         case .aurora: return "Aurora"
         case .topography: return "Lines"
-        case .silk: return "Strands"
+        case .silk: return "Silk"
         case .liquidChrome, .grainWash: return "Highlight"
         default: return SceneCatalog.spec(self)?.colorBLabel ?? "Foreground"
         }
@@ -503,7 +506,9 @@ enum EffectKind: String, Codable, CaseIterable {
              .voronoi,                    // edgeless, muddy mosaic; Hex Mosaic covers it
              .truchet,                    // novelty tile maze
              .toon,                       // dated cel-shade filter
-             .fisheye, .swirl, .ripple:   // Photo Booth-era warps; Glass replaces them
+             .fisheye, .swirl, .ripple,   // Photo Booth-era warps; Glass replaces them
+             .nowPlaying:                 // music is a presentation over any style now
+                                          // (MusicPresentation); 66 lives on as Album Art
             return true
         default: return false
         }
@@ -580,7 +585,8 @@ extension EffectInstance {
                             u.p1 = .init(g("rough"), g("aniso"), g("film"), 0)
         case .silk:      u.p0 = .init(g("speed"), g("scale"), g("sheen"), 0)
         case .risograph: u.p0 = .init(g("screen"), g("cell"), g("misreg"), g("paper"))
-        case .grainWash: u.p0 = .init(g("soft"), g("grain"), g("tint"), 0)
+        case .grainWash: u.p0 = .init(g("soft"), g("grain"), g("tint"), g("halation"))
+                         u.p1 = .init(g("paper"), 0, 0, 0)
         case .glass:     u.p0 = .init(g("style"), g("size"), g("refract"), g("frost"))
         default:
             // Scene packs: params fill p0.xyzw, p1.xyzw, p2.xyzw in catalog order.

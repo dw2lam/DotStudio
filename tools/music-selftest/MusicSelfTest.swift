@@ -429,12 +429,15 @@ enum MusicSelfTest {
 
         say("\n[12] Apple Events gating (real workspace detection)")
         if realSpotifyRunning || realMusicRunning {
+            // These three describe players that AREN'T running; with a real one open on this Mac
+            // (the owner listening while the test runs) they can't hold, so they're skipped too.
             say("  SKIP  a real player is running — dry-run counted \(m.appleEvents.totalAttempts) would-be events, none sent")
+            say("  SKIP  automation status / control refusal while not running (a real player is running)")
         } else {
             check(m.appleEvents.totalAttempts == 0, "players not running ⇒ 0 Apple Events attempted (incl. permission checks)")
+            check(m.spotify.automation == .unknown && m.music.automation == .unknown, "automation status unknown while not running (never prompted)")
+            check(m.playPause() == false && m.next() == false, "controls refuse when the player isn't running (never launch)")
         }
-        check(m.spotify.automation == .unknown && m.music.automation == .unknown, "automation status unknown while not running (never prompted)")
-        check(m.playPause() == false && m.next() == false, "controls refuse when the player isn't running (never launch)")
 
         say("\n[13] stop() clears")
         m.stop()
@@ -443,16 +446,68 @@ enum MusicSelfTest {
         spotify(["Name": "After Stop", "Track ID": "spotify:track:FAKEFAKEFAKEFAKEFAKEZZ", "Player State": "Playing"])
         pump(0.5)
         check(current?.hasTrack == false, "no observers after stop()")
-        var off = MusicSpec(); off.cardEnabled = false
+        var off = MusicSpec(); off.setDisplay(.off)
         check(m.start(store: store, settings: off) == false && !m.isMonitoring, "start() is a no-op when nothing needs monitoring")
-        // "Also on the live wallpaper" is part of the card: with the card off it shows nothing,
-        // so it must not keep the watcher (or the Automation prompt) alive on its own.
-        var wallOnly = MusicSpec(); wallOnly.cardEnabled = false; wallOnly.cardOnWallpaper = true
-        check(!wallOnly.needsMonitoring && !wallOnly.drawsCardOnWallpaper
+        // "Also on the live wallpaper" only adds a place to show music: with Show music off it
+        // shows nothing, so it must not keep the watcher (or the Automation prompt) alive.
+        var wallOnly = MusicSpec(); wallOnly.setDisplay(.off); wallOnly.cardOnWallpaper = true
+        check(!wallOnly.needsMonitoring && !wallOnly.drawsOnWallpaper
               && m.start(store: store, settings: wallOnly) == false && !m.isMonitoring,
-              "card off + wallpaper card on ⇒ nothing to show, no monitoring")
+              "Show music off + wallpaper on ⇒ nothing to show, no monitoring")
         var wallCard = MusicSpec(); wallCard.cardOnWallpaper = true
-        check(wallCard.needsMonitoring && wallCard.drawsCardOnWallpaper, "card on + wallpaper card on ⇒ monitoring")
+        check(wallCard.needsMonitoring && wallCard.drawsOnWallpaper, "Corner (default) + wallpaper on ⇒ monitoring")
+        var full = MusicSpec(); full.setDisplay(.fullScreen)
+        check(full.needsMonitoring && full.backdrop == .albumArt, "Full Screen ⇒ monitoring, Album Art behind by default")
+
+        say("\n[13b] Show music: compatibility with 1.3 libraries (cardEnabled / takeOver)")
+        func decode(_ json: String) -> MusicSpec? { try? JSONDecoder().decode(MusicSpec.self, from: Data(json.utf8)) }
+        check(decode("{}")?.displayMode == .corner, "no fields ⇒ Corner (the default)")
+        check(decode(#"{"cardEnabled":false}"#)?.displayMode == .off, "cardEnabled false ⇒ Off")
+        check(decode(#"{"takeOver":true}"#)?.displayMode == .fullScreen, "takeOver true ⇒ Full Screen")
+        check(decode(#"{"cardEnabled":false,"takeOver":true}"#)?.displayMode == .fullScreen,
+              "card off + takeOver ⇒ Full Screen (the explicit full-screen choice wins)")
+        check(decode(#"{"cardEnabled":true,"takeOver":false}"#)?.displayMode == .corner, "card on, no takeOver ⇒ Corner")
+        check(decode(#"{"display":"off","takeOver":true}"#)?.displayMode == .off, "a stored display wins over the legacy fields")
+        check(decode(#"{"display":"sideways"}"#)?.displayMode == .corner, "an unknown display decodes as Corner")
+        check(decode(#"{"fullBackdrop":"screensaver"}"#)?.backdrop == .screensaver
+              && decode("{}")?.backdrop == .albumArt, "Behind the music: stored / Album Art by default")
+        var w = MusicSpec(); w.setDisplay(.fullScreen)
+        check(w.takeOver == true && w.cardEnabled == nil, "writing Full Screen keeps takeOver for older builds")
+        w.setDisplay(.off)
+        check(w.takeOver == nil && w.cardEnabled == false, "writing Off keeps cardEnabled false for older builds")
+        w.setDisplay(.corner)
+        check(w.takeOver == nil && w.cardEnabled == nil && w.displayMode == .corner, "writing Corner clears both")
+
+        say("\n[13c] MusicPresentation: one decision for every host")
+        var playing = MusicState(); playing.title = "Song"; playing.isPlaying = true
+        playing.duration = 200; playing.position = 10; playing.positionAt = Date().timeIntervalSince1970
+        let song = MusicSnapshot(state: playing, artwork: nil, revision: 1)
+        let style = Preset(name: "Liquid Chrome", effects: [EffectInstance(.liquidChrome)])
+        let corner = MusicPresentation.resolve(settings: MusicSpec(), music: song, preset: style)
+        check(corner.overlay == .card(.bottomLeft) && corner.backdrop == .none, "Corner: the corner over the style, no backdrop")
+        let fullArt = MusicPresentation.resolve(settings: full, music: song, preset: style)
+        check(fullArt.backdrop == .albumArt(.album) && { if case .full = fullArt.overlay { return true }; return false }(),
+              "Full Screen: the Album layout over the living art")
+        var veilSpec = full; veilSpec.fullBackdrop = .screensaver
+        check(MusicPresentation.resolve(settings: veilSpec, music: song, preset: style).backdrop == .veil,
+              "Full Screen + Your Screensaver ⇒ the veil")
+        check(MusicPresentation.resolve(settings: full, music: .empty, preset: style) == .none,
+              "nothing playing ⇒ just the screensaver (never a Not Playing screen)")
+        check(MusicPresentation.resolve(settings: off, music: song, preset: style) == .none, "Show music off ⇒ nothing")
+        check(MusicPresentation.resolve(settings: full, music: song, preset: style, surface: .wallpaper) == .none,
+              "wallpaper without Also on the live wallpaper ⇒ nothing")
+        var paused = playing; paused.isPlaying = false; paused.pausedAt = Date().timeIntervalSince1970 - 400
+        check(MusicPresentation.resolve(settings: full, music: MusicSnapshot(state: paused, artwork: nil, revision: 2),
+                                        preset: style) == .none, "paused past the 5-min linger ⇒ back to the screensaver")
+        let legacy = SceneCatalog.musicPresets[0]
+        let legacyIdle = MusicPresentation.resolve(settings: off, music: .empty, preset: legacy)
+        let legacyPlaying = MusicPresentation.resolve(settings: off, music: song, preset: legacy)
+        check(legacyIdle == .none && legacyPlaying.backdrop == .none
+              && { if case .full = legacyPlaying.overlay { return true }; return false }(),
+              "a legacy Now Playing style: calm art when idle, its own foreground while playing")
+        check(!DefaultPresets.makeLibrary().presets.contains(where: \.isMusicScene)
+              && !DefaultPresets.offeredBuiltIns().contains(where: \.isMusicScene) && EffectKind.nowPlaying.isRetired,
+              "Now Playing is no longer a style the library offers")
 
         // ── Phase B: Spotify "running" (fake pid), dry-run Apple Events ──
         say("\n[14] Fake-running Spotify (dry-run AE): gating, optimistic controls, position poll")

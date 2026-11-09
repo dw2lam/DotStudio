@@ -165,7 +165,7 @@ static inline float3 musicIdle(float2 uv, float asp, float tm, float3 deep, floa
     float2 b2 = float2(0.28 * asp + 0.09 * cos(tm * 0.023), 0.20 + 0.08 * sin(tm * 0.029));
     float g1 = exp(-dot(p - b1, p - b1) / 0.20);
     float g2 = exp(-dot(p - b2, p - b2) / 0.28);
-    float3 col = srgbToLinear(deep) + srgbToLinear(c1) * g1 * 0.45 + srgbToLinear(c2) * g2 * 0.30;
+    float3 col = srgbToLinear(deep) + srgbToLinear(c1) * g1 * 0.72 + srgbToLinear(c2) * g2 * 0.48;
     return linearToSrgb(col);
 }
 
@@ -180,7 +180,7 @@ static inline float3 musicBackground(texture2d<float> art, bool has, sampler s, 
     if (!has) {
         // No artwork: the palette when there is one, else the scene's idle colours.
         col = musicIdle(uv, asp, tm, mix(idleA, deep * 0.35, 0.5), vivid, mean);
-        return musicGrade(col, 1.0, 0.10, 0.40, vivid, 0.0);
+        return musicGrade(col, 1.0, 0.10, 0.46, vivid, 0.0);
     }
     if (layout == 2) {
         // COVER: the artwork itself fills the screen, drifting like a slow Ken Burns.
