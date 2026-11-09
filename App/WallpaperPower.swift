@@ -15,8 +15,8 @@
 //                 still turns over once a minute so it never lies. On battery it plays
 //                 at 30 fps.
 //    • Threads  — every frame is built off the main thread, on a render thread at
-//                 utility QoS for 30/60 fps and clock ticks (user-initiated only while
-//                 Smooth runs above 60 Hz; see WallpaperRenderLoop), on the GPU that
+//                 user-initiated QoS while animating, utility for clock ticks and idle
+//                 (see WallpaperRenderLoop), on the GPU that
 //                 drives each display, with coalescable clock-timer wake-ups.
 
 import AppKit
