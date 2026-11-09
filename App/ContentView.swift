@@ -10,6 +10,7 @@ struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var hero
 
@@ -59,8 +60,14 @@ struct ContentView: View {
                 .adaptiveLayout()   // the sheet is its own root: measure the sheet, not the window
         }
         .onAppear {
+            // At launch this runs inside the launch's first Apple event, before the app
+            // activates: the earliest point to become a Dock app (or, for a login launch on an
+            // older macOS that still opened the window, to put it away). Once per launch.
+            AppPresence.shared.decideLaunch()
             // Lets the Dock icon / menu bar reopen this window after it was closed.
-            WallpaperController.shared.registerOpenMainWindow { openWindow(id: DotStudioApp.mainWindowID) }
+            let open = { openWindow(id: DotStudioApp.mainWindowID) }
+            AppPresence.shared.register(openMainWindow: open, openSettings: { openSettings() })
+            WallpaperController.shared.registerOpenMainWindow(open)
             if DemoHooks.isActive { DemoHooks.apply(to: model) } else { presentOnboardingIfNeeded() }
         }
         .onChange(of: model.storeAlert == nil) { _, clear in
@@ -110,6 +117,15 @@ struct ContentView: View {
 ///                                         click-through window ordered beneath every app window,
 ///                                         to verify the occlusion pause without touching others' windows
 /// While any is set the first-launch sheet never auto-presents. Pair with DOTSTUDIO_STORE_DIR.
+///
+/// Presence hooks (AppPresence.swift; they don't suppress the first-launch sheet):
+///   DOTSTUDIO_DEMO_LOGIN_LAUNCH=1         treat this launch as a login-item launch (the real
+///                                         signal is the oapp event's keyAELaunchedAsLogInItem;
+///                                         a test can also send that event through LaunchServices)
+///   DOTSTUDIO_DEV_COMMANDS=1              accept test commands by distributed notification
+///                                         (open, settings, close, wallpaper-stop, …) — see
+///                                         AppPresence.listenForDevCommands
+/// App-level switches (menu-bar mode) live in <store>/app-prefs.json under DOTSTUDIO_STORE_DIR.
 /// The `static var` hooks are also set per render by UIShots (Shots.swift).
 enum DemoHooks {
     private static let env = ProcessInfo.processInfo.environment
@@ -140,6 +156,8 @@ enum DemoHooks {
     static let liveWallpaperName = env["DOTSTUDIO_DEMO_WALLPAPER"]
     static let closeWindow = env["DOTSTUDIO_DEMO_CLOSE_WINDOW"] == "1"
     static let coverSeconds = env["DOTSTUDIO_DEMO_COVER_DESKTOP"].flatMap(Double.init)
+    static let loginLaunch = env["DOTSTUDIO_DEMO_LOGIN_LAUNCH"] == "1"
+    static let devCommands = env["DOTSTUDIO_DEV_COMMANDS"] == "1"
     private static var cover: NSWindow?
 
     static var isActive: Bool {

@@ -87,8 +87,8 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Promote any old per-style source up to the shared global source.
-    private static func migrate(_ lib: Library) -> Library {
+    /// Bring a library written by an older build up to date (every launch; idempotent).
+    static func migrate(_ lib: Library) -> Library {
         var lib = lib
         if lib.version < 2 {
             // Prefer the active style's old source, else the first non-gradient one.
@@ -105,7 +105,82 @@ final class AppModel: ObservableObject {
             lib.version = 3
         }
         for i in lib.presets.indices { lib.presets[i].source = nil }   // strip legacy field
+        lib = offerNewBuiltIns(lib)
+        if lib.version < 4 { lib.version = 4 }
         return lib
+    }
+
+    // MARK: Built-ins (library migration v4)
+
+    /// Featured built-ins every library gets once, even one from before seenBuiltIns existed.
+    /// "Now Playing" counts only once a built-in of that name ships (it's looked up by name).
+    static let promotedBuiltIns = ["Tidewater", "Now Playing"]
+
+    /// New built-in styles reach existing libraries exactly once (runs on every launch):
+    ///  • no `seenBuiltIns` (a library from before 1.4): everything shipping now counts as
+    ///    seen WITHOUT being added — a curated library isn't flooded — except the promoted
+    ///    styles, added if no style has their name;
+    ///  • `seenBuiltIns`: every FEATURED built-in not seen yet is added (unless a style already
+    ///    has its name); new pack styles only become "seen" (Add Built-in Styles has them).
+    /// Added styles go after the last style of their kind. Then every offered built-in is
+    /// recorded as seen, so deleting one sticks.
+    static func offerNewBuiltIns(_ lib: Library) -> Library {
+        var lib = lib
+        let offered = DefaultPresets.offeredBuiltIns()
+        let candidates: [Preset]
+        if let seen = lib.seenBuiltIns.map(Set.init) {
+            candidates = DefaultPresets.featuredPresets().filter { !seen.contains($0.name) }
+        } else {
+            candidates = offered.filter { promotedBuiltIns.contains($0.name) }
+        }
+        var have = Set(lib.presets.map(\.name))
+        for p in candidates where have.insert(p.name).inserted {
+            insertBuiltIn(p, into: &lib.presets)
+        }
+        var seen = lib.seenBuiltIns ?? []
+        var known = Set(seen)
+        for name in offered.map(\.name) where known.insert(name).inserted { seen.append(name) }
+        lib.seenBuiltIns = seen
+        return lib
+    }
+
+    /// Puts a built-in after the last style of its kind (scenes before looks), so it lands at
+    /// the end of its own gallery section without reordering anything.
+    static func insertBuiltIn(_ p: Preset, into presets: inout [Preset]) {
+        if let last = presets.lastIndex(where: { $0.isScene == p.isScene }) {
+            presets.insert(p, at: last + 1)
+        } else if p.isScene {
+            presets.insert(p, at: presets.firstIndex(where: { !$0.isScene }) ?? presets.count)
+        } else {
+            presets.append(p)
+        }
+    }
+
+    /// DOTSTUDIO_MIGRATE_ONLY (dev): migrate library.json in DOTSTUDIO_STORE_DIR exactly as a
+    /// launch does (a missing one becomes a new library), save it, print what changed, exit.
+    static func migrateOnly() -> Never {
+        let store = SharedStore(role: .app)
+        var out = "store: \(store.baseDir.path)\n"
+        let result: Library
+        switch store.loadLibrary() {
+        case .loaded(let before):
+            result = migrate(before)
+            let old = Set(before.presets.map(\.name))
+            out += "version: \(before.version) → \(result.version)\n"
+            out += "seenBuiltIns: \(before.seenBuiltIns.map { String($0.count) } ?? "none") → \(result.seenBuiltIns?.count ?? 0)\n"
+            out += "added: \(result.presets.map(\.name).filter { !old.contains($0) })\n"
+        case .missing:
+            result = DefaultPresets.makeLibrary()
+            out += "new library: version \(result.version), seenBuiltIns \(result.seenBuiltIns?.count ?? 0)\n"
+        case .corrupt(let backup):
+            out += "corrupt (backup: \(backup?.lastPathComponent ?? "none")) — left untouched\n"
+            FileHandle.standardOutput.write(Data(out.utf8))
+            exit(1)
+        }
+        out += "styles (\(result.presets.count)): \(result.presets.map { ($0.isScene ? "S:" : "L:") + $0.name }.joined(separator: " | "))\n"
+        out += store.save(result) ? "saved\n" : "SAVE FAILED: \(store.lastSaveError ?? "?")\n"
+        FileHandle.standardOutput.write(Data(out.utf8))
+        exit(0)
     }
 
     var selected: Preset? { library.presets.first { $0.id == selectedID } }
@@ -230,12 +305,16 @@ final class AppModel: ObservableObject {
         return "\(base) \(n)"
     }
 
-    /// Append the built-in demo screensavers that aren't already present (by name).
+    /// File › Add Built-in Styles: every built-in style the library is missing (by name),
+    /// featured and pack alike, each after the last style of its kind.
     func addDemoPack() {
         let existing = Set(library.presets.map(\.name))
-        let toAdd = DefaultPresets.coolPack().filter { !existing.contains($0.name) }
+        let toAdd = DefaultPresets.offeredBuiltIns().filter { !existing.contains($0.name) }
         guard !toAdd.isEmpty else { return }
-        library.presets.append(contentsOf: toAdd)
+        for p in toAdd { AppModel.insertBuiltIn(p, into: &library.presets) }
+        var seen = library.seenBuiltIns ?? []
+        for p in toAdd where !seen.contains(p.name) { seen.append(p.name) }
+        library.seenBuiltIns = seen
         selectedID = toAdd.first?.id
         save()
     }

@@ -9,8 +9,10 @@ struct DotStudioApp: App {
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model: AppModel
-    /// The live wallpaper; its menu bar item exists only while a wallpaper is on.
+    /// The live wallpaper (it outlives the main window).
     @StateObject private var wallpaper = WallpaperController.shared
+    /// Dock app vs. menu-bar item, and the menu-bar item's visibility (AppPresence.swift).
+    @StateObject private var presence = AppPresence.shared
 
     /// Sparkle auto-updates from GitHub Releases (app-side only — the saver never links Sparkle).
     @StateObject private var updates = UpdateController()
@@ -38,9 +40,15 @@ struct DotStudioApp: App {
         if let dir = ProcessInfo.processInfo.environment["DOTSTUDIO_UI_SHOTS"] {
             UIShots.run(outDir: dir)  // renders the app's screens offscreen and exits
         }
+        if ProcessInfo.processInfo.environment["DOTSTUDIO_MIGRATE_ONLY"] != nil {
+            // Headless migration check (pair with DOTSTUDIO_STORE_DIR): migrates library.json
+            // the way a launch does, saves it, prints a summary, exits.
+            AppModel.migrateOnly()
+        }
         let model = AppModel()
         _model = StateObject(wrappedValue: model)
         WallpaperController.shared.attach(model: model)   // restored in applicationDidFinishLaunching
+        AppPresence.shared.attach(model: model)
         // After an app update, silently refresh the installed .saver so the
         // screensaver actually gets the new code (takes effect next start).
         Installer.reinstallIfOutdated()
@@ -53,6 +61,9 @@ struct DotStudioApp: App {
                 .environmentObject(updates)
         }
         .windowStyle(.titleBar)
+        // A double-clicked .dotstudiopreset goes to AppDelegate.application(_:open:), which
+        // imports it and brings THE main window forward — not a new window per document.
+        .handlesExternalEvents(matching: [])
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Look") { model.addPreset() }
@@ -114,34 +125,42 @@ struct DotStudioApp: App {
                 .adaptiveLayout()   // Settings is its own window: its own width class (Layout.swift)
         }
 
-        MenuBarExtra(isInserted: Binding(get: { wallpaper.isActive }, set: { _ in })) {
-            WallpaperMenu()
+        // Whenever menu-bar mode is on, or a live wallpaper plays (MenuBarMenu.swift).
+        MenuBarExtra(isInserted: Binding(get: { presence.showsMenuBarItem }, set: { _ in })) {
+            DotStudioMenu()
                 .environmentObject(model)
+                .environmentObject(updates)
         } label: {
-            WallpaperMenuLabel()
+            DotStudioMenuLabel()
         }
         .menuBarExtraStyle(.menu)
     }
 }
 
-/// App-level hooks SwiftUI doesn't expose: the live wallpaper must outlive the main
-/// window, and the Dock icon must bring the window back even though the wallpaper's
-/// own (desktop-level) windows are technically visible.
+/// App-level hooks SwiftUI doesn't expose. Window / Dock / menu-bar behaviour lives in
+/// AppPresence; the live wallpaper must outlive the main window.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         WallpaperController.shared.restore()
+        AppPresence.shared.didFinishLaunching()   // login launch → menu bar; else a regular Dock app
         if DemoHooks.isActive { DemoHooks.applyAtLaunch() }
     }
 
+    /// AppPresence decides (menu-bar mode → menu bar; off → quit, unless a wallpaper plays).
+    /// AppKit's own rule counts the wallpaper's desktop windows and the status item's window
+    /// as open windows, so it can't be relied on to fire.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
 
+    /// A Dock click or a second launch: the main window, in front, with a Dock icon.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        let wallpaper = WallpaperController.shared
-        guard wallpaper.isActive, !wallpaper.hasVisibleMainWindow else { return true }
-        wallpaper.openMainWindow()
-        return false
+        !AppPresence.shared.reopen()
+    }
+
+    /// A double-clicked .dotstudiopreset (or any URL handed to the app): import, then show it.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        AppPresence.shared.open(urls)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
