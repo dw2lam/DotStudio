@@ -18,6 +18,8 @@
 //  preset; --cardsize small|medium|large picks the card's size (default medium, as in the app);
 //  --scale 2 sets the overlay's pixels per point (default 2 from 2400 px wide, else 1);
 //  --tag name appends "@name" to the file names. Fixtures: tools/music-fixtures/make.sh.
+//  --framebench times whole live frames (MetalRenderer.renderFrame: source, every effect and any
+//  compute pass, e.g. the error-diffusion dithers) with GPU timestamps, per preset, on its own renderer.
 //  --checks runs the live-renderer checks (wall-clock time base, synced slideshow, held-frame
 //  track change, rapid skips) through MetalRenderer.renderFrame and exits non-zero on a failure.
 
@@ -49,6 +51,7 @@ var overlayScale: CGFloat?
 var tag: String?
 var musicFadeBench = false
 var runChecks = false
+var frameBench = false
 while !args.isEmpty {
     let a = args.removeFirst()
     switch a {
@@ -81,6 +84,7 @@ while !args.isEmpty {
     case "--overlay": overlay = true
     case "--musicfade": musicFadeBench = true
     case "--checks": runChecks = true
+    case "--framebench": frameBench = true
     case "--card":
         let v = args.removeFirst()
         cardCorners = v == "all" ? MusicSpec.Corner.allCases : [MusicSpec.Corner(rawValue: v) ?? .bottomLeft]
@@ -375,6 +379,25 @@ if gpuBench {
         samples.sort()
         print(String(format: "%6.2f ms GPU  (median %5.2f)  %@ [%@]", samples[0], samples[samples.count / 2],
                      p.name, inst.kind.displayName))
+    }
+    exit(0)
+}
+
+if frameBench {
+    for p in presets {
+        guard let r = MetalRenderer(pixelFormat: .bgra8Unorm, store: store) else { continue }
+        r.apply(p, source: source)
+        for _ in 0..<6 { _ = r.renderFrame(width: W, height: H); Thread.sleep(forTimeInterval: 0.05) }
+        r.measuresGPUTime = true
+        _ = r.takeGPUSeconds()
+        var ms: [Double] = []
+        for _ in 0..<20 {
+            _ = r.renderFrame(width: W, height: H)
+            Thread.sleep(forTimeInterval: 0.01)            // let the completion handler land
+            ms.append(r.takeGPUSeconds() * 1000)
+        }
+        ms.sort()
+        print(String(format: "%6.2f ms GPU frame  (median %5.2f)  %@", ms[0], ms[ms.count / 2], p.name))
     }
     exit(0)
 }
