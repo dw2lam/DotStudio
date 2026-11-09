@@ -50,10 +50,10 @@ struct StyleTile: View {
 
     private var selected: Bool { model.selectedID == preset.id }
     private var isOpen: Bool { model.editingID == preset.id }
-    private static let radius: CGFloat = 14
+    private static let radius = Radius.tile
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: TileLabel.gapAbove) {
             ZStack {
                 // While this style is open in the editor, its image lives there.
                 if !isOpen {
@@ -73,11 +73,7 @@ struct StyleTile: View {
             .scaleEffect(hovering && !reduceMotion ? 1.025 : 1)
             .offset(y: hovering && !reduceMotion ? -2 : 0)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(preset.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            }
-            .padding(.horizontal, 3)
+            TileLabel(title: preset.name, summary: summary)
         }
         .contentShape(Rectangle())
         .motion(Motion.snappy, value: hovering)
@@ -94,7 +90,7 @@ struct StyleTile: View {
         .onTapGesture(count: 2) { model.edit(preset.id) }
         .onTapGesture { model.selectedID = preset.id }
         .contextMenu { TileMenu(preset: preset, lineup: lineup, confirmDelete: $confirmDelete) }
-        .help("Double-click to edit")
+        .help("\(preset.name) — double-click to edit")
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(Text("\(preset.name), \(summary)"))
@@ -118,18 +114,19 @@ struct StyleTile: View {
     }
 
     private var selectionRing: some View {
-        RoundedRectangle(cornerRadius: Self.radius + 4, style: .continuous)
+        // Sits Space.xxs outside the thumbnail, so its radius grows by the same amount.
+        RoundedRectangle(cornerRadius: Self.radius + Space.xxs, style: .continuous)
             .strokeBorder(Color.accentColor, lineWidth: 2.5)
-            .padding(-4)
+            .padding(-Space.xxs)
             .opacity(selected ? 1 : 0)
             .scaleEffect(selected || reduceMotion ? 1 : 1.03)
     }
 
     private var overlays: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .top) {
+            HStack(alignment: .top, spacing: 0) {
                 TileBadgeCluster(badges: badges, rotates: lineup.rotates)
-                Spacer()
+                Spacer(minLength: 0)
             }
             Spacer(minLength: 0)
             if hovering {
@@ -138,7 +135,7 @@ struct StyleTile: View {
                                 : .opacity.combined(with: .offset(y: 10)).combined(with: .scale(scale: 0.96, anchor: .bottom)))
             }
         }
-        .padding(8)
+        .padding(Space.xs)
     }
 
     private var summary: String {
@@ -148,44 +145,97 @@ struct StyleTile: View {
     }
 }
 
+// MARK: - Label
+
+/// A tile's name and one-line summary under its thumbnail. Shared by the style tiles and
+/// the New Look / New Scene tiles, so every label in the grid starts on the thumbnail's
+/// leading edge (the section header's edge too) and uses the same type.
+struct TileLabel: View {
+    /// Thumbnail → label.
+    static let gapAbove = Space.xs
+    @Environment(\.layout) private var layout
+    let title: String
+    /// nil keeps an empty summary line, so a New tile is as tall as its neighbours.
+    let summary: String?
+    var dimmed = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: layout.labelGap) {
+            // Up to two lines, then "…" with the full name as a tooltip.
+            Text(title)
+                .textRole(.itemTitle)
+                .foregroundStyle(dimmed ? .secondary : .primary)
+                .truncating(title, lines: 2)
+            if let summary {
+                Text(summary)
+                    .textRole(.caption)
+                    .foregroundStyle(.secondary)
+                    .truncating(summary)
+            } else {
+                Text(" ").textRole(.caption).accessibilityHidden(true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 // MARK: - Badges
 
-/// Subtle top-left state: on the screensaver (playing now), in the playlist, night, wallpaper.
+/// Subtle top-left state: on the screensaver (playing now), in the playlist, night,
+/// wallpaper. Wraps onto a second line rather than running off a narrow tile.
 struct TileBadgeCluster: View {
     let badges: TileBadges
     let rotates: Bool
 
     var body: some View {
         if !badges.isEmpty {
-            HStack(spacing: 6) {
+            FlowLayout(spacing: GlassBadge.spacing, lineSpacing: GlassBadge.spacing) {
                 if badges.onScreensaver {
                     if rotates {
-                        badge(badges.playingNow ? "Playing" : nil,
-                              badges.playingNow ? "play.fill" : "play.square.stack.fill",
-                              help: badges.playingNow ? "In the screensaver playlist — on screen now" : "In the screensaver playlist")
+                        GlassBadge(text: badges.playingNow ? "Playing" : nil,
+                                   symbol: badges.playingNow ? "play.fill" : "play.square.stack.fill")
+                            .help(badges.playingNow ? "In the screensaver playlist — on screen now" : "In the screensaver playlist")
                     } else {
-                        badge("Screensaver", "play.fill", help: "Plays as your screensaver")
+                        GlassBadge(text: "Screensaver", symbol: "play.fill")
+                            .help("Plays as your screensaver")
                     }
                 }
-                if badges.night { badge(badges.onScreensaver ? nil : "Night", "moon.fill", help: "Plays at night") }
-                if badges.wallpaper { badge(badges.isOnlyWallpaper ? "Wallpaper" : nil, "photo.artframe",
-                                            help: "Playing as your wallpaper") }
+                if badges.night {
+                    GlassBadge(text: badges.onScreensaver ? nil : "Night", symbol: "moon.fill")
+                        .help("Plays at night")
+                }
+                if badges.wallpaper {
+                    GlassBadge(text: badges.isOnlyWallpaper ? "Wallpaper" : nil, symbol: "photo.artframe")
+                        .help("Playing as your wallpaper")
+                }
             }
-            .font(.system(size: 10.5, weight: .semibold))
             .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .topLeading)))
         }
     }
+}
 
-    private func badge(_ text: String?, _ symbol: String, help: String) -> some View {
-        HStack(spacing: 4) {
+/// A small tinted glass capsule over imagery: an icon and an optional word, always white.
+/// The tile badges and the Night/Day badge on the Screensaver card's preview.
+struct GlassBadge: View {
+    /// Between neighbouring badges (a half step: badges are small).
+    static let spacing = Space.xxs + 2
+    /// No token for a badge's height: 20 at the default text size, grown with caption text.
+    @ScaledLength(relativeTo: .caption) private var height: CGFloat = 20
+    let text: String?
+    let symbol: String
+    var tint: Color? = Color.accentColor.opacity(0.75)
+
+    var body: some View {
+        HStack(spacing: Space.xxs) {
             Image(systemName: symbol)
-            if let text { Text(text) }
+            if let text { Text(text).lineLimit(1) }
         }
+        .textRole(.badge)
         .foregroundStyle(.white)
-        .padding(.horizontal, text == nil ? 6 : 8)
-        .frame(height: 21)
-        .glassSurface(.regular, in: Capsule(), tint: Color.accentColor.opacity(0.75))
-        .help(help)
+        .padding(.horizontal, text == nil ? Space.xxs + 2 : Space.xs)
+        .frame(minHeight: height)
+        .fixedSize()
+        .tintedGlassSurface(.regular, in: Capsule(), tint: tint)
     }
 }
 
@@ -198,6 +248,7 @@ private extension TileBadges {
 private struct TileActionBar: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var wallpaper = WallpaperSlot.shared
+    @ScaledLength(relativeTo: .body) private var dividerHeight: CGFloat = 16
     let preset: Preset
     let badges: TileBadges
     let lineup: ScreensaverLineup
@@ -205,46 +256,119 @@ private struct TileActionBar: View {
     private var isOnly: Bool { lineup.playlist == [preset.id] }
 
     var body: some View {
-        GlassGroup(spacing: 6) {
-            HStack(spacing: 2) {
-                icon(isOnly ? "checkmark" : "play.fill",
-                     help: isOnly ? "Playing as your screensaver" : "Play as Screensaver") {
-                    Motion.run { model.playAsScreensaver(preset.id) }
-                }
-                .disabled(isOnly)
+        // Every action when the tile has room. On a narrow tile (or at large text sizes)
+        // Preview and Edit fold into a "…" menu; narrower still, everything but Play does.
+        ViewThatFits(in: .horizontal) {
+            bar { destinationIcons; divider; styleIcons }
+            bar { destinationIcons; divider; moreMenu(includeDestinations: false) }
+            bar { playIcon; moreMenu(includeDestinations: true) }
+        }
+    }
 
-                icon(badges.onScreensaver ? "minus" : "plus",
-                     help: badges.onScreensaver ? "Remove from Screensaver" : "Add to Screensaver") {
+    private func bar<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        GlassGroup(spacing: Space.xs) {
+            HStack(spacing: Space.xxs) { content() }
+                .padding(Space.xxs)
+                .glassSurface(.regular, in: Capsule())
+        }
+        .fixedSize()
+    }
+
+    private var divider: some View {
+        Divider().frame(height: dividerHeight).padding(.horizontal, Space.xxs)
+    }
+
+    private var playIcon: some View {
+        icon(isOnly ? "checkmark" : "play.fill",
+             help: isOnly ? "Playing as your screensaver" : "Play as Screensaver") {
+            Motion.run { model.playAsScreensaver(preset.id) }
+        }
+        .disabled(isOnly)
+    }
+
+    @ViewBuilder private var destinationIcons: some View {
+        playIcon
+
+        icon(badges.onScreensaver ? "minus" : "plus",
+             help: badges.onScreensaver ? "Remove from Screensaver" : "Add to Screensaver") {
+            Motion.run { model.togglePlaylist(preset.id) }
+        }
+        .disabled(isOnly)
+
+        if wallpaper.isAvailable {
+            icon(badges.wallpaper ? "photo.artframe.circle.fill" : "photo.artframe",
+                 help: badges.wallpaper ? "Stop Wallpaper" : "Set as Wallpaper") {
+                Motion.run { wallpaper.toggle(preset.id) }
+            }
+        }
+    }
+
+    @ViewBuilder private var styleIcons: some View {
+        icon("arrow.up.left.and.arrow.down.right", help: "Preview Full Screen") { preview() }
+        icon("slider.horizontal.3", help: "Edit") { model.edit(preset.id) }
+    }
+
+    private func moreMenu(includeDestinations: Bool) -> some View {
+        Menu {
+            if includeDestinations {
+                Button(badges.onScreensaver ? "Remove from Screensaver" : "Add to Screensaver") {
                     Motion.run { model.togglePlaylist(preset.id) }
                 }
                 .disabled(isOnly)
-
                 if wallpaper.isAvailable {
-                    icon(badges.wallpaper ? "photo.artframe.circle.fill" : "photo.artframe",
-                         help: badges.wallpaper ? "Stop Wallpaper" : "Set as Wallpaper") {
+                    Button(badges.wallpaper ? "Stop Wallpaper" : "Set as Wallpaper") {
                         Motion.run { wallpaper.toggle(preset.id) }
                     }
                 }
-
-                Divider().frame(height: 16).padding(.horizontal, 3)
-
-                icon("arrow.up.left.and.arrow.down.right", help: "Preview Full Screen") {
-                    ScreensaverPreviewController.shared.present(
-                        preset: preset, source: model.library.source, store: model.store)
-                }
-                icon("slider.horizontal.3", help: "Edit") { model.edit(preset.id) }
+                Divider()
             }
-            .padding(.horizontal, 4)
-            .frame(height: 34)
-            .glassSurface(.regular, in: Capsule())
+            Button("Preview Full Screen") { preview() }
+            Button("Edit") { model.edit(preset.id) }
+        } label: {
+            Image(systemName: "ellipsis")
         }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(ScaledIconButtonStyle())
+        .fixedSize()
+        .help("More")
+        .accessibilityLabel("More")
+    }
+
+    private func preview() {
+        ScreensaverPreviewController.shared.present(
+            preset: preset, source: model.library.source, store: model.store)
     }
 
     private func icon(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: symbol) }
-            .buttonStyle(GlassIconButtonStyle())
+            .buttonStyle(ScaledIconButtonStyle())
             .help(help)
             .accessibilityLabel(help)
+    }
+}
+
+/// GlassIconButtonStyle (Glass.swift) with its size and glyph following the text size:
+/// a plain, borderless round icon button for glass bars.
+struct ScaledIconButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { ScaledIconButton(configuration: configuration) }
+}
+
+private struct ScaledIconButton: View {
+    let configuration: ButtonStyleConfiguration
+    @ScaledLength(relativeTo: .body) private var size: CGFloat = 28
+    @State private var hovering = false
+
+    var body: some View {
+        configuration.label
+            .scaledFont { .scaled(points: 12.5, $0, weight: .semibold) }
+            .frame(width: size, height: size)
+            .contentShape(Circle())
+            .background(Circle().fill(Color.white.opacity(hovering ? 0.22 : 0)))
+            .scaleEffect(configuration.isPressed ? 0.9 : 1)
+            .animation(Motion.snappy, value: configuration.isPressed)
+            .animation(Motion.snappy, value: hovering)
+            .onHover { hovering = $0 }
     }
 }
 
