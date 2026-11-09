@@ -409,7 +409,9 @@ enum EffectKind: String, Codable, CaseIterable {
                                  ParamSpec("paper", "Paper Texture", 0, 1, def: 0.5)]
         case .grainWash: return [ParamSpec("soft", "Softness", 0, 1, def: 0.6),
                                  ParamSpec("grain", "Grain", 0, 0.5, def: 0.16),
-                                 ParamSpec("tint", "Color Wash", 0, 1, def: 0)]
+                                 ParamSpec("tint", "Color Wash", 0, 1, def: 0),
+                                 ParamSpec("halation", "Halation", 0, 1, def: 0),
+                                 ParamSpec("paper", "Paper Texture", 0, 1, def: 0)]
         case .glass:     return [ParamSpec(menu: "style", "Glass", ["Fluted", "Tiles", "Liquid"], def: 0),
                                  ParamSpec("size", "Size", 10, 200, def: 44),
                                  ParamSpec("refract", "Refraction", 0, 1, def: 0.5),
@@ -580,7 +582,8 @@ extension EffectInstance {
                             u.p1 = .init(g("rough"), g("aniso"), g("film"), 0)
         case .silk:      u.p0 = .init(g("speed"), g("scale"), g("sheen"), 0)
         case .risograph: u.p0 = .init(g("screen"), g("cell"), g("misreg"), g("paper"))
-        case .grainWash: u.p0 = .init(g("soft"), g("grain"), g("tint"), 0)
+        case .grainWash: u.p0 = .init(g("soft"), g("grain"), g("tint"), g("halation"))
+                         u.p1 = .init(g("paper"), 0, 0, 0)
         case .glass:     u.p0 = .init(g("style"), g("size"), g("refract"), g("frost"))
         default:
             // Scene packs: params fill p0.xyzw, p1.xyzw, p2.xyzw in catalog order.

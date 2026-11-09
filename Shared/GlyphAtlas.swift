@@ -31,6 +31,10 @@ enum GlyphAtlas {
             ]
             let attr = CFAttributedStringCreate(nil, String(ch) as CFString, attrs as CFDictionary)!
             let line = CTLineCreateWithAttributedString(attr)
+            // Image bounds are measured from the context's current text position, which the
+            // previous CTLineDraw advanced: reset it, or every other glyph lands half outside
+            // its cell (the atlas used to hold half the glyphs, overlapping, and blanks).
+            ctx.textPosition = .zero
             let bounds = CTLineGetImageBounds(line, ctx)
             let x = CGFloat(i * cellW) + (CGFloat(cellW) - bounds.width) / 2 - bounds.minX
             let y = (CGFloat(cellH) - bounds.height) / 2 - bounds.minY

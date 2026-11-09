@@ -24,10 +24,13 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private var drawableSize: CGSize = .zero
 
     // Serial dither (error diffusion / Riemersma) compute resources.
-    private var computePSO: MTLComputePipelineState?
+    private var ditherPrepPSO: MTLComputePipelineState?
+    private var ditherWavePSO: MTLComputePipelineState?
+    private var ditherRiemPSO: MTLComputePipelineState?
     private var gridTex: MTLTexture?
     private var errBuf: MTLBuffer?
-    private var gridW = 0, gridH = 0
+    private var gridNeedsClear = false
+    private var gridW = 0, gridH = 0, gridCell = 1
 
     /// Media-clock origin of the animation time: t = now − startTime. With the instance
     /// time base it's when the source was applied; with the wall-clock base it is re-derived
@@ -162,9 +165,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         guard let pso = try? device.makeRenderPipelineState(descriptor: desc) else { return nil }
         pipeline = pso
 
-        if let cfn = library.makeFunction(name: "dither_serial") {
-            computePSO = try? device.makeComputePipelineState(function: cfn)
+        func compute(_ name: String) -> MTLComputePipelineState? {
+            library.makeFunction(name: name).flatMap { try? device.makeComputePipelineState(function: $0) }
         }
+        ditherPrepPSO = compute("dither_prep")
+        ditherWavePSO = compute("dither_wave")
+        ditherRiemPSO = compute("dither_riem")
 
         let sd = MTLSamplerDescriptor()
         sd.minFilter = .linear; sd.magFilter = .linear
@@ -679,8 +685,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             // producing a coarse grid that the blit pass (effect 38) upscales.
             var fragInput = input
             var serialBlit = false
-            if let inst = inst, isSerialDither(inst), let cpso = computePSO {
-                encodeSerialDither(cmd, pso: cpso, inst: inst, input: input, size: size)
+            if let inst = inst, isSerialDither(inst), ditherWavePSO != nil {
+                encodeSerialDither(cmd, inst: inst, input: input, size: size)
                 if let g = gridTex { fragInput = g; serialBlit = true }
             }
 
@@ -731,7 +737,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 }
             } else if serialBlit {
                 u.effect = 38                      // upscale the precomputed dither grid
-                u.p0 = simd_float4(Float(gridW), Float(gridH), 0, 0)
+                u.p0 = simd_float4(Float(gridW), Float(gridH), Float(gridCell), 0)
             } else {
                 if !havePacked { inst!.pack(into: &u) }
                 if inst!.kind == .universe {
@@ -876,10 +882,21 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 simd_float4(Float(wrapPi(lst)), 1, 0, 0))
     }
 
-    // MARK: Serial dither (compute)
+    // MARK: Error-diffusion dither (compute)
 
     private func isSerialDither(_ inst: EffectInstance) -> Bool {
         inst.kind == .dither && Int((inst.params["algo"] ?? 1).rounded()) >= 4
+    }
+
+    /// Whole-pixel cell size for an error-diffusion dither: "Pixel Size" is in pixels of a
+    /// 1000-px-tall frame, so the pattern keeps its scale from a thumbnail to 5K (it used to
+    /// collapse to whatever a 130k-cell cap allowed, at a fractional size that beat).
+    static func ditherCellPixels(cell: Double, size: CGSize) -> Int {
+        let k = max(size.height, 1) / 1000
+        var cp = max(1, Int((max(cell, 1) * k).rounded()))
+        // Keep the grid small enough for one threadgroup's wavefront to stay ~1 ms.
+        while Double(cp * cp) * 600_000 < Double(size.width * size.height) { cp += 1 }
+        return cp
     }
 
     private func ensureGrid(_ w: Int, _ h: Int) {
@@ -889,39 +906,58 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         d.usage = [.shaderRead, .shaderWrite]
         d.storageMode = .private
         gridTex = device.makeTexture(descriptor: d)
-        errBuf = device.makeBuffer(length: max(w * h, 1) * MemoryLayout<Float>.stride, options: .storageModePrivate)
+        // Two half4 per cell: this frame's input/error, and the persistent last level + input.
+        errBuf = device.makeBuffer(length: max(w * h, 1) * 2 * 8, options: .storageModePrivate)
+        gridNeedsClear = true
     }
 
-    private func encodeSerialDither(_ cmd: MTLCommandBuffer, pso: MTLComputePipelineState,
-                                    inst: EffectInstance, input: MTLTexture, size: CGSize) {
-        let cell = max(Double(inst.g("cell")), 1)
-        var gw = max(1, Int(size.width / cell))
-        var gh = max(1, Int(Double(gw) * size.height / max(size.width, 1)))
-        let maxCells = 130_000   // cap so the single-threaded serial scan stays fast
-        if gw * gh > maxCells {
-            let f = (Double(maxCells) / Double(gw * gh)).squareRoot()
-            gw = max(1, Int(Double(gw) * f)); gh = max(1, Int(Double(gh) * f))
-        }
+    private func encodeSerialDither(_ cmd: MTLCommandBuffer, inst: EffectInstance, input: MTLTexture, size: CGSize) {
+        guard let prep = ditherPrepPSO, let wave = ditherWavePSO, let riem = ditherRiemPSO else { return }
+        let cp = MetalRenderer.ditherCellPixels(cell: Double(inst.g("cell")), size: size)
+        let gw = max(1, Int((size.width / CGFloat(cp)).rounded(.up)))
+        let gh = max(1, Int((size.height / CGFloat(cp)).rounded(.up)))
         ensureGrid(gw, gh)
-        guard let gridTex = gridTex, let errBuf = errBuf,
-              let enc = cmd.makeComputeCommandEncoder() else { return }
+        guard let gridTex = gridTex, let errBuf = errBuf else { return }
+        if gridNeedsClear, let bl = cmd.makeBlitCommandEncoder() {
+            bl.fill(buffer: errBuf, range: 0..<errBuf.length, value: 0)   // no history yet
+            bl.endEncoding()
+            gridNeedsClear = false
+        }
+        guard let enc = cmd.makeComputeCommandEncoder() else { return }
         var u = FXUniforms()
         u.resolution = simd_float2(Float(size.width), Float(size.height))
         inst.pack(into: &u)                        // p0 = (cell, levels, mono, algo), colorA/B
         let algo = Int((inst.params["algo"] ?? 4).rounded())
-        let kernelId = (algo == 16) ? 100 : (algo - 4)
-        u.p1 = simd_float4(Float(kernelId), Float(gw), Float(gh), 0)
-        enc.setComputePipelineState(pso)
+        let riemersma = algo == 16
+        u.p1 = simd_float4(Float(riemersma ? 100 : algo - 4), Float(gw), Float(gh), Float(cp))
+        u.p2 = MetalRenderer.ditherTuning
         enc.setBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
         enc.setTexture(input, index: 0)
         enc.setTexture(gridTex, index: 1)
         enc.setBuffer(errBuf, offset: 0, index: 1)
         enc.setSamplerState(sampler, index: 0)
-        enc.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1),
-                                 threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+        enc.setComputePipelineState(prep)
+        enc.dispatchThreadgroups(MTLSize(width: (gw + 15) / 16, height: (gh + 15) / 16, depth: 1),
+                                 threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
+        if riemersma {
+            var side = 1
+            while side < gw || side < gh { side <<= 1 }
+            let chunks = (side * side + 255) / 256
+            enc.setComputePipelineState(riem)
+            enc.dispatchThreadgroups(MTLSize(width: (chunks + 63) / 64, height: 1, depth: 1),
+                                     threadsPerThreadgroup: MTLSize(width: 64, height: 1, depth: 1))
+        } else {
+            // One threadgroup: rows run as a wavefront, a band of `t` rows at a time.
+            let t = min(gh, wave.maxTotalThreadsPerThreadgroup, 1024)
+            enc.setComputePipelineState(wave)
+            enc.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1),
+                                     threadsPerThreadgroup: MTLSize(width: t, height: 1, depth: 1))
+        }
         enc.endEncoding()
-        gridW = gw; gridH = gh
+        gridW = gw; gridH = gh; gridCell = cp
     }
+    /// (hysteresis in levels, sharpen, threshold jitter, 0) — see dither_prep / dither_wave.
+    static let ditherTuning = simd_float4(0.35, 0.35, 0.18, 0)
 
     // MARK: Thumbnails (offscreen, one frame, synchronous)
 
