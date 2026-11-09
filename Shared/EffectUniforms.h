@@ -52,6 +52,11 @@ typedef struct {
     FX_FLOAT4 music;        // (has artwork 0/1, progress 0–1 or −1 = unknown, playing 0/1,
                             //  seconds since the artwork changed — cross-fade clock)
     FX_FLOAT4 musicRect;    // where the foreground draws the artwork, in uv (x, y from the top, w, h)
+
+    // Per-scene data the CPU works out once a frame, where every pixel would otherwise derive
+    // the same values (Sand Garden: its three sweeps and the ball — SandGarden.fill, called
+    // from MetalRenderer.fillLiveSky). Zero for scenes that don't use it.
+    FX_FLOAT4 scene[16];
 } FXUniforms;
 
 #endif /* EffectUniforms_h */
