@@ -15,8 +15,8 @@
 //
 //  Threads: this controller, the windows and the policy live on the main thread. All
 //  per-frame work — display links, uniforms, encoding, drawables, media decode and
-//  upload — runs on WallpaperRenderLoop's own thread (utility QoS, raised to
-//  user-initiated only above 60 Hz). The main thread hands it immutable snapshots and
+//  upload — runs on WallpaperRenderLoop's own thread (user-initiated while animating,
+//  utility for clock ticks and idle). The main thread hands it immutable snapshots and
 //  never waits on it.
 
 import AppKit

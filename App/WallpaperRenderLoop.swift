@@ -2,16 +2,13 @@
 //
 //  One dedicated thread owns everything a frame touches: each display's MetalRenderer,
 //  its CAMetalLayer's drawables, the display links (attached to this thread's run
-//  loop), the clock timer, the pacing plan and the media decoders. It runs at .utility
-//  QoS for 30/60 fps and clock ticks, so on a busy Mac the user's own work goes first
-//  (and on chips with efficiency cores the scheduler may place it there); while a
-//  display link runs above 60 Hz (Smooth on ProMotion) it runs at .userInitiated,
-//  because an 8.3 ms frame has no room for the scheduling delay utility work sees
-//  under load. (Measured on an M5 Pro with every core busy at default QoS: at 120 Hz,
-//  utility showed 2% of frames late with gaps up to 190 ms; user-initiated 0.1%, max
-//  42 ms, like the old main-thread loop. The trade-off at 30 fps: under that same full
-//  load the wallpaper slips to ~15-20 fps for the first 30-40 s, where the main-thread
-//  loop held 30. With any idle core it holds 30.)
+//  loop), the clock timer, the pacing plan and the media decoders. While any display is
+//  animating it runs at .userInitiated; for the 1 Hz clock ticks and idle it drops to
+//  .utility. (Measured 2026-11-09 on an M5 Pro — no efficiency cores — under load:
+//  utility let frames slip even at 30 fps, up to ~9% late with 292 ms gaps, and the
+//  owner had already flagged lag; user-initiated matched the old main-thread loop. The
+//  wins that remain: the main thread is idle during playback, ~10–14% less CPU per
+//  frame, the right GPU per display, and zero work while paused.)
 //
 //  The main thread keeps the windows and the policy. It decides *what* may run (hard
 //  pauses, which displays are visible, fps, still, style) and posts immutable snapshots
@@ -206,17 +203,21 @@ final class WallpaperRenderLoop {
         return work()
     }
 
-    /// This thread's QoS between one-time setups: utility, or user-initiated while any
-    /// display link runs above 60 Hz (see the header).
+    /// This thread's QoS between one-time setups: user-initiated while any display is
+    /// animating, utility for clock ticks and idle (see the header).
     private var frameQoS = QOS_CLASS_UTILITY
 
     private func updateFrameQoS() {
-        let fast = surfaces.values.contains { !$0.link.isPaused && $0.linkRate > 60 }
-        let q = fast ? QOS_CLASS_USER_INITIATED : QOS_CLASS_UTILITY
+        // Any continuously animating display runs user-initiated: under CPU load utility QoS
+        // dropped frames even at 30 fps (up to ~9% late, 292 ms gaps — measured 2026-11-09 on
+        // an M5 Pro, which has no efficiency cores), and the owner flagged lag. Utility stays
+        // for the 1 Hz clock ticks and idle, where a late wake-up is invisible.
+        let animating = surfaces.values.contains { !$0.link.isPaused }
+        let q = animating ? QOS_CLASS_USER_INITIATED : QOS_CLASS_UTILITY
         guard q.rawValue != frameQoS.rawValue else { return }
         frameQoS = q
         pthread_set_qos_class_self_np(q, 0)
-        if debug { log("frame qos \(q.rawValue) (\(fast ? ">60 Hz" : "≤60 Hz"))") }
+        if debug { log("frame qos \(q.rawValue) (\(animating ? "animating" : "ticks/idle"))") }
     }
 
     private func configureSurface(_ id: CGDirectDisplayID, _ config: WallpaperSurfaceConfig) {
