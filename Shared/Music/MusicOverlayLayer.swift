@@ -33,8 +33,8 @@ final class MusicOverlayLayer: CALayer {
     }
 
     /// Screen areas to keep the type clear of, in points (menu bar and Dock on the wallpaper).
-    /// The Album / Stage compositions are centred with margins wider than both, so only the
-    /// Cover type and the card move for them.
+    /// Album is centred with margins wider than both; Stage centres its block in the area
+    /// between them; the Cover type and the card move off them.
     var safeInsets = Insets() { didSet { if safeInsets != oldValue { setNeedsLayout() } } }
     /// Accessibility Reduce Motion: no flips, no scaling, no equalizer bounce — fades only.
     var reduceMotion = MusicOverlayLayer.systemReduceMotion
@@ -43,6 +43,10 @@ final class MusicOverlayLayer: CALayer {
     /// ticks. Both keep WindowServer compositing every refresh, so the live wallpaper turns
     /// them off (bars hold still, progress steps once a second); the screensaver keeps them.
     var ambientMotion = true
+
+    /// Continuous decoration never needs the panel's full rate: at most 30 Hz, so a ProMotion
+    /// display doesn't recomposite the overlay at 120 Hz over a 30 fps Metal background.
+    static let decorationRate = CAFrameRateRange(minimum: 10, maximum: 30, preferred: 30)
 
     private(set) var mode: Mode = .hidden
     private var music = MusicSnapshot.empty
@@ -253,7 +257,7 @@ private final class MusicOverlayGroup: CALayer {
         case .full(let o):
             switch o.layout {
             case .album: buildAlbum(d, o)
-            case .stage: buildStage(d, o)
+            case .stage: buildStage(d, o, insets)
             case .cover: buildCover(d, o, insets)
             }
         case .card(let corner):
@@ -434,6 +438,14 @@ private final class MusicOverlayGroup: CALayer {
 
     private func updateTimes(_ d: MusicDisplay, now: Date) {
         guard let st = d.state, let style = timeStyle else { return }
+        // An estimated position (Apple Music without Automation: counted from when the track
+        // was seen) keeps the bar as a rough guide but never claims to-the-second times.
+        if st.positionIsApproximate == true {
+            elapsedLayer?.removeFromSuperlayer(); remainingLayer?.removeFromSuperlayer()
+            elapsedLayer = nil; remainingLayer = nil
+            lastSecond = Int.min
+            return
+        }
         let e = st.elapsed(at: now)
         let sec = Int(e)
         guard sec != lastSecond else { return }
@@ -477,6 +489,7 @@ private final class MusicOverlayGroup: CALayer {
                     a.toValue = w
                     a.duration = 1.0
                     a.timingFunction = CAMediaTimingFunction(name: .linear)
+                    a.preferredFrameRateRange = MusicOverlayLayer.decorationRate
                     fill.add(a, forKey: "glide")
                 }
                 fill.bounds.size.width = w
@@ -645,36 +658,39 @@ private final class MusicOverlayGroup: CALayer {
         }
     }
 
-    /// Spotify TV: artwork centred, type centred below.
-    private func buildStage(_ d: MusicDisplay, _ o: MusicSceneOptions) {
-        let art = MusicGeometry.artRect(.stage, size: CGSize(width: W, height: H))
+    /// Spotify TV: artwork centred, type centred below. The block (sized for a two-line
+    /// title — MusicGeometry.stageBlock) is centred between the menu bar and the Dock.
+    private func buildStage(_ d: MusicDisplay, _ o: MusicSceneOptions, _ insets: MusicOverlayLayer.Insets) {
+        typealias S = MusicGeometry.Stage
+        let art = MusicGeometry.artRect(.stage, size: CGSize(width: W, height: H), options: o,
+                                        insets: (insets.top, insets.bottom))
         addArt(d, art, radius: 0.024, shadow: 1)
-        let colW = min(W - 0.16 * u, 1.3 * u)
-        let x = (W - colW) / 2
-        let st = bodyStyles(title: 0.046 * u, artist: 0.030 * u, album: 0.023 * u, caption: 0.0138 * u,
-                            align: .center, titleLines: 2)
-        var y = art.maxY + 0.055 * u
+        let colW = min(W - 0.16 * u - insets.left - insets.right, 1.3 * u)
+        let x = insets.left + (W - insets.left - insets.right - colW) / 2
+        let st = bodyStyles(title: S.title * u, artist: S.artist * u, album: S.album * u, caption: S.caption * u,
+                            align: .center, titleLines: S.titleLines)
+        var y = art.maxY + S.artGap * u
         if d.idle {
             var sub = st.artist; sub.color = Self.white(0.5); sub.weight = .regular
-            y += addText(Self.idleTitle, st.title, x: x, top: y, width: colW) + 0.012 * u
+            y += addText(Self.idleTitle, st.title, x: x, top: y, width: colW) + S.artistGap * u
             addText(Self.idleSubtitle, sub, x: x, top: y, width: colW)
             return
         }
         y += addText(d.title, st.title, x: x, top: y, width: colW)
-        let ah = addText(d.artist, st.artist, x: x, top: y + 0.012 * u, width: colW)
-        if ah > 0 { y += 0.012 * u + ah }
+        let ah = addText(d.artist, st.artist, x: x, top: y + S.artistGap * u, width: colW)
+        if ah > 0 { y += S.artistGap * u + ah }
         if o.showAlbum {
-            let lh = addText(d.album, st.album, x: x, top: y + 0.008 * u, width: colW)
-            if lh > 0 { y += 0.008 * u + lh }
+            let lh = addText(d.album, st.album, x: x, top: y + S.albumGap * u, width: colW)
+            if lh > 0 { y += S.albumGap * u + lh }
         }
-        let barH = max(0.0058 * u, 3)
+        let barH = max(S.bar * u, 3)
         if o.showProgress && d.hasDuration {
-            y += 0.042 * u
+            y += S.barGap * u
             let bar = CGRect(x: art.minX, y: y, width: art.width, height: barH)
-            addProgress(d, bar: bar, timesTop: y + barH + 0.014 * u, timeSize: 0.0158 * u)
-            y += barH + 0.014 * u + 0.0158 * u * 1.2
+            addProgress(d, bar: bar, timesTop: y + barH + S.timesGap * u, timeSize: S.times * u)
+            y += barH + S.timesGap * u + S.times * u * MusicGeometry.lineBox
         }
-        _ = addCaption(d, st.caption, x: x, top: y + 0.034 * u, width: colW)
+        _ = addCaption(d, st.caption, x: x, top: y + S.captionGap * u, width: colW)
     }
 
     /// Full-bleed artwork (the shader), type bottom-left over its scrim.
@@ -683,8 +699,11 @@ private final class MusicOverlayGroup: CALayer {
         let left = m + insets.left
         let bottom = H - m - insets.bottom
         let colW = max(min(1.05 * u, W - left - m - insets.right), 40)
-        let st = bodyStyles(title: 0.080 * u, artist: 0.040 * u, album: 0.028 * u, caption: 0.0158 * u,
+        var st = bodyStyles(title: 0.080 * u, artist: 0.040 * u, album: 0.028 * u, caption: 0.0158 * u,
                             align: .left, titleLines: 2, halo: 0.35)
+        // Over full-bleed art the secondary lines need more weight than over the calm Album /
+        // Stage backgrounds (the shader's scrim targets ≥ 7:1 for the title; these keep ≥ 4.5:1).
+        st.caption.color = Self.white(0.72); st.artist.color = Self.white(0.84); st.album.color = Self.white(0.68)
         if d.idle {
             var sub = st.artist; sub.color = Self.white(0.55); sub.weight = .regular
             let sb = measure(Self.idleSubtitle, sub, width: colW)
@@ -706,6 +725,7 @@ private final class MusicOverlayGroup: CALayer {
             addProgress(d, bar: CGRect(x: left, y: y, width: min(0.56 * u, colW), height: barH),
                         timesTop: timesTop, timeSize: ts, trackAlpha: 0.26)
             timeStyle?.halo = 0.35
+            timeStyle?.color = Self.white(0.70)
             y -= 0.050 * u
         }
         if o.showAlbum {
@@ -835,6 +855,7 @@ private final class MusicEQGlyph: CALayer {
             a.repeatCount = .infinity
             a.timeOffset = [0.0, 0.21, 0.37][i]
             a.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            a.preferredFrameRateRange = MusicOverlayLayer.decorationRate
             b.add(a, forKey: "eq")
         }
     }
@@ -843,27 +864,56 @@ private final class MusicEQGlyph: CALayer {
 // MARK: - Artwork bitmaps
 
 enum MusicArtwork {
-    /// The artwork redrawn at exactly `side` px (aspect-filled), so a 1400 px cover shown at
-    /// 160 px in a card stays crisp instead of aliasing. Cached for the last few requests.
+    /// The artwork redrawn at exactly `side` px, so a 1400 px cover shown at 160 px in a card
+    /// stays crisp instead of aliasing. A square-ish cover fills the square; a clearly
+    /// non-square one (video art, user art) is shown whole, fitted over a soft, dimmed blow-up
+    /// of itself, instead of losing its sides. Cached for the last few requests. Main thread.
     static func scaled(_ art: CGImage, side: Int) -> CGImage {
-        let key = Key(art: ObjectIdentifier(art), side: side)
-        if let hit = cache.first(where: { $0.key == key }) { return hit.image }
+        // Identity, not address: the entry holds its source, so a new cover can never be
+        // mistaken for a freed one that happened to live at the same address.
+        if let hit = cache.first(where: { $0.art === art && $0.side == side }) { return hit.image }
         guard side > 0, let ctx = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
                                             space: CGColorSpace(name: CGColorSpace.sRGB)!,
                                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return art }
         ctx.interpolationQuality = .high
-        let w = CGFloat(art.width), h = CGFloat(art.height)
-        let s = CGFloat(side) / min(w, h)
-        ctx.draw(art, in: CGRect(x: (CGFloat(side) - w * s) / 2, y: (CGFloat(side) - h * s) / 2,
-                                 width: w * s, height: h * s))
+        let w = CGFloat(art.width), h = CGFloat(art.height), S = CGFloat(side)
+        func draw(_ img: CGImage, scale s: CGFloat, in c: CGContext, side: CGFloat) {
+            c.draw(img, in: CGRect(x: (side - w * s) / 2, y: (side - h * s) / 2, width: w * s, height: h * s))
+        }
+        if abs(w / max(h, 1) - 1) > 0.05 {
+            if let fill = backdrop(art) {
+                ctx.draw(fill, in: CGRect(x: 0, y: 0, width: S, height: S))
+                ctx.setFillColor(CGColor(gray: 0, alpha: 0.30))
+                ctx.fill(CGRect(x: 0, y: 0, width: S, height: S))
+            }
+            draw(art, scale: S / max(w, h), in: ctx, side: S)           // aspect-fit
+        } else {
+            draw(art, scale: S / min(w, h), in: ctx, side: S)           // aspect-fill (≤ 5% crop)
+        }
         let out = ctx.makeImage() ?? art
-        cache.insert((key, out), at: 0)
-        if cache.count > 6 { cache.removeLast() }
+        cache.insert(Entry(art: art, side: side, image: out), at: 0)
+        if cache.count > 4 { cache.removeLast() }
         return out
     }
 
-    private struct Key: Equatable { var art: ObjectIdentifier; var side: Int }
-    private static var cache: [(key: Key, image: CGImage)] = []
+    /// Drop the cached bitmaps (the saver calls this when it tears down: the host process
+    /// outlives every activation, and a 5K cover is ~8 MB).
+    static func purge() { cache.removeAll() }
+
+    /// The art aspect-filled into a few pixels: smoothly upscaled, a soft blur of its colours.
+    private static func backdrop(_ art: CGImage) -> CGImage? {
+        let n = 6
+        guard let c = CGContext(data: nil, width: n, height: n, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        c.interpolationQuality = .medium
+        let w = CGFloat(art.width), h = CGFloat(art.height), s = CGFloat(n) / min(w, h)
+        c.draw(art, in: CGRect(x: (CGFloat(n) - w * s) / 2, y: (CGFloat(n) - h * s) / 2, width: w * s, height: h * s))
+        return c.makeImage()
+    }
+
+    private struct Entry { let art: CGImage; let side: Int; let image: CGImage }
+    private static var cache: [Entry] = []
 
     /// A designed stand-in: a soft gradient (the track's palette, or a quiet neutral when
     /// idle) with a music note.

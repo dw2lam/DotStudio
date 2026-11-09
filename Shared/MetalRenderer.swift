@@ -31,7 +31,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     /// Media-clock origin of the animation time: t = now − startTime. With the instance
     /// time base it's when the source was applied; with the wall-clock base it is re-derived
-    /// every frame from local midnight (see `timeBase`).
+    /// every frame from the wall clock (see `timeBase`).
     private var startTime: CFTimeInterval = CACurrentMediaTime()
     private var loggedFirstFrame = false
 
@@ -40,33 +40,40 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         /// Seconds since this renderer applied its current source (the default): every
         /// preview, saver and wallpaper instance starts its own motion from zero.
         case instance
-        /// Seconds since local midnight, read from the wall clock each frame, so every
-        /// renderer using it (screensaver, live wallpaper) draws the same frame at the same
-        /// moment — the screensaver picks up exactly where the desktop was.
+        /// Seconds into the current wall-clock hour (`wallClockPeriod`, aligned to the Unix
+        /// epoch, so DST and time-zone changes never move it), read from the wall clock each
+        /// frame. Every renderer using it (screensaver, live wallpaper) draws the same frame at
+        /// the same moment — the screensaver picks up exactly where the desktop was.
         ///
-        /// Kept under one day so Float time keeps ~8 ms resolution at worst (the per-instance
-        /// base reaches that after a day of running too). At local midnight it wraps to 0;
-        /// the renderer hides the jump with a 2 s crossfade from the old time to the new, which
-        /// every synced renderer performs at the same wall time. DST days are 23/25 h; the
-        /// wrap still happens at midnight. A video source keeps its own decoder clock.
+        /// Shaders get t as a Float: under an hour it resolves 0.24 ms at worst, so frame steps
+        /// stay even at 120 fps (seconds since midnight reached 7.8 ms and visibly juddered).
+        /// At each boundary t wraps to 0; the renderer hides the jump with a 2 s crossfade from
+        /// the old time to the new, which every synced renderer performs at the same wall time.
+        /// A slideshow source runs on the full-precision wall clock instead, so it never wraps
+        /// (see `slideClock`); a video keeps its own decoder clock.
         case wallClock
     }
 
-    /// Switching bases mid-show crossfades (the time jumps); before the first frame it's free.
+    /// The wall-clock time base's period: t ∈ [0, 3600).
+    static let wallClockPeriod: Double = 3600
+
+    /// Switching bases mid-show crossfades (motion and slideshow jump); before the first
+    /// frame it's free. Wall clock → instance keeps the current origin, so the motion carries
+    /// on from where it was and only a slideshow changes.
     var timeBase: TimeBase = .instance {
         didSet {
             guard timeBase != oldValue else { return }
-            if timeBase == .instance { startTime = CACurrentMediaTime() }
+            let now = CACurrentMediaTime()
             if let p = preset, outgoing == nil, drewOnce {
-                outgoing = (p, packedUniforms, startTime)
-                transitionBegan = CACurrentMediaTime()
+                // The outgoing chain keeps the OLD clock: captured before the origin moves.
+                outgoing = Outgoing(preset: p, packed: packedUniforms, startTime: startTime,
+                                    wallSlides: oldValue == .wallClock)
+                transitionBegan = now
                 transitionDuration = 1.0
             }
-            if timeBase == .wallClock { syncWallClockOrigin(CACurrentMediaTime(), allowWrapFade: false) }
+            if timeBase == .wallClock { syncWallClockOrigin(now, allowWrapFade: false) }
         }
     }
-    private var dayStart: Date?
-    private var nextDayStart: Date?
     private var drewOnce = false
 
     // Cap frames-in-flight so drawables/IOSurfaces are recycled rather than queued up.
@@ -93,7 +100,15 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     // Crossfade: while `outgoing` is set, both chains render (old → fadeOld,
     // new → drawable via blend pass 41) until progress reaches 1.
-    private var outgoing: (preset: Preset, packed: [FXUniforms], startTime: CFTimeInterval)?
+    private struct Outgoing {
+        let preset: Preset
+        let packed: [FXUniforms]
+        /// The outgoing chain's own time origin (a wall-clock wrap keeps counting past it).
+        let startTime: CFTimeInterval
+        /// Its slideshow ran on the wall clock (see `slideClock`).
+        let wallSlides: Bool
+    }
+    private var outgoing: Outgoing?
     private var transitionBegan: CFTimeInterval = 0
     private var transitionDuration: Double = 0
     private var fadeOld: MTLTexture?
@@ -185,31 +200,40 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
     }
 
-    /// The animation time (seconds) a frame drawn at `now` uses, per the time base. With
-    /// `.wallClock` every renderer on the Mac returns the same value at the same moment.
+    /// The animation time (seconds) a frame drawn at `now` would use, per the time base.
+    /// With `.wallClock` every renderer on the Mac returns the same value at the same moment.
+    /// Read-only: it never moves the origin a frame's wrap crossfade is detected against.
     func animationTime(at now: CFTimeInterval = CACurrentMediaTime()) -> Double {
-        if timeBase == .wallClock { syncWallClockOrigin(now, allowWrapFade: false) }
-        return now - startTime
+        timeBase == .wallClock ? Self.wallPhase(Date().timeIntervalSince1970) : now - startTime
     }
 
-    /// Wall-clock time base: put `startTime` where t = seconds since local midnight. At the
-    /// day boundary t jumps back to ~0; that frame starts a crossfade whose outgoing chain
-    /// keeps the old origin, so the motion never visibly jumps.
+    /// Seconds into the current wall-clock period (0 ..< wallClockPeriod).
+    static func wallPhase(_ epoch: Double) -> Double {
+        let p = wallClockPeriod
+        return max(epoch - (epoch / p).rounded(.down) * p, 0)
+    }
+
+    /// Wall-clock time base: put `startTime` where t = seconds into the current period. When
+    /// the origin moves (the hourly wrap, the clock being set, a wake from sleep) that frame
+    /// starts a crossfade whose outgoing chain keeps the old origin, so motion never visibly
+    /// jumps. Every synced renderer wraps at the same wall time.
     private func syncWallClockOrigin(_ now: CFTimeInterval, allowWrapFade: Bool) {
-        let wall = Date()
-        if dayStart == nil || nextDayStart.map({ wall >= $0 }) ?? true || wall < dayStart! {
-            let cal = Calendar.current
-            let start = cal.startOfDay(for: wall)
-            dayStart = start
-            nextDayStart = cal.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86_400)
-        }
-        let origin = now - wall.timeIntervalSince(dayStart!)
-        if allowWrapFade, origin - startTime > 3_600, let p = preset, outgoing == nil {
-            outgoing = (p, packedUniforms, startTime)     // keeps counting past 86 400 for 2 s
+        let origin = now - Self.wallPhase(Date().timeIntervalSince1970)
+        if allowWrapFade, abs(origin - startTime) > 0.25, let p = preset, outgoing == nil {
+            // The outgoing chain keeps counting past the period for the 2 s fade.
+            outgoing = Outgoing(preset: p, packed: packedUniforms, startTime: startTime, wallSlides: true)
             transitionBegan = now
             transitionDuration = 2.0
         }
         startTime = origin
+    }
+
+    /// The slideshow timeline a chain shows: on the wall clock, full-precision epoch seconds
+    /// with a fixed photo order (seed 0), so every synced renderer shows the same photo with
+    /// the same Ken Burns framing and the hourly wrap never touches it; otherwise the
+    /// instance time with this source's own random first photo.
+    private func slideClock(wall: Bool, startTime: CFTimeInterval, now: CFTimeInterval, epoch: Double) -> SlideClock {
+        wall ? SlideClock(t: epoch, seed: 0) : SlideClock(t: now - startTime, seed: nil)
     }
 
     /// Opt-in GPU accounting (live wallpaper power stats): GPU execution time of drawn
@@ -247,8 +271,14 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     private var currentMusic: MusicSnapshot { hostMusic ?? ownMusicFeed?.snapshot ?? .empty }
 
+    /// The background's track-change cross-fade (Music_cases.h: smoothstep(0, 1.6, music.w)).
+    static let musicFadeSeconds: Double = 1.6
+
     /// Poll (own feed only), and upload new artwork into this frame's command buffer ahead
-    /// of the passes that sample it. `fade` = cross-fade the background from the old art.
+    /// of the passes that sample it.
+    /// - fade: cross-fade the background from the old art (a host drawing continuously).
+    ///   false = settled: the frame shows the current art fully, finishing any fade — for a
+    ///   host that holds this frame (a still wallpaper) or a one-off render.
     private func prepareMusic(_ cmd: MTLCommandBuffer, now: CFTimeInterval, wall: Date, fade: Bool) {
         if hostMusic == nil {
             if ownMusicFeed == nil { ownMusicFeed = MusicFeed(baseDir: store.baseDir) }
@@ -260,18 +290,25 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let snap = currentMusic
         // Nothing playing (or paused past the linger) shows the idle background.
         let art = snap.state?.isVisible(at: wall, lingerMinutes: musicLingerMinutes) == true ? snap.artwork : nil
-        if art !== musicArtImage || !musicPrepared {
-            musicArtPrevTex = musicArtTex
+        if !fade {
+            musicArtPrevTex = nil
+            musicArtChangedAt = -.infinity
+        }
+        // Skipping tracks faster than the fade: let the running fade finish first, then fade
+        // to whatever is current by then (never cut from a half-faded mix).
+        let midFade = now - musicArtChangedAt < Self.musicFadeSeconds
+        if !musicPrepared || (art !== musicArtImage && !midFade) {
+            let crossfade = fade && musicPrepared       // the very first artwork just appears
+            musicArtPrevTex = crossfade ? musicArtTex : nil
             musicArtTex = art.flatMap { uploadArt($0, cmd) }
             musicArtImage = art
-            // The very first artwork just appears; later changes cross-fade.
-            musicArtChangedAt = (fade && musicPrepared) ? now : -.infinity
-            if !(fade && musicPrepared) { musicArtPrevTex = nil }
+            musicArtChangedAt = crossfade ? now : -.infinity
             musicPrepared = true
-        } else if musicArtPrevTex != nil, now - musicArtChangedAt > 2 {
+        } else if musicArtPrevTex != nil, now - musicArtChangedAt > Self.musicFadeSeconds + 0.4 {
             musicArtPrevTex = nil                          // fade done: free the old artwork
         }
-        if musicPaletteKey.0 !== snap.artwork || musicPaletteKey.1 != snap.state?.palette {
+        // The palette follows the artwork on screen (not one still waiting for its fade).
+        if art === musicArtImage, musicPaletteKey.0 !== snap.artwork || musicPaletteKey.1 != snap.state?.palette {
             musicPaletteKey = (snap.artwork, snap.state?.palette)
             musicPalette = snap.palette
         }
@@ -287,7 +324,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     }
 
     /// Per-frame Now Playing uniforms (palette, progress, artwork flags, its place on screen).
-    private func fillMusic(_ u: inout FXUniforms, size: CGSize, now: CFTimeInterval, wall: Date) {
+    private func fillMusic(_ u: inout FXUniforms, options: MusicSceneOptions, size: CGSize,
+                           now: CFTimeInterval, wall: Date) {
         let snap = currentMusic
         let flags = (musicArtTex != nil ? 1 : 0) + (musicArtPrevTex != nil ? 2 : 0)
         let visible = snap.state?.isVisible(at: wall, lingerMinutes: musicLingerMinutes) == true
@@ -301,7 +339,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
         u.musicPal0 = slot(0); u.musicPal1 = slot(1); u.musicPal2 = slot(2)
         let layout = MusicLayoutKind(rawValue: Int(u.p0.x.rounded())) ?? .album
-        let r = MusicGeometry.artUV(layout, size: size)
+        let r = MusicGeometry.artUV(layout, size: size, options: options)
         u.musicRect = simd_float4(r.x, r.y, r.w, r.h)
         if reduceMotion { u.p0.z *= 0.33 }
     }
@@ -339,7 +377,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             apply(preset, source: source)
             return
         }
-        outgoing = (current, packedUniforms, startTime)
+        outgoing = Outgoing(preset: current, packed: packedUniforms, startTime: startTime,
+                            wallSlides: timeBase == .wallClock)
         transitionBegan = CACurrentMediaTime()
         transitionDuration = duration
         apply(preset, source: source)   // shared global source ⇒ no media reload mid-fade
@@ -427,9 +466,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     /// One frame straight into a CAMetalLayer, from whichever thread owns this renderer
     /// (the live wallpaper's render thread). The layer's drawableSize is the render size.
+    /// - settled: the host will hold this frame (a still wallpaper) rather than draw the next
+    ///   one shortly: finish any crossfade in progress (style, time-base wrap, track change)
+    ///   and show the end state, instead of a first fade frame that would stay on screen.
     /// - Returns: whether a frame was encoded and committed.
     @discardableResult
-    func draw(to layer: CAMetalLayer) -> Bool {
+    func draw(to layer: CAMetalLayer, settled: Bool = false) -> Bool {
         autoreleasepool {
             let ds = layer.drawableSize
             guard preset != nil, ds.width > 0, ds.height > 0 else { return false }
@@ -444,19 +486,42 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             final.colorAttachments[0].texture = drawable.texture
             final.colorAttachments[0].loadAction = .dontCare
             final.colorAttachments[0].storeAction = .store
-            return encodeFrame(final: final, drawable: drawable, size: ds, format: layer.pixelFormat)
+            return encodeFrame(final: final, drawable: drawable, size: ds, format: layer.pixelFormat,
+                               settled: settled) != nil
         }
     }
 
-    /// Encode, present and commit one frame of the current preset into `final`.
+    /// One live frame — the same path as `draw(to:)`: time base, crossfades, slideshow
+    /// clock, track-change fade — rendered offscreen and read back. For checks in the gallery
+    /// tool; it resizes the renderer's working textures, so never call it between live draws.
+    func renderFrame(width: Int, height: Int, settled: Bool = false) -> CGImage? {
+        let fmt: MTLPixelFormat = .bgra8Unorm
+        let ds = CGSize(width: width, height: height)
+        guard preset != nil, width > 0, height > 0 else { return nil }
+        if texA == nil || texB == nil || drawableSize != ds {
+            drawableSize = ds
+            (texA, texB) = makeOffscreen(width: width, height: height, format: fmt)
+        }
+        let fd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: fmt, width: width, height: height, mipmapped: false)
+        fd.usage = [.shaderRead, .renderTarget]
+        fd.storageMode = .shared
+        guard let out = device.makeTexture(descriptor: fd) else { return nil }
+        let final = offscreenDescriptor(out)
+        guard let cmd = encodeFrame(final: final, drawable: nil, size: ds, format: fmt, settled: settled) else { return nil }
+        cmd.waitUntilCompleted()
+        return readBack(out)
+    }
+
+    /// Encode and commit one frame of the current preset into `final` (presenting
+    /// `drawable` when there is one). Returns the committed command buffer.
     @discardableResult
-    private func encodeFrame(final: MTLRenderPassDescriptor, drawable: MTLDrawable,
-                             size ds: CGSize, format: MTLPixelFormat) -> Bool {
-        guard let preset = preset, let texA = texA, let texB = texB else { return false }
+    private func encodeFrame(final: MTLRenderPassDescriptor, drawable: MTLDrawable?,
+                             size ds: CGSize, format: MTLPixelFormat, settled: Bool = false) -> MTLCommandBuffer? {
+        guard let preset = preset, let texA = texA, let texB = texB else { return nil }
 
         // Throttle frames-in-flight; released in the command buffer's completion handler.
         inFlight.wait()
-        guard let cmd = queue.makeCommandBuffer() else { inFlight.signal(); return false }
+        guard let cmd = queue.makeCommandBuffer() else { inFlight.signal(); return nil }
         cmd.addCompletedHandler { [inFlight] _ in inFlight.signal() }
         if measuresGPUTime {
             cmd.addCompletedHandler { [weak self] cb in
@@ -467,20 +532,37 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
 
         let now = CACurrentMediaTime()
-        if timeBase == .wallClock { syncWallClockOrigin(now, allowWrapFade: drewOnce) }
+        if settled, outgoing != nil {
+            outgoing = nil                       // a held frame shows where the fade ends
+            fadeOld = nil; fadeNew = nil
+        }
+        if timeBase == .wallClock { syncWallClockOrigin(now, allowWrapFade: drewOnce && !settled) }
         drewOnce = true
         let t = Float(now - startTime)
         // Now Playing: poll / upload artwork before any pass samples it.
         if preset.isMusicScene || (outgoing?.preset.isMusicScene ?? false) {
-            prepareMusic(cmd, now: now, wall: clockOverride ?? Date(), fade: true)
+            prepareMusic(cmd, now: now, wall: clockOverride ?? Date(), fade: !settled)
         } else {
             releaseMusic()
         }
-        // Slideshow state comes from the source clock, so both chains of a preset
-        // crossfade show the same photo.
-        // Scenes ignore the source, so an idle slideshow doesn't decode photos.
+        // Slideshow state comes from the source clock (see slideClock): both chains of a
+        // preset crossfade show the same photo; a time-base switch fades between the two
+        // clocks' photos. Scenes ignore the source, so an idle slideshow doesn't decode photos.
         let wantsSource = !preset.isScene || (outgoing.map { !$0.preset.isScene } ?? false)
-        let slides = wantsSource ? collection?.frame(at: now - startTime, sync: false) : nil
+        var slides: SlideFrame?
+        var outSlides: SlideFrame?
+        if wantsSource, let c = collection {
+            let epoch = Date().timeIntervalSince1970
+            let inClock = slideClock(wall: timeBase == .wallClock, startTime: startTime, now: now, epoch: epoch)
+            let outClock = outgoing.map { slideClock(wall: $0.wallSlides, startTime: $0.startTime, now: now, epoch: epoch) }
+            if let outClock, outClock != inClock {
+                let f = c.frames(at: [inClock, outClock], sync: false)
+                slides = f[0]; outSlides = f[1]
+            } else {
+                slides = c.frames(at: [inClock], sync: false)[0]
+                outSlides = slides
+            }
+        }
         let sTex = media?.currentTexture() ?? slides?.texA
         if !loggedFirstFrame {
             loggedFirstFrame = true
@@ -500,8 +582,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                     // Outgoing chain → fadeOld (its own time base keeps its motion coherent).
                     encodePasses(cmd, finalDescriptor: offscreenDescriptor(fo), pingA: texA, pingB: texB,
                                  size: drawableSize, time: Float(now - out.startTime),
-                                 preset: out.preset, source: source, sourceTex: sTex,
-                                 slides: slides, packedUniforms: out.packed)
+                                 preset: out.preset, source: source,
+                                 sourceTex: media?.currentTexture() ?? outSlides?.texA,
+                                 slides: outSlides, packedUniforms: out.packed)
                     // Incoming chain → fadeNew. The shared ping-pong is safe: the chains
                     // encode sequentially and each result is parked before the next starts.
                     encodePasses(cmd, finalDescriptor: offscreenDescriptor(fn), pingA: texA, pingB: texB,
@@ -518,10 +601,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                          size: drawableSize, time: t, preset: preset, source: source,
                          sourceTex: sTex, slides: slides, packedUniforms: packedUniforms)
         }
-        if let onPresented { drawable.addPresentedHandler { onPresented($0.presentedTime) } }
-        cmd.present(drawable)
+        if let drawable {
+            if let onPresented { drawable.addPresentedHandler { onPresented($0.presentedTime) } }
+            cmd.present(drawable)
+        }
         cmd.commit()
-        return true
+        return cmd
     }
 
     // MARK: Crossfade helpers
@@ -657,7 +742,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 }
                 MetalRenderer.fillLiveSky(&u, inst: inst!, now: wall, time: time, location: location)
                 if inst!.kind == .nowPlaying {
-                    fillMusic(&u, size: size, now: CACurrentMediaTime(), wall: wall)
+                    fillMusic(&u, options: MusicSceneOptions(inst!), size: size, now: CACurrentMediaTime(), wall: wall)
                 }
             }
 
@@ -882,7 +967,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                      preset: preset, source: source, sourceTex: thumbTex, slides: slides)
         cmd.commit()
         cmd.waitUntilCompleted()
+        return readBack(outTex)
+    }
 
+    /// A finished, CPU-readable BGRA8 render target as a CGImage.
+    private func readBack(_ outTex: MTLTexture) -> CGImage? {
+        let width = outTex.width, height = outTex.height
         let bytesPerRow = width * 4
         var bytes = [UInt8](repeating: 0, count: bytesPerRow * height)
         outTex.getBytes(&bytes, bytesPerRow: bytesPerRow,

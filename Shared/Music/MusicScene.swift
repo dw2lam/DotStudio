@@ -4,6 +4,7 @@
 
 import Foundation
 import CoreGraphics
+import CoreText
 
 /// Foreground arrangement of the Now Playing scene (the "Layout" menu).
 enum MusicLayoutKind: Int, CaseIterable {
@@ -145,13 +146,46 @@ enum MusicGeometry {
     static let albumArt: CGFloat = 0.50       // artwork side, in units
     static let albumGap: CGFloat = 0.075      // artwork → text column
     static let albumText: CGFloat = 0.56      // text column width
-    /// Stage layout: artwork side and the block (art + type) it heads.
-    static let stageArt: CGFloat = 0.44
-    static let stageBlock: CGFloat = 0.70     // art + gap + title + artist + progress, single-line title
+    /// Stage layout (Spotify TV): the type scale and gaps of the block the artwork heads, in
+    /// units — the overlay draws with these, and `stageBlock` sums them, so the reserved
+    /// block is measured, not guessed.
+    enum Stage {
+        static let art: CGFloat = 0.44
+        static let artGap: CGFloat = 0.055               // artwork → title
+        static let title: CGFloat = 0.046, titleLeading: CGFloat = 1.08, titleLines = 2
+        static let artist: CGFloat = 0.030, artistGap: CGFloat = 0.012
+        static let album: CGFloat = 0.023, albumGap: CGFloat = 0.008
+        static let barGap: CGFloat = 0.042, bar: CGFloat = 0.0058
+        static let times: CGFloat = 0.0158, timesGap: CGFloat = 0.014
+        static let caption: CGFloat = 0.0138, captionGap: CGFloat = 0.034
+    }
+
+    /// Height of one line of the system font (ascent + descent) per point of size — how
+    /// MusicText measures a single-line block. SF Pro: 0.967 + 0.211.
+    static let lineBox: CGFloat = {
+        let f = CTFontCreateUIFontForLanguage(.system, 100, nil)
+        return f.map { (CTFontGetAscent($0) + CTFontGetDescent($0)) / 100 } ?? 1.18
+    }()
+
+    /// The Stage block from the artwork's top to the caption's bottom, in units, for the
+    /// worst case (a two-line title) so the artwork never moves between tracks. Rows the
+    /// scene hides (album, progress) aren't reserved.
+    static func stageBlock(_ o: MusicSceneOptions) -> CGFloat {
+        typealias S = Stage
+        var h = S.art + S.artGap
+        h += S.title * lineBox + S.title * S.titleLeading * CGFloat(S.titleLines - 1)
+        h += S.artistGap + S.artist * lineBox
+        if o.showAlbum { h += S.albumGap + S.album * lineBox }
+        if o.showProgress { h += S.barGap + S.bar + S.timesGap + S.times * lineBox }
+        return h + S.captionGap + S.caption * lineBox
+    }
 
     /// The artwork rect in the screen's own units, top-left origin (y down). For Cover the
-    /// artwork is the whole screen.
-    static func artRect(_ layout: MusicLayoutKind, size: CGSize) -> CGRect {
+    /// artwork is the whole screen. `insets` (menu bar, Dock — the overlay's safe insets)
+    /// only move Stage, which centres its block between them; the shader passes none (its
+    /// glow behind the art is soft enough not to mind the few points).
+    static func artRect(_ layout: MusicLayoutKind, size: CGSize, options: MusicSceneOptions = MusicSceneOptions(),
+                        insets: (top: CGFloat, bottom: CGFloat) = (0, 0)) -> CGRect {
         let u = unit(size)
         switch layout {
         case .album:
@@ -162,8 +196,9 @@ enum MusicGeometry {
             let y = (size.height - s) / 2 - 0.01 * u      // optical centre: a hair above
             return CGRect(x: x, y: y, width: s, height: s)
         case .stage:
-            let s = stageArt * u
-            let top = (size.height - stageBlock * u) / 2
+            let s = Stage.art * u
+            let avail = size.height - insets.top - insets.bottom
+            let top = insets.top + max((avail - stageBlock(options) * u) / 2, min(0.02 * u, avail * 0.02))
             return CGRect(x: (size.width - s) / 2, y: top, width: s, height: s)
         case .cover:
             return CGRect(origin: .zero, size: size)
@@ -171,9 +206,10 @@ enum MusicGeometry {
     }
 
     /// The artwork rect as uv (x, y from the top, w, h) for the shader.
-    static func artUV(_ layout: MusicLayoutKind, size: CGSize) -> (x: Float, y: Float, w: Float, h: Float) {
+    static func artUV(_ layout: MusicLayoutKind, size: CGSize,
+                      options: MusicSceneOptions = MusicSceneOptions()) -> (x: Float, y: Float, w: Float, h: Float) {
         guard size.width > 0, size.height > 0 else { return (0, 0, 0, 0) }
-        let r = artRect(layout, size: size)
+        let r = artRect(layout, size: size, options: options)
         return (Float(r.minX / size.width), Float(r.minY / size.height),
                 Float(r.width / size.width), Float(r.height / size.height))
     }

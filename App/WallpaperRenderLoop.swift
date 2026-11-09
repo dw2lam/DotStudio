@@ -293,9 +293,11 @@ final class WallpaperRenderLoop {
             return
         }
         // A fresh frame now when something changed or we're resuming from a hold;
-        // a running display link just keeps going.
-        if forceDraw || plan == .none { drawVisible() }
-        setPlan(currentPlan())
+        // a running display link just keeps going. A frame the next plan will hold shows
+        // the end of any fade it would start (a track change, a time-base switch).
+        let next = currentPlan()
+        if forceDraw || plan == .none { drawVisible(settled: !next.isContinuous) }
+        setPlan(next)
     }
 
     private func currentPlan() -> WallpaperPacing.Plan {
@@ -359,19 +361,22 @@ final class WallpaperRenderLoop {
         }
     }
 
-    private func drawVisible() {
+    /// - settled: the frame will be held (no display link runs after it), so it must show
+    ///   the end state of any crossfade rather than its first frame.
+    private func drawVisible(settled: Bool) {
         // A new display draws its first frame even before its occlusion state settles,
         // so it can fade in over the system wallpaper with real content.
         for s in surfaces.values where state.visible.contains(s.id) || !s.hasDrawn {
-            draw(s, fromLink: false)
+            draw(s, fromLink: false, settled: settled)
         }
         noteStats()
     }
 
-    private func draw(_ s: Surface, fromLink: Bool) {
+    private func draw(_ s: Surface, fromLink: Bool, settled: Bool = false) {
         let pacing = s.pacing
         s.renderer.onPresented = (debug && fromLink) ? { pacing.presented($0) } : nil
-        let drawn = s.warming ? boosted { s.renderer.draw(to: s.layer) } : s.renderer.draw(to: s.layer)
+        let drawn = s.warming ? boosted { s.renderer.draw(to: s.layer, settled: settled) }
+                              : s.renderer.draw(to: s.layer, settled: settled)
         guard drawn else { return }
         s.warming = false
         framesDrawn += 1
@@ -407,8 +412,9 @@ final class WallpaperRenderLoop {
             clockTickLatest = max(clockTickLatest, Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 1))
         }
         guard state.canDraw else { setPlan(.none); return }
-        drawVisible()
-        setPlan(currentPlan())
+        let next = currentPlan()
+        drawVisible(settled: !next.isContinuous)
+        setPlan(next)
     }
 
     /// A video source keeps decoding on its own clock; stop it with the frame loop.

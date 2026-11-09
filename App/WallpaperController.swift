@@ -107,6 +107,7 @@ final class WallpaperController: ObservableObject {
     /// Bring back the wallpaper the user left on (applicationDidFinishLaunching).
     func restore() {
         applyDevOverrides()
+        syncLibraryTimeBase()
         if settings.enabled { start() }
     }
 
@@ -127,17 +128,16 @@ final class WallpaperController: ObservableObject {
     /// "Match Screensaver": the wallpaper shows what the screensaver would show right now
     /// (Playback.effectivePreset with the same music take-over), re-evaluated at rotation
     /// slot boundaries with the rotation's crossfade, on the shared wall-clock time base —
-    /// and sets `Library.syncTimeBase` so the screensaver uses that time base too, starting
-    /// on exactly the frame the desktop shows. Off: back to `presetID`, per-instance time
-    /// (the library flag is cleared). Turns the wallpaper on when switching on.
+    /// and `Library.syncTimeBase` is set so the screensaver uses that time base too, starting
+    /// on exactly the frame the desktop shows. Off: back to `presetID` (adopting the style on
+    /// screen when none was ever picked), per-instance time. Turns the wallpaper on when
+    /// switching on.
     func setFollowsScreensaver(_ on: Bool) {
-        if let model, (model.library.syncTimeBase ?? false) != on {
-            model.library.syncTimeBase = on ? true : nil
-            model.save()
-        }
+        let keep = on ? nil : styleToKeep()
         update {
             $0.followsScreensaver = on
             if on { $0.enabled = true }
+            if let keep { $0.presetID = keep }
         }
         if on {
             userPaused = false
@@ -146,6 +146,25 @@ final class WallpaperController: ObservableObject {
     }
 
     var followsScreensaver: Bool { settings.followsScreensaver }
+
+    /// Leaving Match Screensaver: keep the chosen style if it still exists, else the style
+    /// the desktop shows now (when it's a library style), else the active one.
+    private func styleToKeep() -> UUID? {
+        guard let lib = model?.library else { return nil }
+        func exists(_ id: UUID?) -> UUID? { id.flatMap { id in lib.presets.contains { $0.id == id } ? id : nil } }
+        if exists(settings.presetID) != nil { return nil }
+        return exists(applied?.preset.id) ?? exists(lib.activeID) ?? lib.presets.first?.id
+    }
+
+    /// `Library.syncTimeBase` mirrors "a wallpaper is matching the screensaver": the saver uses
+    /// the wall-clock time base exactly while one is (so a lone saver keeps per-instance time).
+    private func syncLibraryTimeBase() {
+        guard let model else { return }
+        let want: Bool? = (settings.enabled && settings.followsScreensaver) ? true : nil
+        guard model.library.syncTimeBase != want else { return }
+        model.library.syncTimeBase = want
+        model.save()
+    }
 
     func stop() {
         update { $0.enabled = false }
@@ -180,6 +199,7 @@ final class WallpaperController: ObservableObject {
         let old = settings
         settings = s
         if let url = settingsURL { s.save(to: url) }
+        syncLibraryTimeBase()
         guard s.enabled, !hosts.isEmpty else { return }
         if s.followsScreensaver != old.followsScreensaver {
             applyTimeBase()
@@ -430,12 +450,14 @@ final class WallpaperController: ObservableObject {
         musicSnapshot = snap
         if changed { renderLoop?.setMusic(snap, lingerMinutes: ms.linger) }
         let active = snap.isVisible(settings: ms)
-        if active != musicActive {
+        let flipped = active != musicActive
+        if flipped {
             musicActive = active
             if settings.followsScreensaver && ms.takesOver { applyStyle(fade: true) }
         }
-        // A new cover shows even while the background holds a frame.
-        if changed, currentPreset?.isMusicScene == true { reevaluate(forceDraw: true) }
+        // A new cover — or music starting, or the paused linger running out — shows even
+        // while the background holds a frame (that forced frame is drawn settled).
+        if changed || flipped, currentPreset?.isMusicScene == true { reevaluate(forceDraw: true) }
         updateMusicOverlays(animated: true)
     }
 
