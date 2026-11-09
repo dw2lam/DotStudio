@@ -5,7 +5,8 @@
 
     case 62: { // NEON HORIZON — a glossy black floor ruled by a neon grid, racing toward a
                // striped sun over two ranges of backlit mountains. The floor mirrors the sky
-               // (Fresnel-weighted, glossy-blurred, sun stretched into a wet streak).
+               // (Fresnel-weighted; the sun's mirror image blurs and spreads into a soft glossy
+               // lobe toward the viewer, broken by fine ripples).
                // p0 = (speed, grid, mountains, sun), p1 = (haze, stars); A neon, B sun.
         float speed = u.p0.x, dens = max(u.p0.y, 0.2), sunK = max(u.p0.w, 0.2);
         float hazeK = u.p1.x;
@@ -19,7 +20,7 @@
         s.haze = mix(s.sunBot, s.neon, 0.6) * (0.03 + 0.055 * hazeK);
         s.mtnDark = s.top * 0.5 + s.neon * 0.002;
         s.sunR = 0.25 * sunK; s.sunY = 0.13 * sunK + 0.02;
-        s.mtn = u.p0.z; s.stripes = 1.0; s.stars = u.p1.y; s.clouds = 1.0; s.t = t; s.sunGain = 1.0;
+        s.mtn = u.p0.z; s.stripes = 1.0; s.stars = u.p1.y; s.clouds = 1.0; s.t = t; s.sunGain = 1.0; s.sunBlur = 0.0;
 
         const float hy = -0.06;                                  // horizon, in screen units
         float pix = 1.0 / res.y;
@@ -65,11 +66,21 @@
             float ks = smoothstep(0.45, 0.12, fwp * 6.0);
             sliver = mix(0.55, smoothstep(-0.25, 0.35, gnoise(wp * float2(0.35, 6.0) + float2(0.0, t * 0.3))), ks);
             s.sunGain = 2.2;                       // the sun is far brighter than its LDR disc
+            s.sunBlur = 0.004 + 0.35 * -qy;          // glossy blur of the sun widens toward the viewer
         }
         // one sky lookup per pixel: the sky itself above the horizon, its mirror image below
-        float3 sky = retro_synthSky(up ? q : qr, up ? pix : pix + 0.05 * -qy,
-                                    up ? 1.0 : 1.0 + 1.2 * smoothstep(0.0, 0.25, -qy), up ? 1.0 : 0.0, s);
+        float3 sky = retro_synthSky(up ? q : qr, up ? pix : pix + 0.002 + 0.03 * -qy,
+                                    up ? 1.0 : 1.0 + 0.3 * smoothstep(0.0, 0.25, -qy), up ? 1.0 : 0.0, s);
         float3 floorC = s.top * 0.3 + sky * F * 0.5 * (0.18 + 1.1 * sliver);
+        if (!up) {
+            // the rough part of the gloss: a soft lobe of sunlight under the mirrored disc,
+            // widening and fading toward the viewer (so the reflection glows, never a cut-out)
+            float e = -qy;
+            float lw = s.sunR * (0.8 + 1.2 * e);
+            float lob = exp(-q.x * q.x / (lw * lw));
+            float3 sc = mix(s.sunMid, s.sunBot, 0.4) * s.sunGain;
+            floorC += sc * lob * 0.8 * F * exp(-e / 0.3) * (0.6 + 0.6 * sliver);
+        }
         floorC += s.neon * gridE;
         float fog = 1.0 - exp(-tf * 0.035 * (0.4 + hazeK));
         floorC = mix(floorC, s.haze * 1.3, fog);

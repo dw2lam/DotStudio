@@ -105,14 +105,21 @@
         // ---- front wax: blobs + pool + cap (+ glue), with the analytic gradient
         float2 mound;
         float3 Fb = flowing_lavaField(p, ts, nb, size, 0.0, aspect * 0.86, mound);
-        float H = -0.405 + 0.024 * sin(p.x * 2.3 + ts * 1.1) + 0.011 * sin(p.x * 5.3 - ts * 1.7 + 2.0)
+        float H = -0.43 + 0.024 * sin(p.x * 2.3 + ts * 1.1) + 0.011 * sin(p.x * 5.3 - ts * 1.7 + 2.0)
                 + 0.004 * sin(p.x * 11.0 + ts * 2.3 + 4.0);
         float dH = 0.0552 * cos(p.x * 2.3 + ts * 1.1) + 0.0583 * cos(p.x * 5.3 - ts * 1.7 + 2.0)
                  + 0.044 * cos(p.x * 11.0 + ts * 2.3 + 4.0);
-        H += 0.032 * mound.x; dH += 0.032 * mound.y;
-        float xp = clamp((H - p.y) / 0.14 + 0.34, 0.0, 1.0);           // crosses T at y = H
-        float pool = 1.2 * xp * xp * (3.0 - 2.0 * xp);
-        float2 gPool = (1.2 * 6.0 * xp * (1.0 - xp) / 0.14) * float2(dH, -1.0);
+        H += 0.045 * mound.x; dH += 0.045 * mound.y;              // the pool swells under settling blobs
+        // pool profile in depth s below the surface: an exponential tail above it (a metaball
+        // falloff, so blobs neck into it the way they neck into each other) and a long, gentle
+        // rise below it (C¹ at the surface), so its rim never prints a ledge through a blob
+        const float poolLa = 0.035, poolA = 0.8, poolLb = poolA * poolLa / 0.32;   // T / La = A / Lb
+        float sP = H - p.y;
+        float tailP = 0.32 * exp(min(sP, 0.0) / poolLa);
+        float riseP = poolA * (1.0 - exp(-max(sP, 0.0) / poolLb));
+        float pool = tailP + riseP;
+        float dPool = sP < 0.0 ? tailP / poolLa : (poolA / poolLb) * (1.0 - riseP / poolA);
+        float2 gPool = dPool * float2(dH, -1.0);
         float Hc = 0.505 + 0.006 * sin(p.x * 3.0 - ts * 1.5);
         float xq = clamp((p.y - Hc) / 0.12 + 0.47, 0.0, 1.0);
         float cap = 0.7 * xq * xq * (3.0 - 2.0 * xq);
@@ -156,18 +163,18 @@
 
         // ---- shade front wax
         float3 ld = normalize(float3(-p.x * 0.25, -1.0, 0.45));
-        float wrap = clamp((dot(n, ld) + 0.55) / 1.55, 0.0, 1.0);
+        float wrap = clamp((dot(n, ld) + 0.8) / 1.8, 0.0, 1.0);          // wax scatters: soft terminator
         float hot = exp(-(p.y + 0.5) * 3.0);                       // wax near the bulb runs hotter
-        float3 waxH = flowing_oklabToLinear(oklabHue(srgbToOklab(u.colorB.rgb), 0.35 * hot) + float3(0.06 * hot, 0.0, 0.0));
+        float3 waxH = flowing_oklabToLinear(oklabHue(srgbToOklab(u.colorB.rgb), 0.42 * hot) + float3(0.08 * hot, 0.0, 0.0));
         float3 trans = pow(waxH, float3(0.8 + 1.8 * thick));      // thick wax deepens & saturates
-        float edge = 1.0 - n.z;
+        float edge = max(1.0 - n.z, 0.0);                          // n.z can round above 1: no NaN
         float rimLit = pow(edge, 1.5) * clamp(-dir.y * 0.8 + 0.3, 0.0, 1.0);
         float thin = (1.0 - thick) * (1.0 - thick);                 // thin wax lets the lamp through
-        float3 waxCol = lamp * (waxH * wrap * 0.55 + trans * (0.35 + 0.6 * wrap) + waxH * (rimLit * 0.9 + thin * 0.22))
+        float3 waxCol = lamp * (waxH * wrap * 0.55 + trans * (0.45 + 0.6 * wrap) + waxH * (rimLit * 0.9 + thin * 0.22))
                       + wax * 0.03;
         float3 r = float3(2.0 * n.z * n.xy, 2.0 * n.z * n.z - 1.0);
         float fres = 0.04 + 0.96 * pow(edge, 5.0);
-        float3 spec = flowing_lavaEnv(r, warm) * mix(0.05, 1.0, fres) * gloss * 1.3;
+        float3 spec = flowing_lavaEnv(r, warm) * mix(0.03, 1.0, fres) * gloss * 1.3;
         waxCol += spec;
         col = mix(col, waxCol, cover);
 
