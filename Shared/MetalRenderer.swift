@@ -38,7 +38,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     // Thumbnail/export slideshows (no eviction), keyed by decode size class.
     private var thumbCollections: [Int: CollectionSource] = [:]
     private let store: SharedStore
-    var location: (lat: Double, lon: Double)?      // resolved device location (Universe marker)
+    var location: (lat: Double, lon: Double)?      // resolved device location (Universe marker, live sky)
+    /// Renders as if the wall clock read this instead of now (offscreen gallery only).
+    var clockOverride: Date?
 
     // Per-effect uniforms packed once at apply(); per frame only the dynamic
     // fields (time/resolution/srcSize/astro) are overwritten on a copy.
@@ -359,7 +361,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             u.resolution = res
             u.time = time
             u.glyphCount = Int32(GlyphAtlas.count)
-            (u.clock, u.date) = MetalRenderer.wallClock()
+            let wall = clockOverride ?? Date()
+            (u.clock, u.date) = MetalRenderer.wallClock(wall)
             u.srcSize = simd_float2(Float(fragInput.width), Float(fragInput.height))
             u.fillMode = Int32(source.fillMode)
 
@@ -394,6 +397,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                     let orbits: Float = (inst!.params["orbits"] ?? 1) > 0.5 ? 1 : 0
                     u.p2 = simd_float4(a.userLon, a.userLat, a.hasLoc ? 1 : 0, orbits)
                 }
+                MetalRenderer.fillLiveSky(&u, inst: inst!, now: wall, time: time, location: location)
             }
 
             enc.setFragmentBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
@@ -452,6 +456,73 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let a = astro(location: location)
         let s = Double(sin(a.userLat)) * Double(a.sun.y) + Double(cos(a.userLat)) * Double(a.sun.z)
         return asin(max(-1, min(1, s)))
+    }
+
+    // MARK: Live sky (Ocean Horizon "Follow the Sun")
+
+    /// Fills u.sun / u.moon / u.sky for an Ocean Horizon following the real sun; leaves
+    /// them zero for anything else. Time Lapse (minutes per simulated day, 0 = real time)
+    /// runs the clock forward from `now` by the scene's own time.
+    static func fillLiveSky(_ u: inout FXUniforms, inst: EffectInstance, now: Date, time: Float,
+                            location: (lat: Double, lon: Double)?) {
+        guard inst.kind == .oceanHorizon, (inst.params["live"] ?? 0) > 0.5 else { return }
+        let lapse = inst.params["lapse"] ?? 0
+        let rate = lapse > 0.05 ? 1440.0 / lapse : 1.0           // simulated s per real s
+        let date = now.addingTimeInterval(Double(time) * (rate - 1))
+        let s = liveSky(at: date, location: location)
+        u.sun = s.sun; u.moon = s.moon; u.sky = s.sky
+    }
+
+    /// Low-precision sun and moon for `date` (NOAA / Meeus-style mean elements, ~0.01° sun,
+    /// ~0.3° moon — sunrise/sunset good to a minute or two). Without a resolved location it
+    /// assumes 40° N on the time zone's meridian, like astro().
+    static func liveSky(at date: Date, location: (lat: Double, lon: Double)?)
+        -> (sun: simd_float4, moon: simd_float4, sky: simd_float4) {
+        let d2r = Double.pi / 180
+        func wrapPi(_ x: Double) -> Double { let a = fmod(fmod(x + .pi, 2 * .pi) + 2 * .pi, 2 * .pi); return a - .pi }
+        // Hour angle at which a body of declination `dec` crosses altitude h0 (0…π; π = never sets, 0 = never rises).
+        func halfArc(_ lat: Double, _ dec: Double, _ h0: Double) -> Double {
+            acos(max(-1, min(1, (sin(h0) - sin(lat) * sin(dec)) / max(cos(lat) * cos(dec), 1e-9))))
+        }
+        // Atmospheric refraction (Bennett), faded out below −1° so it stays continuous.
+        func refracted(_ h: Double) -> Double {
+            let hd = max(h / d2r, -1)
+            let r = 1.02 / tan((hd + 10.3 / (hd + 5.11)) * d2r) / 60 * d2r
+            return h + r * max(0, min(1, 1 + (h / d2r + 1) / 2))
+        }
+        let latDeg = location?.lat ?? 40
+        let lonDeg = location?.lon ?? (Double(TimeZone.current.secondsFromGMT(for: date)) / 3600 * 15)
+        let lat = latDeg * d2r
+        let n = date.timeIntervalSince1970 / 86400 - 10957.5           // days since J2000.0
+        let eps = (23.439 - 4e-7 * n) * d2r
+        let lst = (280.46061837 + 360.98564736629 * n + lonDeg) * d2r
+
+        // Sun: mean longitude + equation of centre → ecliptic longitude → RA/Dec.
+        let L = (280.460 + 0.9856474 * n) * d2r, g = (357.528 + 0.9856003 * n) * d2r
+        let lamS = L + (1.915 * sin(g) + 0.020 * sin(2 * g)) * d2r
+        let raS = atan2(cos(eps) * sin(lamS), cos(lamS)), decS = asin(sin(eps) * sin(lamS))
+        let Hs = wrapPi(lst - raS)
+        let hs = asin(sin(lat) * sin(decS) + cos(lat) * cos(decS) * cos(Hs))
+
+        // Moon: mean elements + the six largest periodic terms, topocentric parallax.
+        let Lm = (218.316 + 13.176396 * n) * d2r, Mm = (134.963 + 13.064993 * n) * d2r
+        let F = (93.272 + 13.229350 * n) * d2r, D = (297.850 + 12.190749 * n) * d2r
+        let lamM = Lm + (6.289 * sin(Mm) + 1.274 * sin(2 * D - Mm) + 0.658 * sin(2 * D) + 0.214 * sin(2 * Mm)
+                         - 0.186 * sin(g) - 0.114 * sin(2 * F)) * d2r
+        let betM = (5.128 * sin(F) + 0.281 * sin(Mm + F) + 0.278 * sin(Mm - F) + 0.173 * sin(2 * D - F)) * d2r
+        let dist = 385001 - 20905 * cos(Mm)                              // km
+        let xm = cos(betM) * cos(lamM), ym = cos(betM) * sin(lamM), zm = sin(betM)
+        let raM = atan2(ym * cos(eps) - zm * sin(eps), xm), decM = asin(ym * sin(eps) + zm * cos(eps))
+        let Hm = wrapPi(lst - raM)
+        var hm = asin(sin(lat) * sin(decM) + cos(lat) * cos(decM) * cos(Hm))
+        hm -= asin(6378.0 / dist) * cos(hm)
+        // Elongation from the sun, 0…2π (past π = waning).
+        var elong = acos(max(-1, min(1, cos(betM) * cos(lamM - lamS))))
+        if wrapPi(lamM - lamS) < 0 { elong = 2 * .pi - elong }
+
+        return (simd_float4(Float(refracted(hs)), Float(Hs), Float(halfArc(lat, decS, -0.833 * d2r)), Float(lat)),
+                simd_float4(Float(refracted(hm)), Float(Hm), Float(halfArc(lat, decM, 0.125 * d2r)), Float(elong)),
+                simd_float4(Float(wrapPi(lst)), 1, 0, 0))
     }
 
     // MARK: Serial dither (compute)

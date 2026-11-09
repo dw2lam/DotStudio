@@ -3,101 +3,10 @@
 //  In scope: uv, res, px, t (seconds), u (FXUniforms incl. u.clock / u.date), src, glyphs,
 //  samp, base, L. Scenes ignore src/base.
 
-    case 59: { // OCEAN HORIZON — golden-hour sea and sky (see nature_ocean* in Nature_funcs.h).
-               // p0 = (speed, sun elevation °, sea state, clouds)  p1.x = haze
-               // colorA deep water, colorB sunlight tint.
-        float speed = u.p0.x, waves = clamp(u.p0.z, 0.0, 1.0), haze = clamp(u.p1.x, 0.0, 1.0);
-        float aspect = res.x / res.y;
-        float2 sp = float2((uv.x - 0.5) * 2.0 * aspect, (0.5 - uv.y) * 2.0);
-        const float F = 1.65, pitch = 0.055;
-        float3 fwd = float3(0.0, sin(pitch), cos(pitch));
-        float3 up = float3(0.0, cos(pitch), -sin(pitch));
-        float3 rd = normalize(fwd * F + float3(1.0, 0.0, 0.0) * sp.x + up * sp.y);
-
-        NatureOceanP P;
-        P.se = u.p0.y * 0.0174533;
-        const float saz = 0.16;
-        P.sd = float3(sin(saz) * cos(P.se), sin(P.se), cos(saz) * cos(P.se));
-        P.esun = srgbToLinear(u.colorB.rgb) * 9.5;
-        P.mie = 0.008 + 0.065 * haze;
-        P.tauS = NATURE_RAYLEIGH + P.mie;
-        P.tauT = P.tauS + float3(0.016, 0.047, 0.002) + 0.02 * haze;
-        P.clouds = clamp(u.p0.w, 0.0, 1.0);
-        P.tc = t * speed * 0.004;
-        P.pix = 2.0 / (res.y * F);
-        float3 Tsun = exp(-P.tauT * nature_airmass(P.se));
-
-        float3 col;
-        if (rd.y > 0.0) {
-            float3 sky = nature_oceanAtmos(rd, P);
-            // Sun disc (flattened by refraction near the horizon), limb-darkened.
-            float3 dv = rd - P.sd;
-            float flat = mix(0.82, 1.0, smoothstep(0.0, 0.08, P.se));
-            float ad = length(float2(dv.x, dv.y / flat));
-            const float R = 0.0075;
-            float disc = smoothstep(R + P.pix, R - P.pix, ad);
-            float limb = sqrt(max(1.0 - (ad / R) * (ad / R), 0.0));
-            sky += P.esun * Tsun * disc * (0.45 + 0.55 * limb) * 60.0;
-            col = nature_oceanClouds(rd, sky, P, 5);
-        } else {
-            const float camH = 4.0;
-            float dist = camH / -rd.y;
-            float2 w = rd.xz * dist;
-            float foot = dist * P.pix / sqrt(max(-rd.y, 0.004));
-            float ts = t * speed;
-            float2 slope = float2(0.0);
-            float unres = 0.0;
-            float steep = 0.028 + 0.07 * waves;
-            // Wind sea from the sun's side (crests roll toward the camera) plus a cross swell.
-            for (int i = 0; i < 17; ++i) {
-                float4 W = NATURE_WAVES[i];                  // direction, phase, wavelength
-                float2 dir = W.xy;
-                float lam = W.w;
-                float k = 6.2831853 / lam;
-                float s = steep * (i < 3 ? 0.5 + 0.8 * waves : (i < 11 ? 0.62 : 0.55));
-                float rs = smoothstep(1.5 * foot, 5.0 * foot, lam);
-                float ph = dot(w, dir) * k - sqrt(9.81 * k) * ts + W.z;
-                slope += dir * cos(ph) * s * rs;
-                unres += (1.0 - rs) * s * s * 0.5;
-            }
-            float3 n = normalize(float3(-slope.x, 1.0, -slope.y));
-            float3 v = -rd;
-            float3 rr = reflect(rd, n);
-            // Unresolved roughness: facets tilted toward the eye dominate what we see, so a rough
-            // patch mirrors sky from higher up (darker, bluer) than a flat mirror would.
-            rr.y = abs(rr.y) + 0.002 + 1.1 * sqrt(unres + 0.0004);
-            rr = normalize(rr);
-            float F0 = nature_schlick(max(dot(n, v), 0.0));
-            float3 sky = nature_oceanAtmos(rr, P);
-            float3 refl = nature_oceanClouds(rr, sky, P, 2);
-            // Sun glitter: Beckmann lobe over the unresolved slope variance.
-            float sig2 = 0.0005 + 0.003 * waves + unres + 0.006 * (1.0 - exp(-dist / 150.0));
-            float3 h = normalize(P.sd + v);
-            float hn = max(dot(h, n), 1e-3);
-            float t2 = (1.0 - hn * hn) / (hn * hn);
-            float D = exp(-t2 / sig2) / (NATURE_PI * sig2 * hn * hn * hn * hn);
-            float Fh = nature_schlick(max(dot(h, v), 0.0));
-            float sunUp = smoothstep(-0.012, 0.004, P.se);
-            // Sparkle: sub-pixel facets catching the sun, flickering as the sea moves.
-            float sp = pcg3(float3(floor(w * 3.0 / max(foot, 0.02)), floor(ts * 6.0))).x;
-            float spark = 0.6 + 3.5 * smoothstep(0.9, 1.0, sp);
-            float3 glint = P.esun * Tsun * sunUp * Fh * D * spark / (4.0 * max(dot(n, v), 0.08)) * 0.1;
-            // Light scattered up out of the water body.
-            float3 deep = srgbToLinear(u.colorA.rgb);
-            // Skylight on the water ≈ the sky it reflects (already in hand), a bit bluer.
-            float3 hz = nature_oceanAtmos(normalize(float3(rd.x, 0.004, rd.z)), P);
-            float3 body = deep * (sky * float3(0.9, 1.0, 1.15) + P.esun * Tsun * 0.04 * max(P.sd.y + 0.1, 0.0));
-            // Smith-style masking: on rough water at grazing angles, much of the mirror is
-            // hidden behind wave crests, so the far sea sits darker than the sky it reflects.
-            float G = 1.0 / (1.0 + 0.5 * sqrt(unres + 0.0015) / max(-rd.y, 0.004));
-            col = refl * F0 * G + body * (1.0 - F0 * G) + glint;
-            // Haze over distance, toward the horizon's own colour.
-            col = mix(col, hz, 1.0 - exp(-dist * (0.00004 + 0.00012 * haze)));
-        }
-        // Partial white balance toward the low sun (as a camera would): gold, not red.
-        float3 wb = Tsun / max(max(Tsun.r, Tsun.g), 1e-4);
-        col /= mix(float3(1.0), max(wb, 0.05), 0.12);
-        return float4(nature_display(col, px), 1.0);
+    case 59: { // OCEAN HORIZON — golden-hour sea and sky; Follow the Sun: the real day and night.
+               // See nature_ocean in Nature_funcs.h.
+        if (nature_live(u)) return nature_oceanLive(uv, res, px, t, u);
+        return nature_ocean(uv, res, px, t, u, false);
     }
 
     case 60: { // NIGHT SKY — tonight's sky from 40°N: real sidereal orientation from the
