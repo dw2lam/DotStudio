@@ -113,11 +113,9 @@ struct LibraryView: View {
         let all = model.library.presets
         guard matcher.isFiltering else {
             return [
-                GallerySection(kind: .scenes, title: "Scenes",
-                               subtitle: "Ready-made generative pieces. Nothing to set up.",
+                GallerySection(kind: .scenes, title: "Scenes", subtitle: "",
                                presets: all.filter(\.isScene)),
-                GallerySection(kind: .looks, title: "Looks",
-                               subtitle: "Effects that restyle your source — a photo slideshow, a photo, a video or a gradient.",
+                GallerySection(kind: .looks, title: "Looks", subtitle: "",
                                presets: all.filter { !$0.isScene }),
             ]
         }
@@ -240,11 +238,13 @@ private struct SectionHeader: View {
             Text(section.title)
                 .textRole(.sectionTitle)
                 .wrapping()
-            Text(section.subtitle)
-                .textRole(.callout)
-                .foregroundStyle(.secondary)
-                .wrapping()
-                .contentTransition(.numericText())
+            if !section.subtitle.isEmpty {   // only search/filter results carry one (a count)
+                Text(section.subtitle)
+                    .textRole(.callout)
+                    .foregroundStyle(.secondary)
+                    .wrapping()
+                    .contentTransition(.numericText())
+            }
         }
         .readableWidth(layout)
     }
