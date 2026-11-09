@@ -220,7 +220,8 @@ struct SettingsView: View {
 // MARK: - General
 
 /// How DotStudio runs: in the menu bar when its window is closed (menu-bar mode, on by
-/// default — AppPresence), and whether it opens at login (where it starts in the menu bar).
+/// default — AppPresence), and whether it opens at login (quietly in the menu bar in
+/// menu-bar mode, else with its window — the footer says which).
 struct GeneralSettingsSection: View {
     @ObservedObject private var presence = AppPresence.shared
     @State private var loginStatus = SMAppService.mainApp.status
@@ -247,8 +248,11 @@ struct GeneralSettingsSection: View {
                 SettingsNote(presence.menuBarMode
                     ? "Closing the window takes DotStudio out of the Dock; it keeps running in the menu bar, so your live wallpaper keeps playing. Open or quit it from there."
                     : "Closing the window quits DotStudio — unless a live wallpaper is playing; then it stays in the menu bar until you stop it.")
-                if opensAtLogin && presence.menuBarMode {
-                    SettingsNote("At login it starts quietly in the menu bar, without opening its window.")
+                if opensAtLogin {
+                    // What a login launch does (AppPresence.decideLaunch).
+                    SettingsNote(presence.menuBarMode
+                        ? "At login it starts quietly in the menu bar, without opening its window."
+                        : "At login it opens its window — or, if your live wallpaper was on, starts quietly in the menu bar and keeps it playing.")
                 }
             }
         }
