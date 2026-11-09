@@ -78,7 +78,7 @@
 
     case 55: { // LAVA LAMP — metaball wax lit by a lamp below. One smooth field holds the blobs,
                // the heaving pool they rise from and a thin layer under the cap; a glue term
-               // (blob × pool) fillets every neck so no specks of liquid get trapped. Normals come
+               // (blob–pool harmonic mean) fillets every neck so no specks of liquid get trapped. Normals come
                // from the field itself (n ∝ (−K∇F, √(F−T))), so domes, necks and saddles all shade
                // smoothly. Wrap diffuse + thickness-dependent transmission, glossy reflections of a
                // soft studio, a hazy defocused back layer, behind curved glass.
@@ -103,11 +103,13 @@
         float3 warm = wax * 0.7 + float3(0.30, 0.18, 0.08);
 
         // ---- front wax: blobs + pool + cap (+ glue), with the analytic gradient
-        float3 Fb = flowing_lavaField(p, ts, nb, size, 0.0, aspect * 0.86);
+        float2 mound;
+        float3 Fb = flowing_lavaField(p, ts, nb, size, 0.0, aspect * 0.86, mound);
         float H = -0.405 + 0.024 * sin(p.x * 2.3 + ts * 1.1) + 0.011 * sin(p.x * 5.3 - ts * 1.7 + 2.0)
                 + 0.004 * sin(p.x * 11.0 + ts * 2.3 + 4.0);
         float dH = 0.0552 * cos(p.x * 2.3 + ts * 1.1) + 0.0583 * cos(p.x * 5.3 - ts * 1.7 + 2.0)
                  + 0.044 * cos(p.x * 11.0 + ts * 2.3 + 4.0);
+        H += 0.032 * mound.x; dH += 0.032 * mound.y;
         float xp = clamp((H - p.y) / 0.14 + 0.34, 0.0, 1.0);           // crosses T at y = H
         float pool = 1.2 * xp * xp * (3.0 - 2.0 * xp);
         float2 gPool = (1.2 * 6.0 * xp * (1.0 - xp) / 0.14) * float2(dH, -1.0);
@@ -115,9 +117,14 @@
         float xq = clamp((p.y - Hc) / 0.12 + 0.47, 0.0, 1.0);
         float cap = 0.7 * xq * xq * (3.0 - 2.0 * xq);
         float2 gCap = (0.7 * 6.0 * xq * (1.0 - xq) / 0.12) * float2(-0.018 * cos(p.x * 3.0 - ts * 1.5), 1.0);
-        float glueK = 1.8;
-        float F = Fb.x + pool + cap + glueK * Fb.x * pool;
-        float2 g = Fb.yz + gPool + gCap + glueK * (Fb.yz * pool + Fb.x * gPool);
+        // glue: a harmonic-mean bridge (≈ the smaller of the two near a junction, 0 away from
+        // one), so a blob settling into the pool fills the gap instead of trapping a speck
+        const float glueK = 1.6;
+        float gS = Fb.x + pool + 0.08;
+        float glue = glueK * Fb.x * pool / gS;
+        float2 gGlue = glueK * (Fb.yz * pool * (gS - Fb.x) + gPool * Fb.x * (gS - pool)) / (gS * gS);
+        float F = Fb.x + pool + cap + glue;
+        float2 g = Fb.yz + gPool + gCap + gGlue;
         const float T = 0.32;
         float wF = pix * (length(g * float2(dpx, 1.0)) + 1.2);    // field change across ~a pixel
         float cover = clamp((F - T) / (1.3 * wF) + 0.5, 0.0, 1.0);
@@ -134,7 +141,8 @@
 
         // ---- back layer, seen through the liquid (and refracted through the front wax)
         float2 pb = p * 1.18 + float2(0.21, 0.04) + n.xy * cover * 0.05;
-        float3 Fk = flowing_lavaField(pb, ts * 0.8 + 11.0, max(nb / 2 + 1, 2), size * 1.1, 37.0, aspect * 1.1);
+        float2 moundB;
+        float3 Fk = flowing_lavaField(pb, ts * 0.8 + 11.0, max(nb / 2 + 1, 2), size * 1.1, 37.0, aspect * 1.1, moundB);
         float glb = length(Fk.yz) + 1.2;
         float sdb = (T - Fk.x) / glb;
         float coverB = smoothstep(0.020, -0.026, sdb);
@@ -239,7 +247,7 @@
                 // the vortex pair (ring cross-section), slightly behind the front, unequal strengths
                 float G = (0.45 + 0.75 * curl) * (3.5 + 4.5 * h2.x) * (1.0 - exp(-4.0 * a));
                 float rc2 = 0.30 * grow * grow;
-                float sv = 0.92 * grow;
+                float sv = (0.82 + 0.22 * h2.x) * grow;
                 float2 cL = float2(-sv, -0.32 * sv), cR = float2(sv, -0.32 * sv);
                 float2 dc = d;
                 if (split > 1e-3) {
@@ -257,7 +265,7 @@
                 e += (0.10 + 0.30 * a) * grow * wn;
                 // the cap: a dome-shaped shell, seen side on — denser where the sheet turns
                 // edge-on (its rolled rim and its leading face), translucent across the middle
-                float2 m = e / (float2(1.22, 0.74) * grow);
+                float2 m = e / (float2(1.22 + 0.30 * (h2.y - 0.5), 0.74 + 0.24 * (h.z - 0.5)) * grow);
                 float nz = vnoise(e * 2.3 + id * 7.13) + 0.5 * vnoise(e * 5.1 - id * 3.7) - 0.75;
                 float r = length(m) + nz * 0.20;
                 float blur = blur0 + 0.44 * (wn.x + 0.5) * (wn.y + 0.5);   // patchy: sharp sheets, soft billows
@@ -349,61 +357,68 @@
         if (meadow > 0.5) {
             float x = p.x;
             float treeDof = blur * abs(0.08 - focus) * 0.012;
-            // a far ridge under the treeline, hazed toward the sky (aerial perspective)
-            float ridge = horizonY + 0.028 + 0.030 * vnoise(float2(x * 2.2 + 11.0, 0.5))
-                        + 0.006 * (vnoise(float2(x * 31.0, 2.5)) - 0.5);
-            float rb = pixel * 1.2 + treeDof * 0.6;
-            float ridgeCov = smoothstep(ridge + rb, ridge - rb, p.y);
-            col = mix(col, mix(horizonC * 0.55, A * 0.35, 0.4), ridgeCov * 0.85);
-            // the treeline: conifer spires and broadleaf crowns over a slow height envelope
-            const float tw = 0.040;
-            float ix = floor(x / tw);
-            float tree = horizonY + 0.006;
-            for (int k = -2; k <= 2; ++k) {
-                float i = ix + float(k);
-                float3 h = pcg3(float3(i + 2048.0, 21.0, 5.0));
-                float env = 0.040 + 0.060 * vnoise(float2(i * 0.16, 2.0));
-                float cx = (i + 0.5 + (h.x - 0.5) * 0.7) * tw;
-                float dx = x - cx;
-                if (h.z < 0.22) {                                    // conifer: a ragged spire
-                    float ht = env * (0.95 + 0.55 * h.y) + 0.018;
-                    float wb = tw * (0.60 + 0.40 * h.y);
-                    float sp = horizonY + ht * (1.0 - pow(abs(dx) / wb, 0.85));
-                    sp += 0.0035 * sin(dx * 900.0 + h.x * 30.0) * smoothstep(0.0, wb, abs(dx));   // branch tiers
-                    tree = max(tree, sp);
-                } else {                                             // broadleaf: two lobed domes
-                    float rr = tw * (0.70 + 0.85 * h.y);
-                    float Hc = env + 0.012 * h.z + rr * 0.55;
-                    float q1 = 1.0 - dx * dx / (rr * rr);
-                    if (q1 > 0.0) tree = max(tree, horizonY + Hc * pow(q1, 0.38));
-                    float dx2 = dx - rr * 0.55 * (h.x - 0.5) * 2.0;
-                    float r2 = rr * 0.66;
-                    float q2 = 1.0 - dx2 * dx2 / (r2 * r2);
-                    if (q2 > 0.0) tree = max(tree, horizonY + (Hc * 0.82 + r2 * 0.45) * pow(q2, 0.38));
-                }
-            }
-            // a porous, leafy edge: 2D noise near the silhouette lets sky through the foliage
-            // (the fine octave fades out before it gets smaller than a pixel)
-            float near = tree - p.y;
-            float tb = pixel * 1.3 + treeDof;
-            if (abs(near) < 0.03) {
-                float2 lq = p * 150.0;
-                float fine = smoothstep(0.30, 0.10, pixel * 330.0);
-                float leaf = (vnoise(lq) - 0.5) + (vnoise(lq * 2.2 + 3.7) - 0.5) * 0.6 * fine;
-                near += leaf * 0.009 * smoothstep(horizonY + 0.004, horizonY + 0.022, p.y);
-            }
-            float treeCov = smoothstep(-tb, tb, near);
             float3 treeC = mix(A * 0.20, horizonC * 0.09, 0.5);
-            col = mix(col, treeC, treeCov);
+            // the ridge and the trees only live in a band above the horizon (tallest crown
+            // ≈ 0.18): everything outside it skips their noise and the five-tree loop
+            if (p.y > horizonY - 0.004 && p.y < horizonY + 0.19) {
+                // a far ridge under the treeline, hazed toward the sky (aerial perspective)
+                float ridge = horizonY + 0.028 + 0.030 * vnoise(float2(x * 2.2 + 11.0, 0.5))
+                            + 0.006 * (vnoise(float2(x * 31.0, 2.5)) - 0.5);
+                float rb = pixel * 1.2 + treeDof * 0.6;
+                float ridgeCov = smoothstep(ridge + rb, ridge - rb, p.y);
+                col = mix(col, mix(horizonC * 0.55, A * 0.35, 0.4), ridgeCov * 0.85);
+                // the treeline: conifer spires and broadleaf crowns over a slow height envelope
+                const float tw = 0.040;
+                float ix = floor(x / tw);
+                float tree = horizonY + 0.006;
+                for (int k = -2; k <= 2; ++k) {
+                    float i = ix + float(k);
+                    float3 h = pcg3(float3(i + 2048.0, 21.0, 5.0));
+                    float env = 0.040 + 0.060 * vnoise(float2(i * 0.16, 2.0));
+                    float cx = (i + 0.5 + (h.x - 0.5) * 0.7) * tw;
+                    float dx = x - cx;
+                    if (h.z < 0.22) {                                    // conifer: a ragged spire
+                        float ht = env * (0.95 + 0.55 * h.y) + 0.018;
+                        float wb = tw * (0.60 + 0.40 * h.y);
+                        float sp = horizonY + ht * (1.0 - pow(abs(dx) / wb, 0.85));
+                        sp += 0.0035 * sin(dx * 900.0 + h.x * 30.0) * smoothstep(0.0, wb, abs(dx));   // branch tiers
+                        tree = max(tree, sp);
+                    } else {                                             // broadleaf: two lobed domes
+                        float rr = tw * (0.70 + 0.85 * h.y);
+                        float Hc = env + 0.012 * h.z + rr * 0.55;
+                        float q1 = 1.0 - dx * dx / (rr * rr);
+                        if (q1 > 0.0) tree = max(tree, horizonY + Hc * pow(q1, 0.38));
+                        float dx2 = dx - rr * 0.55 * (h.x - 0.5) * 2.0;
+                        float r2 = rr * 0.66;
+                        float q2 = 1.0 - dx2 * dx2 / (r2 * r2);
+                        if (q2 > 0.0) tree = max(tree, horizonY + (Hc * 0.82 + r2 * 0.45) * pow(q2, 0.38));
+                    }
+                }
+                // a porous, leafy edge: 2D noise near the silhouette lets sky through the foliage
+                // (the fine octave fades out before it gets smaller than a pixel)
+                float near = tree - p.y;
+                float tb = pixel * 1.3 + treeDof;
+                if (abs(near) < 0.03) {
+                    float2 lq = p * 150.0;
+                    float fine = smoothstep(0.30, 0.10, pixel * 330.0);
+                    float leaf = (vnoise(lq) - 0.5) + (vnoise(lq * 2.2 + 3.7) - 0.5) * 0.6 * fine;
+                    near += leaf * 0.009 * smoothstep(horizonY + 0.004, horizonY + 0.022, p.y);
+                }
+                col = mix(col, treeC, smoothstep(-tb, tb, near));
+            }
             // the meadow: darkening toward the camera, with rows of low tufts fading into mist
-            float fieldT = smoothstep(horizonY, -0.5, p.y);
-            float3 field = mix(treeC * 1.6 + horizonC * 0.09, A * 0.10 + horizonC * 0.01, sqrt(fieldT));
-            float rows = vnoise(float2(x * 9.0 / (0.15 + fieldT), p.y * 70.0 / (0.2 + fieldT)));
-            field *= 0.88 + 0.24 * rows * smoothstep(0.0, 0.35, fieldT) * smoothstep(0.003, 0.0012, pixel / (0.2 + fieldT));
-            col = mix(col, field, smoothstep(horizonY + 0.003, horizonY - 0.003, p.y));
-            float mist = exp(-abs(p.y - horizonY + 0.02) * 18.0) * (0.75 + 0.25 * vnoise(float2(x * 3.0 + ts * 0.02, 0.5)));
-            mist += 0.45 * exp(-abs(p.y - horizonY + 0.09) * 22.0) * vnoise(float2(x * 1.7 - ts * 0.015, 3.5));
-            col += horizonC * 0.10 * mist;
+            if (p.y < horizonY + 0.003) {
+                float fieldT = smoothstep(horizonY, -0.5, p.y);
+                float3 field = mix(treeC * 1.6 + horizonC * 0.09, A * 0.10 + horizonC * 0.01, sqrt(fieldT));
+                float rows = vnoise(float2(x * 9.0 / (0.15 + fieldT), p.y * 70.0 / (0.2 + fieldT)));
+                field *= 0.88 + 0.24 * rows * smoothstep(0.0, 0.35, fieldT) * smoothstep(0.003, 0.0012, pixel / (0.2 + fieldT));
+                col = mix(col, field, smoothstep(horizonY + 0.003, horizonY - 0.003, p.y));
+            }
+            if (abs(p.y - horizonY) < 0.36) {
+                float mist = exp(-abs(p.y - horizonY + 0.02) * 18.0) * (0.75 + 0.25 * vnoise(float2(x * 3.0 + ts * 0.02, 0.5)));
+                mist += 0.45 * exp(-abs(p.y - horizonY + 0.09) * 22.0) * vnoise(float2(x * 1.7 - ts * 0.015, 3.5));
+                col += horizonC * 0.10 * mist;
+            }
         }
         for (int li = 0; li < 3; ++li) {
             float z = 0.12 + 0.28 * float(li);
