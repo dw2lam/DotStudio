@@ -20,9 +20,10 @@ scale/fade entrances).
 | Section | What it is |
 |---------|-----------|
 | `Hero` | Inset rounded viewport, **live ASCII effect canvas** backdrop (no stock video), hanging black nav pill, giant `DotStudio` wordmark, pitch + "Get DotStudio" CTA |
-| `Showcase` | "The best of the library": a bento of the owner's favourite scenes, Liquid Chrome / Golden Hour / Neon Horizon as silent render loops, Universe / Topography / Aurora as stills |
-| `Studio` | The app itself: native window grabs of the gallery (Playback bar: One Style / Rotate / Day & Night), the editor on Lava Lamp, and the welcome sheet's Create Your Own tab |
-| `Packs` | The four new scene packs (Clocks, Flowing, Nature, Retro), one card each, no style repeated from Showcase |
+| `Showcase` | "The best of the library": the owner's favourites only: Liquid Chrome (silent render loop), Zen Garden, Tidewater (four renders of its live sky cross-fading: dusk, night, morning, snow), Topography, Universe |
+| `NowPlaying` | New in 1.4: what's playing (Spotify / Apple Music) over any screensaver; Album / Stage / Cover / Corner switcher (images load on demand, fictional demo track) |
+| `Studio` | The app itself: the gallery with Screensaver + Wallpaper cards joined by SYNC, Playlist / Night / Wallpaper, a details strip (live weather, 120 fps, menu bar, instant start), and the editor |
+| `Packs` | Clocks (Sunray, Flip Clock, Window Light), Flowing (Lava loop), Water & Sky (Shallows), Retro (Neon Horizon loop); no style repeated from Showcase |
 | `Looks` | One built-in photo, six Looks, switchable in place (images load on demand) |
 | `Steps` | Install: DMG → Open Anyway in Privacy & Security → welcome guide; auto-updates + library location |
 | `Download` | Centered `#101010` CTA card: icon, "Get DotStudio", cream pill download button, release meta |
@@ -65,12 +66,15 @@ Vercel project's **Root Directory** at `web` to ship it.
 
 ## Media (`public/media/`)
 
-All renders come from the app's own renderer (`tools/gallery/render.sh … --size 2400x1500`),
-app grabs are native window captures (`screencapture -l`, shadow included) of a Debug
-build run against a scratch library (`DOTSTUDIO_STORE_DIR`) with the dev-only
-`DOTSTUDIO_DEMO_*` hooks in `App/ContentView.swift`.
+All renders come from the app's own offscreen renderer (`tools/gallery/render.sh … --size 1920x1200`,
+always with `DOTSTUDIO_STORE_DIR=$(mktemp -d)`); app shots are the offscreen UIShots renders
+(`DOTSTUDIO_UI_SHOTS`, dark, 1440x900 window) framed as a window in CSS. Nothing is a screen capture.
 
-- `scenes/*.webp`: 1600 px stills (Flip Clock rendered natively at 2560x800 for its wide tile)
-- `loops/*.{webm,mp4,webp}`: 1280x800 silent loops + posters; lazy, play only in view
+- `scenes/*.webp`: 1600 px stills (1280 for the small tiles; Tidewater = `--weather` × `--clock` renders)
+- `loops/*.{webm,mp4,webp}`: 1280x800 silent loops + posters; lazy, play only in view. Liquid Chrome
+  is 300 frames rendered on an eased there-and-back time path, so it loops without a seam or ghosting
+- `music/*.webp`: `--full art --layout album|stage|cover` and `--card bottomLeft`, fed a fictional
+  fixture (`DOTSTUDIO_MUSIC_FAKE`, artwork from tools/music-fixtures)
 - `looks/*.webp`: 1280x800, one built-in photo (Wadi Rum, CC0) per Look
-- `app/*.webp`: 2400 px window grabs with transparent shadow margin
+- `app/*.webp`: gallery (`dest-sync-on`) and editor (`editor-scene`, cropped) UIShots
+- `icon.png`: 256 px of the Chrome Drop icon (`tools/icon/build.sh <dir>` → `chrome.png`)

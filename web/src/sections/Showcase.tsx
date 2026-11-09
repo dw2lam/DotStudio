@@ -1,5 +1,6 @@
 import { Reveal } from "../components/Reveal";
 import { LoopVideo } from "../components/LoopVideo";
+import { CycleStills } from "../components/CycleStills";
 import { SectionHeader } from "../components/SectionHeader";
 
 const CREAM = "#E1E0CC";
@@ -7,15 +8,16 @@ const CREAM = "#E1E0CC";
 type Tile = {
   name: string;
   blurb: string;
-  /** A render loop under /media/loops, or a still under /media/scenes. */
+  /** A render loop under /media/loops, a still under /media/scenes, or stills to cycle through. */
   loop?: string;
   still?: string;
+  cycle?: { src: string; alt: string }[];
   span: string;
   aspect: string;
 };
 
-// The owner's favourites, one appearance each across the page. Scenes from the
-// new packs that aren't here (clocks, Lava Lamp, Night Sky, Pipeworks) live in Packs.
+// The owner's favourites, one appearance each across the page. Clocks, the other
+// water scenes and the classic genres live in Packs.
 const TILES: Tile[] = [
   {
     name: "Liquid Chrome",
@@ -25,9 +27,21 @@ const TILES: Tile[] = [
     aspect: "aspect-[16/10] md:aspect-auto md:h-full",
   },
   {
-    name: "Universe",
-    blurb: "The solar system tonight, with Earth lit where you are.",
-    still: "universe",
+    name: "Zen Garden",
+    blurb: "A little rake cart re-rakes the gravel, pattern after pattern.",
+    still: "zen-garden",
+    span: "md:col-span-4",
+    aspect: "aspect-[16/10]",
+  },
+  {
+    name: "Tidewater",
+    blurb: "Your sky, live: the real sun, moon and weather, snow included.",
+    cycle: [
+      { src: "/media/scenes/tidewater-dusk.webp", alt: "Tidewater at dusk, a crescent moon over the sea" },
+      { src: "/media/scenes/tidewater-night.webp", alt: "Tidewater at night, moonlight on the water" },
+      { src: "/media/scenes/tidewater-morning.webp", alt: "Tidewater in the morning, low sun through broken cloud" },
+      { src: "/media/scenes/tidewater-snow.webp", alt: "Tidewater in falling snow" },
+    ],
     span: "md:col-span-4",
     aspect: "aspect-[16/10]",
   },
@@ -35,28 +49,14 @@ const TILES: Tile[] = [
     name: "Topography",
     blurb: "Contour lines drifting like a living map.",
     still: "topography",
-    span: "md:col-span-4",
+    span: "md:col-span-6",
     aspect: "aspect-[16/10]",
   },
   {
-    name: "Golden Hour",
-    blurb: "Open sea, a sun path glittering across real waves.",
-    loop: "golden",
-    span: "md:col-span-4",
-    aspect: "aspect-[16/10]",
-  },
-  {
-    name: "Neon Horizon",
-    blurb: "An endless synthwave grid racing toward the sun.",
-    loop: "neon",
-    span: "md:col-span-4",
-    aspect: "aspect-[16/10]",
-  },
-  {
-    name: "Aurora",
-    blurb: "Rebuilt: curtains of light over a still, mirrored lake.",
-    still: "aurora",
-    span: "md:col-span-4",
+    name: "Universe",
+    blurb: "The solar system tonight, on a slowly orbiting camera.",
+    still: "universe",
+    span: "md:col-span-6",
     aspect: "aspect-[16/10]",
   },
 ];
@@ -82,6 +82,8 @@ export function Showcase() {
                     alt={`${t.name}, rendered live by DotStudio`}
                     className="absolute inset-0 h-full w-full object-cover"
                   />
+                ) : t.cycle ? (
+                  <CycleStills frames={t.cycle} className="absolute inset-0 h-full w-full" />
                 ) : (
                   <img
                     src={`/media/scenes/${t.still}.webp`}
