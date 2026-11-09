@@ -809,14 +809,14 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         return asin(max(-1, min(1, s)))
     }
 
-    // MARK: Live sky (Ocean Horizon "Follow the Sun")
+    // MARK: Live sky ("Follow the Sun": Ocean Horizon, Shallows)
 
-    /// Fills u.sun / u.moon / u.sky for an Ocean Horizon following the real sun; leaves
-    /// them zero for anything else. Time Lapse (minutes per simulated day, 0 = real time)
+    /// Fills u.sun / u.moon / u.sky for an Ocean Horizon or Shallows following the real sun;
+    /// leaves them zero for anything else. Time Lapse (minutes per simulated day, 0 = real time)
     /// runs the clock forward from `now` by the scene's own time.
     static func fillLiveSky(_ u: inout FXUniforms, inst: EffectInstance, now: Date, time: Float,
                             location: (lat: Double, lon: Double)?) {
-        guard inst.kind == .oceanHorizon, (inst.params["live"] ?? 0) > 0.5 else { return }
+        guard inst.kind == .oceanHorizon || inst.kind == .shallows, (inst.params["live"] ?? 0) > 0.5 else { return }
         let lapse = inst.params["lapse"] ?? 0
         let rate = lapse > 0.05 ? 1440.0 / lapse : 1.0           // simulated s per real s
         let date = now.addingTimeInterval(Double(time) * (rate - 1))
