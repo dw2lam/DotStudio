@@ -123,7 +123,8 @@ final class AppModel: ObservableObject {
     /// Featured built-ins every library gets once, even one from before seenBuiltIns existed.
     /// (Now Playing was one until music became a presentation over any style — it's retired:
     /// never added, and a library that has it keeps it.)
-    static let promotedBuiltIns = ["Tidewater"]
+    // The 1.4 highlights 1.3 users get once on upgrade (Glass Clock stays; Sunray joins it).
+    static let promotedBuiltIns = ["Tidewater", "Sunray", "Shallows"]
 
     /// New built-in styles reach existing libraries exactly once (runs on every launch):
     ///  • no `seenBuiltIns` (a library from before 1.4): everything shipping now counts as
