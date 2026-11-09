@@ -87,10 +87,25 @@ final class WeatherService: ObservableObject {
             if status != .ok { status = .idle }
             return
         }
-        guard next == nil, !inFlight else { return }
+        guard !inFlight else { return }
+        // The location just arrived (it was missing), or its daily refresh moved it to another
+        // ~10 km cell: fetch now rather than at the next tick. Not while backing off a failure
+        // (library changes come in bursts while editing).
+        if failures == 0, let loc = model?.locationTuple,
+           status == .noLocation || reading.map({ Self.cell(loc.lat, loc.lon) != Self.cell($0.latitude, $0.longitude) }) == true {
+            schedule(after: 0)
+            return
+        }
+        guard next == nil else { return }
         // A fresh enough reading (a relaunch) waits out the rest of its interval.
         let age = reading?.fetchedAt.map { Date().timeIntervalSince1970 - $0 } ?? .infinity
         schedule(after: age < Self.interval ? Self.interval - age : 0)
+    }
+
+    /// The ~0.1° cell a location falls in (what the request sends).
+    private static func cell(_ lat: Double?, _ lon: Double?) -> String? {
+        guard let lat, let lon else { return nil }
+        return String(format: "%.1f,%.1f", (lat * 10).rounded() / 10, (lon * 10).rounded() / 10)
     }
 
     private func schedule(after seconds: TimeInterval) {
@@ -131,6 +146,12 @@ final class WeatherService: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.inFlight = false
+                // Live weather turned off (or no style follows it any more) while this was out:
+                // drop the answer — writing it would bring weather.json back after clear().
+                guard self.isNeeded else {
+                    if self.status == .fetching { self.status = .idle }
+                    return
+                }
                 guard let current, (200..<300).contains(code) else {
                     let why = error.map { ($0 as NSError).localizedDescription } ?? (code != 0 ? "HTTP \(code)" : "No data")
                     self.failed(why)
@@ -152,7 +173,8 @@ final class WeatherService: ObservableObject {
     }
 
     private func write(_ state: WeatherState) {
-        guard let url = fileURL else { return }
+        // Every writer goes through here (the fetch, the place name): never once it's off.
+        guard isNeeded, let url = fileURL else { return }
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         do {
@@ -194,7 +216,8 @@ final class WeatherService: ObservableObject {
                 var d = (UserDefaults.standard.dictionary(forKey: Self.placeKey) as? [String: String]) ?? [:]
                 d[self.placeKey(lat, lon)] = name
                 UserDefaults.standard.set(d, forKey: Self.placeKey)
-                if var r = self.reading, r.latitude == lat, r.longitude == lon {
+                // Turned off meanwhile: the name is cached for next time, the file stays gone.
+                if self.isNeeded, var r = self.reading, r.latitude == lat, r.longitude == lon {
                     r.place = name
                     self.write(r)
                 }

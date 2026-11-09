@@ -58,8 +58,16 @@ struct EditorView: View {
     private func previewPane(_ preset: Preset) -> some View {
         VStack(spacing: layout.itemGap) {
             ZStack {
-                StyleThumb(preset: preset)
+                // The still only until the live preview is up: under it, it would re-render on
+                // every edit for nothing. The hero geometry stays on the (black) frame.
+                Color.black
                     .heroGeometry(id, in: hero)
+                if !live || DemoHooks.stillPreviews {
+                    StyleThumb(preset: preset)
+                        // Gone only once the live view has faded in over it (no dip to black).
+                        .transition(.asymmetric(insertion: .identity,
+                                                removal: .opacity.animation(.linear(duration: 0.01).delay(0.6))))
+                }
                 if live && !DemoHooks.stillPreviews {
                     MetalPreview(preset: preset, source: model.library.source,
                                  location: model.locationTuple, store: model.store,

@@ -73,23 +73,39 @@ jobs:
         env:
           SIGNING_P12_BASE64: ${{ secrets.SIGNING_P12_BASE64 }}
           SIGNING_P12_PASSWORD: ${{ secrets.SIGNING_P12_PASSWORD }}
+        # The keychain and the decoded .p12 live in $RUNNER_TEMP and are removed by the
+        # always-run cleanup step below, whether or not this step gets that far. Nothing here
+        # echoes a secret: `set +x`, the .p12 is decoded from a here-string (no echo/pipe), and
+        # GitHub masks both secrets in the log. `security import` has no way to take the .p12
+        # password except -P (argv, visible to this single-tenant, throwaway runner only).
         run: |
+          set +x
+          umask 077
           if [ -z "$SIGNING_P12_BASE64" ] || [ -z "$SIGNING_P12_PASSWORD" ]; then
             echo "::error::SIGNING_P12_BASE64 / SIGNING_P12_PASSWORD not set — run scripts/setup-signing.sh once"
             exit 1
           fi
           KC="$RUNNER_TEMP/signing.keychain-db"; KCPASS=$(openssl rand -hex 16)
-          echo "$SIGNING_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/id.p12"
+          base64 --decode <<< "$SIGNING_P12_BASE64" > "$RUNNER_TEMP/id.p12"
           security create-keychain -p "$KCPASS" "$KC"
           security set-keychain-settings -lut 3600 "$KC"
           security unlock-keychain -p "$KCPASS" "$KC"
           security import "$RUNNER_TEMP/id.p12" -k "$KC" -P "$SIGNING_P12_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KCPASS" "$KC" >/dev/null
           rm -f "$RUNNER_TEMP/id.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KCPASS" "$KC" >/dev/null
           ID=$(security find-identity -p codesigning "$KC" | awk '/DotStudio Release Signing/{print $2; exit}')
           test -n "$ID"
           zsh scripts/sign-app.sh build/DD/Build/Products/Release/DotStudio.app "$ID" "$KC"
-          security delete-keychain "$KC"
+
+      - name: Remove signing keychain
+        # Always — also when signing (or anything before it) failed part-way.
+        if: always()
+        run: |
+          KC="$RUNNER_TEMP/signing.keychain-db"
+          rm -f "$RUNNER_TEMP/id.p12"
+          if [ -f "$KC" ]; then
+            security delete-keychain "$KC" || rm -f "$KC"
+          fi
 
       - name: Package DMG
         run: |
