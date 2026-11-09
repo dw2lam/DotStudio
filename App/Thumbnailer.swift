@@ -94,6 +94,7 @@ final class Thumbnailer {
     /// - music: the library's music settings — a Now Playing tile keeps a paused song exactly
     ///   as long as the screensaver does (its linger).
     func image(for preset: Preset, source: SourceSpec, music settings: MusicSpec = MusicSpec()) -> NSImage? {
+        Perf.count("thumb:image(for:)")
         let job = makeJob(preset, source: source, settings: settings)
         let id = preset.id
         if job.period != nil {
@@ -155,6 +156,7 @@ final class Thumbnailer {
 
     /// Renders a job's frame (any thread).
     private func render(_ job: Job) -> CGImage? {
+        Perf.count(Thread.isMainThread ? "thumb:render-main" : "thumb:render-bg")
         renderLock.lock(); defer { renderLock.unlock() }
         guard let renderer else { return nil }
         if let music = job.music { renderer.setMusic(music) }
@@ -203,6 +205,9 @@ final class Thumbnailer {
         }
         if let next, next.stamp != job.stamp { refresh(next) }
     }
+
+    /// Perf probe: announce a still landing exactly as a finished refresh does.
+    func debugAnnounceUpdate() { scheduleUpdate() }
 
     private func scheduleUpdate() {
         guard !updateScheduled else { return }
@@ -258,6 +263,7 @@ final class Thumbnailer {
     /// Re-render the time-dependent stills a view showed lately, if their bucket (or the weather)
     /// moved on — only while a DotStudio window is on screen.
     private func tickFired() {
+        Perf.count("tick:Thumbnailer")
         tick = nil
         guard Self.appWindowVisible else { return }   // the next gallery render re-arms it
         let now = Date()

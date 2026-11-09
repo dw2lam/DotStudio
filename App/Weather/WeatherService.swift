@@ -119,6 +119,7 @@ final class WeatherService: ObservableObject {
     }
 
     private func fetch() {
+        Perf.count("WeatherService.fetch")
         guard isNeeded, !inFlight else { return }
         guard let loc = model?.locationTuple else {
             status = .noLocation

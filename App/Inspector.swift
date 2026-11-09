@@ -327,6 +327,7 @@ struct EffectStackView: View {
     // (a wrapped title or reorder hint would be clipped) and ignores its row insets. As
     // rows they grow with their text, and the vertical rhythm is all on the token scale.
     var body: some View {
+        let _ = Perf.body("EffectStackView")
         List {
             effectsHeader
                 .listRowInsets(rowInsets(vertical: layout.labelGap))
@@ -462,6 +463,7 @@ struct EffectRow: View {
     @ScaledLength(relativeTo: .body) private var glyphColumn: CGFloat = InspectorMetrics.glyphColumn
 
     var body: some View {
+        let _ = Perf.body("EffectRow")
         VStack(alignment: .leading, spacing: layout.controlGap) {
             header
             if isExpanded {
@@ -650,6 +652,7 @@ struct ParamRow: View {
     @ScaledLength(relativeTo: .caption) private var valueColumn: CGFloat = InspectorMetrics.valueColumn
 
     var body: some View {
+        let _ = Perf.body("ParamRow")
         InspectorRow(label: spec.label) {
             if let options = spec.options {
                 InspectorMenu(title: spec.label,

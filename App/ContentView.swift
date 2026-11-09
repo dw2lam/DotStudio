@@ -21,6 +21,7 @@ struct ContentView: View {
     private var editing: Preset? { model.editingID.flatMap(model.preset) }
 
     var body: some View {
+        let _ = Perf.body("ContentView")
         let editing = editing
         ZStack {
             // The gallery stays alive under the editor (scroll position, hover state) and
