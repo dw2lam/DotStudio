@@ -244,6 +244,8 @@ enum WallpaperPacing {
         case .flipClock:  return .clock(period: on("seconds") ? 1 : 60, burst: 0.8)   // flaps fall for 0.75 s
         case .typeClock:  return .clock(period: on("seconds") ? 1 : 60, burst: on("seconds") ? 0.45 : 0.65)
         case .wordClock:  return .clock(period: 60, burst: 0)                     // no transition animation
+        // the seconds hand sweeps; without it the hands and the light creep slowly enough for 1 fps
+        case .dialClock:  return on("seconds") ? .motion : .clock(period: 1, burst: 0)
         default: break
         }
         if first.kind.isScene { return .motion }

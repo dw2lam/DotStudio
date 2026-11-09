@@ -121,7 +121,7 @@ enum DefaultPresets {
     static let featured: [String] = [
         // Scenes
         "Liquid Chrome", "Aurora", "Universe", "Topography", "Sand Garden", "Black Hole", "Afterglow",
-        "Glass Clock", "Flip Clock", "Word Clock", "Window Light",
+        "Sunray", "Flip Clock", "Word Clock", "Window Light",
         "Lava Lamp", "Currents", "Fireflies",
         "Golden Hour", "Tidewater", "Shallows", "Night Sky", "First Snow",
         "Neon Horizon", "Pipeworks", "Light Tunnel", "Light Ribbons",

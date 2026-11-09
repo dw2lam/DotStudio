@@ -5,7 +5,7 @@
 //  razor sharp at any size, from a 60 px date line to a 1500 px clock face at 5K, and the
 //  shaders get bevels, soft shadows and glows from the same field for free.
 //
-//  Texture (r16Unorm, bound at fragment slot 6 only while a Clocks scene is drawing). Faces:
+//  Texture (r16Unorm, bound at fragment slot 6 only while a Clocks scene or Dial Clock draws). Faces:
 //      0 = SF Pro Light   1 = SF Pro Bold   2 = New York   3 = SF Pro Rounded Medium
 //  Only the faces a scene draws with are built (`faces(for:)`), one plane each, stacked
 //  vertically; a plane holds every glyph cell, packed in rows of variable-width cells:
@@ -43,8 +43,9 @@ enum TextAtlas {
     static let bigGlyphs = Array("0123456789:")
     static let smallGlyphs = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789,.\u{2019}\u{00B7}-/&abcdefghijklmnopqrstuvwxyz")
 
-    /// Shader ids of the scenes that read the atlas (the Clocks pack).
-    private static let users: Set<Int32> = Set(SceneCatalog.clocks.values.map { $0.shaderID })
+    /// Shader ids of the scenes that read the atlas (the Clocks pack, and Dial Clock in slot 6).
+    private static let users: Set<Int32> = Set(SceneCatalog.clocks.values.map(\.shaderID)
+        + SceneCatalog.studio6.values.map(\.shaderID))
 
     // Per GPU (keyed by registryID): a texture only belongs to its own device, and on a
     // multi-GPU Mac (Mac Pro, eGPU) a wallpaper may draw on the GPU driving its display
@@ -124,6 +125,8 @@ enum TextAtlas {
             case 2: return 1 << 3
             default: return 1 << 2
             }
+        case 72:                                                     // Dial Clock: date + 24-hour figures
+            return 1 << 0                                            // SF Pro Light
         default:
             return allFaces
         }
