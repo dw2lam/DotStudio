@@ -416,15 +416,18 @@ private struct EmptyResults: View {
                 .foregroundStyle(.secondary)
                 .frame(width: iconCircle, height: iconCircle)
                 .glassSurface(.regular, in: Circle())
-            Text(query.isEmpty ? "Nothing in \(filter.title) yet" : "No styles match “\(shownQuery)”")
-                .textRole(.headline)
-                .wrapping(.center)
-                .help(query)
-            Text(query.isEmpty ? "Add Built-in Styles from the New menu, or make your own."
-                               : "Try a style name, an effect like “Dither”, or a pack like “Clocks”.")
-                .textRole(.callout)
-                .foregroundStyle(.secondary)
-                .wrapping(.center)
+            // Headline and message read as one block; icon and button an item step away.
+            VStack(spacing: layout.labelGap) {
+                Text(query.isEmpty ? "Nothing in \(filter.title) yet" : "No styles match “\(shownQuery)”")
+                    .textRole(.headline)
+                    .wrapping(.center)
+                    .help(query)
+                Text(query.isEmpty ? "Add Built-in Styles from the New menu, or make your own."
+                                   : "Try a style name, an effect like “Dither”, or a pack like “Clocks”.")
+                    .textRole(.callout)
+                    .foregroundStyle(.secondary)
+                    .wrapping(.center)
+            }
             Button(action: reset) { Text("Show All Styles").textRole(.body) }
                 .glassButton()
                 .adaptiveControlSize()

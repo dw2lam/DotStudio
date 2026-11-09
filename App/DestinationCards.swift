@@ -42,36 +42,89 @@ struct TileBadges: Equatable {
     var isEmpty: Bool { !onScreensaver && !night && !wallpaper }
 }
 
-// MARK: - Card metrics
+// MARK: - Row geometry
 
-fileprivate extension LayoutMetrics {
-    /// Width of a destination card's preview (the Screensaver hero, and the Wallpaper
-    /// preview when that card lays out side by side): the small end of `heroWidth` in
-    /// compact windows and at accessibility text sizes, the large end otherwise.
-    var destinationPreviewWidth: CGFloat {
-        isCompact || typeSize.isAccessibilitySize ? heroWidth.lowerBound : heroWidth.upperBound
+/// How the two destination cards share the row, worked out from the row's MEASURED width
+/// (not the width class alone), so the Screensaver card's text column never gets crushed
+/// beside the Wallpaper card, and nothing jumps when the window crosses a class boundary.
+///
+///   • stacked — the Wallpaper card goes under the Screensaver card: side by side, the
+///     Screensaver text column would be narrower than `textMin` even with the smallest hero.
+///   • side    — Screensaver card (preview beside text) + a narrow Wallpaper card (preview
+///     on top, as tall as the hero, its top level with the hero's).
+///   • mirror  — both cards lay out preview beside text, with the same preview size; the
+///     text columns split evenly once both are roomy, and the Wallpaper actions line up
+///     with the Screensaver night row.
+///   • single  — no live wallpaper on this Mac: the Screensaver card alone.
+///
+/// Both previews are always 16:10 and the same size, in every arrangement.
+struct DestinationGeometry: Equatable {
+    enum Arrangement { case single, stacked, side, mirror }
+
+    var arrangement: Arrangement
+    /// The Screensaver hero's width, and the Wallpaper preview's when it sits beside its text.
+    var previewWidth: CGFloat
+    /// The Screensaver card's width when the cards sit side by side; nil fills the row.
+    var screensaverWidth: CGFloat?
+
+    /// Both previews are 16:10.
+    var previewHeight: CGFloat { (previewWidth * 10 / 16).rounded() }
+    /// The Wallpaper card puts its preview beside its text (not on top).
+    var wallpaperPreviewBeside: Bool { arrangement != .side }
+
+    init(width measured: CGFloat?, layout: LayoutMetrics, hasWallpaper: Bool) {
+        let p = layout.cardPadding
+        let g = layout.gridColumnGap
+        let range = layout.heroWidth
+        let lo = range.lowerBound
+        // No tokens for these text-column widths; they're on the grid and grow with the text.
+        let textMin = layout.scaled(300)    // Screensaver: header + Preview, deck, rotation, night
+        let textCap = layout.scaled(440)    // room for the night row on one line
+        let wallpaperTextMin = layout.scaled(200)
+        let wallpaperTextComfort = layout.scaled(240)
+        let largeText = layout.typeSize >= .xxLarge
+        // Before the first measurement: a typical row for the class.
+        let w = measured ?? layout.widthClass.pick(840, 1036, 1760)
+
+        /// The hero for a card `card` wide: 40% of its content, inside `heroWidth`, never
+        /// squeezing the text column below `minText` (the hero shrinks first). The small end
+        /// at large text sizes, where the text needs the room.
+        func hero(card: CGFloat, minText: CGFloat) -> CGFloat {
+            if largeText { return lo }
+            let ideal = Space.snap((card - 3 * p) * 0.4)
+            let room = ((card - 3 * p - minText) / 4).rounded(.down) * 4
+            return max(lo, min(range.upperBound, ideal, room))
+        }
+
+        guard hasWallpaper else {
+            self.init(arrangement: .single, previewWidth: hero(card: w, minText: textMin), screensaverWidth: nil)
+            return
+        }
+        let sideRoom = w - g - layout.sideCardWidth.lowerBound
+        if sideRoom - 3 * p - lo < textMin {
+            self.init(arrangement: .stacked, previewWidth: hero(card: w, minText: textMin), screensaverWidth: nil)
+        } else if w - g - 6 * p - 2 * lo >= textMin + wallpaperTextMin {
+            let fit = ((w - g - 6 * p - textMin - wallpaperTextMin) / 8).rounded(.down) * 4
+            let h = max(lo, min(hero(card: (w - g) / 2, minText: 0), fit))
+            // The text columns split evenly once both are roomy; until then the Screensaver
+            // column (more to hold) fills up to its cap first, the Wallpaper keeping enough
+            // for its name.
+            let text = w - g - 6 * p - 2 * h
+            let preferred = max(text / 2, min(textCap, text - wallpaperTextComfort))
+            let screensaverText = min(max(textMin, preferred), text - wallpaperTextMin)
+            self.init(arrangement: .mirror, previewWidth: h,
+                      screensaverWidth: (3 * p + h + screensaverText).rounded(.down))
+        } else {
+            let h = hero(card: sideRoom, minText: textMin)
+            self.init(arrangement: .side, previewWidth: h,
+                      screensaverWidth: min(sideRoom, 3 * p + h + textCap))
+        }
     }
 
-    /// Widest the Screensaver card gets beside the Wallpaper card: its preview plus a text
-    /// column of readable width. Past that the Wallpaper card takes the room, so the
-    /// Preview button never drifts far from the title and no card is mostly empty.
-    var screensaverCardMaxWidth: CGFloat {
-        cardPadding * 3 + destinationPreviewWidth + readableWidth
-    }
-
-    /// The Wallpaper card goes under the Screensaver card in a compact window at the
-    /// largest text sizes (side by side, neither would have room for its text).
-    var stacksDestinations: Bool { isCompact && prefersStacking }
-}
-
-fileprivate extension View {
-    /// A destination card's preview: a fixed width, at least 16:10 tall, and free to grow
-    /// to a square — so it fills a card made taller by its neighbour (the two cards in a
-    /// row share one height) instead of leaving a gap under it.
-    func destinationPreviewFrame(width: CGFloat, grows: Bool = true) -> some View {
-        let height = (width * 10 / 16).rounded()
-        return frame(width: width)
-            .frame(minHeight: height, maxHeight: grows ? width : height, alignment: .top)
+    private init(arrangement: Arrangement, previewWidth: CGFloat, screensaverWidth: CGFloat?) {
+        self.arrangement = arrangement
+        self.previewWidth = previewWidth
+        self.screensaverWidth = screensaverWidth
     }
 }
 
@@ -80,25 +133,34 @@ fileprivate extension View {
 struct DestinationRow: View {
     @Environment(\.layout) private var layout
     let state: GalleryState
+    @State private var width: CGFloat?
+    /// Height of the Screensaver card's preview + text block, so a mirrored Wallpaper card
+    /// can end its own block (and its actions) level with it.
+    @State private var screensaverBlock: CGFloat = 0
 
     var body: some View {
-        let stacked = layout.stacksDestinations
         let hasWallpaper = WallpaperSlot.shared.isAvailable
-        // Side by side, both cards as tall as the taller one; the Screensaver card takes
-        // the room first (up to its cap) and the Wallpaper card the rest.
-        AdaptiveStack(rowAlignment: .top, columnAlignment: .leading, spacing: layout.gridColumnGap,
-                      stackWhen: { $0.stacksDestinations }) {
-            ScreensaverCard(state: state)
-                .frame(maxWidth: stacked || !hasWallpaper ? .infinity : layout.screensaverCardMaxWidth,
+        let geometry = DestinationGeometry(width: width, layout: layout, hasWallpaper: hasWallpaper)
+        let stacked = geometry.arrangement == .stacked
+        // Children keep their identity (and state) when the arrangement changes.
+        let arrangement = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: layout.gridColumnGap))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: layout.gridColumnGap))
+        arrangement {
+            // Side by side, both cards are as tall as the taller one.
+            ScreensaverCard(state: state, geometry: geometry) { screensaverBlock = $0 }
+                .frame(width: geometry.screensaverWidth)
+                .frame(maxWidth: geometry.screensaverWidth == nil ? .infinity : nil,
                        maxHeight: .infinity, alignment: .top)
-                .layoutPriority(1)
             if hasWallpaper {
-                WallpaperCard(state: state)
-                    .frame(minWidth: stacked ? nil : layout.sideCardWidth.lowerBound,
-                           maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                WallpaperCard(state: state, geometry: geometry,
+                              alignHeight: geometry.arrangement == .mirror ? screensaverBlock : 0)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
         }
         .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 }
 
@@ -110,22 +172,25 @@ struct ScreensaverCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.controlActiveState) private var activeState
     let state: GalleryState
+    let geometry: DestinationGeometry
+    /// Reports the preview + text block's height (see DestinationRow).
+    var onBlockHeight: (CGFloat) -> Void = { _ in }
 
     private var lineup: ScreensaverLineup { state.lineup }
     private var playing: Preset? { state.nowPlaying.flatMap(model.preset) }
 
-    /// The night picker's widest (a long style name truncates, full name in its tooltip).
-    /// No token for it: three quarters of the narrowest side card, on the grid.
-    private var nightPickerMaxWidth: CGFloat { Space.snap(layout.sideCardWidth.lowerBound * 0.75) }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // The block keeps its own height (at least the hero's); if the Wallpaper card
+            // beside it is taller, the extra room falls below the card's content.
             HStack(alignment: .top, spacing: layout.cardPadding) {
                 hero
                 column
+                    .frame(maxWidth: .infinity, minHeight: geometry.previewHeight, alignment: .topLeading)
             }
+            .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { onBlockHeight($0) }
             .padding(layout.cardPadding)
-            .frame(maxHeight: .infinity, alignment: .top)
 
             if model.setupStatus != .ready {
                 SetupStrip(status: model.setupStatus)
@@ -149,11 +214,11 @@ struct ScreensaverCard: View {
                         .transition(.reveal(reduceMotion: reduceMotion))
                 }
             }
-            // The night row sits at the foot of the card, an even step below the rest.
+            // The night row ends level with the hero's foot (or an even step below the
+            // rest, when the text runs longer than the hero).
             Spacer(minLength: layout.itemGap)
             nightRow
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     // MARK: Live preview
@@ -183,7 +248,7 @@ struct ScreensaverCard: View {
                     .padding(Space.xs)
             }
         }
-        .destinationPreviewFrame(width: layout.destinationPreviewWidth)
+        .frame(width: geometry.previewWidth, height: geometry.previewHeight)
         .clipShape(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous).strokeBorder(.white.opacity(0.12)))
         .shadow(color: .black.opacity(0.22), radius: 14, y: 6)
@@ -196,25 +261,9 @@ struct ScreensaverCard: View {
     // MARK: Header
 
     private var header: some View {
-        HStack(alignment: .top, spacing: layout.itemGap) {
-            VStack(alignment: .leading, spacing: layout.labelGap) {
-                // The status moves under the eyebrow rather than breaking either word.
-                FlowLayout(spacing: layout.controlGap, lineSpacing: layout.labelGap) {
-                    CardEyebrow(text: "Screensaver")
-                    StatusDot(status: model.setupStatus)
-                }
-                let name = playing?.name ?? "Nothing yet"
-                Text(name)
-                    .textRole(.cardTitle)
-                    .truncating(name, lines: 2)
-                    .contentTransition(.opacity)
-                Text(subtitle)
-                    .textRole(.callout)
-                    .foregroundStyle(.secondary)
-                    .wrapping()
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
+        // Preview sits on the title's line, right beside what it previews.
+        DestinationHeader(eyebrow: "Screensaver", status: StatusDot(status: model.setupStatus),
+                          title: playing?.name ?? "Nothing yet", subtitle: subtitle) {
             Button {
                 if let p = playing {
                     ScreensaverPreviewController.shared.present(
@@ -235,7 +284,8 @@ struct ScreensaverCard: View {
     private var subtitle: String {
         let n = lineup.playlist.count
         if n <= 1 { return lineup.night == nil ? "Plays all the time" : "Plays by day" }
-        return lineup.night == nil ? "Now playing · one of \(n) styles" : "Now playing · \(n) styles by day"
+        // A no-break space before the dot: a wrapped line never starts with "·".
+        return lineup.night == nil ? "Now playing\u{00A0}· one of \(n) styles" : "Now playing\u{00A0}· \(n) styles by day"
     }
 
     // MARK: Playlist
@@ -259,22 +309,34 @@ struct ScreensaverCard: View {
     }
 
     private var rotationControls: some View {
+        // A Menu and a button-style toggle drawn in SwiftUI (not the AppKit pop-up and
+        // push-on/push-off button), so their labels follow the text size like the rest of
+        // the row.
+        let current = model.rotation.intervalMinutes
         let interval = HStack(spacing: layout.controlGap) {
             Text("Change every")
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .fixedSize()
-            Picker("Interval", selection: Binding(get: { model.rotation.intervalMinutes },
-                                                  set: { model.setRotationInterval($0) })) {
-                ForEach(intervalOptions, id: \.self) { m in Text(intervalLabel(m)).tag(m) }
+            Menu {
+                ForEach(intervalOptions, id: \.self) { m in
+                    Button { model.setRotationInterval(m) } label: {
+                        if m == current { Label(intervalLabel(m), systemImage: "checkmark") } else { Text(intervalLabel(m)) }
+                    }
+                }
+            } label: {
+                Text(intervalLabel(current)).textRole(.callout)
             }
-            .labelsHidden()
+            .menuStyle(.button)
+            .glassButton()
             .fixedSize()
+            .accessibilityLabel("Change every")
+            .accessibilityValue(intervalLabel(current))
         }
         let shuffle = Toggle(isOn: Binding(get: { model.rotation.shuffle }, set: { model.setShuffle($0) })) {
-            Label("Shuffle", systemImage: "shuffle")
+            Label("Shuffle", systemImage: "shuffle").textRole(.callout)
         }
-        .toggleStyle(.button)
+        .toggleStyle(GlassToggleButtonStyle())
         .fixedSize()
         .help("Play the playlist in a random order")
 
@@ -312,7 +374,8 @@ struct ScreensaverCard: View {
     // MARK: Night
 
     private var nightRow: some View {
-        // Switch, picker and caption flow onto a second line in a narrow card.
+        // The picker and its caption move to a second line together in a narrow card; the
+        // picker takes the whole line before a long name truncates (full name in its tooltip).
         FlowLayout(spacing: layout.controlGap, lineSpacing: layout.controlGap) {
             Toggle(isOn: Binding(get: { lineup.night != nil },
                                  set: { on in Motion.run { model.setNightEnabled(on) } })) {
@@ -324,14 +387,15 @@ struct ScreensaverCard: View {
             .fixedSize()
 
             if let nightID = lineup.night, let night = model.preset(nightID) {
-                StylePickerMenu(current: night, title: night.name, maxWidth: nightPickerMaxWidth) { model.setNight($0) }
-                    .transition(.lift(reduceMotion: reduceMotion))
-                Text(model.isNightNow ? "Playing now" : "After sunset")
-                    .textRole(.caption)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .fixedSize()
-                    .transition(.opacity)
+                HStack(spacing: layout.controlGap) {
+                    StylePickerMenu(current: night, title: night.name, maxWidth: .infinity) { model.setNight($0) }
+                    Text(model.isNightNow ? "Playing now" : "After sunset")
+                        .textRole(.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                .transition(.lift(reduceMotion: reduceMotion))
             }
         }
         .adaptiveControlSize(.small)
@@ -346,6 +410,59 @@ struct ScreensaverCard: View {
 /// The primary actions on both destination cards (Preview; Change / Stop) share a size.
 enum DestinationAction {
     static let size: ControlSize = .regular
+}
+
+/// The top of both destination cards — eyebrow + status, title, subtitle — with one
+/// structure and one set of gaps, so the two cards' titles and subtitles line up when they
+/// sit side by side. `accessory` (the Screensaver's Preview) sits on the title's line.
+private struct DestinationHeader<Accessory: View>: View {
+    @Environment(\.layout) private var layout
+    let eyebrow: String
+    let status: StatusDot
+    let title: String
+    let subtitle: String
+    @ViewBuilder var accessory: Accessory
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: layout.labelGap) {
+            // The status moves under the eyebrow rather than breaking either word.
+            FlowLayout(spacing: layout.controlGap, lineSpacing: layout.labelGap) {
+                CardEyebrow(text: eyebrow)
+                status
+            }
+            HStack(alignment: .top, spacing: layout.itemGap) {
+                VStack(alignment: .leading, spacing: layout.labelGap) {
+                    Text(title)
+                        .textRole(.cardTitle)
+                        .truncating(title, lines: 2)
+                        .contentTransition(.opacity)
+                    Text(subtitle)
+                        .textRole(.callout)
+                        .foregroundStyle(.secondary)
+                        .wrapping()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                accessory
+            }
+        }
+    }
+}
+
+extension DestinationHeader where Accessory == EmptyView {
+    init(eyebrow: String, status: StatusDot, title: String, subtitle: String) {
+        self.init(eyebrow: eyebrow, status: status, title: title, subtitle: subtitle) { EmptyView() }
+    }
+}
+
+/// A toggle drawn as a glass button — tinted while on — whose label is SwiftUI text, so it
+/// follows the text size (the stock `.button` toggle style is an AppKit button whose title
+/// never scales on macOS).
+struct GlassToggleButtonStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button { configuration.isOn.toggle() } label: { configuration.label }
+            .glassButton(configuration.isOn ? .prominent : .normal)
+            .accessibilityAddTraits(configuration.isOn ? [.isToggle, .isSelected] : .isToggle)
+    }
 }
 
 /// "SCREENSAVER", "WALLPAPER": the small caps label that opens each card. Never breaks.
@@ -527,8 +644,18 @@ struct PlaylistStack: View {
         }
     }
 
+    /// The `n` chips on show, in playlist order. When only some fit, the window slides so
+    /// it always holds the style playing now (the one with the accent ring).
+    private func shownIDs(_ n: Int) -> [UUID] {
+        guard n < ids.count, let current, let i = ids.firstIndex(of: current), i >= n else {
+            return Array(ids.prefix(n))
+        }
+        let start = min(i, ids.count - n)
+        return Array(ids[start ..< start + n])
+    }
+
     private func content(_ d: Deck) -> some View {
-        let shown = Array(ids.prefix(d.shown))
+        let shown = shownIDs(d.shown)
         let step = fanned ? d.fanStep : d.restStep
         return HStack(spacing: layout.controlGap) {
             if !shown.isEmpty {
@@ -644,12 +771,15 @@ struct PlaylistEditor: View {
         let presets = model.library.presets.filter { q.isEmpty || StyleMatcher.searchText(for: $0).contains(q) }
         let width = layout.popoverWidth
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: layout.controlGap) {
-                Text("Screensaver Playlist").textRole(.headline).wrapping()
-                Text(lineup.rotates ? "\(lineup.playlist.count) styles take turns." : "One style plays. Tick more to rotate.")
-                    .textRole(.caption)
-                    .foregroundStyle(.secondary)
-                    .wrapping()
+            // Title and caption close together; the field an item step below them.
+            VStack(alignment: .leading, spacing: layout.itemGap) {
+                VStack(alignment: .leading, spacing: layout.labelGap) {
+                    Text("Screensaver Playlist").textRole(.headline).wrapping()
+                    Text(lineup.rotates ? "\(lineup.playlist.count) styles take turns." : "One style plays. Tick more to rotate.")
+                        .textRole(.caption)
+                        .foregroundStyle(.secondary)
+                        .wrapping()
+                }
                 SearchField(text: $query, prompt: "Filter styles")
             }
             .padding(layout.cardPadding)
@@ -757,65 +887,56 @@ struct WallpaperCard: View {
     @ObservedObject private var slot = WallpaperSlot.shared
     @Environment(\.layout) private var layout
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// Shortest the preview gets when the card lays out top to bottom (it grows to fill).
-    @ScaledLength(relativeTo: .body) private var previewMinHeight: CGFloat = 80
-    @State private var width: CGFloat = 0
     let state: GalleryState
+    let geometry: DestinationGeometry
+    /// Side by side in the mirror arrangement: the Screensaver card's block height, so this
+    /// card's actions end level with its night row.
+    var alignHeight: CGFloat = 0
 
     private var style: Preset? { slot.styleID.flatMap(model.preset) }
 
-    /// Wide enough to mirror the Screensaver card — preview beside the text — when the
-    /// text keeps at least a narrow column's width.
-    private var sideBySide: Bool {
-        width >= layout.cardPadding * 3 + layout.destinationPreviewWidth + layout.scaled(200)
-    }
-
     var body: some View {
+        // Content keeps its own height; if the Screensaver card beside it is taller (the
+        // setup strip), the extra room falls below rather than pulling the actions down.
         Group {
-            if sideBySide {
+            if geometry.wallpaperPreviewBeside {
+                // Mirrors the Screensaver card: a preview the hero's size, the same header.
                 HStack(alignment: .top, spacing: layout.cardPadding) {
-                    // 16:10, the same size and top as the Screensaver hero beside it.
                     preview
-                        .destinationPreviewFrame(width: layout.destinationPreviewWidth, grows: false)
+                        .frame(width: geometry.previewWidth, height: geometry.previewHeight)
                     VStack(alignment: .leading, spacing: 0) {
-                        VStack(alignment: .leading, spacing: layout.itemGap) {
-                            eyebrow
-                            details
-                        }
+                        header
                         Spacer(minLength: layout.itemGap)
                         actions
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, minHeight: max(geometry.previewHeight, alignHeight),
+                           alignment: .topLeading)
                 }
             } else {
-                // The preview grows to fill a card made taller by its neighbour, up to
-                // 16:10; past that the actions settle at the foot of the card.
-                let previewMax = max(previewMinHeight, ((width - layout.cardPadding * 2) * 10 / 16).rounded())
-                VStack(alignment: .leading, spacing: 0) {
-                    VStack(alignment: .leading, spacing: layout.itemGap) {
-                        eyebrow
-                        preview
-                            .frame(maxWidth: .infinity)
-                            .frame(minHeight: previewMinHeight, idealHeight: previewMinHeight, maxHeight: previewMax)
-                        details
-                    }
-                    Spacer(minLength: layout.itemGap)
+                // A narrow card beside the Screensaver card: the preview on top, as tall as
+                // the hero and level with it.
+                VStack(alignment: .leading, spacing: layout.itemGap) {
+                    preview
+                        .frame(maxWidth: .infinity)
+                        .frame(height: geometry.previewHeight)
+                    header
                     actions
                 }
             }
         }
+        .fixedSize(horizontal: false, vertical: true)
         .padding(layout.cardPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .glassCard(cornerRadius: Radius.card)
         .motion(Motion.smooth, value: slot.styleID)
     }
 
-    private var eyebrow: some View {
-        FlowLayout(spacing: layout.controlGap, lineSpacing: layout.labelGap) {
-            CardEyebrow(text: "Wallpaper")
-            StatusDot(color: style != nil ? .green : .secondary.opacity(0.6), text: style != nil ? "Live" : "Off")
-        }
+    private var header: some View {
+        DestinationHeader(eyebrow: "Wallpaper",
+                          status: StatusDot(color: style != nil ? .green : .secondary.opacity(0.6),
+                                            text: style != nil ? "Live" : "Off"),
+                          title: style?.name ?? "Your desktop, alive",
+                          subtitle: style != nil ? "Playing behind your windows" : "Play any style behind your windows.")
     }
 
     private var preview: some View {
@@ -830,19 +951,6 @@ struct WallpaperCard: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous).strokeBorder(.primary.opacity(0.08)))
-    }
-
-    private var details: some View {
-        VStack(alignment: .leading, spacing: layout.labelGap) {
-            let name = style?.name ?? "Your desktop, alive"
-            Text(name)
-                .textRole(.cardTitle)
-                .truncating(name, lines: 2)
-            Text(style != nil ? "Playing behind your windows" : "Play any style behind your windows.")
-                .textRole(.callout)
-                .foregroundStyle(.secondary)
-                .wrapping()
-        }
     }
 
     private var actions: some View {
