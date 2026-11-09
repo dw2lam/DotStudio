@@ -9,6 +9,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     let device: MTLDevice
     private let queue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
+    /// The format the live passes draw in (the view's / layer's).
+    private let pixelFormat: MTLPixelFormat
     private var veilDownPipeline: MTLRenderPipelineState?
     private var veilPipeline: MTLRenderPipelineState?
     private let sampler: MTLSamplerState
@@ -43,12 +45,20 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// time base it's when the source was applied; with the wall-clock base it is re-derived
     /// every frame from the wall clock (see `timeBase`).
     private var startTime: CFTimeInterval = CACurrentMediaTime()
+    /// The instance time base's slideshow origin: when the source was applied. Unlike
+    /// `startTime` it never wraps, so the hourly wrap never moves the slideshow.
+    private var slideOrigin: CFTimeInterval = CACurrentMediaTime()
+    /// Which chain the current time origin belongs to: bumped whenever a fade parks the
+    /// current chain as `outgoing`, so per-chain state (weather cloud drift) stays with its chain.
+    private var chainID = 0
     private var loggedFirstFrame = false
 
     /// What the animation time `t` counts from.
     enum TimeBase: Equatable {
         /// Seconds since this renderer applied its current source (the default): every
-        /// preview, saver and wallpaper instance starts its own motion from zero.
+        /// preview, saver and wallpaper instance starts its own motion from zero. Like the
+        /// wall clock it wraps every `wallClockPeriod` (behind the same 2 s crossfade), so a
+        /// saver left running for days never feeds the shaders a coarse Float time.
         case instance
         /// Seconds into the current wall-clock hour (`wallClockPeriod`, aligned to the Unix
         /// epoch, so DST and time-zone changes never move it), read from the wall clock each
@@ -74,14 +84,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         didSet {
             guard timeBase != oldValue else { return }
             let now = CACurrentMediaTime()
-            if let p = preset, outgoing == nil, drewOnce {
+            if preset != nil, outgoing == nil, drewOnce {
                 // The outgoing chain keeps the OLD clock: captured before the origin moves.
-                outgoing = Outgoing(preset: p, packed: packedUniforms, startTime: startTime,
-                                    wallSlides: oldValue == .wallClock)
-                transitionBegan = now
-                transitionDuration = 1.0
+                beginFade(now: now, duration: 1.0, wallSlides: oldValue == .wallClock)
             }
             if timeBase == .wallClock { syncWallClockOrigin(now, allowWrapFade: false) }
+            else { slideOrigin = startTime }       // the slideshow carries on from the same origin
         }
     }
     private var drewOnce = false
@@ -103,6 +111,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     var location: (lat: Double, lon: Double)?      // resolved device location (Universe marker, live sky)
     /// Renders as if the wall clock read this instead of now (offscreen gallery only).
     var clockOverride: Date?
+    /// Tools only (gallery --checks): the wall clock the time base reads runs this far ahead,
+    /// so an hourly wrap can be put a moment away.
+    var timeBaseSkew: TimeInterval = 0
+    private func timeBaseEpoch() -> Double { Date().timeIntervalSince1970 + timeBaseSkew }
+    /// Tools only: puts the instance time base's t at `t` now.
+    func setInstanceTime(_ t: Double) { startTime = CACurrentMediaTime() - t }
 
     // Per-effect uniforms packed once at apply(); per frame only the dynamic
     // fields (time/resolution/srcSize/astro) are overwritten on a copy.
@@ -118,10 +132,28 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let packed: [FXUniforms]
         /// The outgoing chain's own time origin (a wall-clock wrap keeps counting past it).
         let startTime: CFTimeInterval
+        /// Its instance slideshow's origin (see `slideOrigin`).
+        let slideOrigin: CFTimeInterval
         /// Its slideshow ran on the wall clock (see `slideClock`).
         let wallSlides: Bool
+        /// Its `chainID`.
+        let chain: Int
     }
     private var outgoing: Outgoing?
+    /// A preset switch asked for while a same-preset fade (the hourly wrap, a time-base
+    /// switch) was in flight: started as soon as that fade ends (see `transition`).
+    private var pendingTransition: (preset: Preset, source: SourceSpec, duration: Double)?
+
+    /// Parks the current chain — preset, uniforms, time origins — as `outgoing` and starts a
+    /// crossfade from it; whatever is drawn next is a new chain.
+    private func beginFade(now: CFTimeInterval, duration: Double, wallSlides: Bool) {
+        guard let p = preset else { return }
+        outgoing = Outgoing(preset: p, packed: packedUniforms, startTime: startTime, slideOrigin: slideOrigin,
+                            wallSlides: wallSlides, chain: chainID)
+        chainID &+= 1
+        transitionBegan = now
+        transitionDuration = duration
+    }
     private var transitionBegan: CFTimeInterval = 0
     private var transitionDuration: Double = 0
     private var fadeOld: MTLTexture?
@@ -192,6 +224,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         desc.colorAttachments[0].pixelFormat = pixelFormat
         guard let pso = try? device.makeRenderPipelineState(descriptor: desc) else { return nil }
         pipeline = pso
+        self.pixelFormat = pixelFormat
+        WeatherLink.adopt(library, device: device)      // its pipelines use this metallib too
         // The music veil's own small passes (Shaders.metal, "music veil").
         func veilPSO(_ name: String) -> MTLRenderPipelineState? {
             guard let f = library.makeFunction(name: name) else { return nil }
@@ -232,6 +266,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     func apply(_ preset: Preset, source: SourceSpec) {
         let sourceChanged = (self.source != source)
+        pendingTransition = nil                    // this supersedes a switch still waiting
+        if preset != self.preset { WeatherLink.prewarm(for: preset, device: device, format: pixelFormat) }
         self.preset = preset
         self.source = source
         // Pack static uniforms (effect id, params, palette) once per preset change
@@ -242,7 +278,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             return u
         }
         if sourceChanged {
-            if timeBase == .instance { startTime = CACurrentMediaTime() }
+            if timeBase == .instance { startTime = CACurrentMediaTime(); slideOrigin = startTime }
             loadMedia(for: source)
         }
         ditherHistoryKey = nil
@@ -252,7 +288,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// With `.wallClock` every renderer on the Mac returns the same value at the same moment.
     /// Read-only: it never moves the origin a frame's wrap crossfade is detected against.
     func animationTime(at now: CFTimeInterval = CACurrentMediaTime()) -> Double {
-        timeBase == .wallClock ? Self.wallPhase(Date().timeIntervalSince1970) : now - startTime
+        timeBase == .wallClock ? Self.wallPhase(timeBaseEpoch()) : now - startTime
     }
 
     /// Seconds into the current wall-clock period (0 ..< wallClockPeriod).
@@ -266,22 +302,35 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// starts a crossfade whose outgoing chain keeps the old origin, so motion never visibly
     /// jumps. Every synced renderer wraps at the same wall time.
     private func syncWallClockOrigin(_ now: CFTimeInterval, allowWrapFade: Bool) {
-        let origin = now - Self.wallPhase(Date().timeIntervalSince1970)
-        if allowWrapFade, abs(origin - startTime) > 0.25, let p = preset, outgoing == nil {
+        let origin = now - Self.wallPhase(timeBaseEpoch())
+        if allowWrapFade, abs(origin - startTime) > 0.25, preset != nil {
+            // Another fade (a style change) in flight: the wrap waits for it to end, t running
+            // on past the period meanwhile, rather than jumping under a chain on screen.
+            if outgoing != nil { return }
             // The outgoing chain keeps counting past the period for the 2 s fade.
-            outgoing = Outgoing(preset: p, packed: packedUniforms, startTime: startTime, wallSlides: true)
-            transitionBegan = now
-            transitionDuration = 2.0
+            beginFade(now: now, duration: 2.0, wallSlides: true)
         }
         startTime = origin
+    }
+
+    /// Instance time base: wrap t every `wallClockPeriod`, behind the same 2 s crossfade as the
+    /// wall clock's (deferred while another fade is in flight), so it stays a precise Float.
+    private func wrapInstanceOrigin(_ now: CFTimeInterval, allowFade: Bool) {
+        let p = Self.wallClockPeriod
+        guard now - startTime >= p else { return }
+        if allowFade, preset != nil {
+            if outgoing != nil { return }
+            beginFade(now: now, duration: 2.0, wallSlides: false)
+        }
+        startTime += p * ((now - startTime) / p).rounded(.down)
     }
 
     /// The slideshow timeline a chain shows: on the wall clock, full-precision epoch seconds
     /// with a fixed photo order (seed 0), so every synced renderer shows the same photo with
     /// the same Ken Burns framing and the hourly wrap never touches it; otherwise the
     /// instance time with this source's own random first photo.
-    private func slideClock(wall: Bool, startTime: CFTimeInterval, now: CFTimeInterval, epoch: Double) -> SlideClock {
-        wall ? SlideClock(t: epoch, seed: 0) : SlideClock(t: now - startTime, seed: nil)
+    private func slideClock(wall: Bool, origin: CFTimeInterval, now: CFTimeInterval, epoch: Double) -> SlideClock {
+        wall ? SlideClock(t: epoch, seed: 0) : SlideClock(t: now - origin, seed: nil)
     }
 
     /// Opt-in GPU accounting (live wallpaper power stats): GPU execution time of drawn
@@ -579,11 +628,27 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             apply(preset, source: source)
             return
         }
-        outgoing = Outgoing(preset: current, packed: packedUniforms, startTime: startTime,
-                            wallSlides: timeBase == .wallClock)
-        transitionBegan = CACurrentMediaTime()
-        transitionDuration = duration
+        let now = CACurrentMediaTime()
+        // A same-preset fade in flight (the hourly wrap — a rotation lands on the hour — or a
+        // time-base switch) shows one style at two times: replacing its outgoing chain would cut
+        // away the one mostly on screen. Let it finish; this switch starts when it ends.
+        if let out = outgoing, out.preset == current, now - transitionBegan < transitionDuration {
+            pendingTransition = (preset, source, duration)
+            return
+        }
+        beginFade(now: now, duration: duration, wallSlides: timeBase == .wallClock)
         apply(preset, source: source)   // shared global source ⇒ no media reload mid-fade
+    }
+
+    /// Starts a switch `transition` held back, once the fade it waited for is over (or at
+    /// once, without a fade, for a held frame).
+    private func startPendingTransition(_ now: CFTimeInterval, settled: Bool) {
+        guard let p = pendingTransition,
+              settled || outgoing == nil || now - transitionBegan >= transitionDuration else { return }
+        pendingTransition = nil
+        outgoing = nil
+        if settled { apply(p.preset, source: p.source) }
+        else { transition(to: p.preset, source: p.source, duration: p.duration) }
     }
 
     /// Sun/location for the Universe effect, cached for a second.
@@ -719,6 +784,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     @discardableResult
     private func encodeFrame(final: MTLRenderPassDescriptor, drawable: MTLDrawable?,
                              size ds: CGSize, format: MTLPixelFormat, settled: Bool = false) -> MTLCommandBuffer? {
+        startPendingTransition(CACurrentMediaTime(), settled: settled)
         guard let preset = preset, let texA = texA, let texB = texB else { return nil }
 
         // Throttle frames-in-flight; released in the command buffer's completion handler.
@@ -739,6 +805,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             fadeOld = nil; fadeNew = nil
         }
         if timeBase == .wallClock { syncWallClockOrigin(now, allowWrapFade: drewOnce && !settled) }
+        else { wrapInstanceOrigin(now, allowFade: drewOnce && !settled) }
         drewOnce = true
         let t = Float(now - startTime)
         // Full Screen music's backdrop: a held frame shows where its ease ends.
@@ -800,9 +867,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         var slides: SlideFrame?
         var outSlides: SlideFrame?
         if wantsSource, let c = collection {
-            let epoch = Date().timeIntervalSince1970
-            let inClock = slideClock(wall: timeBase == .wallClock, startTime: startTime, now: now, epoch: epoch)
-            let outClock = outgoing.map { slideClock(wall: $0.wallSlides, startTime: $0.startTime, now: now, epoch: epoch) }
+            let epoch = timeBaseEpoch()
+            let inClock = slideClock(wall: timeBase == .wallClock, origin: slideOrigin, now: now, epoch: epoch)
+            let outClock = outgoing.map { slideClock(wall: $0.wallSlides, origin: $0.slideOrigin, now: now, epoch: epoch) }
             if let outClock, outClock != inClock {
                 let f = c.frames(at: [inClock, outClock], sync: false)
                 slides = f[0]; outSlides = f[1]
@@ -838,12 +905,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                                  size: drawableSize, time: Float(now - out.startTime),
                                  preset: out.preset, source: source,
                                  sourceTex: media?.currentTexture() ?? outSlides?.texA,
-                                 slides: outSlides, packedUniforms: out.packed)
+                                 slides: outSlides, packedUniforms: out.packed, chain: out.chain)
                     // Incoming chain → fadeNew. The shared ping-pong is safe: the chains
                     // encode sequentially and each result is parked before the next starts.
                     encodePasses(cmd, finalDescriptor: offscreenDescriptor(fn), pingA: texA, pingB: texB,
                                  size: drawableSize, time: t, preset: preset, source: source,
-                                 sourceTex: sTex, slides: slides, packedUniforms: packedUniforms)
+                                 sourceTex: sTex, slides: slides, packedUniforms: packedUniforms, chain: chainID)
                     // Both chains are parked: texA is free for the blend when veiled.
                     encodeBlend(cmd, final: veiled ? offscreenDescriptor(texA) : final, newTex: fn, oldTex: fo,
                                 progress: Float(progress), size: drawableSize)
@@ -855,7 +922,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         if !blended {
             encodePasses(cmd, finalDescriptor: veiled ? offscreenDescriptor(chainOut) : final, pingA: texA, pingB: texB,
                          size: drawableSize, time: t, preset: preset, source: source,
-                         sourceTex: sTex, slides: slides, packedUniforms: packedUniforms)
+                         sourceTex: sTex, slides: slides, packedUniforms: packedUniforms, chain: chainID)
         }
         if veiled {
             encodeVeil(cmd, style: styleTex, final: final, size: drawableSize, amount: backdrop,
@@ -923,7 +990,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                               pingA: MTLTexture, pingB: MTLTexture, size: CGSize, time: Float,
                               preset: Preset, source: SourceSpec, sourceTex: MTLTexture?,
                               slides: SlideFrame? = nil,
-                              packedUniforms packed: [FXUniforms]? = nil) {
+                              packedUniforms packed: [FXUniforms]? = nil, chain: Int = -1) {
         let res = simd_float2(Float(size.width), Float(size.height))
         let useGradient = (source.kind == .gradient) || (sourceTex == nil)
         let effects = preset.effects.filter { $0.enabled }
@@ -1002,8 +1069,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                     u.p2 = simd_float4(a.userLon, a.userLat, a.hasLoc ? 1 : 0, orbits)
                 }
                 MetalRenderer.fillLiveSky(&u, inst: inst!, now: wall, time: time, location: location)
-                weatherLink.fill(&u, inst: inst!, time: time, wall: wall, encoder: enc, format: rpd.colorAttachments[0].texture?.pixelFormat)
-                if inst!.kind == .sandGarden { sceneData = sandGardens.prepare(&u, device: device) }
+                weatherLink.fill(&u, inst: inst!, time: time, wall: wall, chain: chain,
+                                 encoder: enc, format: rpd.colorAttachments[0].texture?.pixelFormat)
+                if inst!.kind == .sandGarden { sceneData = sandGardens.prepare(&u, wall: wall, device: device) }
                 if inst!.kind == .nowPlaying {
                     fillMusic(&u, options: MusicSceneOptions(inst!), size: size, now: CACurrentMediaTime(), wall: wall)
                 }
@@ -1271,7 +1339,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         // sourceTexOverride (see Thumbnailer); gradient renders the fallback.
         var thumbTex: MTLTexture? = sourceTexOverride
         if thumbTex == nil, source.kind == .image, let name = source.mediaFilename {
-            thumbTex = ImageSource(url: store.mediaURL(name), device: device)?.currentTexture()
+            thumbTex = thumbImage(name)?.currentTexture()
         }
         // Slideshow: the frame at `time`, photos decoded on the spot.
         var slides: SlideFrame?
@@ -1311,6 +1379,20 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         cmd.commit()
         cmd.waitUntilCompleted()
         return readBack(outTex)
+    }
+
+    /// The last image source a thumbnail decoded, by file and modification date: a run of
+    /// thumbnails over one photo (every style's card) decodes it once, not once a card.
+    private var thumbImageCache: (name: String, modified: Date?, source: ImageSource)?
+
+    private func thumbImage(_ name: String) -> ImageSource? {
+        let url = store.mediaURL(name)
+        let modified = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
+        if let c = thumbImageCache, c.name == name, c.modified == modified { return c.source }
+        thumbImageCache = nil                    // drop the old photo before decoding the next
+        guard let s = ImageSource(url: url, device: device) else { return nil }
+        thumbImageCache = (name, modified, s)
+        return s
     }
 
     /// A finished, CPU-readable BGRA8 render target as a CGImage.

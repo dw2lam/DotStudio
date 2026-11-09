@@ -21,6 +21,7 @@
 constant float STUDIO2_PI = 3.14159265;
 constant uint STUDIO2_ROW_COUNT = 0, STUDIO2_ROW_RING = 1, STUDIO2_ROW_STONE = 257, STUDIO2_ROW_SHADOW = 258;
 constant int STUDIO2_K = 32;
+constant int STUDIO2_CELLS = 4096;                                // SandGarden.maxCells
 constant float STUDIO2_TINES = 5.0;
 
 struct studio2_Geo {
@@ -207,10 +208,11 @@ static inline void studio2_track(thread studio2_Acc& A, texture2d<float> data, c
     }
     float4 gd = u.scene[3];                                      // grid: origin, cell, columns
     int gx = int(gd.w);
-    int gy = int(ceil(-2.0 * gd.y / gd.z));
+    int gy = int(u.scene[15].w);                                 // rows, as SandGarden.grid counted them
     int2 c = clamp(int2(floor((x - gd.xy) / gd.z)), int2(0), int2(gx - 1, gy - 1));
     int cell = c.y * gx + c.x;
-    int cnt = int(data.read(uint2(uint(cell) >> 2, STUDIO2_ROW_COUNT))[cell & 3]);
+    // (the count row and the rings hold STUDIO2_CELLS cells: never read past them)
+    int cnt = cell < STUDIO2_CELLS ? int(data.read(uint2(uint(cell) >> 2, STUDIO2_ROW_COUNT))[cell & 3]) : 0;
     int n = min(cnt, STUDIO2_K);
     int base = cell * STUDIO2_K;
     for (int j = 0; j < n; ++j) {
