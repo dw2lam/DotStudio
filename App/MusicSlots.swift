@@ -14,7 +14,8 @@
 //  │ MusicSettingsSlot — the Music section, right after Settings › General: each player's  │
 //  │ status and permission (with its fix-it), what's playing with controls, Show music     │
 //  │ (Off / Corner / Full Screen) and that mode's options — corner + size, or what's       │
-//  │ behind the music + layout — then, while music shows at all, also on the wallpaper,    │
+//  │ layout (Album/Stage/Cover miniatures) + behind the music — then, while music shows,   │
+//  │ also on the wallpaper,                                                                 │
 //  │ the paused linger and the source; the privacy note. As WallpaperSettingsSection.      │
 //  └───────────────────────────────────────────────────────────────────────────────────────┘
 
@@ -150,13 +151,16 @@ struct MusicSettingsSection: View {
                 }
             }
             if spec.displayMode == .fullScreen {
-                SettingsValueRow("Behind the music", valueWidth: segmentWidth) {
-                    ScaledSegmentedPicker(title: "Behind the music", selection: binding(\.backdrop) { $0.fullBackdrop = $1 },
-                                          options: MusicSpec.Backdrop.allCases.map { ($0.label, $0) }, fills: true)
-                }
+                // The layout as small pictures of the screen (they show the backdrop picked
+                // below); Cover is the artwork itself, so "Behind the music" leaves with it.
                 SettingsValueRow("Layout", valueWidth: segmentWidth) {
-                    ScaledSegmentedPicker(title: "Layout", selection: binding(\.layout) { $0.fullLayout = $1 },
-                                          options: MusicSpec.FullLayout.allCases.map { ($0.label, $0) }, fills: true)
+                    MusicLayoutChoice(selection: binding(\.layout) { $0.fullLayout = $1 }, backdrop: spec.backdrop)
+                }
+                if spec.layout.usesBackdrop {
+                    SettingsValueRow("Behind the music", valueWidth: segmentWidth) {
+                        ScaledSegmentedPicker(title: "Behind the music", selection: binding(\.backdrop) { $0.fullBackdrop = $1 },
+                                              options: MusicSpec.Backdrop.allCases.map { ($0.label, $0) }, fills: true)
+                    }
                 }
             }
             if spec.displayMode != .off {
@@ -181,7 +185,7 @@ struct MusicSettingsSection: View {
             SettingsHeader("Music")
         } footer: {
             VStack(alignment: .leading, spacing: Space.xs) {
-                SettingsNote("While a song plays in Spotify or Apple Music, the screensaver shows it over whatever style is playing — in a corner, or full screen over the album's living art or your screensaver, softly blurred. When the music stops, the screensaver is all that's left.")
+                SettingsNote("While a song plays in Spotify or Apple Music, the screensaver shows it over whatever style is playing — in a corner, or full screen: over the album's living art or your screensaver, softly blurred, or on the cover itself. When the music stops, the screensaver is all that's left.")
                 // What closing the window does (AppPresence.windowClosed), as General says.
                 SettingsNote(presence.menuBarMode
                     ? "DotStudio has to be running to know what's playing — closing its window keeps it in the menu bar."
@@ -214,6 +218,152 @@ struct MusicSettingsSection: View {
         if m < 1 { return "\(Int((m * 60).rounded())) seconds" }
         let n = Int(m.rounded())
         return n == 1 ? "1 minute" : "\(n) minutes"
+    }
+}
+
+/// Full Screen's layouts as labelled miniatures of the screen — Album (art left, type right),
+/// Stage (art centred, type below), Cover (the art fills it, type bottom-left) — drawn over the
+/// backdrop "Behind the music" picks, so the pair reads as the screen you'll get. Equal columns
+/// across the value column; the selected one gets an accent ring and a semibold label.
+private struct MusicLayoutChoice: View {
+    @Binding var selection: MusicSpec.FullLayout
+    let backdrop: MusicSpec.Backdrop
+    @Environment(\.layout) private var layout
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(alignment: .top, spacing: layout.controlGap) {
+            ForEach(MusicSpec.FullLayout.allCases) { option in
+                cell(option)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .animation(reduceMotion ? Motion.reduced : Motion.snappy, value: selection)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Layout")
+    }
+
+    private func cell(_ option: MusicSpec.FullLayout) -> some View {
+        let isOn = option == selection
+        let shape = RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
+        return Button { selection = option } label: {
+            VStack(spacing: layout.labelGap) {
+                MusicLayoutMiniature(layout: option, backdrop: backdrop)
+                    .aspectRatio(16.0 / 10.0, contentMode: .fit)
+                    .clipShape(shape)
+                    .overlay(shape.strokeBorder(Color.primary.opacity(0.12)))
+                    .padding(3)
+                    .overlay(RoundedRectangle(cornerRadius: Radius.concentric(Radius.s, inset: -3), style: .continuous)
+                        .strokeBorder(isOn ? Color.accentColor : .clear, lineWidth: 2))
+                // The semibold copy (hidden) sizes every label, so picking one never re-wraps it.
+                ZStack {
+                    Text(option.label).textRole(.calloutEmphasis).hidden()
+                    Text(option.label).textRole(isOn ? .calloutEmphasis : .callout)
+                        .foregroundStyle(isOn ? .primary : .secondary)
+                }
+                .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(Self.help(option))
+        .accessibilityLabel(option.label)
+        .accessibilityHint(Self.help(option))
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+    }
+
+    private static func help(_ option: MusicSpec.FullLayout) -> String {
+        switch option {
+        case .album: return "Album — the cover on the left, the song in big type beside it"
+        case .stage: return "Stage — the cover in the middle, the song centred under it"
+        case .cover: return "Cover — the cover fills the screen, the song at the bottom left"
+        }
+    }
+}
+
+/// A schematic of one Full Screen layout: the backdrop, the artwork and three lines of type
+/// (title, artist, progress), in the proportions MusicOverlayLayer uses.
+private struct MusicLayoutMiniature: View {
+    let layout: MusicSpec.FullLayout
+    let backdrop: MusicSpec.Backdrop
+
+    /// A stand-in cover: warm, with a bright corner, like most album art.
+    private static let art = LinearGradient(colors: [Color(red: 0.98, green: 0.62, blue: 0.36),
+                                                     Color(red: 0.78, green: 0.27, blue: 0.48),
+                                                     Color(red: 0.32, green: 0.18, blue: 0.52)],
+                                            startPoint: .topLeading, endPoint: .bottomTrailing)
+    /// Living art: the cover's colours as soft fields.
+    private static let livingArt = LinearGradient(colors: [Color(red: 0.55, green: 0.24, blue: 0.40),
+                                                           Color(red: 0.26, green: 0.14, blue: 0.36),
+                                                           Color(red: 0.62, green: 0.34, blue: 0.24)],
+                                                  startPoint: .topLeading, endPoint: .bottomTrailing)
+    /// The screensaver, blurred and dimmed: cool and quiet.
+    private static let veil = LinearGradient(colors: [Color(red: 0.20, green: 0.27, blue: 0.33),
+                                                      Color(red: 0.10, green: 0.12, blue: 0.16)],
+                                             startPoint: .top, endPoint: .bottom)
+
+    var body: some View {
+        GeometryReader { g in
+            let w = g.size.width, h = g.size.height
+            ZStack(alignment: .topLeading) {
+                background(w, h)
+                switch layout {
+                case .album:
+                    let s = h * 0.5
+                    artTile(s).offset(x: w * 0.14, y: (h - s) / 2)
+                    lines(width: w * 0.36, scale: h).offset(x: w * 0.14 + s + w * 0.07, y: h * 0.36)
+                case .stage:
+                    let s = h * 0.42
+                    artTile(s).offset(x: (w - s) / 2, y: h * 0.12)
+                    lines(width: w * 0.36, scale: h, centred: true).offset(x: w * 0.32, y: h * 0.12 + s + h * 0.07)
+                case .cover:
+                    lines(width: w * 0.4, scale: h).offset(x: w * 0.08, y: h * 0.58)
+                }
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder private func background(_ w: CGFloat, _ h: CGFloat) -> some View {
+        if layout == .cover {
+            ZStack {
+                Self.art
+                // The shader's scrim under the type.
+                LinearGradient(colors: [.clear, .black.opacity(0.55)], startPoint: .center, endPoint: .bottom)
+            }
+        } else if backdrop == .albumArt {
+            ZStack {
+                Self.livingArt
+                Circle().fill(Color(red: 0.95, green: 0.55, blue: 0.35).opacity(0.45))
+                    .frame(width: h * 0.9).blur(radius: h * 0.18).offset(x: w * 0.45, y: -h * 0.2)
+            }
+        } else {
+            ZStack {
+                Self.veil
+                // A hint of the style behind, softly blurred.
+                Circle().fill(Color(red: 0.55, green: 0.70, blue: 0.80).opacity(0.25))
+                    .frame(width: h * 0.7).blur(radius: h * 0.16).offset(x: -w * 0.1, y: h * 0.35)
+            }
+        }
+    }
+
+    private func artTile(_ s: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: s * 0.08, style: .continuous)
+            .fill(Self.art)
+            .frame(width: s, height: s)
+            .shadow(color: .black.opacity(0.35), radius: s * 0.08, y: s * 0.04)
+    }
+
+    /// Title, artist and a progress bar, as white bars.
+    private func lines(width: CGFloat, scale h: CGFloat, centred: Bool = false) -> some View {
+        VStack(alignment: centred ? .center : .leading, spacing: h * 0.045) {
+            Capsule().fill(.white.opacity(0.95)).frame(width: width * 0.8, height: h * 0.07)
+            Capsule().fill(.white.opacity(0.7)).frame(width: width * 0.55, height: h * 0.045)
+            Capsule().fill(.white.opacity(0.45)).frame(width: width, height: h * 0.02)
+                .padding(.top, h * 0.03)
+        }
+        .frame(width: width, alignment: centred ? .center : .leading)
     }
 }
 

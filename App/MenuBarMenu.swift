@@ -5,7 +5,8 @@
 //      Screensaver: <what plays now>          Play as Screensaver ▸ (Scenes / Looks)
 //        | Screensaver: Not installed / Not selected   Set Up Screensaver… (the main window)
 //      ───
-//      Wallpaper: <style> | Off  (+ status)   Set as Wallpaper ▸, Pause, Stop | Set “X” as Wallpaper
+//      Wallpaper: <style> | Off  (+ status)   ✓ Same as Screensaver, Set as Wallpaper ▸, Pause, Stop
+//                                             | Set “X” as Wallpaper, Same as Screensaver, Set as Wallpaper ▸
 //      ───
 //      Open DotStudio · Settings… · Check for Updates…
 //      ───

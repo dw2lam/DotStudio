@@ -382,16 +382,9 @@ struct EffectStackView: View {
                 .listRowSeparator(.hidden)
 
             VStack(alignment: .leading, spacing: layout.labelGap) {
-                // A stock pop-up: its title can't take a font (AppKit draws it at the
-                // control size's own font), so it keeps 13 pt while its bezel steps up.
                 InspectorRow(label: "Frame rate") {
-                    FittingPicker {
-                        Picker("Frame rate", selection: $preset.fps) {
-                            ForEach(fpsOptions, id: \.self) { Text("\($0) fps").tag($0) }
-                        }
-                        .labelsHidden()
-                    }
-                    .adaptiveControlSize()
+                    InspectorMenu(title: "Frame rate", selection: $preset.fps,
+                                  options: fpsOptions.map { ("\($0) fps", $0) })
                 }
                 // One sentence per line, each short enough for the narrowest inspector at
                 // the default size, so the caption breaks on the sentence, not mid-phrase.
@@ -417,30 +410,12 @@ struct EffectStackView: View {
         }
     }
 
-    /// "Effects" (or "Scene & Layers") with the reorder hint beside it, or under it when
-    /// the two can't share a line. The hint only shows when there's something to reorder.
+    /// "Effects" (or "Scene & Layers"). How to reorder is in its tooltip, not on screen.
     private var effectsHeader: some View {
-        let title = Text(preset.isScene ? "Scene & Layers" : "Effects").textRole(.inspectorSection)
-        let hint = Text("Drag to reorder · top runs first")
-            .textRole(.caption2).foregroundStyle(.tertiary)
-        return Group {
-            if preset.effects.count > 1 {
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .firstTextBaseline, spacing: layout.controlGap) {
-                        title
-                        Spacer(minLength: layout.controlGap)
-                        hint.fixedSize()
-                    }
-                    VStack(alignment: .leading, spacing: layout.labelGap) {
-                        title
-                        hint.wrapping()
-                    }
-                }
-            } else {
-                title
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        Text(preset.isScene ? "Scene & Layers" : "Effects")
+            .textRole(.inspectorSection)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .help(preset.effects.count > 1 ? "Drag effects to reorder them — the top one runs first" : "")
     }
 
     /// Row insets that put list content on the panel's content edge (`cardPadding`).
@@ -617,16 +592,50 @@ struct EffectRow: View {
     }
 }
 
-/// A menu picker at its natural width when it fits, otherwise squeezed (macOS then
-/// truncates the selected title) instead of running past the panel.
-private struct FittingPicker<Content: View>: View {
-    @ViewBuilder var content: Content
+/// The inspector's pop-up: the same capsule track as `SegmentedChoice` (fills, height, `.body`
+/// title that follows the text size), spanning the control column, with the up-down chevrons
+/// of a pop-up — so a Frame rate or a Layout menu sits in the panel like its other controls
+/// rather than as a stock white box. The menu itself is the stock checkmarked list.
+struct InspectorMenu<Value: Hashable>: View {
+    let title: String
+    @Binding var selection: Value
+    let options: [(title: String, value: Value)]
+    @ScaledLength(relativeTo: .body) private var height: CGFloat = InspectorMetrics.segmentHeight
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            content.fixedSize()
-            content
+        let current = options.first { $0.value == selection }?.title ?? ""
+        let shape = RoundedRectangle(cornerRadius: height / 2, style: .continuous)
+        Menu {
+            Picker(title, selection: $selection) {
+                ForEach(options.indices, id: \.self) { i in Text(options[i].title).tag(options[i].value) }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            HStack(spacing: Space.xs) {
+                Text(current)
+                    .textRole(.body)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.up.chevron.down")
+                    .textRole(.caption2)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, height / 2)
+            .frame(maxWidth: .infinity, minHeight: height)
+            .background(shape.fill(Color.primary.opacity(0.078)))
+            .contentShape(shape)
         }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .frame(maxWidth: .infinity)
+        .help("\(title): \(current)")
+        .accessibilityLabel(title)
+        .accessibilityValue(current)
     }
 }
 
@@ -641,13 +650,9 @@ struct ParamRow: View {
     var body: some View {
         InspectorRow(label: spec.label) {
             if let options = spec.options {
-                FittingPicker {
-                    Picker(spec.label, selection: Binding(get: { Int(value.rounded()) }, set: { value = Double($0) })) {
-                        ForEach(Array(options.enumerated()), id: \.offset) { i, name in Text(name).tag(i) }
-                    }
-                    .labelsHidden()
-                }
-                .adaptiveControlSize()
+                InspectorMenu(title: spec.label,
+                              selection: Binding(get: { Int(value.rounded()) }, set: { value = Double($0) }),
+                              options: options.enumerated().map { ($0.element, $0.offset) })
             } else if spec.isToggle {
                 Toggle(spec.label, isOn: Binding(get: { value > 0.5 }, set: { value = $0 ? 1 : 0 }))
                     .labelsHidden()
@@ -664,13 +669,17 @@ struct ParamRow: View {
                             .textRole(.value).foregroundStyle(.secondary)
                             .lineLimit(1)
                             .frame(width: valueColumn, alignment: .trailing)
+                        // Every slider row has its reset in the same slot, so the value column
+                        // and the row's right edge line up whatever has been changed; at the
+                        // default it is a faint, disabled glyph.
+                        let isDefault = abs(value - spec.def) <= 1e-6
                         Button { value = spec.def } label: {
                             Image(systemName: "arrow.counterclockwise").textRole(.caption2)
                         }
                         .buttonStyle(.borderless)
-                        .opacity(abs(value - spec.def) > 1e-6 ? 1 : 0)
-                        .disabled(abs(value - spec.def) <= 1e-6)
-                        .help("Reset to \(format(spec.def))")
+                        .opacity(isDefault ? 0.3 : 1)
+                        .disabled(isDefault)
+                        .help(isDefault ? "At its default (\(format(spec.def)))" : "Reset to \(format(spec.def))")
                     }
                 }
                 .adaptiveControlSize(.small)
@@ -923,9 +932,12 @@ private struct SourceEditorContent: View {
         let choose = own ? "Choose Other Photos…" : "Use Your Own Photos…"
         return VStack(alignment: .leading, spacing: layout.itemGap) {
             VStack(alignment: .leading, spacing: layout.labelGap) {
+                // Always the column's full width at 16:10 (fixed vertically, so a host that
+                // runs short of height never shrinks it into a narrower thumbnail).
                 Color.clear
                     .frame(maxWidth: .infinity)
                     .aspectRatio(16.0 / 10.0, contentMode: .fit)
+                    .fixedSize(horizontal: false, vertical: true)
                     .overlay(SourceSwatch(source: source))
                     .clipShape(RoundedRectangle(cornerRadius: Radius.s, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
