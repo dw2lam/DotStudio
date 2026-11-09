@@ -79,6 +79,14 @@ enum UIShots {
     private static let env = ProcessInfo.processInfo.environment
 
     static func run(outDir: String) {
+        // Renders rewrite the library and wallpaper settings; never let them reach the real ones.
+        let store = ProcessInfo.processInfo.environment["DOTSTUDIO_STORE_DIR"] ?? ""
+        guard !store.isEmpty,
+              URL(fileURLWithPath: store).standardizedFileURL.resolvingSymlinksInPath().path
+                != SharedStore.sharedDir.standardizedFileURL.resolvingSymlinksInPath().path else {
+            FileHandle.standardError.write(Data("ui shots: set DOTSTUDIO_STORE_DIR to a throwaway folder (never the real library)\n".utf8))
+            exit(2)
+        }
         let app = NSApplication.shared
         app.setActivationPolicy(.prohibited)
         AppPrefs.shared.ephemeral()   // renders flip menu-bar mode; never persist it
