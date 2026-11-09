@@ -177,35 +177,134 @@ static inline float wx_streaks(float2 sp, float t, float pixS, float F, float ra
     return 1.0 - keep;
 }
 
-// Snowflakes: soft discs drifting down and swaying on depth layers, the near ones large and out
-// of focus. Returns coverage 0…1.
-static inline float wx_flakes(float2 sp, float t, float pixS, float F, float rate, float wind,
-                              float rdy, float camH) {
-    float keep = 1.0;
-    for (int L = 0; L < 5; ++L) {
-        float z = L == 0 ? 0.8 : (L == 1 ? 1.6 : (L == 2 ? 3.2 : (L == 3 ? 6.4 : 13.0)));
-        if (camH + z * rdy < -0.2) continue;
-        float spd = F * 1.0 / z;                               // ~1 m/s
-        float r = F * 0.005 / z;                               // flake radius (1 cm flakes), sp
-        float def = 0.010 / z;                                 // out of focus up close
-        float sig = sqrt(r * r * 0.4 + def * def + pixS * pixS * 0.3);
-        float len = spd * 0.02;                                // 1/50 s of fall
-        float sigy = sqrt(sig * sig + len * len * 0.08);
-        float a0 = min(1.0, (r * r * 1.3) / (sig * sigy)) * (L == 0 ? 0.55 : 0.9);
-        float cs = L == 0 ? 0.30 : (L == 1 ? 0.16 : (L == 2 ? 0.085 : (L == 3 ? 0.045 : 0.026)));
-        float2 p = sp + float2(t * F * (0.15 + wind * 0.06) / z, t * spd);
-        p += float2(sin(p.y * 2.3 + float(L) * 1.7), cos(p.x * 1.9 + float(L))) * (0.012 / z);
-        float2 cell = floor(p / cs);
+// Snowflakes on five depth layers (z metres from the camera, near → far), drifting down on the
+// wind and tumbling: big soft aggregates up close — they fall slowest (~0.4 m/s), and the lens,
+// focused far off, spreads them into bokeh discs — down to fine specks far out. Each layer is a
+// lattice moving with its flakes, at most one flake per cell (columns staggered, so rows never
+// line up), each swaying round a slow helix inside its cell. A flake has its own size (most
+// small, a few big), is an oval that turns as it tumbles, is blurred along its fall over a 1/50 s
+// exposure, and is drawn energy-kept (a fine flake far off is a faint speck, not a hard dot).
+// Round the ones the pixel resolves, a faint shadow ring: it parts a white flake from a pale sky
+// (over the sea it hardly shows). rate: how many, 0…1.4 (heavy); wet: sleet’s smaller, wetter flakes, 0…1.
+// sp: screen (x right, y up, ±1 top to bottom), F: focal length in those units, pixS: a pixel.
+// Layers whose flakes would be under the sea at this pixel are culled (camH: camera height, rdy:
+// the ray's y). Returns (coverage, ring) 0…1.
+static inline float2 wx_flakes(float2 sp, float t, float pixS, float F, float rate, float wind,
+                               float rdy, float camH, float wet) {
+    float keep = 1.0, ring = 1.0;
+    float drift = 0.12 + 0.05 * wind;                          // sideways, m/s: a gentle drift
+    int nL = wet > 0.5 ? 4 : 5;                                // (sleet: no fine flakes far off)
+    for (int L = 0; L < nL; ++L) {
+        float z = L == 0 ? 0.9 : (L == 1 ? 1.7 : (L == 2 ? 3.1 : (L == 3 ? 5.8 : 11.5)));
+        float above = camH + z * rdy;
+        if (above < -0.2) continue;                            // under the water here
+        float k = F / z;                                       // metres → screen units, here
+        float vf = L == 0 ? 0.42 : (L == 1 ? 0.6 : 0.85);     // fall speed, m/s
+        float cs = L == 0 ? 0.40 : (L == 1 ? 0.24 : (L == 2 ? 0.14 : (L == 3 ? 0.075 : 0.04)));
+        float2 p = sp + float2(t * drift * k, t * vf * k);    // (the lattice falls with its flakes)
+        float col = floor(p.x / cs);
+        p.y += fract(col * 0.618034 + float(L) * 0.37) * cs;   // (columns staggered)
+        float2 cell = float2(col, floor(p.y / cs));
         float3 h = wx_hash3(cell, uint(L) + 23u);
-        if (h.x > rate * (L == 0 ? 0.35 : 0.7)) continue;
-        float sw = sin(t * (0.7 + h.z) + h.y * 6.283) * 0.18;  // sway within the cell
-        float2 c = (cell + float2(0.5 + sw, 0.2 + 0.6 * h.y)) * cs;
+        if (h.x > rate * (L == 0 ? 0.28 : (L == 1 ? 0.5 : 0.7))) continue;
+        float sc;
+        float sw = nature_sincosT(t * (0.11 + 0.13 * h.z) + h.y, sc);   // the helix
+        float2 c = (cell + 0.5) * cs + (float2(fract(h.z * 7.31), h.y) - 0.5) * (0.3 * cs)
+                 + float2(sw, 0.4 * sc) * (0.035 * k);
         float2 d = p - c;
-        float a = a0 * exp(-0.5 * (d.x * d.x / (sig * sig) + d.y * d.y / (sigy * sigy)));
-        a *= smoothstep(-0.2, 0.3, camH + z * rdy);
-        keep *= 1.0 - a;
+        float rad = k * (L == 0 ? 0.012 : (L == 1 ? 0.012 : (L == 2 ? 0.010 : 0.008))) * (1.0 - 0.4 * wet);
+        float def = (L == 0 ? 0.034 : 0.007) / z;             // defocus
+        float len = vf * k * 0.02;                             // 1/50 s of fall
+        // (Most of a cell is clear of its flake: out past the biggest one's halo, nothing to do.)
+        float rm = rad * 1.45;
+        float ext2 = L == 0 ? (rm * rm + def * def) * 1.7 + pixS * pixS
+                            : 36.0 * (rm * rm * 0.35 + def * def + pixS * pixS * 0.3 + len * len * 0.08);
+        if (dot(d, d) > ext2) continue;
+        float3 h2 = wx_hash3(cell, uint(L) + 57u);
+        float r = rad * (0.55 + 0.9 * h2.x * h2.x);
+        float a, rg;
+        if (L == 0) {
+            // Up close: a soft bokeh disc, a touch brighter toward its rim.
+            float Rb = sqrt(r * r + def * def), e = 0.3 * Rb + pixS;
+            float dl = length(float2(d.x, d.y * Rb / (Rb + 0.5 * len)));
+            a = smoothstep(Rb + e, Rb - e, dl) * (0.34 + 0.10 * smoothstep(0.2 * Rb, Rb, dl));
+            rg = 0.0;
+        } else {
+            float sig2 = r * r * 0.35 + def * def + pixS * pixS * 0.3;
+            float mb = sig2 / (sig2 + len * len * 0.08);       // (blur along the fall keeps energy)
+            // Tumbling: a slightly oval aggregate whose long axis turns as it falls.
+            float axc, axs = nature_sincosT(h2.z + t * (0.1 + 0.22 * h.z), axc);
+            float2 ax = float2(axc, axs);
+            float2 dm = float2(d.x, d.y * sqrt(mb));
+            float2 dr = float2(dot(dm, ax), ax.x * dm.y - ax.y * dm.x);
+            float q2 = (dr.x * dr.x * 0.85 + dr.y * dr.y * 1.18) / sig2;
+            a = min(1.0, r * r * 1.6 / sig2) * sqrt(mb) * exp(-0.5 * q2);
+            // Its shadow: a soft, wider halo underneath (only where the pixel resolves it).
+            rg = exp(-0.125 * q2) * saturate(r / (1.2 * pixS) - 0.3);
+        }
+        float fade = smoothstep(-0.2, 0.3, above);
+        keep *= 1.0 - a * fade;
+        ring *= 1.0 - rg * fade;
     }
-    return 1.0 - keep;
+    return float2(1.0 - keep, 1.0 - ring);
+}
+
+// Snow seen from above (Shallows: a camera looking down at the water from camH up): the flakes
+// fall away from the lens toward the water, shrinking toward the point straight below as they go,
+// and are gone where they land (they melt). Five sheets of flakes, staggered in depth, each
+// sinking from just under the lens to the water and then starting again higher up with new
+// flakes (faded in and out at the ends: nothing pops); the wind carries them sideways, each sways
+// on its helix. r: the view ray (z up), cv = −r.z. Returns (coverage, ring) as wx_flakes.
+static inline float2 wx_flakesDown(float3 r, float cv, float t, float pix, float F, float rate,
+                                   float wind, float camH, float wet) {
+    float keep = 1.0, ring = 1.0;
+    const float d0 = 0.35;                                     // the nearest sheet, m below the lens
+    float span = camH - d0;
+    float vf = 0.55;                                           // fall speed, m/s
+    float2 wv = float2(0.36, -0.93) * (0.10 + 0.05 * wind);    // drift, m/s
+    for (int L = 0; L < 5; ++L) {
+        float ph = t * vf / span + float(L) * 0.2;
+        float cyc = floor(ph), f = ph - cyc;
+        float d = d0 + span * f;                               // this sheet's depth now
+        float2 q = r.xy * (d / cv) - wv * t;                   // where the ray meets it, in the flakes' frame
+        float cs = 0.16;                                       // m
+        float2 cell = floor(q / cs);
+        float3 h = wx_hash3(cell + float2(cyc * 37.0, cyc * 11.0), uint(L) + 71u);
+        if (h.x > rate * 0.55) continue;
+        float3 h2 = wx_hash3(cell + float2(cyc * 37.0, cyc * 11.0), uint(L) + 89u);
+        float rad = 0.0085 * (0.55 + 0.9 * h2.x * h2.x) * (1.0 - 0.4 * wet);   // m
+        float sw = t * (0.7 + 0.8 * h.z) + h.y * 6.283;
+        float2 c = (cell + 0.5) * cs + (float2(h2.y, h.y) - 0.5) * (0.3 * cs) + float2(sin(sw), cos(sw)) * 0.03;
+        // On screen: metres on the sheet × F·cv/d; the lens is focused on the floor, ~3 m down.
+        float k = F * cv / d;
+        float rs = rad * k;
+        float def = 0.05 * abs(1.0 / d - 1.0 / (camH + 0.5));
+        float2 dq = (q - c) * k;
+        float fade = smoothstep(0.0, 0.12, f) * smoothstep(1.0, 0.85, f);
+        float a, rg;
+        float Rb = sqrt(rs * rs + def * def);
+        if (def > 1.5 * rs) {
+            // Out of focus: a soft disc.
+            float e = 0.2 * Rb + pix;
+            float dl = length(dq);
+            a = smoothstep(Rb + e, Rb - e, dl) * mix(0.75, 0.26, saturate(def / rs * 0.25 - 0.4))
+              * (0.85 + 0.15 * smoothstep(0.3 * Rb, Rb, dl));
+            float x = (dl - Rb - 1.3 * e) / (1.2 * e);
+            rg = 0.35 * exp(-x * x);
+        } else {
+            float sig2 = rs * rs * 0.35 + def * def + pix * pix * 0.3;
+            float th = h2.z * 6.283 + t * (0.6 + 1.4 * h.z);
+            float2 ax = float2(cos(th), sin(th));
+            float2 dr = float2(dot(dq, ax), ax.x * dq.y - ax.y * dq.x);
+            float q2 = (dr.x * dr.x * 0.72 + dr.y * dr.y * 1.38) / sig2;
+            a = min(1.0, rs * rs * 1.3 / sig2) * exp(-0.5 * q2);
+            float x = sqrt(q2) - 2.3;
+            rg = exp(-2.2 * x * x) * saturate(rs / (1.2 * pix) - 0.4);
+        }
+        keep *= 1.0 - a * fade;
+        ring *= 1.0 - rg * fade;
+    }
+    return float2(1.0 - keep, 1.0 - ring);
 }
 
 // ---------------------------------------------------------------- rain on the water
