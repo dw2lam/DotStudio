@@ -241,6 +241,23 @@ enum UIShots {
             var m = st.model.library.musicSettings; m.setDisplay(.fullScreen)
             st.model.library.music = m
         }, view: main))
+        // The Screensaver card's "Show what's playing" menu, laid out as a column (menus can't
+        // render offscreen): Full Screen with its Layout / Behind the Music sections, and Corner
+        // with its Corner / Size sections.
+        for (mode, tag) in [(MusicSpec.Display.fullScreen, "full"), (.corner, "corner")] {
+            s.append(Screen(name: "dest-music-menu-\(tag)", frame: .fit(width: 240), prepare: { st in
+                var m = st.model.library.musicSettings; m.setDisplay(mode)
+                if mode == .fullScreen { m.fullLayout = MusicSpec.FullLayout.allCases.last }
+                st.model.library.music = m
+            }, view: { _ in AnyView(MenuPreview { MusicDisplayMenuItems() }) }))
+        }
+        // The Wallpaper card synced while the screensaver rotates a playlist.
+        s.append(Screen(name: "dest-wallpaper-synced", frame: .window, prepare: { st in
+            st.lineup(st.playlist, night: st.night)
+            WallpaperController.shared.update { $0.enabled = true; $0.followsScreensaver = true }
+            WallpaperSlot.shared.set(st.model.nowPlayingID ?? st.hero)
+            MusicDemo.apply(.playing)
+        }, view: main))
         // The Wallpaper card while matching shows what follow mode would: the screensaver's
         // style right now (WallpaperController.currentPreset), not a style of its own.
         s.append(Screen(name: "dest-wallpaper-match", frame: .window, prepare: { st in
@@ -334,28 +351,28 @@ enum UIShots {
 
         // The DotStudio menu-bar menu, laid out as a plain column (menus can't render offscreen):
         // wallpaper off, playing, paused, a rotating screensaver playlist, and not set up
-        s.append(Screen(name: "menu-off", frame: .fit(width: 320), view: { _ in AnyView(MenuPreview()) }))
+        s.append(Screen(name: "menu-off", frame: .fit(width: 320), view: { _ in AnyView(MenuPreview { DotStudioMenu() }) }))
         s.append(Screen(name: "menu-on", frame: .fit(width: 320), prepare: { st in
             WallpaperController.shared.update { $0.enabled = true; $0.presetID = st.wallpaper }
-        }, view: { _ in AnyView(MenuPreview()) }))
+        }, view: { _ in AnyView(MenuPreview { DotStudioMenu() }) }))
         s.append(Screen(name: "menu-paused", frame: .fit(width: 320), prepare: { st in
             WallpaperController.shared.update { $0.enabled = true; $0.presetID = st.wallpaper }
             WallpaperController.shared.togglePause()
-        }, view: { _ in AnyView(MenuPreview()) }))
+        }, view: { _ in AnyView(MenuPreview { DotStudioMenu() }) }))
         s.append(Screen(name: "menu-playlist", frame: .fit(width: 320),
                         prepare: { $0.lineup($0.playlist, night: $0.night) },
-                        view: { _ in AnyView(MenuPreview()) }))
+                        view: { _ in AnyView(MenuPreview { DotStudioMenu() }) }))
         // The screensaver isn't set up: the line says so and leads to the setup strip
         s.append(Screen(name: "menu-setup", frame: .fit(width: 320),
                         prepare: { $0.setup(.notChosen) },
-                        view: { _ in AnyView(MenuPreview()) }))
+                        view: { _ in AnyView(MenuPreview { DotStudioMenu() }) }))
         // Music at the top of the menu: playing, and with the player's permission refused
         s.append(Screen(name: "menu-music", frame: .fit(width: 320),
                         prepare: { _ in MusicDemo.apply(.playing) },
-                        view: { _ in AnyView(MenuPreview()) }))
+                        view: { _ in AnyView(MenuPreview { DotStudioMenu() }) }))
         s.append(Screen(name: "menu-music-denied", frame: .fit(width: 320),
                         prepare: { _ in MusicDemo.apply(.denied) },
-                        view: { _ in AnyView(MenuPreview()) }))
+                        view: { _ in AnyView(MenuPreview { DotStudioMenu() }) }))
         // The one-time "still running" popover (menu-bar mode off, wallpaper playing)
         s.append(Screen(name: "menu-notice", frame: .fit(width: 288, minHeight: 80), view: { _ in
             AnyView(MenuBarStayNotice(quit: {}, keepRunning: {}, turnOnMenuBarMode: {})
@@ -643,10 +660,12 @@ enum UIShots {
 /// The DotStudio menu-bar menu's items laid out as a plain column, standing in for the real
 /// menu (menus can't be drawn offscreen). Shows what each item says — submenus as pull-down
 /// buttons — at the current text size, not the system menu's own metrics.
-private struct MenuPreview: View {
+private struct MenuPreview<Items: View>: View {
+    @ViewBuilder var items: () -> Items
+
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
-            DotStudioMenu()
+            items()
         }
         .textRole(.body)
         .menuStyle(.button)
