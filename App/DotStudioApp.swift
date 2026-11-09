@@ -5,7 +5,12 @@ import Sparkle
 
 @main
 struct DotStudioApp: App {
-    @StateObject private var model = AppModel()
+    static let mainWindowID = "main"
+
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @StateObject private var model: AppModel
+    /// The live wallpaper; its menu bar item exists only while a wallpaper is on.
+    @StateObject private var wallpaper = WallpaperController.shared
 
     /// Sparkle auto-updates from GitHub Releases (app-side only — the saver never links Sparkle).
     @StateObject private var updates = UpdateController()
@@ -33,13 +38,16 @@ struct DotStudioApp: App {
         if let dir = ProcessInfo.processInfo.environment["DOTSTUDIO_UI_SHOTS"] {
             UIShots.run(outDir: dir)  // renders the app's screens offscreen and exits
         }
+        let model = AppModel()
+        _model = StateObject(wrappedValue: model)
+        WallpaperController.shared.attach(model: model)   // restored in applicationDidFinishLaunching
         // After an app update, silently refresh the installed .saver so the
         // screensaver actually gets the new code (takes effect next start).
         Installer.reinstallIfOutdated()
     }
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: DotStudioApp.mainWindowID) {
             ContentView()
                 .environmentObject(model)
                 .environmentObject(updates)
@@ -65,7 +73,7 @@ struct DotStudioApp: App {
                 Button("Save Image…") { model.exportSelectedAsImage() }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
                     .disabled(model.selectedID == nil)
-                Button("Set as Desktop Picture") { model.setSelectedAsWallpaper() }
+                Button("Set as Desktop Picture (Still)") { model.setSelectedAsWallpaper() }
                     .disabled(model.selectedID == nil)
             }
             CommandMenu("Style") {
@@ -77,6 +85,12 @@ struct DotStudioApp: App {
                 Divider()
                 Button("Use as Screensaver") { if let id = model.selectedID { model.useAsScreensaver(id) } }
                     .disabled(model.selectedID == nil)
+                Button("Use as Wallpaper") {
+                    if let id = model.editingID ?? model.selectedID { wallpaper.use(id) }
+                }
+                .disabled(model.selectedID == nil && model.editingID == nil)
+                Button("Stop Wallpaper") { wallpaper.stop() }
+                    .disabled(!wallpaper.isActive)
                 Button("Preview Full Screen") {
                     if let id = model.editingID ?? model.selectedID, let p = model.preset(id) {
                         ScreensaverPreviewController.shared.present(
@@ -104,5 +118,38 @@ struct DotStudioApp: App {
                 .environmentObject(model)
                 .environmentObject(updates)
         }
+
+        MenuBarExtra(isInserted: Binding(get: { wallpaper.isActive }, set: { _ in })) {
+            WallpaperMenu()
+                .environmentObject(model)
+        } label: {
+            WallpaperMenuLabel()
+        }
+        .menuBarExtraStyle(.menu)
+    }
+}
+
+/// App-level hooks SwiftUI doesn't expose: the live wallpaper must outlive the main
+/// window, and the Dock icon must bring the window back even though the wallpaper's
+/// own (desktop-level) windows are technically visible.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        WallpaperController.shared.restore()
+        if DemoHooks.isActive { DemoHooks.applyAtLaunch() }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        let wallpaper = WallpaperController.shared
+        guard wallpaper.isActive, !wallpaper.hasVisibleMainWindow else { return true }
+        wallpaper.openMainWindow()
+        return false
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        WallpaperController.shared.shutdown()
     }
 }

@@ -131,12 +131,14 @@ struct LibraryView: View {
 
 struct StyleTile: View {
     @EnvironmentObject var model: AppModel
+    @ObservedObject private var wallpaper = WallpaperController.shared
     let preset: Preset
     @State private var hovering = false
     @State private var live = false
     @State private var confirmDelete = false
 
     private var role: AppModel.Role { model.role(of: preset.id) }
+    private var isWallpaper: Bool { wallpaper.isActive && wallpaper.settings.presetID == preset.id }
     private var selected: Bool { model.selectedID == preset.id }
     private var excluded: Bool { model.playbackMode == .rotate && role == .none }
 
@@ -198,8 +200,9 @@ struct StyleTile: View {
 
     @ViewBuilder private var overlays: some View {
         VStack {
-            HStack(alignment: .top) {
+            HStack(alignment: .top, spacing: 6) {
                 RoleBadge(role: role)
+                if isWallpaper { WallpaperBadge() }
                 Spacer()
                 if model.playbackMode == .rotate {
                     Button { model.toggleRotation(preset.id) } label: {
@@ -262,11 +265,16 @@ struct StyleTile: View {
             Button("Show During the Day") { model.updateSchedule { $0.dayPresetID = preset.id } }
             Button("Show at Night") { model.updateSchedule { $0.nightPresetID = preset.id } }
         }
+        Button("Use as Wallpaper") { wallpaper.use(preset.id) }
+            .disabled(isWallpaper)
+        if wallpaper.isActive {
+            Button("Stop Wallpaper") { wallpaper.stop() }
+        }
         Divider()
         Button("Duplicate") { model.duplicate(preset.id) }
         Button("Export Style…") { model.exportPreset(preset.id) }
         Button("Save Image…") { model.exportSelectedAsImage(preset.id) }
-        Button("Set as Desktop Picture") { model.setSelectedAsWallpaper(preset.id) }
+        Button("Set as Desktop Picture (Still)") { model.setSelectedAsWallpaper(preset.id) }
         Divider()
         Button("Delete…", role: .destructive) { confirmDelete = true }
     }

@@ -9,6 +9,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
+    @Environment(\.openWindow) private var openWindow
 
     /// Offscreen UI renders (Shots.swift) must never present the sheet or touch the flag.
     private static let isRenderingShots = ProcessInfo.processInfo.environment["DOTSTUDIO_UI_SHOTS"] != nil
@@ -37,6 +38,8 @@ struct ContentView: View {
                 .environmentObject(model)
         }
         .onAppear {
+            // Lets the Dock icon / menu bar reopen this window after it was closed.
+            WallpaperController.shared.registerOpenMainWindow { openWindow(id: DotStudioApp.mainWindowID) }
             if DemoHooks.isActive { DemoHooks.apply(to: model) } else { presentOnboardingIfNeeded() }
         }
         .onChange(of: model.storeAlert == nil) { _, clear in
@@ -68,6 +71,13 @@ struct ContentView: View {
 ///   DOTSTUDIO_DEMO_EDIT=<style name>    open that style in the editor on launch
 ///   DOTSTUDIO_DEMO_ONBOARDING=create    open the welcome sheet on its "Create Your Own" tab
 ///   DOTSTUDIO_DEMO_WINDOW=1440x900      size the main window's content
+///   DOTSTUDIO_DEMO_WALLPAPER=<name>     turn the live wallpaper on with that style
+///                                       (WallpaperController.applyDevOverrides; more knobs there)
+///   DOTSTUDIO_DEMO_CLOSE_WINDOW=1       close the main window after launch (wallpaper-only,
+///                                       as after a login launch) for power measurements
+///   DOTSTUDIO_DEMO_COVER_DESKTOP=<s>    for <s> seconds, hide the desktop behind an opaque,
+///                                       click-through window ordered beneath every app window,
+///                                       to verify the occlusion pause without touching others' windows
 /// While any is set the first-launch sheet never auto-presents. Pair with DOTSTUDIO_STORE_DIR.
 enum DemoHooks {
     private static let env = ProcessInfo.processInfo.environment
@@ -77,7 +87,14 @@ enum DemoHooks {
         let p = s.split(separator: "x").compactMap { Double($0) }
         return p.count == 2 ? CGSize(width: p[0], height: p[1]) : nil
     }
-    static var isActive: Bool { editName != nil || onboardingCreate || windowSize != nil }
+    static let wallpaperName = env["DOTSTUDIO_DEMO_WALLPAPER"]
+    static let closeWindow = env["DOTSTUDIO_DEMO_CLOSE_WINDOW"] == "1"
+    static let coverSeconds = env["DOTSTUDIO_DEMO_COVER_DESKTOP"].flatMap(Double.init)
+    private static var cover: NSWindow?
+    static var isActive: Bool {
+        editName != nil || onboardingCreate || windowSize != nil || wallpaperName != nil || closeWindow
+            || coverSeconds != nil
+    }
 
     @MainActor static func apply(to model: AppModel) {
         if let name = editName, let p = model.library.presets.first(where: { $0.name == name }) {
@@ -90,6 +107,27 @@ enum DemoHooks {
                 win.center()
             }
             if onboardingCreate { model.showOnboarding = true }
+        }
+    }
+
+    /// The wallpaper hooks run from applicationDidFinishLaunching — they must work even
+    /// when no main window is restored (as after a login launch).
+    @MainActor static func applyAtLaunch() {
+        if closeWindow {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                NSApp.windows.filter { $0.isVisible && $0.styleMask.contains(.titled) }.forEach { $0.close() }
+            }
+        }
+        if let secs = coverSeconds, let screen = NSScreen.screens.first {
+            let w = NSWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            w.isOpaque = true
+            w.backgroundColor = NSColor(white: 0.12, alpha: 1)
+            w.ignoresMouseEvents = true
+            w.isReleasedWhenClosed = false
+            w.orderFront(nil)
+            w.orderBack(nil)      // beneath every app window: hides only the desktop
+            cover = w
+            DispatchQueue.main.asyncAfter(deadline: .now() + secs) { cover?.orderOut(nil); cover = nil }
         }
     }
 }

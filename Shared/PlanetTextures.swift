@@ -13,6 +13,20 @@ final class PlanetTextures {
     let planets: MTLTexture          // texture2d_array, one layer per `order`
     let loaded: Bool
 
+    /// 1×1 stand-ins bound for every effect except Universe, so a renderer that never
+    /// shows the solar system never decodes the ~80 MB of planet maps.
+    init(placeholderFor device: MTLDevice) {
+        let d2 = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
+        d2.usage = .shaderRead
+        earthDay = device.makeTexture(descriptor: d2)!
+        earthNight = device.makeTexture(descriptor: d2)!
+        let da = MTLTextureDescriptor()
+        da.textureType = .type2DArray; da.pixelFormat = .rgba8Unorm
+        da.width = 1; da.height = 1; da.arrayLength = 1; da.usage = .shaderRead
+        planets = device.makeTexture(descriptor: da)!
+        loaded = false
+    }
+
     init(device: MTLDevice, queue: MTLCommandQueue) {
         let loader = MTKTextureLoader(device: device)
         let bundle = Bundle(for: PlanetTextures.self)

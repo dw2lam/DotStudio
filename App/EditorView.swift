@@ -4,6 +4,7 @@ import SwiftUI
 
 struct EditorView: View {
     @EnvironmentObject var model: AppModel
+    @ObservedObject private var wallpaper = WallpaperController.shared
     let id: UUID
     @State private var tab: Tab = .effects
     @State private var confirmDelete = false
@@ -143,7 +144,12 @@ struct EditorView: View {
                 Button("Export Style…") { model.exportPreset(id) }
                 Divider()
                 Button("Save Image…") { model.exportSelectedAsImage(id) }
-                Button("Set as Desktop Picture") { model.setSelectedAsWallpaper(id) }
+                Button("Use as Wallpaper") { wallpaper.use(id) }
+                    .disabled(wallpaper.isActive && wallpaper.settings.presetID == id)
+                if wallpaper.isActive {
+                    Button("Stop Wallpaper") { wallpaper.stop() }
+                }
+                Button("Set as Desktop Picture (Still)") { model.setSelectedAsWallpaper(id) }
                 Divider()
                 Button("Delete…", role: .destructive) { confirmDelete = true }
             } label: {

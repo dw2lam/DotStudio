@@ -11,6 +11,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             setupSection
+            WallpaperSettingsSection()
             transitionsSection
             performanceSection
             updatesSection
