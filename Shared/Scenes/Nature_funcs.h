@@ -554,7 +554,7 @@ static inline float nature_cloudNoise(float2 p, int oct) {
 // Altocumulus deck + cirrus over the atmosphere along v (v.y > 0). `oct` trades detail
 // for speed (reflections use fewer octaves).
 static inline float3 nature_oceanClouds(float3 v, float3 sky, NatureOceanP P, int oct, thread float &cov,
-                                        constant FXUniforms& u) {
+                                        constant FXUniforms& u, float ang = 0.0) {
     cov = 0.0;                                                        // (how much sky they hide)
     // Live, deep night: cirrus and the clouds' reflections fade out (dark on dark, unseen).
     float nf = P.live ? smoothstep(8.5, 5.5, nature_liveDD(u)) : 1.0;
@@ -586,10 +586,16 @@ static inline float3 nature_oceanClouds(float3 v, float3 sky, NatureOceanP P, in
     float lo = 0.78 - 0.45 * cover;
     // Pixel footprint in noise units: where the deck is too foreshortened to resolve,
     // fade texture into its average (no venetian-blind aliasing at the horizon).
-    float fp = tA * P.pix * 0.32 / max(v.y, 0.004);
+    // (ang: the angle a reflected pixel spans — the rough, curved mirror's spread — which
+    // softens the clouds it sees exactly as distance does.)
+    float fp = tA * max(P.pix, ang) * 0.32 / max(v.y, 0.004);
     float resolved = smoothstep(0.5, 0.12, fp);
     float soft = (oct < 5 ? 0.32 : 0.0) + 0.3 * (1.0 - resolved);
-    float dens = smoothstep(lo - soft, lo + 0.28 + soft, n * 0.75 + 0.5 + 0.18 * w.x);
+    float nv = n * 0.75 + 0.5 + 0.18 * w.x;
+    // Reflections: where a pixel spans more cloud than it can resolve (a grazing or rough
+    // mirror), it sees the deck's average, not a magnified sliver of its edges.
+    if (oct < 5) nv = mix(nv, 0.5, smoothstep(0.3, 2.0, fp));
+    float dens = smoothstep(lo - soft, lo + 0.28 + soft, nv);
     float fade = exp(-tA * 0.012);                                  // aerial perspective
     if (oct < 5) fade *= smoothstep(0.02, 0.2, v.y);                // no grazing streaks in reflections
     if (dens > 0.0) {
@@ -603,7 +609,9 @@ static inline float3 nature_oceanClouds(float3 v, float3 sky, NatureOceanP P, in
             float d2 = smoothstep(lo, lo + 0.28, n2 * 0.75 + 0.5 + 0.18 * w.x);
             shade = exp(-2.2 * d2) * 0.85 + 0.15;
         }
-        float thin = 1.0 - dens;
+        // (Reflections: no bright thin-edge rim — blurred by the rough mirror it would draw
+        // contour lines on the water.)
+        float thin = oct < 5 ? 0.45 : 1.0 - dens;
         // Low sun: the undersides we see catch reddened light; thin edges toward the sun
         // silver-line (strong forward scattering); thick cores fall to blue-grey skylight.
         float3 lit = P.esun * Tc * vis * (0.25 + 3.4 * nature_hg(c, 0.62) * (0.2 + thin)) * (0.12 + 0.35 * thin) * shade;
@@ -940,7 +948,8 @@ static inline float4 nature_ocean(float2 uv, float2 res, float2 px, float t, con
         float fz = fx / max(-rw.y, 1e-4);
         float2 vh = normalize(rw.xz);
         float ts = t * speed;
-        float2 slope = float2(0.0);
+        float2 slope = float2(0.0), rslope = float2(0.0);  // swell + chop; wind ripples
+        float rvar = 0.0;                                   // resolved ripple slope variance
         float sharp = 0.0;                                  // Gerstner crest sharpening
         float unres = 0.0;                                  // slope variance filtered out (LEAN)
         float steep = 0.028 + 0.07 * waves;
@@ -967,7 +976,8 @@ static inline float4 nature_ocean(float2 uv, float2 res, float2 px, float t, con
             float cph, sph = 0.0;
             if (i < 10) sph = sincos(ph, cph);
             else cph = cos(ph + (i >= 17 ? warp * (1.0 + 0.26 * float(i - 17)) + 2.2 * prev : 0.0));
-            slope += W.xy * (cph * s * rs);
+            if (i < 17) slope += W.xy * (cph * s * rs);
+            else { rslope += W.xy * (cph * s * rs); rvar += s * s * rs * rs * 0.5; }
             // Gerstner: normals tip faster over the crests and lie flatter in the troughs.
             sharp += sph * s * rs * 1.3;
             unres += (1.0 - rs * rs) * s * s * 0.5;
@@ -975,20 +985,30 @@ static inline float4 nature_ocean(float2 uv, float2 res, float2 px, float t, con
             if (i >= 4) warp += 1.6 * sph;
             prev = cph;
         }
-        float3 n = normalize(float3(-slope.x, max(1.0 - sharp, 0.4), -slope.y));
+        // Two normals: the full one (swell, chop and ripples) catches the sun's glints; the
+        // sky is mirrored by a smoothed one, where the ripples count mostly as roughness —
+        // a mirror wrinkled finer than the swells blurs what it reflects instead of crazing
+        // it into hard-edged islands of cloud and sky.
+        float ny = max(1.0 - sharp, 0.4);
+        float3 n = normalize(float3(-(slope.x + rslope.x), ny, -(slope.y + rslope.y)));
+        float3 nr = normalize(float3(-(slope.x + 0.25 * rslope.x), ny, -(slope.y + 0.25 * rslope.y)));
         float3 v = -rw;
-        float3 rr = reflect(rw, n);
+        float3 rr = reflect(rw, nr);
         // Rough-mirror average: facets tilted toward the eye dominate what we see, so a
         // rough patch mirrors sky from higher up (darker, bluer) than a flat mirror would.
-        // (A smooth max, so the reflected elevation never folds into hard bands.)
-        float sig = sqrt(unres + 0.0004);
+        // (A smooth max, so the reflected elevation never folds into hard bands, and never
+        // dips below the horizon.)
+        float sig = sqrt(unres + 0.94 * rvar + 0.0004);
         float ry = rr.y;
         rr.y = 0.5 * (ry + sqrt(ry * ry + (sig + 0.004) * (sig + 0.004))) + 0.3 * sig;
         rr = normalize(rr);
-        float F0 = nature_schlick(max(dot(n, v), 0.0));
+        float F0 = nature_schlick(max(dot(nr, v), 0.0));
         float3 sky = nature_oceanAtmos(rr, P, u);
         float rcov;
-        float3 refl = nature_oceanClouds(rr, sky, P, 2, rcov, u);
+        // The reflected sky is seen through a rough, curved mirror: each pixel spans about
+        // 2σ of slope plus however fast the mirror turns from pixel to pixel.
+        float spread = 2.0 * sig + length(fwidth(rr));
+        float3 refl = nature_oceanClouds(rr, sky, P, 2, rcov, u, spread);
         // Sun glitter: Beckmann lobe over the filtered slope variance, so the sun's path
         // widens and softens into a glitter column with distance.
         float sig2 = 0.0005 + 0.0010 * waves + unres + 0.006 * (1.0 - exp(-dist / 150.0));
