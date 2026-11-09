@@ -3,8 +3,8 @@
 //  other apps listening to the real Spotify/Music names never see them), then checks what
 //  renderers would read — music.json + cover + palette, through the real MusicFeed.
 //
-//  Run:  tools/music-selftest/run.sh <outDir>      (builds a CLI from Shared + App/Music)
-//  The UI stage may also wire DOTSTUDIO_MUSIC_SELFTEST=<outDir> to `MusicSelfTest.runAndExit`.
+//  Run:  tools/music-selftest/run.sh <outDir>      (builds a CLI from Shared + App/Music + this
+//        folder). Lives here, not in App/, so the shipping app doesn't contain it.
 //
 //  Apple Events are dry-run throughout (counted, never sent), and the "real gating" phase
 //  asserts that nothing is even attempted while Spotify / Music aren't running.
@@ -121,6 +121,42 @@ enum MusicSelfTest {
         let lum = p.map(MusicPalette.luminance)
         check(zip(lum, lum.dropFirst()).allSatisfy { $0 >= $1 - 1e-9 }, "\(label): palette brightest-first \(lum.map { String(format: "%.2f", $0) })")
         check(p.allSatisfy { (0...1).contains($0.r) && (0...1).contains($0.g) && (0...1).contains($0.b) && $0.a == 1 }, "\(label): palette values in 0…1 sRGB")
+        if let image = feed.artwork {
+            let missing = hueCoverage(image, p)
+            check(missing.isEmpty, "\(label): every vivid hue covering ≥ 10 % of the cover is in the palette\(missing.isEmpty ? "" : " — missing " + missing.joined(separator: "; "))")
+        }
+    }
+
+    /// Vivid hue families (Oklab chroma > 0.06, 30° bins) covering ≥ `minShare` of the cover
+    /// must have a palette entry within 35° of hue and ≥ 60 % of their mean chroma — a palette
+    /// of muddy averages (an azure sky blended with the greys beside it) fails this.
+    static func hueCoverage(_ image: CGImage, _ palette: [RGBA], minShare: Double = 0.1) -> [String] {
+        guard let px = MusicArtImage.rgba(image, side: 64) else { return ["no pixels"] }
+        func hueChroma(_ r: Double, _ g: Double, _ b: Double) -> (h: Double, c: Double) {
+            let lab = MusicPalette.oklab(r: r, g: g, b: b)
+            var h = atan2(lab.b, lab.a) * 180 / .pi
+            if h < 0 { h += 360 }
+            return (h, (lab.a * lab.a + lab.b * lab.b).squareRoot())
+        }
+        var bins = [(n: Double, c: Double)](repeating: (0, 0), count: 12)
+        var total = 0.0
+        for k in stride(from: 0, to: px.count, by: 4) where px[k + 3] > 128 {
+            total += 1
+            let (h, c) = hueChroma(Double(px[k]) / 255, Double(px[k + 1]) / 255, Double(px[k + 2]) / 255)
+            guard c > 0.06 else { continue }
+            bins[Int(h / 30) % 12].n += 1
+            bins[Int(h / 30) % 12].c += c
+        }
+        var missing: [String] = []
+        for (i, b) in bins.enumerated() where total > 0 && b.n / total >= minShare {
+            let hue = Double(i) * 30 + 15, want = b.c / b.n
+            let ok = palette.contains { e in
+                let (h, c) = hueChroma(e.r, e.g, e.b)
+                return min(abs(h - hue), 360 - abs(h - hue)) <= 35 && c >= 0.6 * want
+            }
+            if !ok { missing.append(String(format: "hue %.0f° (%.0f %% of pixels, chroma %.3f)", hue, b.n / total * 100, want)) }
+        }
+        return missing
     }
 
     // MARK: Run
@@ -420,7 +456,11 @@ enum MusicSelfTest {
         let b = MusicMonitor(options: optsB)
         check(b.start(store: store), "start")
         check(wait(3) { b.spotify.automation == .allowed }, "permission checked for the running player only")
-        check(wait(2) { b.appleEvents.attempts(.spotify) >= 1 }, "running + allowed ⇒ state-at-launch snapshot attempted (\(b.appleEvents.attempts(.spotify)), dry-run)")
+        check(wait(2) { b.appleEvents.attempts(.spotify) >= 1 }, "running + allowed ⇒ state-at-launch snapshot attempted (dry-run)")
+        pump(0.5)
+        check(b.appleEvents.attempts(.spotify) == 1 && b.appleEvents.permissionChecks(.spotify) == 1,
+              "start reads the player's state exactly once (\(b.appleEvents.attempts(.spotify)) read(s), \(b.appleEvents.permissionChecks(.spotify)) permission check(s))")
+        check(b.spotify.isInstalled && b.spotify.isRunning, "a running player counts as installed")
         let a0 = b.appleEvents.attempts(.spotify)
         spotify(["Name": "Blinding Lights", "Artist": "The Weeknd", "Album": "After Hours",
                  "Duration": 200_040, "Track ID": "spotify:track:0VjIjW4GlUZAMYd2vXMi3b",
@@ -472,6 +512,147 @@ enum MusicSelfTest {
         check(wait(2) { current?.hasTrack == false }, "player quit (workspace terminate) ⇒ clear")
         b.stop()
 
+        // ── Phase C: the optimistic play/pause window never outvotes the player for long ──
+        say("\n[16] Play/pause window vs. real player changes (fake-running Spotify, dry-run AE)")
+        prefix = "com.davidlam.DotStudio.selftest.\(getpid()).c."
+        var optsC = optsB
+        optsC.notificationPrefix = prefix
+        optsC.art.networkEnabled = false
+        let c = MusicMonitor(options: optsC)
+        check(c.start(store: store), "start")
+        func fake(_ name: String, _ id: String, _ state: String, _ pos: Double) -> [String: Any] {
+            ["Name": name, "Artist": "Tester", "Album": "Window", "Duration": 240_000,
+             "Track ID": "spotify:track:FAKEFAKEFAKEFAKEFAKE" + id, "Playback Position": pos, "Player State": state]
+        }
+        spotify(fake("Track A", "0A", "Playing", 30))
+        check(wait(3) { current?.title == "Track A" && current?.isPlaying == true }, "Track A playing")
+        check(c.playPause() && c.state.isPlaying == false, "DotStudio pause (optimistic)")
+        pump(0.3)
+        spotify(fake("Track B", "0B", "Playing", 0))     // …then Next in Spotify: B starts playing
+        check(wait(3) { current?.title == "Track B" }, "Track B reported inside the window")
+        s = current
+        check(s?.isPlaying == true && s?.pausedAt == nil && c.state.isPlaying == true, "a new track inside the window wins: B is PLAYING, no pausedAt")
+        check(!c.isControlPending, "…and the play/pause window is closed")
+        pump(0.5)
+        let tB = Date().timeIntervalSince1970
+        check(c.playPause() && c.state.isPlaying == false, "pause B in DotStudio")
+        pump(0.3)
+        let tPlay = Date().timeIntervalSince1970
+        spotify(fake("Track B", "0B", "Playing", 1.0))   // …then play in Spotify, same track
+        pump(0.3)
+        check(c.state.isPlaying == false && current?.isPlaying == false, "inside the window the contradicting report is held back (no flicker)")
+        check(wait(2.5) { current?.isPlaying == true }, "when the window closes the player's last word applies: PLAYING (no further notification)")
+        s = current
+        check(s?.pausedAt == nil && near(s.map { $0.elapsed() }, 1.0 + (Date().timeIntervalSince1970 - tPlay), 0.4),
+              "…with its position carried forward (\(String(format: "%.2f", s?.elapsed() ?? -1)) s)")
+        check(s?.isVisible(at: Date().addingTimeInterval(330), lingerMinutes: 5) == true, "still visible 5.5 min later (playing, not a 5-min paused linger)")
+        _ = tB
+        check(c.playPause() && c.isControlPending, "pause again (window open)")
+        check(c.next() && !c.isControlPending, "next() ends the window: the next report is about the new track")
+        c.stop()
+
+        // ── Phase D: the cover wait (fresh cache, real network) ──
+        say("\n[17] Cover wait: in-app state + artwork move together; bursts land with their cover; clicks show at once")
+        prefix = "com.davidlam.DotStudio.selftest.\(getpid()).d."
+        var optsD = optsB
+        optsD.notificationPrefix = prefix
+        optsD.cacheDir = out.appendingPathComponent("cache-d", isDirectory: true)
+        let d = MusicMonitor(options: optsD)
+        check(d.start(store: store), "start (fresh artwork cache)")
+        spotify(["Name": "Never Gonna Give You Up", "Artist": "Rick Astley", "Album": "Whenever You Need Somebody", "Duration": 213_573,
+                 "Track ID": "spotify:track:4cOdK2wGLETKBW3PvgPWqT", "Playback Position": 1.0, "Player State": "Playing"])
+        check(wait(15) { d.artwork != nil && d.state.title == "Never Gonna Give You Up" }, "first track settles with its cover")
+        spotify(["Name": "Mr. Brightside", "Artist": "The Killers", "Album": "Hot Fuss", "Duration": 222_973,
+                 "Track ID": "spotify:track:3n3Ppam7vgaVa1iaRUc9Lp", "Playback Position": 0.0, "Player State": "Playing"])
+        var samples = 0, mismatched = 0
+        let tm0 = Date()
+        while Date().timeIntervalSince(tm0) < 2.5 {
+            pump(0.02)
+            samples += 1
+            let pairOK = (d.state.artwork == nil) == (d.artwork == nil)
+            if !pairOK || (d.state.title == "Never Gonna Give You Up" && d.artwork == nil) { mismatched += 1 }
+        }
+        check(mismatched == 0, "published (state, artwork) always a matching pair: \(mismatched) of \(samples) samples off")
+        check(d.state.title == "Mr. Brightside" && d.artwork != nil, "settles on Mr. Brightside with its cover")
+
+        // Skip burst: every music.json version a renderer could see.
+        var versions: [String] = []
+        _ = feed.poll()                                  // start from what's on disk now
+        var lastRev = feed.revision
+        func sample() {
+            if feed.poll() || feed.revision != lastRev {
+                lastRev = feed.revision
+                versions.append("\(feed.state?.title ?? "∅") art=\(feed.state?.artwork == nil ? "none" : "yes")")
+            }
+        }
+        for i in 0..<5 {
+            spotify(fake("Burst \(i)", String(format: "%02d", 20 + i), "Playing", 0))
+            let e = Date().addingTimeInterval(0.2)
+            while Date() < e { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)); sample() }
+        }
+        spotify(["Name": "Blinding Lights", "Artist": "The Weeknd", "Album": "After Hours", "Duration": 200_040,
+                 "Track ID": "spotify:track:0VjIjW4GlUZAMYd2vXMi3b", "Playback Position": 0.0, "Player State": "Playing"])
+        let eb = Date().addingTimeInterval(4)
+        while Date() < eb { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)); sample() }
+        say("  versions: " + versions.joined(separator: " | "))
+        check(versions.last == "Blinding Lights art=yes", "burst settles on the landed track with its cover")
+        check(!versions.contains("Blinding Lights art=none"), "the landed track is never written without its cover (its wait restarts)")
+        check(versions.count <= 2, "6 tracks in ~1 s coalesced into \(versions.count) renderer-visible version(s)")
+
+        spotify(fake("Song D", "0D", "Playing", 0))      // fake id: its lookup takes ~0.5 s and finds nothing
+        pump(0.15)
+        let clickOK = d.playPause()
+        check(clickOK && d.state.title == "Song D" && d.state.isPlaying == false,
+              "a click during the cover wait shows at once (\(d.state.title ?? "nil"), playing \(d.state.isPlaying ?? false))")
+        check(wait(2) { current?.title == "Song D" && current?.isPlaying == false }, "…and reaches music.json")
+        d.stop()
+
+        say("\n[18] Offline cover lookups: not a miss, retried")
+        let offDir = out.appendingPathComponent("cache-offline", isDirectory: true)
+        var offCfg = MusicArtworkResolver.Config()
+        offCfg.simulateOffline = true
+        let res = MusicArtworkResolver(cacheDir: offDir, config: offCfg) { _ in nil }
+        var lreq = MusicArtRequest(source: .music, trackKey: "music|music:00000000000000AB")
+        lreq.trackID = "music:00000000000000AB"; lreq.title = "Wonderwall"; lreq.artist = "Oasis"
+        lreq.album = "(What's the Story) Morning Glory?"; lreq.isLocal = true
+        let o1 = awaitOutcome(res, lreq)
+        check(o1?.isFailure == true, "offline local-file search ⇒ .failed (not 'no artwork')")
+        _ = awaitValue { await res.setSimulateOffline(false) }
+        let o2 = awaitOutcome(res, lreq)
+        check(o2?.result != nil, "back online, the same track is looked up again (no 30-min miss recorded) → found")
+
+        prefix = "com.davidlam.DotStudio.selftest.\(getpid()).e."
+        var optsE = opts
+        optsE.notificationPrefix = prefix
+        optsE.observeWorkspace = false
+        optsE.cacheDir = out.appendingPathComponent("cache-e", isDirectory: true)
+        optsE.art.simulateOffline = true
+        optsE.artRetryDelays = [1.0, 2.0]
+        let e = MusicMonitor(options: optsE)
+        check(e.start(store: store), "start (offline)")
+        spotify(["Name": "Never Gonna Give You Up", "Artist": "Rick Astley", "Album": "Whenever You Need Somebody", "Duration": 213_573,
+                 "Track ID": "spotify:track:4cOdK2wGLETKBW3PvgPWqT", "Playback Position": 3.0, "Player State": "Playing"])
+        check(wait(5) { current?.title == "Never Gonna Give You Up" && current?.artwork == nil && (awaitStats(e)?.networkFailures ?? 0) >= 1 },
+              "offline: track shown with a placeholder (lookup failed)")
+        _ = awaitValue { await e.resolver?.setSimulateOffline(false) }
+        check(wait(10) { current?.artwork != nil && e.artwork != nil }, "network back: the cover is retried and arrives — no new track or report needed")
+        e.stop()
+
+        say("\n[19] App quit clears music.json")
+        prefix = "com.davidlam.DotStudio.selftest.\(getpid()).f."
+        var optsF = opts
+        optsF.notificationPrefix = prefix
+        optsF.observeWorkspace = false
+        optsF.art.networkEnabled = false
+        let f = MusicMonitor(options: optsF)
+        check(f.start(store: store), "start")
+        music(["Name": "Radio Station", "Artist": "Live", "Player State": "Playing", "PersistentID": NSNumber(value: Int64(77))])
+        check(wait(3) { current?.title == "Radio Station" && current?.isPlaying == true && current?.duration == nil }, "a stream (no duration) is playing")
+        check(current?.isVisible(at: Date().addingTimeInterval(864_000), lingerMinutes: 5) == true, "(a stream never goes stale on its own)")
+        NotificationCenter.default.post(name: NSApplication.willTerminateNotification, object: nil)
+        s = current
+        check(s?.hasTrack == false && s?.isPlaying != true && !f.isMonitoring, "willTerminate ⇒ empty music.json on disk before returning, monitoring off")
+
         let logText = (try? String(contentsOf: storeDir.appendingPathComponent("debug.log"), encoding: .utf8)) ?? ""
         check(logText.contains("[music") && logText.contains("track →") && logText.contains("active source →"),
               "transitions logged to the debug log (\(logText.split(separator: "\n").count) lines)")
@@ -479,6 +660,18 @@ enum MusicSelfTest {
         say("\n\(passed) passed, \(failed.count) failed")
         for f in failed { say("  FAILED: \(f)") }
         return failed.isEmpty ? 0 : 1
+    }
+
+    private static func awaitOutcome(_ r: MusicArtworkResolver, _ req: MusicArtRequest) -> MusicArtOutcome? {
+        awaitValue { await r.resolve(req) }
+    }
+
+    private static func awaitValue<T>(_ body: @escaping @MainActor () async -> T) -> T? {
+        var result: T?
+        var done = false
+        Task { @MainActor in result = await body(); done = true }
+        wait(20) { done }
+        return result
     }
 
     private static func awaitStats(_ m: MusicMonitor) -> MusicArtStats? {

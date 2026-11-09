@@ -49,6 +49,17 @@ struct MusicArtResult {
     var origin: String
 }
 
+/// What a lookup came to. `failed` (offline, timeout, 5xx/429) is worth retrying later;
+/// `none` is definitive (no artwork exists, an ad, a lookup that found nothing).
+enum MusicArtOutcome {
+    case found(MusicArtResult)
+    case none
+    case failed
+
+    var result: MusicArtResult? { if case .found(let r) = self { return r }; return nil }
+    var isFailure: Bool { if case .failed = self { return true }; return false }
+}
+
 /// Counters for tests and the debug log.
 struct MusicArtStats {
     var appleRequests: [Date] = []
@@ -56,6 +67,8 @@ struct MusicArtStats {
     var downloads = 0
     var cacheHits = 0
     var appleEventFetches = 0
+    /// Lookups that failed transiently (network) — never recorded as misses.
+    var networkFailures = 0
 }
 
 // MARK: - Rate limiter
@@ -99,10 +112,12 @@ actor MusicArtworkResolver {
         var cacheLimit = 300
         /// iTunes storefront; nil = the user's region.
         var country: String? = nil
+        /// Tests: every request fails as if offline (nothing is sent).
+        var simulateOffline = false
     }
 
     let cacheDir: URL
-    let config: Config
+    private(set) var config: Config
     /// Runs the Apple Events artwork read (on the AE queue) — supplied by the monitor.
     private let appleEventsFetch: (MusicArtRequest) async -> MusicArtPayload?
     private let session: URLSession
@@ -135,60 +150,88 @@ actor MusicArtworkResolver {
     }
 
     func currentStats() -> MusicArtStats { stats }
+    /// Tests: toggle `Config.simulateOffline`.
+    func setSimulateOffline(_ on: Bool) { config.simulateOffline = on }
 
-    /// Resolves art for `req`, or nil (placeholder). Honors Task cancellation at every step.
-    func resolve(_ req: MusicArtRequest) async -> MusicArtResult? {
+    /// Resolves art for `req`. Honors Task cancellation at every step (a cancelled lookup
+    /// returns `.none`; the monitor drops it anyway).
+    func resolve(_ req: MusicArtRequest) async -> MusicArtOutcome {
         let primary = Self.primaryKey(req)
         let albumKey = Self.albumKey(req)
         // 1. Disk cache.
         for key in [primary, albumKey].compactMap({ $0 }) {
-            if let hit = cached(key) { stats.cacheHits += 1; return hit }
+            if let hit = cached(key) { stats.cacheHits += 1; return .found(hit) }
         }
-        if req.isAd { return nil }
+        if req.isAd { return .none }
         // 2. Apple Events (local, cheap — no debounce).
         if req.useAppleEvents {
             stats.appleEventFetches += 1
             switch await appleEventsFetch(req) {
             case .data(let data)?:
-                if Task.isCancelled { return nil }
-                if let r = store(data, keys: [primary], origin: "appleEvents") { return r }
+                if Task.isCancelled { return .none }
+                if let r = store(data, keys: [primary], origin: "appleEvents") { return .found(r) }
             case .url(let url)?:
-                if Task.isCancelled { return nil }
-                if let data = await download(url), let r = store(data, keys: [primary], origin: "appleEvents") { return r }
+                if Task.isCancelled { return .none }
+                if let data = await download(url), let r = store(data, keys: [primary], origin: "appleEvents") { return .found(r) }
             case nil: break
             }
         }
         // 3. Public lookups, after the skip debounce.
-        guard config.networkEnabled else { return nil }
-        if let missed = misses[primary], Date().timeIntervalSince(missed) < 1800 { return nil }
-        do { try await Task.sleep(nanoseconds: UInt64(config.debounce * 1e9)) } catch { return nil }
+        guard config.networkEnabled else { return .none }
+        if let missed = misses[primary], Date().timeIntervalSince(missed) < 1800 { return .none }
+        do { try await Task.sleep(nanoseconds: UInt64(config.debounce * 1e9)) } catch { return .none }
         // Another request may have cached it while we waited (same track re-reported).
-        if let hit = cached(primary) { stats.cacheHits += 1; return hit }
+        if let hit = cached(primary) { stats.cacheHits += 1; return .found(hit) }
+        let outcome = await lookup(req, primary: primary, albumKey: albumKey)
+        if outcome.isFailure, !Task.isCancelled {
+            stats.networkFailures += 1
+            log("art: lookup failed (network) — will retry, not recorded as a miss")
+        }
+        return outcome
+    }
 
+    private func lookup(_ req: MusicArtRequest, primary: String, albumKey: String?) async -> MusicArtOutcome {
         switch req.source {
         case .spotify:
-            guard !req.isLocal, let uri = req.trackID, uri.hasPrefix("spotify:track:") || uri.hasPrefix("spotify:episode:") else { return nil }
-            guard let url = await spotifyArtworkURL(uri: uri) else { return nil }
-            guard !Task.isCancelled, let data = await download(url) else { return nil }
-            return store(data, keys: [primary], origin: "oembed")
+            guard !req.isLocal, let uri = req.trackID, uri.hasPrefix("spotify:track:") || uri.hasPrefix("spotify:episode:") else { return .none }
+            switch await spotifyArtworkURL(uri: uri) {
+            case .none: return .none
+            case .failed: return .failed
+            case .found(let url):
+                guard !Task.isCancelled else { return .none }
+                guard let data = await download(url) else { return Task.isCancelled ? .none : .failed }
+                return store(data, keys: [primary], origin: "oembed").map(MusicArtOutcome.found) ?? .none
+            }
         case .music, .unknown:
             if req.storeTrackID != nil || req.storeAlbumID != nil {
-                if let url = await appleLookupArtwork(trackID: req.storeTrackID, albumID: req.storeAlbumID),
-                   !Task.isCancelled, let data = await download(url),
-                   let r = store(data, keys: [primary], origin: "itunes-lookup") {
-                    return r
+                switch await appleLookupArtwork(trackID: req.storeTrackID, albumID: req.storeAlbumID) {
+                case .found(let url):
+                    guard !Task.isCancelled else { return .none }
+                    guard let data = await download(url) else { return Task.isCancelled ? .none : .failed }
+                    if let r = store(data, keys: [primary], origin: "itunes-lookup") { return .found(r) }
+                case .failed:
+                    return .failed      // offline: don't burn the search request too
+                case .none:
+                    break               // catalog id unknown in these storefronts: search instead
                 }
-                if Task.isCancelled { return nil }
+                if Task.isCancelled { return .none }
             }
             // Local file (or a catalog id that didn't resolve): search by artist + album.
-            guard let artist = req.artist, !artist.isEmpty else { return nil }
-            if let albumKey, let hit = cached(albumKey) { stats.cacheHits += 1; return hit }
-            guard let url = await appleSearchArtwork(artist: artist, album: req.album, title: req.title) else {
+            guard let artist = req.artist, !artist.isEmpty else { return .none }
+            if let albumKey, let hit = cached(albumKey) { stats.cacheHits += 1; return .found(hit) }
+            switch await appleSearchArtwork(artist: artist, album: req.album, title: req.title) {
+            case .none:
+                // Definitive "no results" only — a failed request never lands here.
                 if !Task.isCancelled { misses[primary] = Date() }
-                return nil
+                return .none
+            case .failed:
+                return .failed
+            case .found(let url):
+                guard !Task.isCancelled else { return .none }
+                guard let data = await download(url) else { return Task.isCancelled ? .none : .failed }
+                return store(data, keys: [primary, albumKey].compactMap { $0 }, origin: "itunes-search")
+                    .map(MusicArtOutcome.found) ?? .none
             }
-            guard !Task.isCancelled, let data = await download(url) else { return nil }
-            return store(data, keys: [primary, albumKey].compactMap { $0 }, origin: "itunes-search")
         }
     }
 
@@ -274,14 +317,43 @@ actor MusicArtworkResolver {
         return !Task.isCancelled
     }
 
-    private func fetchJSON(_ url: URL) async -> [String: Any]? {
+    /// A JSON request's result: `notFound` is a definitive answer (4xx other than 408/429);
+    /// `failed` is transient (offline, timeout, 408/429/5xx, unreadable body).
+    enum Fetch {
+        case json([String: Any])
+        case notFound
+        case failed
+    }
+
+    /// A lookup's answer before the image download.
+    enum Lookup {
+        case found(URL)
+        case none
+        case failed
+    }
+
+    private func fetchJSON(_ url: URL) async -> Fetch {
+        guard !config.simulateOffline else { return .failed }
         guard let (data, response) = try? await session.data(from: url),
-              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+              let code = (response as? HTTPURLResponse)?.statusCode else {
+            log("art: request failed \(url.host ?? "") (network)")
+            return .failed
+        }
+        switch code {
+        case 200:
+            guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return .failed }
+            return .json(json)
+        case 408, 429, 500...:
+            log("art: \(url.host ?? "") answered \(code) — transient")
+            return .failed
+        default:
+            return .notFound
+        }
     }
 
     private func download(_ url: URL) async -> Data? {
         guard url.scheme == "https" || url.scheme == "http" else { return nil }
+        guard !config.simulateOffline else { return nil }
         stats.downloads += 1
         guard let (data, response) = try? await session.data(from: url),
               (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? false,
@@ -293,20 +365,27 @@ actor MusicArtworkResolver {
     }
 
     /// oEmbed (no account, no token) → the 640 px cover.
-    private func spotifyArtworkURL(uri: String) async -> URL? {
+    private func spotifyArtworkURL(uri: String) async -> Lookup {
         let parts = uri.split(separator: ":")
         var candidates = [uri]
         if parts.count == 3 { candidates.append("https://open.spotify.com/\(parts[1])/\(parts[2])") }
         for target in candidates {
             var c = URLComponents(string: "https://open.spotify.com/oembed")!
             c.queryItems = [URLQueryItem(name: "url", value: target)]
-            guard let url = c.url, await waitForSlot(apple: false) else { return nil }
-            if let json = await fetchJSON(url), let thumb = json["thumbnail_url"] as? String {
-                return URL(string: Self.largeSpotifyImage(thumb))
+            guard let url = c.url, await waitForSlot(apple: false) else { return .none }
+            switch await fetchJSON(url) {
+            case .json(let json):
+                if let thumb = json["thumbnail_url"] as? String, let big = URL(string: Self.largeSpotifyImage(thumb)) {
+                    return .found(big)
+                }
+            case .failed:
+                return .failed          // offline: the other spelling would fail too
+            case .notFound:
+                break
             }
-            if Task.isCancelled { return nil }
+            if Task.isCancelled { return .none }
         }
-        return nil
+        return .none
     }
 
     /// i.scdn.co / spotifycdn image ids encode the size: 00001e02 = 300 px, 0000b273 = 640 px.
@@ -321,27 +400,32 @@ actor MusicArtworkResolver {
 
     /// One request for both ids (`lookup?id=<track>,<album>`); the user's storefront first,
     /// then the US one only if that returned nothing.
-    private func appleLookupArtwork(trackID: String?, albumID: String?) async -> URL? {
+    private func appleLookupArtwork(trackID: String?, albumID: String?) async -> Lookup {
         let ids = [trackID, albumID].compactMap { $0 }
-        guard !ids.isEmpty else { return nil }
+        guard !ids.isEmpty else { return .none }
         for country in region == "US" ? ["US"] : [region, "US"] {
             var c = URLComponents(string: "https://itunes.apple.com/lookup")!
             c.queryItems = [URLQueryItem(name: "id", value: ids.joined(separator: ",")),
                             URLQueryItem(name: "country", value: country)]
-            guard let url = c.url, await waitForSlot(apple: true) else { return nil }
-            guard let json = await fetchJSON(url) else { return nil }   // network error: don't burn more requests
+            guard let url = c.url, await waitForSlot(apple: true) else { return .none }
+            let json: [String: Any]
+            switch await fetchJSON(url) {
+            case .json(let j): json = j
+            case .failed: return .failed     // network error: don't burn more requests
+            case .notFound: continue
+            }
             let results = json["results"] as? [[String: Any]] ?? []
             func art(_ r: [String: Any]) -> String? { r["artworkUrl100"] as? String ?? r["artworkUrl60"] as? String }
             // The track's own cover first (singles/compilations can differ from the album's).
             let track = trackID.flatMap { id in results.first { ($0["trackId"] as? NSNumber)?.stringValue == id } }
-            if let a = track.flatMap(art) ?? results.lazy.compactMap(art).first {
-                return URL(string: Self.largeAppleImage(a))
+            if let a = track.flatMap(art) ?? results.lazy.compactMap(art).first, let big = URL(string: Self.largeAppleImage(a)) {
+                return .found(big)
             }
         }
-        return nil
+        return .none
     }
 
-    private func appleSearchArtwork(artist: String, album: String?, title: String?) async -> URL? {
+    private func appleSearchArtwork(artist: String, album: String?, title: String?) async -> Lookup {
         let byAlbum = !(album ?? "").isEmpty
         var c = URLComponents(string: "https://itunes.apple.com/search")!
         let term = byAlbum ? "\(artist) \(album!)" : "\(artist) \(title ?? "")"
@@ -351,7 +435,13 @@ actor MusicArtworkResolver {
             URLQueryItem(name: "limit", value: "10"),
             URLQueryItem(name: "country", value: region),
         ]
-        guard let url = c.url, await waitForSlot(apple: true), let json = await fetchJSON(url) else { return nil }
+        guard let url = c.url, await waitForSlot(apple: true) else { return .none }
+        let json: [String: Any]
+        switch await fetchJSON(url) {
+        case .json(let j): json = j
+        case .failed: return .failed
+        case .notFound: return .none
+        }
         let results = json["results"] as? [[String: Any]] ?? []
         let wantArtist = Self.fold(artist)
         let wantName = Self.fold(byAlbum ? album! : (title ?? ""))
@@ -368,8 +458,9 @@ actor MusicArtworkResolver {
         let exact = results.first { matches($0) && ($0[nameKey] as? String)?.lowercased() == wantRaw }
         let folded = results.first { matches($0) && Self.fold($0[nameKey] as? String ?? "") == wantName }
         guard let best = exact ?? folded ?? results.first(where: matches),
-              let art = best["artworkUrl100"] as? String ?? best["artworkUrl60"] as? String else { return nil }
-        return URL(string: Self.largeAppleImage(art))
+              let art = best["artworkUrl100"] as? String ?? best["artworkUrl60"] as? String,
+              let big = URL(string: Self.largeAppleImage(art)) else { return .none }
+        return .found(big)
     }
 
     /// …/100x100bb.jpg → …/1200x1200bb.jpg (mzstatic serves any size up to the master).
@@ -453,11 +544,20 @@ enum MusicArtImage {
 
 // MARK: - Palette
 
-/// 3–5 dominant artwork colours, brightest-first: k-means (k = 5, k-means++ seeding with a
-/// deterministic per-image seed) in Oklab on a 64 px thumbnail, tiny clusters dropped, near
-/// duplicates merged; padded with lighter/darker variants when the cover is near-monochrome.
+/// 3–5 dominant artwork colours, brightest-first, that keep the cover's vivid accents:
+/// k-means (k = 5, k-means++ seeding with a deterministic per-image seed) in Oklab on a 64 px
+/// thumbnail, with points weighted by chroma so saturated regions pull their own centre;
+/// each cluster is then represented by its most colourful members (the mean of its top
+/// chroma quartile+) rather than its plain mean — a plain mean blends an azure sky with the
+/// greys beside it into slate. Tiny clusters dropped, near duplicates merged; padded with
+/// lighter/darker variants when the cover is near-monochrome.
 enum MusicPalette {
     struct Lab { var l: Double, a: Double, b: Double }
+
+    /// Weight of a point in k-means: 1 for a neutral pixel, up to ~3 for a fully vivid one.
+    static let chromaWeight = 6.0
+    /// Members at or above this chroma percentile (within their cluster) represent it.
+    static let representativePercentile = 0.7
 
     static func extract(from image: CGImage, maxColors: Int = 5) -> [RGBA] {
         let side = 64
@@ -474,20 +574,30 @@ enum MusicPalette {
             seed = (seed ^ UInt64(px[i]) ^ (UInt64(px[i + 1]) << 8) ^ (UInt64(px[i + 2]) << 16)) &* 0x100_0000_01b3
         }
         guard !points.isEmpty else { return [] }
-        var clusters = kMeans(points, k: min(maxColors, points.count), seed: seed)
+        let weights = points.map { 1 + chromaWeight * chroma($0) }
+        let (centers, assign) = kMeans(points, weights: weights, k: min(maxColors, points.count), seed: seed)
+        // Represent each cluster by its colourful members; weight = share of pixels.
+        var members = [[Int]](repeating: [], count: centers.count)
+        for (i, a) in assign.enumerated() { members[a].append(i) }
+        var clusters: [(c: Lab, weight: Double)] = []
+        for m in members where !m.isEmpty {
+            let sorted = m.sorted { chroma(points[$0]) < chroma(points[$1]) }
+            let top = sorted[min(sorted.count - 1, Int(Double(sorted.count) * representativePercentile))...]
+            var sum = Lab(l: 0, a: 0, b: 0)
+            for i in top { sum.l += points[i].l; sum.a += points[i].a; sum.b += points[i].b }
+            let n = Double(top.count)
+            clusters.append((Lab(l: sum.l / n, a: sum.a / n, b: sum.b / n), Double(m.count)))
+        }
         let total = Double(points.count)
         // Drop specks (<2.5 %) as long as three colours remain.
         clusters.sort { $0.weight > $1.weight }
         while clusters.count > 3, let last = clusters.last, last.weight / total < 0.025 { clusters.removeLast() }
-        // Merge near-duplicates (ΔE_ok < 0.06), weight-averaged.
+        // Merge near-duplicates (ΔE_ok < 0.06): keep the more colourful one's hue.
         var merged: [(c: Lab, weight: Double)] = []
         for cl in clusters {
             if let i = merged.firstIndex(where: { distance($0.c, cl.c) < 0.06 }) {
                 let w = merged[i].weight + cl.weight
-                let m = merged[i]
-                merged[i] = (Lab(l: (m.c.l * m.weight + cl.c.l * cl.weight) / w,
-                                 a: (m.c.a * m.weight + cl.c.a * cl.weight) / w,
-                                 b: (m.c.b * m.weight + cl.c.b * cl.weight) / w), w)
+                merged[i] = (chroma(cl.c) > chroma(merged[i].c) ? cl.c : merged[i].c, w)
             } else {
                 merged.append(cl)
             }
@@ -511,7 +621,8 @@ enum MusicPalette {
         }
     }
 
-    private static func kMeans(_ pts: [Lab], k: Int, seed: UInt64) -> [(c: Lab, weight: Double)] {
+    /// Weighted k-means (k-means++ seeding): returns the centres and each point's cluster.
+    private static func kMeans(_ pts: [Lab], weights: [Double], k: Int, seed: UInt64) -> ([Lab], [Int]) {
         var rng = seed == 0 ? 1 : seed
         func next() -> Double {   // SplitMix64
             rng &+= 0x9E37_79B9_7F4A_7C15
@@ -520,16 +631,15 @@ enum MusicPalette {
             z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
             return Double((z ^ (z >> 31)) >> 11) / Double(1 << 53)
         }
-        // k-means++ seeding.
         var centers = [pts[Int(next() * Double(pts.count)) % pts.count]]
-        var d2 = pts.map { distance2($0, centers[0]) }
+        var d2 = pts.indices.map { distance2(pts[$0], centers[0]) * weights[$0] }
         while centers.count < k {
             let sum = d2.reduce(0, +)
             guard sum > 1e-9 else { break }   // fewer distinct colours than k
             var target = next() * sum, idx = 0
             for (i, d) in d2.enumerated() { target -= d; if target <= 0 { idx = i; break } }
             centers.append(pts[idx])
-            for i in pts.indices { d2[i] = min(d2[i], distance2(pts[i], pts[idx])) }
+            for i in pts.indices { d2[i] = min(d2[i], distance2(pts[i], pts[idx]) * weights[i]) }
         }
         var assign = [Int](repeating: 0, count: pts.count)
         for _ in 0..<12 {
@@ -543,20 +653,23 @@ enum MusicPalette {
                 if assign[i] != best { assign[i] = best; moved = true }
             }
             var sums = [Lab](repeating: Lab(l: 0, a: 0, b: 0), count: centers.count)
-            var counts = [Double](repeating: 0, count: centers.count)
+            var wsum = [Double](repeating: 0, count: centers.count)
             for (i, p) in pts.enumerated() {
-                sums[assign[i]].l += p.l; sums[assign[i]].a += p.a; sums[assign[i]].b += p.b
-                counts[assign[i]] += 1
+                let w = weights[i], j = assign[i]
+                sums[j].l += p.l * w; sums[j].a += p.a * w; sums[j].b += p.b * w
+                wsum[j] += w
             }
-            for j in centers.indices where counts[j] > 0 {
-                centers[j] = Lab(l: sums[j].l / counts[j], a: sums[j].a / counts[j], b: sums[j].b / counts[j])
+            for j in centers.indices where wsum[j] > 0 {
+                centers[j] = Lab(l: sums[j].l / wsum[j], a: sums[j].a / wsum[j], b: sums[j].b / wsum[j])
             }
             if !moved { break }
         }
-        var weights = [Double](repeating: 0, count: centers.count)
-        for a in assign { weights[a] += 1 }
-        return zip(centers, weights).filter { $0.1 > 0 }.map { ($0.0, $0.1) }
+        return (centers, assign)
     }
+
+    /// Oklab chroma (0 = grey; vivid sRGB colours reach ~0.3).
+    static func chroma(_ c: Lab) -> Double { (c.a * c.a + c.b * c.b).squareRoot() }
+    static func chroma(_ c: RGBA) -> Double { chroma(oklab(r: c.r, g: c.g, b: c.b)) }
 
     private static func distance2(_ x: Lab, _ y: Lab) -> Double {
         let dl = x.l - y.l, da = x.a - y.a, db = x.b - y.b
