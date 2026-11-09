@@ -131,6 +131,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// drawn frames, in seconds, accumulated on the main thread.
     var measuresGPUTime = false
     var gpuSeconds: Double = 0
+    /// Debug pacing (live wallpaper): called on a Metal thread with each drawn frame's
+    /// on-screen time (0 = never shown). Nil = no presented handler at all.
+    var onPresented: ((CFTimeInterval) -> Void)?
 
     /// Pause/resume a video source's decoder while the host draws nothing (the live
     /// wallpaper's pause must stop the decoder too, not just the draws).
@@ -284,6 +287,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                              size: drawableSize, time: t, preset: preset, source: source,
                              sourceTex: sTex, slides: slides, packedUniforms: packedUniforms)
             }
+            if let onPresented { drawable.addPresentedHandler { onPresented($0.presentedTime) } }
             cmd.present(drawable)
             cmd.commit()
         }
