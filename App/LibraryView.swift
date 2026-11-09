@@ -4,6 +4,11 @@
 //  Styles split into two kinds:
 //    • Scenes — self-contained generative pieces (Universe, Black Hole…). Pick and go.
 //    • Looks  — effect stacks that restyle the shared source (slideshow/photo/video/gradient).
+//
+//  Layout (all from Layout.swift): one page column — `pagePadding` from the window edges,
+//  capped at `contentMaxWidth` and centred — shared by the cards, the filter bar's content
+//  and the grid. Blocks are `sectionGap` apart; a section header sits `itemGap` above its
+//  tiles. The filter bar's frost spans the whole window.
 
 import SwiftUI
 import UniformTypeIdentifiers
@@ -12,6 +17,7 @@ struct LibraryView: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var wallpaper = WallpaperSlot.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.layout) private var layout
     @State private var filter: GalleryFilter = DemoHooks.filter ?? .all
     @State private var query = DemoHooks.search ?? ""
     @FocusState private var searchFocused: Bool
@@ -53,6 +59,9 @@ struct LibraryView: View {
         }
     }
 
+    /// Space above the cards, under the toolbar.
+    private var topInset: CGFloat { layout.widthClass.pick(Space.m, Space.m, Space.l) }
+
     private func gallery(_ state: GalleryState) -> some View {
         let matcher = StyleMatcher(filter: filter, query: query, playing: state.playingIDs)
         let sections = sections(matcher)
@@ -60,22 +69,20 @@ struct LibraryView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                 DestinationRow(state: state)
-                    .padding(.horizontal, 28)
-                    .padding(.top, 18)
-                    .padding(.bottom, 22)
+                    .pageColumn(layout)
+                    .padding(.top, topInset)
+                    .padding(.bottom, layout.sectionGap - FilterBar.verticalInset)
 
                 Section {
                     grid(sections, state: state, matcher: matcher)
-                        .padding(.horizontal, 28)
-                        .padding(.top, 8)
-                        .padding(.bottom, 40)
+                        .pageColumn(layout)
+                        .padding(.top, layout.sectionGap - FilterBar.verticalInset)
+                        .padding(.bottom, Space.xxl)
                 } header: {
                     FilterBar(filter: $filter, query: $query, searchFocused: $searchFocused,
                               counts: counts(state))
                 }
             }
-            .frame(maxWidth: 1400)
-            .frame(maxWidth: .infinity)
         }
         .onAppear {
             // DOTSTUDIO_DEMO_SCROLL=<style name>: scroll that tile to the top (pinned-bar review).
@@ -132,8 +139,6 @@ struct LibraryView: View {
         return out
     }
 
-    private static let columns = [GridItem(.adaptive(minimum: 228, maximum: 340), spacing: 22, alignment: .top)]
-
     @ViewBuilder
     private func grid(_ sections: [GallerySection], state: GalleryState, matcher: StyleMatcher) -> some View {
         if sections.allSatisfy({ $0.presets.isEmpty }) && matcher.isFiltering {
@@ -142,8 +147,10 @@ struct LibraryView: View {
             }
             .transition(.lift(reduceMotion: reduceMotion))
         } else {
-            LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 26) {
-                ForEach(sections) { section in
+            // One grid for every section, so a tile glides to its new place when the filter
+            // changes. Columns are added as the window widens (layout.tileColumns).
+            LazyVGrid(columns: layout.tileColumns, alignment: .leading, spacing: layout.gridRowGap) {
+                ForEach(Array(sections.enumerated()), id: \.element.id) { i, section in
                     Section {
                         ForEach(section.presets) { preset in
                             StyleTile(preset: preset, badges: state.badges(for: preset.id), lineup: state.lineup)
@@ -157,6 +164,11 @@ struct LibraryView: View {
                         }
                     } header: {
                         SectionHeader(section: section)
+                            // The grid puts gridRowGap around every row, header rows too. Re-space
+                            // the header so it sits sectionGap below the previous tiles and only
+                            // itemGap above its own (closer to what it titles than to what it ends).
+                            .padding(.top, i == 0 ? 0 : max(layout.sectionGap - layout.gridRowGap, 0))
+                            .padding(.bottom, layout.itemGap - layout.gridRowGap)
                     }
                 }
             }
@@ -183,90 +195,144 @@ struct LibraryView: View {
     }
 }
 
+private extension View {
+    /// The page's content column: inset `pagePadding` from the window edges, at most
+    /// `contentMaxWidth` wide, centred in wider windows.
+    func pageColumn(_ layout: LayoutMetrics) -> some View {
+        frame(maxWidth: layout.contentMaxWidth, alignment: .leading)
+            .padding(.horizontal, layout.pagePadding)
+            .frame(maxWidth: .infinity)
+    }
+}
+
 // MARK: - Section header
 
 private struct SectionHeader: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.layout) private var layout
+    @ScaledLength(relativeTo: .body) private var swatchWidth: CGFloat = 32
+    @ScaledLength(relativeTo: .body) private var swatchHeight: CGFloat = 20
     let section: LibraryView.GallerySection
     @State private var showSource = false
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(section.title).font(.title2.weight(.semibold))
-                Text(section.subtitle).font(.callout).foregroundStyle(.secondary)
-                    .contentTransition(.numericText())
+        if section.kind == .looks {
+            // The Source button sits on the title's line when it fits, else under the text.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: layout.controlGap) {
+                    titles
+                    Spacer(minLength: layout.itemGap)
+                    sourceButton
+                }
+                VStack(alignment: .leading, spacing: layout.itemGap) {
+                    titles
+                    sourceButton
+                }
             }
-            Spacer()
-            if section.kind == .looks { sourceButton }
+        } else {
+            titles
         }
-        .padding(.top, section.kind == .looks ? 22 : 6)
-        .padding(.bottom, 2)
+    }
+
+    private var titles: some View {
+        VStack(alignment: .leading, spacing: layout.labelGap) {
+            Text(section.title)
+                .textRole(.sectionTitle)
+                .wrapping()
+            Text(section.subtitle)
+                .textRole(.callout)
+                .foregroundStyle(.secondary)
+                .wrapping()
+                .contentTransition(.numericText())
+        }
+        .readableWidth(layout)
     }
 
     private var sourceButton: some View {
         Button { showSource.toggle() } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: layout.iconGap) {
                 SourceSwatch(source: model.library.source)
-                    .frame(width: 30, height: 20)
-                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(.primary.opacity(0.15)))
+                    .frame(width: swatchWidth, height: swatchHeight)
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.xs, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: Radius.xs, style: .continuous).strokeBorder(.primary.opacity(0.15)))
                 Text("Source: \(model.library.source.displayName)")
-                Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                    .textRole(.body)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .scaledFont { .scaled(.caption2, $0, weight: .semibold) }
+                    .foregroundStyle(.secondary)
             }
         }
         .glassButton()
+        .adaptiveControlSize()
+        .fixedSize()
         .help("The slideshow, photo, video or gradient every Look restyles")
         .popover(isPresented: $showSource, arrowEdge: .bottom) {
-            SourceEditor(source: model.sourceBinding, model: model)
-                .padding(16)
-                .frame(width: 320)
+            SourcePopover()
+                .adaptiveLayout()   // the popover is its own root
         }
+    }
+}
+
+/// The Source editor in a popover: card padding, and a width that grows with the text.
+private struct SourcePopover: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.layout) private var layout
+
+    var body: some View {
+        let range = layout.popoverWidth
+        SourceEditor(source: model.sourceBinding, model: model)
+            .padding(layout.cardPadding)
+            .frame(width: min(max(layout.scaled(320), range.lowerBound), range.upperBound))
     }
 }
 
 // MARK: - Filter bar
 
-/// Pinned under the toolbar: search + glass chips. Tiles scroll beneath it.
+/// Pinned under the toolbar: search + glass chips that wrap onto more lines when the window
+/// is narrow or the text is large. Tiles scroll beneath it.
 private struct FilterBar: View {
     /// Coordinate space of the gallery's scroll viewport.
     static let space = "galleryScroll"
+    /// Above and below the bar's content (part of the gap to the cards and to the grid).
+    static let verticalInset = Space.xs
+    @Environment(\.layout) private var layout
     @Binding var filter: GalleryFilter
     @Binding var query: String
     var searchFocused: FocusState<Bool>.Binding
     let counts: [GalleryFilter: Int]
     @Namespace private var chipNS
 
+    /// Narrower in compact windows, wider in wide ones; grows with the text.
+    private var searchWidth: CGFloat { layout.scaled(layout.widthClass.pick(224, 240, 288)) }
+
     var body: some View {
-        HStack(spacing: 12) {
+        AdaptiveStack(rowAlignment: .top, columnAlignment: .leading, spacing: layout.itemGap) {
             SearchField(text: $query, prompt: "Search styles, effects, packs", focus: searchFocused)
-                .frame(width: 236)
+                // Over the chips (large text), it can be as wide as a comfortable line.
+                .frame(width: layout.prefersStacking ? layout.readableWidth : searchWidth)
                 .onExitCommand { query = ""; searchFocused.wrappedValue = false }
-            ScrollView(.horizontal, showsIndicators: false) {
-                GlassGroup(spacing: 6) {
-                    HStack(spacing: 6) {
-                        ForEach(GalleryFilter.chips) { f in
-                            let n = counts[f] ?? 0
-                            if f.alwaysShown || n > 0 || filter == f {
-                                FilterChip(filter: f, count: f == .all ? nil : n,
-                                           selected: filter == f, ns: chipNS) {
-                                    Motion.run { filter = f }
-                                }
+            GlassGroup(spacing: layout.controlGap) {
+                FlowLayout(spacing: layout.controlGap, lineSpacing: layout.controlGap) {
+                    ForEach(GalleryFilter.chips) { f in
+                        let n = counts[f] ?? 0
+                        if f.alwaysShown || n > 0 || filter == f {
+                            FilterChip(filter: f, count: f == .all ? nil : n,
+                                       selected: filter == f, ns: chipNS) {
+                                Motion.run { filter = f }
                             }
                         }
                     }
-                    .padding(.vertical, 4)
-                    .padding(.horizontal, 2)
                 }
             }
-            .scrollClipDisabledCompat()
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 28)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .pageColumn(layout)
+        .padding(.vertical, Self.verticalInset)
         .background {
             // Once pinned, a soft frosted fade keeps the chips legible over the tiles
             // scrolling beneath. Driven by the bar's own position, so no parent re-render.
+            // It spans the whole window, not just the page column.
             GeometryReader { g in
                 let y = g.frame(in: .named(FilterBar.space)).minY
                 Rectangle()
@@ -275,8 +341,8 @@ private struct FilterBar: View {
                                                  .init(color: .black.opacity(0.8), location: 0.6),
                                                  .init(color: .clear, location: 1)],
                                          startPoint: .top, endPoint: .bottom))
-                    .padding(.top, -60)
-                    .padding(.bottom, -16)
+                    .padding(.top, -(Space.xxl + Space.s))   // up under the toolbar
+                    .padding(.bottom, -Space.m)              // a soft tail over the first row
                     .opacity(min(max((150 - y) / 70, 0), 1))
             }
             .allowsHitTesting(false)
@@ -285,6 +351,8 @@ private struct FilterBar: View {
 }
 
 private struct FilterChip: View {
+    @Environment(\.layout) private var layout
+    @ScaledLength(relativeTo: .callout) private var height: CGFloat = GalleryControl.height
     let filter: GalleryFilter
     let count: Int?
     let selected: Bool
@@ -294,9 +362,10 @@ private struct FilterChip: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
+            HStack(spacing: layout.labelGap) {
                 if let s = filter.symbol {
-                    Image(systemName: s).font(.system(size: 10.5, weight: .semibold))
+                    Image(systemName: s)
+                        .scaledFont { .scaled(points: 10.5, $0, weight: .semibold) }
                 }
                 Text(filter.title)
                 if let count {
@@ -306,14 +375,16 @@ private struct FilterChip: View {
                         .contentTransition(.numericText())
                 }
             }
-            .font(.system(size: 12, weight: selected ? .semibold : .medium))
+            .textRole(selected ? TextRole.control.weight(.semibold) : .control)
+            .lineLimit(1)
             .foregroundStyle(selected ? Color.white : Color.primary)
-            .padding(.horizontal, 12)
-            .frame(height: 28)
+            .padding(.horizontal, layout.controlGap + Space.xxs)
+            .frame(minHeight: height)
+            .fixedSize()
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .glassSurface(.regular, in: Capsule(), tint: selected ? Color.accentColor : nil, interactive: true)
+        .tintedGlassSurface(.regular, in: Capsule(), tint: selected ? Color.accentColor : nil, interactive: true)
         .glassID(filter.id, in: ns)
         .scaleEffect(hovering && !selected ? 1.04 : 1)
         .onHover { hovering = $0 }
@@ -322,39 +393,49 @@ private struct FilterChip: View {
     }
 }
 
-private extension View {
-    @ViewBuilder func scrollClipDisabledCompat() -> some View {
-        if #available(macOS 14, *) { self.scrollClipDisabled() } else { self }
-    }
-}
-
 // MARK: - Empty state
 
 private struct EmptyResults: View {
+    @Environment(\.layout) private var layout
+    @ScaledLength(relativeTo: .title3) private var iconCircle: CGFloat = 64
     let filter: GalleryFilter
     let query: String
     let reset: () -> Void
 
+    /// Echoes a long query shortened in the middle; the full text is in the tooltip.
+    private var shownQuery: String {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard q.count > 40 else { return q }
+        return "\(q.prefix(26))…\(q.suffix(13))"
+    }
+
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: layout.itemGap) {
             Image(systemName: query.isEmpty ? (filter.symbol ?? "square.grid.2x2") : "magnifyingglass")
-                .font(.system(size: 30, weight: .light))
+                .scaledFont { .scaled(points: 30, $0, weight: .light) }
                 .foregroundStyle(.secondary)
-                .frame(width: 64, height: 64)
+                .frame(width: iconCircle, height: iconCircle)
                 .glassSurface(.regular, in: Circle())
-            Text(query.isEmpty ? "Nothing in \(filter.title) yet" : "No styles match “\(query)”")
-                .font(.title3.weight(.semibold))
-            Text(query.isEmpty ? "Add Built-in Styles from the New menu, or make your own."
-                               : "Try a style name, an effect like “Dither”, or a pack like “Clocks”.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            Button("Show All Styles", action: reset)
+            // Headline and message read as one block; icon and button an item step away.
+            VStack(spacing: layout.labelGap) {
+                Text(query.isEmpty ? "Nothing in \(filter.title) yet" : "No styles match “\(shownQuery)”")
+                    .textRole(.headline)
+                    .wrapping(.center)
+                    .help(query)
+                Text(query.isEmpty ? "Add Built-in Styles from the New menu, or make your own."
+                                   : "Try a style name, an effect like “Dither”, or a pack like “Clocks”.")
+                    .textRole(.callout)
+                    .foregroundStyle(.secondary)
+                    .wrapping(.center)
+            }
+            Button(action: reset) { Text("Show All Styles").textRole(.body) }
                 .glassButton()
-                .padding(.top, 4)
+                .adaptiveControlSize()
+                .padding(.top, Space.xxs)
         }
-        .multilineTextAlignment(.center)
+        .readableWidth(layout, alignment: .center)
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 70)
+        .padding(.vertical, Space.xxl + Space.l)
     }
 }
 
@@ -376,30 +457,27 @@ struct NewTile: View {
 }
 
 struct NewTileFace: View {
+    @ScaledLength(relativeTo: .body) private var circle: CGFloat = 40
     let title: String
     let symbol: String
     var hovering: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+        VStack(alignment: .leading, spacing: TileLabel.gapAbove) {
+            RoundedRectangle(cornerRadius: Radius.tile, style: .continuous)
                 .strokeBorder(style: StrokeStyle(lineWidth: 1.25, dash: [5, 5]))
                 .foregroundStyle(hovering ? Color.accentColor : Color.secondary.opacity(0.45))
-                .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .background(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous)
                     .fill(Color.primary.opacity(hovering ? 0.06 : 0.025)))
                 .overlay(
                     Image(systemName: symbol)
-                        .font(.system(size: 16, weight: .semibold))
+                        .scaledFont { .scaled(points: 16, $0, weight: .semibold) }
                         .foregroundStyle(hovering ? Color.accentColor : .secondary)
-                        .frame(width: 40, height: 40)
+                        .frame(width: circle, height: circle)
                         .glassSurface(.regular, in: Circle())
                         .scaleEffect(hovering ? 1.08 : 1))
                 .aspectRatio(16.0 / 10.0, contentMode: .fit)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
-                Text(" ").font(.caption)   // keep baseline with sibling tiles
-            }
-            .padding(.horizontal, 3)
+            TileLabel(title: title, summary: nil, dimmed: true)
         }
         .contentShape(Rectangle())
         .motion(Motion.snappy, value: hovering)
