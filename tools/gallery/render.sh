@@ -12,5 +12,5 @@ cp "$ROOT"/Shared/PlanetTextures/*.jpg "$BIN/" 2>/dev/null || true
 rm -rf "$BIN/Photos" && mkdir -p "$BIN/Photos"
 cp "$ROOT"/Shared/Photos/*.jpg "$BIN/Photos/" 2>/dev/null || true
 xcrun -sdk macosx swiftc -O -import-objc-header "$ROOT/Shared/Bridging.h" -I "$ROOT/Shared" \
-  "$ROOT"/Shared/*.swift "$ROOT"/Shared/Scenes/*.swift "$ROOT/tools/gallery/main.swift" -o "$BIN/gallery"
+  "$ROOT"/Shared/*.swift "$ROOT"/Shared/Scenes/*.swift "$ROOT"/Shared/Music/*.swift "$ROOT/tools/gallery/main.swift" -o "$BIN/gallery"
 "$BIN/gallery" "$@"
