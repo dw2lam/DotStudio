@@ -46,87 +46,307 @@ struct TileBadges: Equatable {
 
 /// How the two destination cards share the row, worked out from the row's MEASURED width:
 ///
-///   • side by side — two cards of EQUAL width (the common case);
-///   • stacked      — one above the other, full width: two text columns wouldn't fit side
-///                    by side (a narrow window at large text sizes);
+///   • side by side — two cards of EQUAL width (the common case), mirrored so their
+///                    thumbnails meet in the middle at the SYNC key, like the two zones
+///                    of a car's dual-zone climate panel;
+///   • stacked      — one above the other, full width: two cards wouldn't fit side by side
+///                    (a narrow window at large text sizes);
 ///   • single       — no live wallpaper on this Mac: the Screensaver card alone.
 ///
-/// Both cards share one structure (DestinationCardLayout) and one preview size (16:10), in
-/// every arrangement, so their previews, titles, subtitles and footers line up. The preview
-/// grows with the card (up to `cardPreviewWidth`) but never squeezes the text column below
-/// its minimum; full-width cards take a smaller share, so the page isn't all hero.
+/// Each card is a big thumbnail that fills the card's height, and a column of options
+/// beside it. Both cards share one structure (DestinationCardLayout) and one thumbnail
+/// size, so neither reads heavier or emptier. The column keeps a comfortable width (never
+/// squeezed below its minimum); the thumbnail takes the rest, up to a cap per width class.
 struct DestinationGeometry: Equatable {
     var sideBySide: Bool
-    var previewWidth: CGFloat
+    var thumbWidth: CGFloat
+    /// Between the two cards: room for the SYNC key on the seam, with a margin each side.
+    var gap: CGFloat
+    /// The subtitle folds away in a compact side-by-side card (the column is short).
+    var showsSubtitle: Bool
 
-    var previewHeight: CGFloat { (previewWidth * 10 / 16).rounded() }
+    var thumbHeight: CGFloat { (thumbWidth * 10 / 16).rounded() }
 
-    init(width measured: CGFloat?, layout: LayoutMetrics, hasWallpaper: Bool) {
+    init(width measured: CGFloat?, layout: LayoutMetrics, hasWallpaper: Bool, keySize: CGSize = .zero) {
         let p = layout.cardPadding
-        let g = layout.gridColumnGap
-        let range = layout.cardPreviewWidth
-        // No token for the text column's minimum; on the grid, grown with the text.
-        let textMin = layout.scaled(layout.widthClass.pick(200, 240, 280))
+        // No tokens for the column's range; on the grid, grown with the text.
+        let colMin = layout.scaled(layout.widthClass.pick(176, 232, 272))
+        let colMax = layout.scaled(layout.widthClass.pick(240, 300, 360))
+        let thumbMin = layout.widthClass.pick(CGFloat(140), 176, 220)
         // Before the first measurement: a typical row for the class.
         let w = measured ?? layout.widthClass.pick(840, 1036, 1824)
 
-        /// `share` of the card, inside the range, leaving the text column its minimum.
-        func preview(card: CGFloat, share: CGFloat) -> CGFloat {
-            let room = ((card - 3 * p - textMin) / 4).rounded(.down) * 4
-            return min(range.upperBound, Space.snap(card * share), room)
+        /// The thumbnail's width in a `card`: what the column leaves, on the 4-pt grid.
+        func thumb(card: CGFloat, cap: CGFloat) -> CGFloat {
+            let col = min(max((card * 0.42).rounded(), colMin), colMax)
+            return min(cap, ((card - 3 * p - col) / 4).rounded(.down) * 4)
+        }
+        /// The gap: the grid's, or wider so the key keeps `Space.xs` from both cards' content.
+        func gap(key: CGFloat) -> CGFloat {
+            let room = key > 0 ? key + 2 * Space.xs - 2 * p : 0
+            return max(layout.gridColumnGap, (room / 2).rounded(.up) * 2)
         }
 
         if hasWallpaper && !layout.prefersStacking {
+            let g = gap(key: keySize.width)
             let card = ((w - g) / 2).rounded(.down)
-            let pw = preview(card: card, share: 0.4)
-            if pw >= range.lowerBound {
-                self.init(sideBySide: true, previewWidth: pw)
+            let t = thumb(card: card, cap: layout.widthClass.pick(280, 420, 560))
+            if t >= thumbMin {
+                self.init(sideBySide: true, thumbWidth: t, gap: g, showsSubtitle: !layout.isCompact)
                 return
             }
         }
         self.init(sideBySide: false,
-                  previewWidth: max(range.lowerBound, preview(card: w, share: 0.22)))
+                  thumbWidth: max(layout.cardPreviewWidth.lowerBound,
+                                  thumb(card: w, cap: layout.widthClass.pick(240, 320, 400))),
+                  gap: gap(key: hasWallpaper ? keySize.height : 0), showsSubtitle: true)
     }
 
-    private init(sideBySide: Bool, previewWidth: CGFloat) {
+    private init(sideBySide: Bool, thumbWidth: CGFloat, gap: CGFloat, showsSubtitle: Bool) {
         self.sideBySide = sideBySide
-        self.previewWidth = previewWidth
+        self.thumbWidth = thumbWidth
+        self.gap = gap
+        self.showsSubtitle = showsSubtitle
     }
 }
 
 // MARK: - Row
 
+/// Shots-only: renders the sync morph frozen at a progress (0 split … 1 merged).
+enum SyncMorphHook {
+    static var progress: CGFloat?
+}
+
+/// The two cards as one dual-zone climate panel: Screensaver = the driver's zone, Wallpaper
+/// = the passenger's. The SYNC key sits on the seam between them. Pressing it, the two glass
+/// surfaces close the gap and fuse into one panel (inner corners square off, the seam fades
+/// to a hairline), and the passenger's readout catches up with the driver's — its thumbnail
+/// crossfades to the screensaver's style and its title rolls to that style's name. Pressing
+/// it again (or picking a wallpaper style) splits them back apart.
+///
+/// The whole morph is ONE value, `progress` (0 split … 1 synced), animated with one spring
+/// (Motion.sync): the surface (DualZoneSurface), the seam, the key's LED and the passenger's
+/// readout (RollingReadout) all read it. Content never moves — only the surfaces grow
+/// together — so nothing reflows mid-morph. Under Reduce Motion the surface switches at the
+/// midpoint and everything else crossfades.
 struct DestinationRow: View {
     @Environment(\.layout) private var layout
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject private var slot = WallpaperSlot.shared
+    /// "Same as Screensaver" lives on the controller (wallpaper.json); the slot only knows styles.
+    @ObservedObject private var controller = WallpaperController.shared
     let state: GalleryState
     @State private var width: CGFloat?
-    /// Each card's natural footer height: side by side, both footers take the taller one,
-    /// so their hairlines and first rows of controls sit level.
-    @State private var footers: [Int: CGFloat] = [:]
+    /// The first card's extent along the row (its width side by side, its height stacked).
+    @State private var firstExtent: CGFloat?
+    @State private var keySize: CGSize = .zero
+
+    private var synced: Bool { controller.followsScreensaver && slot.styleID != nil }
 
     var body: some View {
-        let hasWallpaper = WallpaperSlot.shared.isAvailable
-        let geometry = DestinationGeometry(width: width, layout: layout, hasWallpaper: hasWallpaper)
-        let footer = geometry.sideBySide ? (footers.values.max() ?? 0) : 0
+        let hasWallpaper = slot.isAvailable
+        let geometry = DestinationGeometry(width: width, layout: layout, hasWallpaper: hasWallpaper, keySize: keySize)
+        let progress = SyncMorphHook.progress ?? (synced ? 1 : 0)
+        let side = geometry.sideBySide
         // Children keep their identity (and state) when the arrangement changes.
-        let arrangement = geometry.sideBySide
-            ? AnyLayout(HStackLayout(alignment: .top, spacing: layout.gridColumnGap))
-            : AnyLayout(VStackLayout(alignment: .leading, spacing: layout.gridColumnGap))
+        let arrangement = side
+            ? AnyLayout(HStackLayout(alignment: .top, spacing: geometry.gap))
+            : AnyLayout(VStackLayout(alignment: .leading, spacing: geometry.gap))
         arrangement {
-            // Side by side, both cards are as tall as the taller one (footers pinned down)
-            // and equally wide: both are fully flexible, so the stack splits the row evenly.
-            // (Never fixed widths from the measurement: a too-wide first guess would widen
-            // the page and then measure itself.)
-            ScreensaverCard(state: state, geometry: geometry, footerHeight: footer) { footers[0] = $0 }
+            // Side by side, both cards are as tall as the taller one and equally wide: both
+            // are fully flexible, so the stack splits the row evenly. (Never fixed widths from
+            // the measurement: a too-wide first guess would widen the page and then measure
+            // itself.)
+            ScreensaverCard(state: state, geometry: geometry, mirrored: hasWallpaper && side,
+                            drawsSurface: !hasWallpaper)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .onGeometryChange(for: CGFloat.self) { side ? $0.size.width : $0.size.height } action: { firstExtent = $0 }
             if hasWallpaper {
-                WallpaperCard(state: state, geometry: geometry, footerHeight: footer) { footers[1] = $0 }
+                WallpaperCard(state: state, geometry: geometry, progress: progress)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
         }
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(DualZoneSurface(enabled: hasWallpaper, vertical: !side, first: firstExtent,
+                                  gap: geometry.gap, progress: progress, snaps: reduceMotion))
+        .overlay {
+            if hasWallpaper {
+                GeometryReader { proxy in seam(in: proxy.size, geometry: geometry, progress: progress) }
+            }
+        }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .animation(Motion.pick(Motion.sync, reduceMotion: reduceMotion), value: synced)
+    }
+
+    /// The SYNC key on the seam, and the hairline the seam fades to when the zones merge.
+    /// Side by side the key is centred on the seam; stacked, it sits over the thumbnails'
+    /// column so the two thumbnails meet at it.
+    @ViewBuilder
+    private func seam(in size: CGSize, geometry: DestinationGeometry, progress: CGFloat) -> some View {
+        let side = geometry.sideBySide
+        let along = (firstExtent ?? ((side ? size.width : size.height) - geometry.gap) / 2) + geometry.gap / 2
+        let center = side ? CGPoint(x: along, y: size.height / 2)
+                          : CGPoint(x: layout.cardPadding + geometry.thumbWidth / 2, y: along)
+        let inset = layout.cardPadding
+        let clearance = (side ? keySize.height : keySize.width) / 2 + Space.xs
+        ZStack(alignment: .topLeading) {
+            SeamHairline(vertical: side, center: center, length: side ? size.height : size.width,
+                         inset: inset, clearance: clearance)
+                .opacity(progress)
+            SyncKey(level: progress, isOn: synced) { toggleSync() }
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { keySize = $0 }
+                .position(center)
+        }
+    }
+
+    private func toggleSync() {
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        let on = !synced
+        Motion.run(Motion.sync) { controller.setFollowsScreensaver(on) }
+    }
+}
+
+/// A 1-pt line along the seam with a break around the key, inset from the panel's edges.
+private struct SeamHairline: View {
+    let vertical: Bool
+    let center: CGPoint
+    let length: CGFloat
+    let inset: CGFloat
+    let clearance: CGFloat
+
+    var body: some View {
+        let mid = vertical ? center.y : center.x
+        let a = max(0, mid - clearance - inset)
+        let b = max(0, length - inset - (mid + clearance))
+        let line = Color.primary.opacity(0.12)
+        ZStack(alignment: .topLeading) {
+            if vertical {
+                line.frame(width: 1, height: a).offset(x: center.x - 0.5, y: inset)
+                line.frame(width: 1, height: b).offset(x: center.x - 0.5, y: mid + clearance)
+            } else {
+                line.frame(width: a, height: 1).offset(x: inset, y: center.y - 0.5)
+                line.frame(width: b, height: 1).offset(x: mid + clearance, y: center.y - 0.5)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// The two zones' glass, drawn as one animatable shape (Animatable: its body runs every
+/// frame with the spring's current progress, so the glass itself morphs). Off when there's
+/// no wallpaper zone (the Screensaver card draws its own surface).
+private struct DualZoneSurface: ViewModifier, Animatable {
+    let enabled: Bool
+    let vertical: Bool
+    let first: CGFloat?
+    let gap: CGFloat
+    var progress: CGFloat
+    let snaps: Bool
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.panelSurface(in: DualZoneShape(vertical: vertical, first: first, gap: gap,
+                                                   radius: Radius.card, progress: progress, snaps: snaps))
+        } else {
+            content
+        }
+    }
+}
+
+/// Two cards → one panel. At 0: two rounded rectangles `gap` apart. The gap closes over the
+/// first 80% of the move while the inner corners square off over all of it; at 1 it's one
+/// rounded rectangle.
+struct DualZoneShape: Shape {
+    var vertical: Bool
+    /// The first zone's extent along the row (nil: half of it).
+    var first: CGFloat?
+    var gap: CGFloat
+    var radius: CGFloat
+    var progress: CGFloat
+    var snaps = false
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        var q = min(max(progress, 0), 1)
+        if snaps { q = q >= 0.5 ? 1 : 0 }
+        let whole = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        guard q < 0.999 else { return whole.path(in: rect) }
+        let extent = vertical ? rect.height : rect.width
+        let firstLen = min(first ?? (extent - gap) / 2, extent)
+        let close = min(1, q / 0.8)
+        let inner = radius * (1 - q)
+        // Each zone reaches half the gap toward the other (and overlaps by a hair once
+        // closed, so the union is one outline).
+        let reach = gap / 2 * close + (close >= 1 ? 0.5 : 0)
+        let a, b: CGRect
+        let ra, rb: RectangleCornerRadii
+        if vertical {
+            a = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: firstLen + reach)
+            let start = rect.minY + firstLen + gap - reach
+            b = CGRect(x: rect.minX, y: start, width: rect.width, height: rect.maxY - start)
+            ra = RectangleCornerRadii(topLeading: radius, bottomLeading: inner, bottomTrailing: inner, topTrailing: radius)
+            rb = RectangleCornerRadii(topLeading: inner, bottomLeading: radius, bottomTrailing: radius, topTrailing: inner)
+        } else {
+            a = CGRect(x: rect.minX, y: rect.minY, width: firstLen + reach, height: rect.height)
+            let start = rect.minX + firstLen + gap - reach
+            b = CGRect(x: start, y: rect.minY, width: rect.maxX - start, height: rect.height)
+            ra = RectangleCornerRadii(topLeading: radius, bottomLeading: radius, bottomTrailing: inner, topTrailing: inner)
+            rb = RectangleCornerRadii(topLeading: inner, bottomLeading: inner, bottomTrailing: radius, topTrailing: radius)
+        }
+        let pa = UnevenRoundedRectangle(cornerRadii: ra, style: .continuous).path(in: a)
+        let pb = UnevenRoundedRectangle(cornerRadii: rb, style: .continuous).path(in: b)
+        if close >= 1 { return pa.union(pb) }
+        var both = pa
+        both.addPath(pb)
+        return both
+    }
+}
+
+// MARK: - SYNC key
+
+/// The climate-panel SYNC key: a small rounded key with an LED bar over the word "SYNC".
+/// `level` lights the LED (0 dark … 1 lit) — it's the morph's progress, so the light comes
+/// up with the merge. Same wording as the menu bar, editor and Settings for VoiceOver.
+struct SyncKey: View {
+    @Environment(\.layout) private var layout
+    @ScaledLength(relativeTo: .caption2) private var ledWidth: CGFloat = 16
+    @ScaledLength(relativeTo: .caption2) private var ledHeight: CGFloat = 3
+    let level: CGFloat
+    let isOn: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: Space.xxs + 1) {
+                PanelLED(level: level)
+                    .frame(width: ledWidth, height: ledHeight)
+                Text("Sync")
+                    .textRole(.keycap)
+                    .foregroundStyle(Color.primary.opacity(0.62 + 0.38 * level))
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            .padding(.horizontal, layout.controlGap + Space.xxs)
+            .padding(.vertical, layout.controlGap)
+        }
+        .buttonStyle(PanelKeyStyle(radius: Radius.m, floating: true))
+        .fixedSize()
+        .help("Same as Screensaver — play whatever the screensaver shows, same playlist and night style, so it picks up right where your desktop was. Picking a wallpaper style turns this off.")
+        .accessibilityLabel("Same as Screensaver")
+        .accessibilityValue(isOn ? "On" : "Off")
+        .accessibilityAddTraits(isOn ? [.isToggle, .isSelected] : .isToggle)
     }
 }
 
@@ -134,67 +354,78 @@ struct DestinationRow: View {
 
 /// The one structure both destination cards share:
 ///
-///     ┌──────────────────────────────────────────────┐
-///     │ ┌─────────┐  EYEBROW · status                │
-///     │ │ preview │  Title                           │
-///     │ │  16:10  │  Subtitle                        │
-///     │ └─────────┘  details (playlist, rotation…)   │
-///     │ banner (setup strip), full width             │
-///     │ ──────────────────────────────────────────── │  hairline
-///     │ footer controls, full width, pinned down     │
-///     └──────────────────────────────────────────────┘
+///     ┌───────────────────────────────────────────┐
+///     │ ┌──────────────────┐  EYEBROW · status     │
+///     │ │                  │  Title                │
+///     │ │    thumbnail     │  Subtitle             │
+///     │ │  fills the card  │                       │
+///     │ │      height      │  [key ············ ]  │
+///     │ │                  │  [key ············ ]  │
+///     │ └──────────────────┘  [key ············ ]  │
+///     │ banner (setup strip), full width           │
+///     └───────────────────────────────────────────┘
 ///
-/// Every gap is a Layout token: `cardPadding` around and between preview and text, `itemGap`
-/// between blocks, `labelGap` inside the header.
-private struct DestinationCardLayout<Preview: View, Details: View, Banner: View, Footer: View>: View {
+/// The column's header sits at the top and its keys at the bottom, level with the
+/// thumbnail's edges. `mirrored` puts the thumbnail on the trailing side (the Screensaver
+/// card side by side, so both thumbnails meet at the SYNC key).
+private struct DestinationCardLayout<Preview: View, Keys: View, Banner: View>: View {
     @Environment(\.layout) private var layout
     let geometry: DestinationGeometry
     let header: DestinationHeader
-    var footerHeight: CGFloat
-    var onFooterHeight: (CGFloat) -> Void
+    var mirrored = false
+    var drawsSurface = true
     @ViewBuilder var preview: Preview
-    @ViewBuilder var details: Details
+    @ViewBuilder var keys: Keys
     @ViewBuilder var banner: Banner
-    @ViewBuilder var footer: Footer
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: layout.cardPadding) {
-                preview
-                    .frame(width: geometry.previewWidth, height: geometry.previewHeight)
-                    .clipShape(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous)
-                        .strokeBorder(.primary.opacity(0.10)))
-                VStack(alignment: .leading, spacing: layout.itemGap) {
-                    header
-                    details
+                if mirrored {
+                    column
+                    thumbnail
+                } else {
+                    thumbnail
+                    column
                 }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .fixedSize(horizontal: false, vertical: true)
-
             banner
-
-            Spacer(minLength: layout.itemGap)
-
-            footer
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { onFooterHeight($0) }
-                .frame(minHeight: footerHeight, alignment: .top)
-                .padding(.top, layout.itemGap)
-                .overlay(alignment: .top) {
-                    Rectangle().fill(.primary.opacity(0.08)).frame(height: 1)
-                }
         }
         .padding(layout.cardPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .glassCard(cornerRadius: Radius.card)
+        .modifier(OwnSurface(enabled: drawsSurface))
     }
-}
 
-/// The footers' controls: one size on both cards, so their rows are the same height.
-private enum CardFooter {
-    static let controlSize: ControlSize = .small
+    private var thumbnail: some View {
+        preview
+            .frame(width: geometry.thumbWidth)
+            .frame(minHeight: geometry.thumbHeight, idealHeight: geometry.thumbHeight, maxHeight: .infinity)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous)
+                .strokeBorder(.primary.opacity(0.12)))
+    }
+
+    private var column: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Spacer(minLength: layout.itemGap)
+            VStack(alignment: .leading, spacing: PanelKey.gap(layout)) {
+                keys
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private struct OwnSurface: ViewModifier {
+        let enabled: Bool
+        func body(content: Content) -> some View {
+            if enabled {
+                content.panelSurface(in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+            } else {
+                content
+            }
+        }
+    }
 }
 
 // MARK: - Screensaver
@@ -205,24 +436,29 @@ struct ScreensaverCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.controlActiveState) private var activeState
     @ObservedObject private var now = MusicNow.shared
-    @ScaledLength(relativeTo: .callout) private var musicArt: CGFloat = 22
+    @ScaledLength(relativeTo: .callout) private var musicArt: CGFloat = 20
     let state: GalleryState
     let geometry: DestinationGeometry
-    var footerHeight: CGFloat = 0
-    var onFooterHeight: (CGFloat) -> Void = { _ in }
+    var mirrored = false
+    var drawsSurface = true
+    @State private var editingPlaylist = false
 
     private var lineup: ScreensaverLineup { state.lineup }
     private var playing: Preset? { state.nowPlaying.flatMap(model.preset) }
 
     var body: some View {
-        DestinationCardLayout(geometry: geometry, header: header, footerHeight: footerHeight,
-                              onFooterHeight: onFooterHeight) {
+        let spec = model.library.musicSettings
+        // The song only while music shows: Off shows nothing on screen, so neither does this.
+        let showsSong = spec.displayMode != .off && now.isVisible(spec)
+        DestinationCardLayout(geometry: geometry, header: header, mirrored: mirrored, drawsSurface: drawsSurface) {
             hero
-        } details: {
-            playlistRow
-            if lineup.rotates {
-                rotationControls
-                    .transition(.reveal(reduceMotion: reduceMotion))
+        } keys: {
+            playlistKey
+            nightKey
+            musicKey
+            if showsSong {
+                nowPlayingLine
+                    .transition(.lift(reduceMotion: reduceMotion))
             }
         } banner: {
             if model.setupStatus != .ready {
@@ -230,11 +466,10 @@ struct ScreensaverCard: View {
                     .padding(.top, layout.itemGap)
                     .transition(.reveal(reduceMotion: reduceMotion, edge: .bottom))
             }
-        } footer: {
-            optionsRow
         }
         .motion(Motion.smooth, value: lineup)
         .motion(Motion.smooth, value: model.setupStatus)
+        .motion(Motion.smooth, value: showsSong)
     }
 
     // MARK: Live preview
@@ -301,7 +536,8 @@ struct ScreensaverCard: View {
 
     private var header: DestinationHeader {
         DestinationHeader(eyebrow: "Screensaver", status: StatusDot(status: model.setupStatus),
-                          title: playing?.name ?? "Nothing yet", subtitle: subtitle)
+                          title: playing?.name ?? "Nothing yet",
+                          subtitle: geometry.showsSubtitle ? subtitle : nil)
     }
 
     private var subtitle: String {
@@ -311,72 +547,77 @@ struct ScreensaverCard: View {
         return lineup.night == nil ? "Now playing\u{00A0}· one of \(n) styles" : "Now playing\u{00A0}· \(n) styles by day"
     }
 
-    // MARK: Playlist
+    // MARK: Keys
 
-    @ViewBuilder private var playlistRow: some View {
-        if lineup.playlist.count <= 1 {
-            // One style: the hint sits beside the deck, or under it when there's no room.
-            ReflowStack(rowAlignment: .center, columnAlignment: .leading, spacing: layout.controlGap) {
-                PlaylistStack(ids: lineup.playlist, current: state.nowPlaying, lineup: lineup)
-                if lineup.playlist.count == 1 {
-                    Text("Add styles to rotate between them")
-                        .textRole(.caption)
-                        .foregroundStyle(.secondary)
-                        .wrapping()
-                        .transition(.opacity)
+    /// Playlist · "4 styles · 5 min": edit the playlist (a popover), and — while it rotates —
+    /// how often it changes and whether it shuffles.
+    private var playlistKey: some View {
+        let n = lineup.playlist.count
+        let styles = n == 1 ? "1 style" : "\(n) styles"
+        let every = intervalLabel(model.rotation.intervalMinutes, short: true)
+        return Menu {
+            Button("Edit Playlist\u{2026}") { DispatchQueue.main.async { editingPlaylist = true } }
+            if lineup.rotates {
+                Section("Change Every") {
+                    ForEach(intervalOptions, id: \.self) { m in
+                        Button { model.setRotationInterval(m) } label: {
+                            let t = intervalLabel(m, short: false)
+                            if m == model.rotation.intervalMinutes { Label(t, systemImage: "checkmark") } else { Text(t) }
+                        }
+                    }
                 }
+                Toggle("Shuffle", isOn: Binding(get: { model.rotation.shuffle }, set: { model.setShuffle($0) }))
+            } else {
+                Text("Add styles to rotate between them")
             }
-        } else {
-            PlaylistStack(ids: lineup.playlist, current: state.nowPlaying, lineup: lineup, fitsWidth: true)
+        } label: {
+            PanelKeyLabel(symbol: "square.stack", title: "Playlist",
+                          values: lineup.rotates ? ["\(styles) · \(every)", styles, "\(n)"] : [styles],
+                          indicator: .menu)
+        }
+        .panelKeyMenu()
+        .help("Choose which styles the screensaver plays\(lineup.rotates ? ", how often it changes and whether it shuffles" : "")")
+        .accessibilityLabel("Playlist")
+        .accessibilityValue(lineup.rotates ? "\(styles), changes every \(every)" : styles)
+        .popover(isPresented: $editingPlaylist, arrowEdge: .bottom) {
+            PlaylistEditor()
+                .adaptiveLayout()   // the popover is its own root
         }
     }
 
-    private var rotationControls: some View {
-        // A Menu and a button-style toggle drawn in SwiftUI (not the AppKit pop-up and
-        // push-on/push-off button), so their labels follow the text size like the rest of
-        // the row.
-        let current = model.rotation.intervalMinutes
-        let interval = HStack(spacing: layout.controlGap) {
-            Text("Change every")
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .fixedSize()
-            Menu {
-                ForEach(intervalOptions, id: \.self) { m in
-                    Button { model.setRotationInterval(m) } label: {
-                        if m == current { Label(intervalLabel(m), systemImage: "checkmark") } else { Text(intervalLabel(m)) }
-                    }
-                }
-            } label: {
-                Text(intervalLabel(current)).textRole(.callout)
+    /// Night · style name, its LED lit while a different style plays after sunset.
+    private var nightKey: some View {
+        let night = lineup.night.flatMap(model.preset)
+        return Menu {
+            Button { Motion.run { model.setNightEnabled(false) } } label: {
+                if night == nil { Label("Off", systemImage: "checkmark") } else { Text("Off") }
             }
-            .menuStyle(.button)
-            .glassButton()
-            .fixedSize()
-            .accessibilityLabel("Change every")
-            .accessibilityValue(intervalLabel(current))
+            Divider()
+            StyleMenuItems(current: night?.id) { id in model.setNight(id) }
+        } label: {
+            PanelKeyLabel(symbol: "moon.stars", title: "Night",
+                          values: [night?.name ?? "Off"], indicator: .menuLED(night != nil))
         }
-        let shuffle = Toggle(isOn: Binding(get: { model.rotation.shuffle }, set: { model.setShuffle($0) })) {
-            Label("Shuffle", systemImage: "shuffle").textRole(.callout)
-        }
-        .toggleStyle(GlassToggleButtonStyle())
-        .fixedSize()
-        .help("Play the playlist in a random order")
+        .panelKeyMenu()
+        .help(night.map { "Different style at night: \($0.name) — \(model.isNightNow ? "playing now" : "after sunset")" }
+              ?? "Different style at night: off")
+        .accessibilityLabel("Different style at night")
+        .accessibilityValue(night?.name ?? "Off")
+    }
 
-        // One line when it fits; otherwise Shuffle moves under the interval.
-        return ViewThatFits(in: .horizontal) {
-            HStack(spacing: layout.controlGap) {
-                interval
-                Text("·").foregroundStyle(.tertiary)
-                shuffle
-            }
-            VStack(alignment: .leading, spacing: layout.controlGap) {
-                interval
-                shuffle
-            }
+    /// Music · Off / Corner / Full Screen — "Show what's playing", with the mode's options.
+    private var musicKey: some View {
+        let mode = model.library.musicSettings.displayMode
+        return Menu {
+            MusicDisplayMenuItems()
+        } label: {
+            PanelKeyLabel(symbol: "music.note", title: "Music", values: [mode.label],
+                          indicator: .menuLED(mode != .off))
         }
-        .textRole(.callout)
-        .adaptiveControlSize(.small)
+        .panelKeyMenu()
+        .help("Show what's playing: while Spotify or Apple Music plays, nothing, the song in a corner of the screensaver, or the song full screen over it — with that mode's options")
+        .accessibilityLabel("Show what's playing")
+        .accessibilityValue(mode.label)
     }
 
     private var intervalOptions: [Double] {
@@ -386,71 +627,26 @@ struct ScreensaverCard: View {
         return opts
     }
 
-    private func intervalLabel(_ m: Double) -> String {
+    private func intervalLabel(_ m: Double, short: Bool) -> String {
         if m >= 60, m.truncatingRemainder(dividingBy: 60) == 0 {
-            return m == 60 ? "hour" : "\(Int(m / 60)) hours"
+            return m == 60 ? (short ? "1 hr" : "Hour") : "\(Int(m / 60)) \(short ? "hr" : "Hours")"
         }
         if m < 1 { return "\(Int(m * 60)) sec" }
-        return m == 1 ? "minute" : "\(Int(m)) min"
-    }
-
-    // MARK: Options (night, music)
-
-    /// The card's footer: "Different style at night" (its picker beside it), "Show what's
-    /// playing" (Off / Corner / Full Screen, with each mode's options in the same menu), and —
-    /// while music shows — what it is with Play/Pause and Next. Items share a line while they
-    /// fit and wrap only when the card is narrow.
-    private var optionsRow: some View {
-        let spec = model.library.musicSettings
-        // The song only while music shows: Off shows nothing on screen, so neither does this.
-        let showsSong = spec.displayMode != .off && now.isVisible(spec)
-        return FlowLayout(spacing: layout.itemGap, lineSpacing: layout.controlGap) {
-            Toggle(isOn: Binding(get: { lineup.night != nil },
-                                 set: { on in Motion.run { model.setNightEnabled(on) } })) {
-                Label("Different style at night", systemImage: "moon.stars")
-                    .textRole(.callout)
-                    .lineLimit(1)
-            }
-            .toggleStyle(.switch)
-            .fixedSize()
-
-            // The picker and its caption move to a line of their own together in a narrow
-            // card; the picker takes the whole line before a long name truncates (full name
-            // in its tooltip).
-            if let nightID = lineup.night, let night = model.preset(nightID) {
-                HStack(spacing: layout.controlGap) {
-                    StylePickerMenu(current: night, title: night.name, maxWidth: .infinity) { model.setNight($0) }
-                    Text(model.isNightNow ? "Playing now" : "After sunset")
-                        .textRole(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .fixedSize()
-                }
-                .transition(.lift(reduceMotion: reduceMotion))
-            }
-
-            MusicDisplayMenu()
-
-            if showsSong {
-                nowPlayingLine
-                    .transition(.lift(reduceMotion: reduceMotion))
-            }
-        }
-        .adaptiveControlSize(CardFooter.controlSize)
-        .motion(Motion.smooth, value: showsSong)
+        return m == 1 ? (short ? "1 min" : "Minute") : "\(Int(m)) min"
     }
 
     /// Cover · "Song — Artist" · Play/Pause · Next — or, when the player refused Automation,
     /// the same "Allow…" fix-it as Settings, the editor and the menu. The song truncates
-    /// before the controls do.
+    /// before the controls do. Drawn on a key face, so it lines up with the keys above it.
     private var nowPlayingLine: some View {
         HStack(spacing: layout.controlGap) {
             MusicArtThumb(image: now.artwork, palette: now.state.palette ?? [], side: musicArt)
             (Text(now.title).fontWeight(.medium)
-                + Text(now.artist.isEmpty ? "" : " \u{2014} \(now.artist)").foregroundColor(.secondary))
+                + Text(now.artist.isEmpty ? "" : " \u{2014} \(now.artist)").foregroundColor(PanelInk.secondary))
                 .textRole(.callout)
                 .lineLimit(1)
                 .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .help(now.trackLine)
             if now.needsAutomationFix, let source = now.source {
                 Button { now.allowControl(source) } label: { Text("Allow\u{2026}").textRole(.callout) }
@@ -462,42 +658,15 @@ struct ScreensaverCard: View {
                     .fixedSize()
             }
         }
+        .adaptiveControlSize(.small)
+        .modifier(PanelKey.Frame())
+        .background(PanelKeyFace(shape: RoundedRectangle(cornerRadius: PanelKey.radius, style: .continuous)))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Now playing: \(now.trackLine)")
     }
 }
 
 // MARK: - Show what's playing
-
-/// "Show what's playing  [Full Screen ▾]": the mode, and the chosen mode's own options in
-/// the same menu — Corner: which corner and how big; Full Screen: its layout and what's
-/// behind the music. The same settings as Settings › Music (MusicSpec), kept to one compact
-/// control. Drawn as a SwiftUI menu so its title follows the text size.
-struct MusicDisplayMenu: View {
-    @EnvironmentObject var model: AppModel
-    @Environment(\.layout) private var layout
-
-    var body: some View {
-        let spec = model.library.musicSettings
-        HStack(spacing: layout.controlGap) {
-            Label("Show what's playing", systemImage: "music.note")
-                .textRole(.callout)
-                .lineLimit(1)
-                .fixedSize()
-            Menu {
-                MusicDisplayMenuItems()
-            } label: {
-                Text(spec.displayMode.label).textRole(.callout)
-            }
-            .menuStyle(.button)
-            .glassButton()
-            .fixedSize()
-            .accessibilityLabel("Show what's playing")
-            .accessibilityValue(spec.displayMode.label)
-        }
-        .help("While Spotify or Apple Music plays: nothing, the song in a corner of the screensaver, or the song full screen over it — with that mode's options")
-    }
-}
 
 /// The menu's items: Off / Corner / Full Screen, then the current mode's options in titled
 /// sections. Pickers are written over each option enum's `allCases`, so a new case (a Full
@@ -573,43 +742,301 @@ extension AppModel {
 
 /// The top of both destination cards — eyebrow + status, title, subtitle — with one
 /// structure and one set of gaps, so the two cards' titles and subtitles line up when they
-/// sit side by side.
+/// sit side by side. `roll` (0 … 1) rolls the title and subtitle from `titleFrom` /
+/// `subtitleFrom` to `title` / `subtitle`, like a readout catching up (the passenger's zone
+/// syncing to the driver's).
 private struct DestinationHeader: View {
     @Environment(\.layout) private var layout
     let eyebrow: String
     let status: StatusDot
     let title: String
-    let subtitle: String
+    var subtitle: String?
+    var titleFrom: String? = nil
+    var subtitleFrom: String? = nil
+    var roll: CGFloat = 1
 
     var body: some View {
+        // A wide window's cards are big: their titles step up with them.
+        let titleRole = layout.isWide ? TextRole(style: .title, weight: .semibold) : .cardTitle
         VStack(alignment: .leading, spacing: layout.labelGap) {
             // The status moves under the eyebrow rather than breaking either word.
             FlowLayout(spacing: layout.controlGap, lineSpacing: layout.labelGap) {
                 CardEyebrow(text: eyebrow)
                 status
             }
-            // A wide window's cards are big: their titles step up with them.
-            Text(title)
-                .textRole(layout.isWide ? TextRole(style: .title, weight: .semibold) : .cardTitle)
-                .truncating(title, lines: 2)
-                .contentTransition(.opacity)
-            Text(subtitle)
-                .textRole(layout.isWide ? .body : .callout)
-                .foregroundStyle(.secondary)
-                .wrapping()
+            RollingReadout(from: titleFrom ?? title, to: title, progress: roll) { t in
+                Text(t)
+                    .textRole(titleRole)
+                    .foregroundStyle(.primary)
+                    .truncating(t, lines: 2)
+            }
+            if let subtitle {
+                RollingReadout(from: subtitleFrom ?? subtitle, to: subtitle, progress: roll) { t in
+                    Text(t)
+                        .textRole(layout.isWide ? .body : .callout)
+                        .foregroundStyle(PanelInk.secondary)
+                        .truncating(t, lines: 2)
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-/// A toggle drawn as a glass button — tinted while on — whose label is SwiftUI text, so it
-/// follows the text size (the stock `.button` toggle style is an AppKit button whose title
-/// never scales on macOS).
-struct GlassToggleButtonStyle: ToggleStyle {
+/// Text that rolls from one value to another as `progress` goes 0 → 1: the old value lifts
+/// up and blurs away while the new one rises into place and sharpens — a readout catching
+/// up. Sized by whichever value is in front, so it never reserves the other's lines. Under
+/// Reduce Motion it's a plain crossfade.
+private struct RollingReadout<Content: View>: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ScaledLength(relativeTo: .title2) private var travel: CGFloat = 12
+    let from: String
+    let to: String
+    let progress: CGFloat
+    @ViewBuilder let content: (String) -> Content
+
+    var body: some View {
+        let rolls = from != to
+        let p = rolls ? min(max(progress, 0), 1) : 0
+        ReadoutLayout(front: p >= 0.5 ? 1 : 0) {
+            content(from)
+                .modifier(RollEffect(progress: p, incoming: false, travel: travel, reduceMotion: reduceMotion))
+                .accessibilityHidden(p >= 0.5)
+            content(to)
+                .modifier(RollEffect(progress: p, incoming: true, travel: travel, reduceMotion: reduceMotion))
+                .accessibilityHidden(p < 0.5)
+        }
+    }
+}
+
+/// One layer of a RollingReadout, recomputed every frame of the spring (Animatable).
+private struct RollEffect: ViewModifier, Animatable {
+    var progress: CGFloat
+    let incoming: Bool
+    let travel: CGFloat
+    let reduceMotion: Bool
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        let t = min(max(progress, 0), 1)
+        // How far this layer is from rest (0 = in place, 1 = gone).
+        let away = incoming ? 1 - t : t
+        let opacity: CGFloat = reduceMotion
+            ? 1 - away
+            : incoming ? smoothstep(0.3, 1, t) : 1 - smoothstep(0, 0.7, t)
+        return content
+            .opacity(opacity)
+            .offset(y: reduceMotion ? 0 : (incoming ? travel : -travel) * away)
+            .blur(radius: reduceMotion ? 0 : 5 * away)
+    }
+
+    private func smoothstep(_ a: CGFloat, _ b: CGFloat, _ x: CGFloat) -> CGFloat {
+        let u = min(max((x - a) / (b - a), 0), 1)
+        return u * u * (3 - 2 * u)
+    }
+}
+
+/// Lays its layers on top of each other, sized by the `front` one.
+private struct ReadoutLayout: Layout {
+    var front: Int
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard subviews.indices.contains(front) else { return .zero }
+        return subviews[front].sizeThatFits(proposal)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for s in subviews {
+            s.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: nil))
+        }
+    }
+}
+
+// MARK: - Panel keys
+
+/// The cards' controls, drawn as the keys of a climate panel (the SYNC key's family):
+/// raised rounded keys, one per row — an icon, the label, the current value on the right,
+/// then a chevron (opens a menu) and/or an LED (on while the feature is on). Every key has
+/// the same height and face, so the two cards' columns share one rhythm.
+enum PanelKey {
+    static let radius: CGFloat = Radius.s
+
+    /// Between stacked keys.
+    static func gap(_ layout: LayoutMetrics) -> CGFloat { layout.scaled(6) }
+
+    /// A key's padding and height (30 at the default text size, grown with it; a step taller in a wide window).
+    struct Frame: ViewModifier {
+        @Environment(\.layout) private var layout
+        @ScaledLength(relativeTo: .callout) private var height: CGFloat = 30
+
+        func body(content: Content) -> some View {
+            content
+                .padding(.horizontal, layout.controlGap + Space.xxs)
+                .frame(maxWidth: .infinity, minHeight: height + (layout.isWide ? Space.xs : 0), alignment: .leading)
+        }
+    }
+}
+
+/// A key's face: raised and bright over the panel in light mode, a lifted tone in dark, with
+/// a top highlight edge. Hover lifts it a touch; pressing sinks it.
+struct PanelKeyFace<S: InsettableShape>: View {
+    @Environment(\.colorScheme) private var scheme
+    let shape: S
+    var hovering = false
+    var pressed = false
+
+    var body: some View {
+        let dark = scheme == .dark
+        let fill = dark
+            ? Color.white.opacity(pressed ? 0.06 : hovering ? 0.15 : 0.10)
+            : Color.white.opacity(pressed ? 0.45 : hovering ? 0.95 : 0.78)
+        ZStack {
+            shape.fill(fill)
+            shape.strokeBorder(Color.primary.opacity(dark ? 0.16 : 0.13), lineWidth: 0.75)
+            shape.strokeBorder(LinearGradient(colors: [Color.white.opacity(dark ? 0.14 : 0.9), Color.white.opacity(0)],
+                                              startPoint: .top, endPoint: .center), lineWidth: 0.75)
+        }
+        .shadow(color: .black.opacity(pressed ? 0 : (dark ? 0.30 : 0.10)), radius: 2, y: 1)
+    }
+}
+
+/// The panel's indicator light: dark when off, glowing green when on. `level` fades it.
+struct PanelLED: View {
+    let level: CGFloat
+
+    var body: some View {
+        Capsule()
+            .fill(Color.primary.opacity(0.18))
+            .overlay(Capsule().fill(PanelInk.led).opacity(level))
+            .shadow(color: PanelInk.led.opacity(0.8 * level), radius: 3)
+            .accessibilityHidden(true)
+    }
+}
+
+/// A key as a button: the face, hover and press states, and a focus ring in its shape.
+struct PanelKeyStyle: ButtonStyle {
+    var radius: CGFloat = PanelKey.radius
+    /// A key on its own over the page (the SYNC key on the seam): on glass, with a shadow.
+    var floating = false
+
     func makeBody(configuration: Configuration) -> some View {
-        Button { configuration.isOn.toggle() } label: { configuration.label }
-            .glassButton(configuration.isOn ? .prominent : .normal)
-            .accessibilityAddTraits(configuration.isOn ? [.isToggle, .isSelected] : .isToggle)
+        PanelKeyBody(label: configuration.label, pressed: configuration.isPressed,
+                     radius: radius, floating: floating)
+    }
+}
+
+private struct PanelKeyBody<Label: View>: View {
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovering = false
+    let label: Label
+    let pressed: Bool
+    let radius: CGFloat
+    let floating: Bool
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        let key = label
+            .background(PanelKeyFace(shape: shape, hovering: hovering && isEnabled, pressed: pressed))
+            .contentShape(shape)
+            .contentShape(.focusEffect, shape)
+        Group {
+            if floating {
+                key.glassSurface(.regular, in: shape, interactive: true)
+            } else {
+                key
+            }
+        }
+        .scaleEffect(pressed ? 0.97 : 1)
+        .opacity(isEnabled ? 1 : 0.45)
+        .onHover { hovering = $0 }
+        .animation(Motion.snappy, value: pressed)
+        .animation(Motion.snappy, value: hovering)
+    }
+}
+
+/// What a key shows: icon · label ···· value  [LED] [chevron]. `values` are the value from
+/// longest to shortest: the longest that fits is shown (the last one truncates).
+struct PanelKeyLabel: View {
+    enum Indicator: Equatable {
+        case none
+        /// Opens a menu.
+        case menu
+        /// A toggle: lit while on.
+        case led(Bool)
+        /// A menu whose feature is on or off (night style, music).
+        case menuLED(Bool)
+    }
+
+    @Environment(\.layout) private var layout
+    @ScaledLength(relativeTo: .callout) private var iconBox: CGFloat = 16
+    @ScaledLength(relativeTo: .caption) private var led: CGFloat = 6
+    let symbol: String
+    let title: String
+    var values: [String] = []
+    var indicator: Indicator = .none
+
+    var body: some View {
+        HStack(spacing: layout.controlGap) {
+            Image(systemName: symbol)
+                .scaledFont { .scaled(.callout, $0, weight: .medium) }
+                .foregroundStyle(PanelInk.secondary)
+                .frame(width: iconBox)
+            Text(title)
+                .textRole(.control)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .fixedSize()
+            Spacer(minLength: Space.xxs)
+            if let last = values.last {
+                ViewThatFits(in: .horizontal) {
+                    ForEach(Array(values.enumerated()), id: \.offset) { _, v in
+                        valueText(v).fixedSize()
+                    }
+                    valueText(last).truncationMode(.tail)
+                }
+                .layoutPriority(-1)
+            }
+            switch indicator {
+            case .none:
+                EmptyView()
+            case .menu:
+                chevron
+            case .led(let on):
+                PanelLED(level: on ? 1 : 0).frame(width: led, height: led)
+            case .menuLED(let on):
+                PanelLED(level: on ? 1 : 0).frame(width: led, height: led)
+                chevron
+            }
+        }
+        .modifier(PanelKey.Frame())
+        .contentShape(Rectangle())
+    }
+
+    private func valueText(_ v: String) -> some View {
+        Text(v)
+            .textRole(.callout)
+            .foregroundStyle(PanelInk.secondary)
+            .lineLimit(1)
+    }
+
+    private var chevron: some View {
+        Image(systemName: "chevron.up.chevron.down")
+            .scaledFont { .scaled(.caption2, $0, weight: .semibold) }
+            .foregroundStyle(PanelInk.tertiary)
+    }
+}
+
+extension View {
+    /// A Menu drawn as a panel key (its label a PanelKeyLabel).
+    func panelKeyMenu() -> some View {
+        self.menuStyle(.button)
+            .buttonStyle(PanelKeyStyle())
+            .menuIndicator(.hidden)
+            .frame(maxWidth: .infinity)
     }
 }
 
@@ -620,7 +1047,7 @@ private struct CardEyebrow: View {
     var body: some View {
         Text(text)
             .textRole(.eyebrow)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(PanelInk.secondary)
             .lineLimit(1)
             .fixedSize()
     }
@@ -654,7 +1081,7 @@ struct StatusDot: View {
                 .shadow(color: color.opacity(0.6), radius: 3)
             Text(text)
                 .textRole(TextRole.caption.weight(.medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(PanelInk.secondary)
                 .lineLimit(1)
         }
         .fixedSize()
@@ -722,185 +1149,6 @@ struct SetupStrip: View {
         .glassButton(.prominent)
         .adaptiveControlSize()
         .fixedSize()
-    }
-}
-
-// MARK: - Playlist stack
-
-/// The playlist as a small deck of thumbnails that fans out on hover, then "+N" and the
-/// "+" button. With `fitsWidth`, it takes the row's full width, shows only as many chips as
-/// fit, and reserves its fanned-out width up front — so hovering never moves anything
-/// around it or spills out of the card.
-struct PlaylistStack: View {
-    @EnvironmentObject var model: AppModel
-    @Environment(\.layout) private var layout
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @ScaledLength(relativeTo: .callout) private var chipWidth: CGFloat = 64
-    @ScaledLength(relativeTo: .callout) private var chipHeight: CGFloat = 40
-    let ids: [UUID]
-    let current: UUID?
-    let lineup: ScreensaverLineup
-    var fitsWidth = false
-    @State private var fanned = false
-    @State private var available: CGFloat?
-
-    private let maxShown = 7
-
-    private struct Deck {
-        var shown: Int
-        var restStep: CGFloat
-        var fanStep: CGFloat
-        var width: CGFloat
-    }
-
-    /// How many chips fit, how far apart they sit resting and fanned, and the deck's width.
-    private func deck(in room: CGFloat?) -> Deck {
-        let gap = layout.controlGap
-        let total = ids.count
-        let spread = chipWidth + Space.xs                  // fanned: side by side
-        let stacked = (chipWidth * 0.6).rounded()          // resting: overlapped
-        let rest = total <= 3 ? spread : stacked
-        func width(_ n: Int, _ step: CGFloat) -> CGFloat {
-            let chips = n > 0 ? chipWidth + CGFloat(n - 1) * step + gap : 0
-            let more = total > n ? plusWidth + gap : 0
-            return chips + more + chipHeight                // + the round "+" button
-        }
-        var n = min(total, maxShown)
-        let limit = room ?? .infinity
-        while n > 1 && width(n, rest) > limit { n -= 1 }
-        var fan = n > 1 && total > 3 ? spread : rest
-        if n > 1, width(n, fan) > limit {
-            fan = max(rest, ((limit - width(n, 0)) / CGFloat(n - 1)).rounded(.down))
-        }
-        return Deck(shown: n, restStep: rest, fanStep: fan, width: width(n, max(fan, rest)))
-    }
-
-    private var plusWidth: CGFloat { chipHeight + Space.xs }
-
-    var body: some View {
-        if fitsWidth {
-            // Measure the row (not the deck), so the deck can never push the card wider.
-            Color.clear
-                .frame(maxWidth: .infinity)
-                .frame(height: chipHeight)
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { available = $0 }
-                .overlay(alignment: .leading) { content(deck(in: available)) }
-        } else {
-            content(deck(in: nil))
-        }
-    }
-
-    /// The `n` chips on show, in playlist order. When only some fit, the window slides so
-    /// it always holds the style playing now (the one with the accent ring).
-    private func shownIDs(_ n: Int) -> [UUID] {
-        guard n < ids.count, let current, let i = ids.firstIndex(of: current), i >= n else {
-            return Array(ids.prefix(n))
-        }
-        let start = min(i, ids.count - n)
-        return Array(ids[start ..< start + n])
-    }
-
-    private func content(_ d: Deck) -> some View {
-        let shown = shownIDs(d.shown)
-        let step = fanned ? d.fanStep : d.restStep
-        return HStack(spacing: layout.controlGap) {
-            if !shown.isEmpty {
-                HStack(spacing: step - chipWidth) {
-                    ForEach(Array(shown.enumerated()), id: \.element) { i, id in
-                        if let p = model.preset(id) {
-                            PlaylistChip(preset: p, isCurrent: ids.count > 1 && id == current,
-                                         canRemove: ids.count > 1, size: CGSize(width: chipWidth, height: chipHeight))
-                                .zIndex(Double(shown.count - i))
-                                .transition(.lift(reduceMotion: reduceMotion))
-                        }
-                    }
-                }
-                .onHover { h in fanned = h }
-            }
-            if ids.count > d.shown {
-                Text("+\(ids.count - d.shown)")
-                    .textRole(.captionEmphasis)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .frame(width: plusWidth, height: chipHeight)
-                    .glassSurface(.regular, in: Capsule())
-                    .help("\(ids.count - d.shown) more in the playlist")
-            }
-            AddToPlaylistButton(lineup: lineup, diameter: chipHeight)
-        }
-        .frame(width: fitsWidth ? d.width : nil, alignment: .leading)
-        .motion(Motion.smooth, value: fanned)
-        .motion(Motion.smooth, value: ids)
-    }
-}
-
-private struct PlaylistChip: View {
-    @EnvironmentObject var model: AppModel
-    let preset: Preset
-    let isCurrent: Bool
-    let canRemove: Bool
-    let size: CGSize
-    @State private var hovering = false
-
-    var body: some View {
-        StyleThumb(preset: preset)
-            .frame(width: size.width, height: size.height)
-            .clipShape(RoundedRectangle(cornerRadius: Radius.s, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
-                .strokeBorder(isCurrent ? Color.accentColor : Color.white.opacity(0.55),
-                              lineWidth: isCurrent ? 2 : 1))
-            .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
-            .overlay(alignment: .topTrailing) {
-                if hovering && canRemove {
-                    Button { Motion.run { model.removeFromPlaylist(preset.id) } } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(.white, .black.opacity(0.6))
-                            .scaledFont { .scaled(points: 14, $0) }
-                    }
-                    .buttonStyle(.plain)
-                    .offset(x: 5, y: -5)
-                    .help("Remove from Screensaver")
-                    .transition(.opacity)
-                }
-            }
-            .scaleEffect(hovering ? 1.06 : 1)
-            .onHover { hovering = $0 }
-            .motion(Motion.snappy, value: hovering)
-            .onTapGesture(count: 2) { model.edit(preset.id) }
-            .onTapGesture { model.selectedID = preset.id }
-            .help(preset.name)
-            .contextMenu {
-                Button("Play Only This") { Motion.run { model.playAsScreensaver(preset.id) } }
-                Button("Remove from Screensaver") { Motion.run { model.removeFromPlaylist(preset.id) } }
-                    .disabled(!canRemove)
-                Divider()
-                Button("Edit") { model.edit(preset.id) }
-            }
-    }
-}
-
-/// "+" — a popover to tick styles in and out of the playlist. As tall as a playlist chip.
-private struct AddToPlaylistButton: View {
-    @EnvironmentObject var model: AppModel
-    let lineup: ScreensaverLineup
-    let diameter: CGFloat
-    @State private var open = false
-
-    var body: some View {
-        Button { open = true } label: {
-            Image(systemName: "plus")
-                .scaledFont { .scaled(points: 13, $0, weight: .semibold) }
-                .frame(width: diameter, height: diameter)
-        }
-        .buttonStyle(.plain)
-        .glassSurface(.regular, in: Circle(), interactive: true)
-        .help("Choose which styles the screensaver plays")
-        .popover(isPresented: $open, arrowEdge: .bottom) {
-            PlaylistEditor()
-                .adaptiveLayout()   // the popover is its own root
-        }
     }
 }
 
@@ -974,174 +1222,185 @@ struct PlaylistEditor: View {
     }
 }
 
-/// A compact menu button showing a style's thumbnail + name, listing every style.
-struct StylePickerMenu: View {
+/// Every style as menu items, grouped Scenes / Looks, the current one checkmarked.
+struct StyleMenuItems: View {
     @EnvironmentObject var model: AppModel
-    @ScaledLength(relativeTo: .callout) private var thumbWidth: CGFloat = 32
-    @ScaledLength(relativeTo: .callout) private var thumbHeight: CGFloat = 20
-    let current: Preset?
-    let title: String
-    var size: ControlSize = .small
-    /// Caps a long style name: it truncates, with the full name in the tooltip.
-    var maxWidth: CGFloat? = nil
-    /// The Wallpaper's "Same as Screensaver" as the menu's first item: whether it's on
-    /// (checkmarked) and what choosing it does.
-    var sameAsScreensaver: (isOn: Bool, choose: () -> Void)? = nil
+    let current: UUID?
     let onPick: (UUID) -> Void
 
     var body: some View {
-        let menu = Menu {
-            if let same = sameAsScreensaver {
-                Button { same.choose() } label: {
-                    Label("Same as Screensaver", systemImage: same.isOn ? "checkmark" : "link")
-                }
-                Divider()
-            }
-            let scenes = model.library.presets.filter(\.isScene)
-            let looks = model.library.presets.filter { !$0.isScene }
-            Section("Scenes") { ForEach(scenes) { p in item(p) } }
-            Section("Looks") { ForEach(looks) { p in item(p) } }
-        } label: {
-            HStack(spacing: Space.xs) {
-                if let current {
-                    StyleThumb(preset: current)
-                        .frame(width: thumbWidth, height: thumbHeight)
-                        .clipShape(RoundedRectangle(cornerRadius: Radius.xs, style: .continuous))
-                }
-                Text(title)
-                    .textRole(size == .small ? .callout : .body)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-        }
-        .menuStyle(.button)
-        .glassButton()
-        .adaptiveControlSize(size)
-        .help(current?.name ?? title)
-
-        if let maxWidth {
-            menu.frame(maxWidth: maxWidth, alignment: .leading)
-        } else {
-            menu.fixedSize()
-        }
+        let scenes = model.library.presets.filter(\.isScene)
+        let looks = model.library.presets.filter { !$0.isScene }
+        Section("Scenes") { ForEach(scenes) { p in item(p) } }
+        Section("Looks") { ForEach(looks) { p in item(p) } }
     }
 
     @ViewBuilder private func item(_ p: Preset) -> some View {
         Button {
             Motion.run { onPick(p.id) }
         } label: {
-            if p.id == current?.id { Label(p.name, systemImage: "checkmark") } else { Text(p.name) }
+            if p.id == current { Label(p.name, systemImage: "checkmark") } else { Text(p.name) }
         }
     }
 }
-
 // MARK: - Wallpaper
 
-/// The live wallpaper: Off, Live (a style of its own) or Synced — "Same as Screensaver",
-/// the desktop playing whatever the screensaver shows, in step (same playlist slot and night
-/// style, on a shared clock), so the screensaver starts exactly where the desktop was.
-/// Syncing is first-class: the style menu's first item and the toggle beside it, both
-/// reachable while the wallpaper is off (choosing it starts the wallpaper in sync).
+/// The live wallpaper — the passenger's zone: Off, Live (a style of its own) or Synced —
+/// "Same as Screensaver", the desktop playing whatever the screensaver shows, in step (same
+/// playlist slot and night style, on a shared clock), so the screensaver starts exactly where
+/// the desktop was. Syncing is the SYNC key on the seam (DestinationRow) and the Style menu's
+/// first item; both work while the wallpaper is off (it starts in sync). Picking a style
+/// while synced plays that style instead (WallpaperController.use ends syncing).
 struct WallpaperCard: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var slot = WallpaperSlot.shared
+    @ObservedObject private var controller = WallpaperController.shared
     @Environment(\.layout) private var layout
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let state: GalleryState
     let geometry: DestinationGeometry
-    var footerHeight: CGFloat = 0
-    var onFooterHeight: (CGFloat) -> Void = { _ in }
-    /// "Same as Screensaver" lives on the controller (wallpaper.json); the slot only knows styles.
-    @ObservedObject private var controller = WallpaperController.shared
+    /// The sync morph (DestinationRow): 0 its own readout … 1 following the screensaver.
+    var progress: CGFloat = 0
+    /// The wallpaper's own style before it followed the screensaver (nil: it was off) — what
+    /// the readout rolls from, and back to.
+    @State private var lastOwn: UUID?
 
     /// What the desktop shows: its own style, or — synced — the screensaver's right now
     /// (the slot reports WallpaperController.currentPreset).
     private var style: Preset? { slot.styleID.flatMap(model.preset) }
     /// Live and showing whatever the screensaver shows (WallpaperController.setFollowsScreensaver).
     private var synced: Bool { controller.followsScreensaver && style != nil }
+    /// The zone's own readout: its style, or nothing (off).
+    private var own: Preset? { synced ? lastOwn.flatMap(model.preset) : style }
+    /// The driver's readout: what the screensaver plays now.
+    private var driver: Preset? { state.nowPlaying.flatMap(model.preset) }
 
     var body: some View {
-        DestinationCardLayout(geometry: geometry, header: header, footerHeight: footerHeight,
-                              onFooterHeight: onFooterHeight) {
+        DestinationCardLayout(geometry: geometry, header: header, drawsSurface: false) {
             preview
-        } details: {
-            EmptyView()
+        } keys: {
+            // Synced, the zone's own controls recede: it's following the driver.
+            Group {
+                styleKey
+                pauseKey
+                powerKey
+            }
+            .opacity(1 - 0.4 * progress)
         } banner: {
             EmptyView()
-        } footer: {
-            actions
         }
         .motion(Motion.smooth, value: slot.styleID)
-        .motion(Motion.smooth, value: synced)
+        .onChange(of: slot.styleID, initial: true) { _, id in
+            if !synced { lastOwn = id }
+        }
     }
 
     private var header: DestinationHeader {
         let status: StatusDot
-        let subtitle: String
-        if synced {
+        if progress >= 0.5 {
             status = StatusDot(color: .green, text: "Synced")
-            subtitle = "Same as your screensaver, in step"
-        } else if style != nil {
+        } else if own != nil {
             status = StatusDot(color: .green, text: "Live")
-            subtitle = "Playing behind your windows"
         } else {
             status = StatusDot(color: .secondary.opacity(0.6), text: "Off")
-            subtitle = "Play any style behind your windows, or the screensaver's."
         }
+        let ownSubtitle = own != nil ? "Playing behind your windows" : "Play any style behind your windows, or the screensaver's."
         return DestinationHeader(eyebrow: "Wallpaper", status: status,
-                                 title: style?.name ?? "Your desktop, alive", subtitle: subtitle)
+                                 title: driver?.name ?? "Nothing yet",
+                                 subtitle: geometry.showsSubtitle ? "Following the screensaver, in step" : nil,
+                                 titleFrom: own?.name ?? "Your desktop, alive",
+                                 subtitleFrom: ownSubtitle, roll: progress)
     }
 
+    /// Its own style (or the drawn desktop when off), with the screensaver's style coming up
+    /// over it as the zones sync.
     private var preview: some View {
         ZStack(alignment: .topLeading) {
-            if let style {
-                StyleThumb(preset: style)
-                    .transition(.opacity)
-            } else {
-                DesktopGlyph()
-                    .transition(.opacity)
+            Group {
+                if let own {
+                    StyleThumb(preset: own)
+                } else {
+                    DesktopGlyph()
+                }
             }
-            if synced {
-                GlassBadge(text: nil, symbol: "link")
-                    .padding(Space.xs)
-                    .help("Same as the screensaver")
-                    .transition(.opacity)
+            .transition(.opacity)
+            Group {
+                if let driver {
+                    StyleThumb(preset: driver)
+                } else {
+                    Color.black
+                }
             }
+            .scaleEffect(reduceMotion ? 1 : 1.06 - 0.06 * progress)
+            .opacity(progress)
+            GlassBadge(text: nil, symbol: "link")
+                .padding(Space.xs)
+                .help("Same as the screensaver")
+                .opacity(progress)
         }
     }
 
-    /// Style menu ("Same as Screensaver" first) · Same as Screensaver · Stop. Picking a style
-    /// while synced plays that style instead (WallpaperController.use ends syncing).
-    private var actions: some View {
-        FlowLayout(spacing: layout.controlGap, lineSpacing: layout.controlGap) {
-            StylePickerMenu(current: synced ? nil : style, title: style == nil ? "Choose Style" : "Change",
-                            sameAsScreensaver: (synced, { setSynced(true) })) { slot.set($0) }
-            syncToggle
-            if style != nil {
-                Button { Motion.run { slot.stop() } } label: { Text("Stop").textRole(.callout) }
-                    .glassButton()
-                    .fixedSize()
-                    .transition(.lift(reduceMotion: reduceMotion))
+    // MARK: Keys
+
+    /// Style · its name: "Same as Screensaver" first, then every style.
+    private var styleKey: some View {
+        let value = synced ? ["Same as Screensaver", "Synced"] : [style?.name ?? "Choose"]
+        return Menu {
+            Button { setSynced(true) } label: {
+                Label("Same as Screensaver", systemImage: synced ? "checkmark" : "link")
             }
+            Divider()
+            StyleMenuItems(current: synced ? nil : style?.id) { slot.set($0) }
+        } label: {
+            PanelKeyLabel(symbol: "photo.on.rectangle", title: "Style", values: value, indicator: .menu)
         }
-        .adaptiveControlSize(CardFooter.controlSize)
+        .panelKeyMenu()
+        .help(style.map { synced ? "Following the screensaver — pick a style to play one of its own" : $0.name }
+              ?? "Choose a style to play behind your windows")
+        .accessibilityLabel("Wallpaper style")
+        .accessibilityValue(synced ? "Same as Screensaver" : (style?.name ?? "None"))
     }
 
-    /// "Same as Screensaver" as a toggle: on starts the wallpaper (if off) in sync; off keeps
-    /// the style on screen as the wallpaper's own.
-    private var syncToggle: some View {
-        Toggle(isOn: Binding(get: { synced }, set: { setSynced($0) })) {
-            Label("Same as Screensaver", systemImage: synced ? "checkmark" : "link")
-                .textRole(.callout)
-                .lineLimit(1)
+    /// Pause · lit while paused (the desktop holds its frame).
+    private var pauseKey: some View {
+        let paused = controller.userPaused && style != nil
+        return Button { controller.togglePause() } label: {
+            PanelKeyLabel(symbol: paused ? "play.fill" : "pause.fill", title: "Pause",
+                          values: paused ? ["Paused"] : [], indicator: .led(paused))
         }
-        .toggleStyle(GlassToggleButtonStyle())
-        .fixedSize()
-        .help("Play whatever the screensaver shows — same playlist and night style — so the screensaver picks up right where your desktop was. Picking a style turns this off.")
+        .buttonStyle(PanelKeyStyle())
+        .disabled(style == nil)
+        .help(paused ? "Resume the wallpaper" : "Pause the wallpaper on its current frame")
+        .accessibilityLabel("Pause Wallpaper")
+        .accessibilityAddTraits(paused ? [.isToggle, .isSelected] : .isToggle)
+    }
+
+    /// Power · lit while the wallpaper plays. On again resumes what it played (in sync, if
+    /// it was).
+    private var powerKey: some View {
+        let on = style != nil
+        return Button {
+            Motion.run {
+                if on {
+                    slot.stop()
+                } else if controller.followsScreensaver {
+                    controller.setFollowsScreensaver(true)
+                } else if let id = lastOwn ?? driver?.id ?? model.library.presets.first?.id {
+                    slot.set(id)
+                }
+            }
+        } label: {
+            PanelKeyLabel(symbol: "power", title: "Power", values: [on ? "On" : "Off"], indicator: .led(on))
+        }
+        .buttonStyle(PanelKeyStyle())
+        .help(on ? "Turn the wallpaper off" : "Turn the wallpaper on")
+        .accessibilityLabel("Wallpaper")
+        .accessibilityValue(on ? "On" : "Off")
+        .accessibilityAddTraits(on ? [.isToggle, .isSelected] : .isToggle)
     }
 
     private func setSynced(_ on: Bool) {
-        Motion.run { controller.setFollowsScreensaver(on) }
+        Motion.run(Motion.sync) { controller.setFollowsScreensaver(on) }
     }
 }
 
