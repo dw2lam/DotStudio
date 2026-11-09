@@ -312,10 +312,12 @@ static inline float3 nature_auroraView(float3 rd, constant FXUniforms& u, Nature
 // Sky: single scattering through an exponential atmosphere (Rayleigh + Mie + ozone),
 // sunlight reddened by the real airmass at the sun's elevation (Kasten–Young), so the
 // palette comes out of the physics: orange horizon, ozone-blue zenith, warm sun glow.
-// Clouds: a lit altocumulus deck at 2.5 km plus high cirrus. Sea: sum of ten
-// dispersion-correct wave trains; trains too small for a pixel are folded into a
-// microfacet slope variance (Beckmann), which is what turns the sun's reflection into a
-// long glitter path near the horizon and sharp sparkles near the camera.
+// Clouds: a lit altocumulus deck at 2.5 km plus high cirrus. Sea: 21 dispersion-correct
+// wave trains (swell to 6 cm wind ripples), each filtered by the pixel's footprint on the
+// water; what a pixel can't resolve is folded into a microfacet slope variance (LEAN /
+// Beckmann), which is what turns the sun's reflection into a long glitter column near the
+// horizon and sharp glints near the camera — and keeps the far sea from aliasing.
+// Follow the Sun (live) adds the real sun and moon, twilight and night; see nature_ocean.
 
 struct NatureOceanP {
     float3 sd;       // unit sun direction
@@ -327,11 +329,38 @@ struct NatureOceanP {
     float clouds;
     float tc;        // cloud clock
     float pix;
+    float ms;        // multiple-scattering skylight scale (≈ |esun|; live: fades with the twilight)
+    float amb;       // cloud ambient scale (|esun|; live: twilight + moonlight)
+    bool live;       // Follow the Sun
+    float tw;        // live: twilight glow scale (0 unless the sun is 2°…18° down)
+    float2 sh;       // live: the sun's horizontal direction (the key light may be the moon)
 };
 
+// Follow the Sun state. Derived from the uniforms where it is needed rather than carried in
+// NatureOceanP: the sea and sky are register-bound, and the manual mode must not pay for it.
+static inline bool nature_live(constant FXUniforms& u) { return u.p1.y > 0.5 && u.sky.y > 0.5; }
+static inline float nature_liveDD(constant FXUniforms& u) { return -u.sun.x * 57.29578; }   // sun depression, °
+// Sunlight tint: the warm one the user picked at a low sun, relaxing toward white daylight as
+// the sun climbs (sunlight above the air is white; the warmth is the low sun's).
+static inline float3 nature_liveTint(constant FXUniforms& u) {
+    float3 tint = srgbToLinear(u.colorB.rgb);
+    return mix(tint, float3(luma(tint)) * float3(0.98, 1.0, 1.03), 0.9 * smoothstep(0.06, 0.4, u.sun.x));
+}
+// Skylight after sunset: the blue hour fades ~e× per 2.3° of depression.
+static inline float nature_liveFall(float dd) { return exp(-max(dd - 0.5, 0.0) / 2.3); }
+// Moonlight as the night's key light: the real phase (≈ opposition surge), fading in once the
+// sun's own light has left even the cirrus (5° down), so nothing pops at the hand-over.
+static inline float3 nature_liveMoonE(constant FXUniforms& u, float dd) {
+    if (dd <= 5.0) return float3(0.0);
+    float illum = 0.5 - 0.5 * cos(u.moon.w);
+    float pf = illum * (0.35 + 0.65 * illum);
+    return float3(0.62, 0.80, 1.0) * 9.5 * 0.0042 * pf * smoothstep(5.0, 10.0, dd);
+}
+
 // Ocean wave trains: (direction toward the camera ± spread, phase, wavelength m), from
-// 80 m swell down to 0.5 m wind ripples, geometric in wavelength (ratio 0.73).
-constant float4 NATURE_WAVES[17] = {
+// 80 m swell down to 0.5 m (ratio 0.73), then four wind ripples down to 6 cm (ratio 0.53),
+// spread wider and riding the swells.
+constant float4 NATURE_WAVES[21] = {
     float4(0.00807, -0.99997, 6.10883, 80.00000), float4(0.96510, -0.26189, 4.07102, 58.40000),
     float4(-0.16502, -0.98629, 1.39632, 42.63200), float4(-0.56280, -0.82659, 5.88731, 31.12136),
     float4(-0.52702, -0.84985, 0.80283, 22.71859), float4(-0.21676, -0.97622, 5.53007, 16.58457),
@@ -340,7 +369,18 @@ constant float4 NATURE_WAVES[17] = {
     float4(-0.55720, -0.83038, 5.68147, 3.43810), float4(-0.94312, -0.33245, 5.66172, 2.50981),
     float4(-0.94794, -0.31846, 1.93828, 1.83216), float4(-0.25430, -0.96713, 5.55347, 1.33748),
     float4(0.82914, -0.55904, 5.75483, 0.97636), float4(0.27277, -0.96208, 2.29456, 0.71274),
-    float4(0.00787, -0.99997, 1.99348, 0.52030)
+    float4(0.00787, -0.99997, 1.99348, 0.52030),
+    float4(-0.47533, -0.87981, 3.51715, 0.37982), float4(0.50720, -0.86183, 3.21642, 0.20241),
+    float4(-0.32492, -0.94574, 4.98242, 0.10786), float4(0.28481, -0.95858, 0.26314, 0.05748)
+};
+// (wavenumber k = 2π/λ, angular frequency ω = √(gk + (σ/ρ)k³): gravity waves, capillaries)
+constant float2 NATURE_WAVEK[21] = {
+    float2(0.07854, 0.87777), float2(0.10759, 1.02735), float2(0.14738, 1.20242), float2(0.20189, 1.40733),
+    float2(0.27657, 1.64715), float2(0.37886, 1.92785), float2(0.51898, 2.25638), float2(0.71093, 2.64089),
+    float2(0.97388, 3.09093), float2(1.33409, 3.61767), float2(1.82752, 4.23419), float2(2.50345, 4.95580),
+    float2(3.42938, 5.80044), float2(4.69778, 6.78917), float2(6.43532, 7.94669), float2(8.81550, 9.30215),
+    float2(12.07603, 10.89011), float2(16.54250, 12.75196), float2(31.04242, 17.51313), float2(58.25186, 24.20496),
+    float2(109.31106, 34.17148)
 };
 
 static inline float nature_airmass(float e) {
@@ -355,15 +395,115 @@ static inline float nature_hg(float c, float g) {
 // Sunlight reaching altitude h km: the sun sits higher above that point's own horizon
 // (dip ≈ √(2h/R)) and the path runs through thinner air (× e^(−h/8)). This is what keeps
 // clouds glowing pink and red for a while after the sun has set at sea level.
-static inline float3 nature_sunAt(NatureOceanP P, float h) {
+static inline float3 nature_sunAt(NatureOceanP P, float h, constant FXUniforms& u) {
     float dip = sqrt(2.0 * h / 6371.0);
     float se = P.se + dip;
-    float vis = smoothstep(-0.012, 0.006, se);
+    float vis = smoothstep(P.live ? -0.03 : -0.012, 0.006, se);          // live: a softer terminator
     return exp(-P.tauT * nature_airmass(se) * exp(-h / 8.0)) * vis;
 }
 
+// Screen azimuth (radians, + = right) for a body at hour angle H (0 = due south, + west)
+// whose rise→set half-arc is H0. The day is a phase φ running 0 (noon) → ±π/2 (set/rise)
+// → ±π (midnight), linear in time within each half; the frame position is a triangle wave
+// of it: the body crosses left → right while it is up (rising at −A, setting at +A) and
+// drifts back right → left below the horizon, through the centre at midnight. Toward polar
+// day the set phase moves out to π (the midnight sun swings back to centre, low and gold)
+// and toward polar night in to 0, so no latitude or date ever makes it jump.
+static inline float nature_arcAz(float H, float H0, float A) {
+    float P0 = 0.5 * NATURE_PI * min(H0 / 0.6, 1.0);
+    P0 = mix(P0, NATURE_PI, smoothstep(2.4, NATURE_PI, H0));
+    float aH = abs(H);
+    float ph = aH <= H0 ? P0 * aH / max(H0, 1e-4)
+                        : P0 + (NATURE_PI - P0) * (aH - H0) / max(NATURE_PI - H0, 1e-4);
+    float f = A * (ph <= 0.5 * NATURE_PI ? ph : NATURE_PI - ph) / (0.5 * NATURE_PI);
+    return H < 0.0 ? -f : f;
+}
+
+// Ocean Horizon's composed sun and moon (case 59), from the uniforms. Manual mode: the Sun
+// Height param, a little right of centre. Live: the real elevation, with the azimuth mapping
+// the day's progress across the frame (nature_arcAz); the moon likewise, its height eased so
+// a high moon stays in the frame with its glitter path.
+static inline float nature_liveDay(constant FXUniforms& u) { return smoothstep(0.08, 0.5, u.sun.x); }   // clear-day grade
+static inline float nature_oceanArcA(constant FXUniforms& u) {
+    return atan(0.62 * u.resolution.x / (u.resolution.y * 1.65));
+}
+static inline float nature_oceanSunEl(constant FXUniforms& u, const bool live) {
+    return live ? u.sun.x : u.p0.y * 0.0174533;
+}
+static inline float3 nature_oceanSunDir(constant FXUniforms& u, const bool live) {
+    float se = nature_oceanSunEl(u, live);
+    float saz = 0.16;
+    if (live) saz = nature_arcAz(u.sun.y, u.sun.z, nature_oceanArcA(u));
+    return float3(sin(saz) * cos(se), sin(se), cos(saz) * cos(se));
+}
+static inline float3 nature_oceanMoonDir(constant FXUniforms& u, thread float &moonEl) {
+    moonEl = 0.40 * tanh(u.moon.x / 0.40);
+    float maz = nature_arcAz(u.moon.y, u.moon.z, nature_oceanArcA(u));
+    return float3(sin(maz) * cos(moonEl), sin(moonEl), cos(maz) * cos(moonEl));
+}
+static inline float3 nature_oceanTint(constant FXUniforms& u, const bool live) {
+    if (live) return nature_liveTint(u);
+    return srgbToLinear(u.colorB.rgb);
+}
+// Live camera: exposure opens up through twilight (as an eye or a long exposure would), and
+// stops down a little under a high sun.
+static inline float nature_oceanExpo(constant FXUniforms& u) {
+    float dd = nature_liveDD(u);
+    return exp2(1.0 * smoothstep(-2.0, 9.0, dd) + 1.6 * smoothstep(6.0, 16.0, dd)
+                - 0.6 * smoothstep(0.08, 0.7, u.sun.x));
+}
+
+// Twilight and night light the single-scattering model above can't make once the sun is
+// down (Follow the Sun only): the afterglow arch over the set sun (gold → red as it sinks),
+// the purple light high above it (stratospheric dust, ~3–7° depression), the pink
+// anti-twilight band low all round, and the deep blue of the blue hour. Called for a sun
+// 2°…18° down only (every term here is 0 at both ends).
+static inline float3 nature_twilight(float3 v, float2 hs, float tw, constant FXUniforms& u) {
+    float ev = max(v.y, 0.0);
+    float dd = nature_liveDD(u);
+    float2 hv = v.xz * rsqrt(max(dot(v.xz, v.xz), 1e-8));
+    float away = 1.0 - dot(hv, hs);                              // 0 toward the sun … 2 opposite
+    float3 L = float3(0.0);
+    {
+        float dp = max(dd, 0.0);
+        // Blue hour: the clear, deep blue the sky keeps for half an hour after the sun has
+        // gone (ozone absorbs the orange from light grazing through the high atmosphere).
+        float Ih = smoothstep(-1.5, 2.5, dd) * exp(-max(dd - 2.5, 0.0) / 2.6);
+        L += mix(float3(0.050, 0.085, 0.20), float3(0.012, 0.035, 0.16), sqrt(ev)) * Ih * 0.07;
+        // Afterglow: hugs the horizon under the sun, shrinking and reddening with depth.
+        float Ia = smoothstep(-2.0, 1.0, dd) * exp(-dp / 2.4);
+        float ha = mix(0.10, 0.035, smoothstep(0.0, 10.0, dp));
+        float3 ca = mix(float3(1.0, 0.52, 0.20), float3(0.80, 0.17, 0.06), smoothstep(0.5, 8.0, dp));
+        L += ca * Ia * exp(-ev / ha - away * mix(2.5, 4.0, smoothstep(0.0, 8.0, dp))) * 0.12;
+        // Purple light: a soft rose-violet patch ~15–25° up over the sun's azimuth.
+        float pd = (dd - 4.0) / 2.2;
+        float pe = (ev - 0.32 + 0.02 * dp) / 0.20;
+        L += float3(0.70, 0.36, 0.72) * exp(-pd * pd - pe * pe - away * 1.2) * 0.0025;
+        // Pink belt: low and all round, strongest away from the sun.
+        float Ib = smoothstep(-2.0, 0.5, dd) * exp(-dp / 2.0);
+        float be = (ev - 0.07 - 0.008 * dp) / 0.07;
+        L += float3(0.85, 0.48, 0.55) * Ib * exp(-be * be) * (0.25 + 0.75 * saturate(away * 0.6)) * 0.004;
+    }
+    return L * tw;
+}
+
+// Follow the Sun's sky on top of the single scattering: a deep-blue clear midday zenith, the
+// twilight glows (out of line), and the airglow/starlight floor.
+static inline float3 nature_atmosLive(float3 L, float3 v, NatureOceanP P, constant FXUniforms& u) {
+    float ev = max(v.y, 0.0);
+    float dd = nature_liveDD(u);
+    // Clear midday: the zenith deepens to the saturated blue a polariser-free eye sees,
+    // over a pale white-blue horizon.
+    float day = nature_liveDay(u);
+    if (day > 0.0) L *= mix(float3(1.0), float3(0.62, 0.80, 1.06), day * smoothstep(0.02, 0.6, ev));
+    if (P.tw > 0.0) L += nature_twilight(v, P.sh, P.tw, u);
+    // Airglow + starlight: deep navy, so moonless nights still have a horizon.
+    L += float3(0.0007, 0.0012, 0.0028) * smoothstep(2.0, 12.0, dd) * (1.0 + 2.0 * exp(-ev * 7.0));
+    return L;
+}
+
 // Sky radiance along v (no sun disc, no clouds).
-static inline float3 nature_oceanAtmos(float3 v, NatureOceanP P) {
+static inline float3 nature_oceanAtmos(float3 v, NatureOceanP P, constant FXUniforms& u) {
     float ev = max(v.y, 0.0);
     float c = dot(v, P.sd);
     float3 betaR = NATURE_RAYLEIGH;
@@ -373,45 +513,74 @@ static inline float3 nature_oceanAtmos(float3 v, NatureOceanP P) {
     float3 tauV = P.tauS * mv;
     // Light reaching the scatterers: views near the zenith scatter higher up, where the
     // sun's path is shorter (so the zenith stays blue after the horizon turns red).
-    float3 Ts = nature_sunAt(P, 1.0 + 7.0 * sqrt(ev));
+    float3 Ts = nature_sunAt(P, 1.0 + 7.0 * sqrt(ev), u);
     float vis = 1.0;
     float3 scat = (betaR * pr + P.mie * pm) / (betaR + P.mie);
     float3 L = P.esun * Ts * vis * scat * (1.0 - exp(-tauV));
     // Multiple scattering, roughly: a soft skylight that survives after sunset.
     // (Kept bluish: it is mostly light that scattered high up, before the sun reddened.)
-    L += length(P.esun) * float3(0.0011, 0.0042, 0.0165) * (0.3 + 0.7 * smoothstep(-0.1, 0.15, P.se)) * (1.0 - 0.35 * ev);
+    L += P.ms * float3(0.0011, 0.0042, 0.0165) * (1.0 - 0.35 * ev);
+    if (P.live) L = nature_atmosLive(L, v, P, u);
     return L;
+}
+
+// Gradient noise as gnoise, on an arithmetic hash (no sin): the sky's clouds evaluate ~10
+// of these per pixel, which made them most of the scene's cost.
+static inline float2 nature_ghash(float2 p) {
+    float3 p3 = fract(float3(p.xyx) * float3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.xx + p3.yz) * p3.zy) * 2.0 - 1.0;
+}
+static inline float nature_gnoise(float2 p) {
+    float2 i = floor(p), f = p - i;
+    float2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    float a = dot(nature_ghash(i), f);
+    float b = dot(nature_ghash(i + float2(1, 0)), f - float2(1, 0));
+    float c = dot(nature_ghash(i + float2(0, 1)), f - float2(0, 1));
+    float d = dot(nature_ghash(i + float2(1, 1)), f - float2(1, 1));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
 // Cloud density noise: soft large-scale cover + billowy detail (rounded puffs with creases).
 static inline float nature_cloudNoise(float2 p, int oct) {
     const float2x2 R = float2x2(0.8, 0.6, -0.6, 0.8);
-    float s = 0.55 * gnoise(p) + 0.28 * gnoise(R * p * 2.03 + 1.7);
+    float s = 0.55 * nature_gnoise(p) + 0.28 * nature_gnoise(R * p * 2.03 + 1.7);
     float a = 0.22;
     float2 q = R * R * p * 4.1 + 3.3;
-    for (int i = 2; i < oct; ++i) { s += a * (0.35 - abs(gnoise(q))); q = R * q * 2.07; a *= 0.5; }
+    for (int i = 2; i < oct; ++i) { s += a * (0.35 - abs(nature_gnoise(q))); q = R * q * 2.07; a *= 0.5; }
     return s;
 }
 
 // Altocumulus deck + cirrus over the atmosphere along v (v.y > 0). `oct` trades detail
 // for speed (reflections use fewer octaves).
-static inline float3 nature_oceanClouds(float3 v, float3 sky, NatureOceanP P, int oct) {
-    if (v.y < 0.004 || P.clouds <= 0.0) return sky;
+static inline float3 nature_oceanClouds(float3 v, float3 sky, NatureOceanP P, int oct, thread float &cov,
+                                        constant FXUniforms& u) {
+    cov = 0.0;                                                        // (how much sky they hide)
+    // Live, deep night: cirrus and the clouds' reflections fade out (dark on dark, unseen).
+    float nf = P.live ? smoothstep(8.5, 5.5, nature_liveDD(u)) : 1.0;
+    if (v.y < 0.004 || P.clouds <= 0.0 || (oct < 5 && nf <= 0.0)) return sky;
     float c = dot(v, P.sd);
     float vis = 1.0;
-    float3 Tc = nature_sunAt(P, 2.5);                                 // sunlight at the deck
-    // Cirrus at 8 km: streaks stretched along the wind.
-    float tC = 8.0 / v.y;
-    float2 q = v.xz * tC;
-    float2 qs = float2(q.x * 0.6 + q.y * 0.25, q.y * 0.08 - q.x * 0.1) * 0.22 + float2(P.tc * 0.25, 0.0);
-    float ci = gfbm(qs, 2) + 0.35;
-    float cir = smoothstep(0.30, 0.85, ci) * P.clouds * exp(-tC * 0.006);
-    float3 cirC = P.esun * nature_sunAt(P, 8.0) * (0.10 + 1.6 * nature_hg(c, 0.7)) * 0.12 + sky * 0.6;
-    float3 col = mix(sky, cirC, cir * 0.55 * (oct < 5 ? 0.0 : 1.0));
+    float3 Tc = nature_sunAt(P, 2.5, u);                                 // sunlight at the deck
+    // Cirrus at 8 km: streaks stretched along the wind (sky only, not reflections).
+    float3 col = sky;
+    float kc = 0.0;
+    if (oct >= 5 && nf > 0.0) {
+        float tC = 8.0 / v.y;
+        float2 q = v.xz * tC;
+        float2 qs = float2(q.x * 0.6 + q.y * 0.25, q.y * 0.08 - q.x * 0.1) * 0.22 + float2(P.tc * 0.25, 0.0);
+        const float2x2 Rc = float2x2(0.8, 0.6, -0.6, 0.8);
+        float ci = 0.5 * nature_gnoise(qs) + 0.25 * nature_gnoise(Rc * qs * 2.03) + 0.35;
+        float cir = smoothstep(0.30, 0.85, ci) * P.clouds * exp(-tC * 0.006);
+        float3 cirC = P.esun * nature_sunAt(P, 8.0, u) * (0.10 + 1.6 * nature_hg(c, 0.7)) * 0.12 + sky * 0.6;
+        kc = cir * 0.55 * nf;
+        col = mix(sky, cirC, kc);
+    }
+    cov = kc;
     // Altocumulus at 2.5 km.
     float tA = 2.5 / v.y;
     float2 p = v.xz * tA * 0.32 + float2(P.tc, P.tc * 0.3);
-    float2 w = float2(gnoise(p * 0.35 + 3.1), gnoise(p * 0.35 + 7.7));
+    float2 w = float2(nature_gnoise(p * 0.35 + 3.1), nature_gnoise(p * 0.35 + 7.7));
     float n = nature_cloudNoise(p + w * 0.6, oct);
     float cover = P.clouds;
     float lo = 0.78 - 0.45 * cover;
@@ -426,7 +595,9 @@ static inline float3 nature_oceanClouds(float3 v, float3 sky, NatureOceanP P, in
     if (dens > 0.0) {
         // Self-shadowing: how much cloud lies a little way toward the sun.
         float shade = 1.0;
-        if (oct >= 5) {
+        // (Unlit, nothing to shade; under the moon (live, sun > 5° down) the faint key light
+        // doesn't earn the extra noise pass.)
+        if (oct >= 5 && P.esun.b > 0.0 && !(P.live && nature_liveDD(u) > 5.0)) {
             float2 toSun = normalize(P.sd.xz + 1e-4) * 0.55;
             float n2 = nature_cloudNoise(p + toSun + w * 0.6, 2);
             float d2 = smoothstep(lo, lo + 0.28, n2 * 0.75 + 0.5 + 0.18 * w.x);
@@ -436,10 +607,11 @@ static inline float3 nature_oceanClouds(float3 v, float3 sky, NatureOceanP P, in
         // Low sun: the undersides we see catch reddened light; thin edges toward the sun
         // silver-line (strong forward scattering); thick cores fall to blue-grey skylight.
         float3 lit = P.esun * Tc * vis * (0.25 + 3.4 * nature_hg(c, 0.62) * (0.2 + thin)) * (0.12 + 0.35 * thin) * shade;
-        float3 amb = sky * 0.30 + length(P.esun) * float3(0.0025, 0.0035, 0.0085);
+        float3 amb = sky * 0.30 + P.amb * float3(0.0025, 0.0035, 0.0085);
         float3 cc = lit + amb;
-        float a = smoothstep(0.0, 0.55, dens) * fade;
+        float a = smoothstep(0.0, 0.55, dens) * fade * (oct < 5 ? nf : 1.0);
         col = mix(col, cc, a);
+        cov = 1.0 - (1.0 - kc) * (1.0 - a);
     }
     return col;
 }
@@ -550,6 +722,331 @@ static inline float nature_nightLand(float az, float e, float pix) {
         land = max(land, smoothstep(hw + pix, hw - pix, abs(az - pxc)) * step(y, H));
     }
     return land;
+}
+
+// Follow the Sun, the moon over the sea: a phase-lit sphere (Lommel–Seeliger) lit from the
+// sun's side of the frame for the real elongation, maria and earthshine. Called only for
+// pixels near it, out of line so the rest of the sea doesn't carry its registers.
+static inline float3 nature_oceanMoon(float3 rd, float3 moonD, float3 sunD, float moonEl, float elong,
+                                      float illum, float3 tauT, float pix, float dd) {
+    const float Rm = 0.0105;
+    float3 dm = rd - moonD;
+    float3 ex = normalize(cross(float3(0.0, 1.0, 0.0), moonD));
+    float3 ey = cross(moonD, ex);
+    float flatM = mix(0.82, 1.0, smoothstep(0.0, 0.08, moonEl));   // refraction squash, low down
+    float2 dp = float2(dot(dm, ex), dot(dm, ey) / flatM) / Rm;
+    float r2 = dot(dp, dp);
+    float ew = pix / Rm;
+    float mdisc = smoothstep(1.0 + ew, 1.0 - ew, sqrt(r2));
+    if (mdisc <= 0.0) return float3(0.0);
+    float zc = sqrt(max(1.0 - r2, 0.0));
+    float3 nrm = dp.x * ex + dp.y * ey - zc * moonD;
+    float el = elong < NATURE_PI ? elong : 6.2831853 - elong;
+    float3 tow = sunD - moonD * dot(sunD, moonD);
+    float3 perp = dot(tow, tow) > 1e-8 ? normalize(tow) : ey;
+    float3 sunL3 = moonD * cos(el) + perp * sin(el);
+    float3 s3 = float3(dp * 2.2, zc * 2.2);
+    float maria = smoothstep(0.45, 0.7, nature_dirNoise(s3 + 5.0, 3));
+    float alb = (0.85 - 0.38 * maria) * (0.92 + 0.16 * noise3(s3 * 9.0));
+    float mu0 = dot(nrm, sunL3), mu = max(zc, 0.05);
+    float ls = mu0 > 0.0 ? mu0 / (mu0 + mu) : 0.0;
+    float shine = 0.006 * (1.0 - illum);                               // earthshine
+    float3 Tm = exp(-tauT * nature_airmass(moonEl));
+    float3 mc = float3(1.0, 0.97, 0.92) * alb * (ls * 1.8 + shine) * Tm;
+    // Same surface by day and night; the eye adapts, so by day it reads pale.
+    return mc * mdisc * mix(0.6, 0.20, smoothstep(2.0, 12.0, dd));
+}
+
+static inline float3 nature_oceanMoonNear(float3 rd, constant FXUniforms& u, float3 tauT, float pix) {
+    float moonEl;
+    float3 moonD = nature_oceanMoonDir(u, moonEl);
+    float3 dm = rd - moonD;
+    if (dot(dm, dm) > 0.0003 || moonEl < -0.03) return float3(0.0);
+    return nature_oceanMoon(rd, moonD, nature_oceanSunDir(u, true), moonEl, u.moon.w,
+                            0.5 - 0.5 * cos(u.moon.w), tauT, pix, nature_liveDD(u));
+}
+
+// Cheap value noise on a 3D lattice with an integer hash (no sin): the night sky's Milky
+// Way is evaluated over a quarter of a 5K frame, where the sin-hash noise3 is too slow.
+static inline float nature_vn3(float3 p) {
+    float3 i = floor(p), f = p - i;
+    f = f * f * (3.0 - 2.0 * f);
+    uint3 c = uint3(int3(i) + int3(1 << 16));
+    uint bx = c.x * 0x8da6b343u, by = c.y * 0xd8163841u, bz = c.z * 0xcb1ab31fu;
+    uint X1 = 0x8da6b343u, Y1 = 0xd8163841u, Z1 = 0xcb1ab31fu;
+    #define NATURE_H(h) (float(((h) ^ ((h) >> 15u)) * 0x2c1b3c6du >> 8u) * (1.0 / 16777216.0))
+    float a = NATURE_H(bx ^ by ^ bz),             b = NATURE_H((bx + X1) ^ by ^ bz);
+    float cc = NATURE_H(bx ^ (by + Y1) ^ bz),     d = NATURE_H((bx + X1) ^ (by + Y1) ^ bz);
+    float e = NATURE_H(bx ^ by ^ (bz + Z1)),      g = NATURE_H((bx + X1) ^ by ^ (bz + Z1));
+    float h = NATURE_H(bx ^ (by + Y1) ^ (bz + Z1)), k = NATURE_H((bx + X1) ^ (by + Y1) ^ (bz + Z1));
+    #undef NATURE_H
+    return mix(mix(mix(a, b, f.x), mix(cc, d, f.x), f.y), mix(mix(e, g, f.x), mix(h, k, f.x), f.y), f.z);
+}
+
+// A lighter Milky Way for the sea at night: same disc, bulge and Great Rift as
+// nature_milkyWay, on the cheap noise and fewer octaves — it is seen faint and low over the
+// water, half behind cloud, so the fine knots and nebulae wouldn't read anyway.
+static inline float4 nature_milkyWayLite(float3 g) {
+    if (abs(g.z) > 0.36) return float4(0.0, 0.0, 0.0, 1.0);
+    float l = atan2(g.y, g.x);
+    float b = asin(clamp(g.z, -1.0, 1.0));
+    float cl = cos(l);
+    float width = 0.075 + 0.05 * max(cl, 0.0);
+    float disc = exp(-(b * b) / (width * width)) * (0.35 + 0.65 * (0.5 + 0.5 * cl));
+    float bulge = exp(-(l * l + b * b * 2.4) / (0.30 * 0.30)) * 1.6;
+    float3 p = g * 9.0;
+    float n1 = (nature_vn3(p) * 0.5 + nature_vn3(p * 2.07 + 1.3) * 0.25) / 0.75;
+    float n2 = nature_vn3(g * 26.0 + 7.0);
+    float clouds = smoothstep(0.35, 0.8, n1) * (0.3 + 1.0 * n2);
+    float halo = exp(-(b * b) / (width * width * 9.0)) * 0.08;
+    float glow = disc * (0.12 + 1.8 * clouds) + bulge * (0.5 + 0.9 * n1) + halo;
+    float rb = (b - 0.025 - 0.02 * sin(l * 3.0)) / 0.028;
+    float rift = exp(-rb * rb) * smoothstep(1.4, 0.2, abs(l - 0.6));
+    float lanes = smoothstep(0.45, 0.8, nature_vn3(g * 14.0 + 3.0)) * exp(-(b * b) / 0.012);
+    float T = exp(-(1.6 * rift * (0.5 + n2) + 1.1 * lanes));
+    float3 c = mix(float3(0.66, 0.76, 1.0), float3(1.0, 0.80, 0.58),
+                   clamp(smoothstep(-0.2, 0.9, cl) * 0.8 + bulge * 0.2, 0.0, 1.0));
+    return float4(c * glow * T, T);
+}
+
+// Follow the Sun, stars and a faint Milky Way on the real sidereal sky (local sidereal time
+// and latitude from u.sky / u.sun), fading in as the twilight deepens and washed by a
+// bright moon. Added after the clouds, scaled by what they leave uncovered.
+static inline float3 nature_oceanStars(float3 rd, constant FXUniforms& u, float pix, float t) {
+    float dd = nature_liveDD(u), expo = nature_oceanExpo(u);
+    float illum = 0.5 - 0.5 * cos(u.moon.w);
+    float moonEl = 0.40 * tanh(u.moon.x / 0.40);
+    float moonSky = (dd > 5.0 ? 1.0 : 0.0) * illum * illum * smoothstep(-0.05, 0.1, moonEl);
+    // Facing the equator-side sky: x west (right), z toward the equator, y up. (South of
+    // the equator the frame is mirrored to keep the sun moving left → right; so is the sky.)
+    float lat = abs(u.sun.w);
+    const float3 E = float3(-1, 0, 0), N = float3(0, 0, -1), U = float3(0, 1, 0);
+    float3 Pp = cos(lat) * N + sin(lat) * U;
+    float3 Mq = -sin(lat) * N + cos(lat) * U;
+    float dec = asin(clamp(dot(rd, Pp), -1.0, 1.0));
+    if (u.sun.w < 0.0) dec = -dec;
+    float ha = atan2(-dot(rd, E), dot(rd, Mq));
+    float ra = u.sky.x - ha;
+    float3 q = float3(cos(dec) * cos(ra), cos(dec) * sin(ra), sin(dec));
+    float3 g = NATURE_EQ2GAL * q;
+    float ext = exp(-0.06 / (rd.y + 0.04));
+    float wash = 1.0 / (1.0 + 2.5 * moonSky);
+    float vis = smoothstep(8.5, 15.0, dd);
+    float mwv = smoothstep(10.0, 17.0, dd);
+    float4 mw = mwv > 0.0 ? nature_milkyWayLite(g) : float4(0.0, 0.0, 0.0, 1.0);
+    float band = exp(-(g.z * g.z) / 0.02);
+    float twk = smoothstep(0.5, 0.0, rd.y);
+    float3 st = nature_galStars(g, pix, band * mwv, mix(1.0, mw.w, 0.85), t, twk) * 0.5 * mix(1.0, wash, 0.5);
+    return (st * vis + mw.rgb * 0.035 * mwv * wash) * ext / expo;
+}
+
+// ---------------------------------------------------------------- case 59 itself
+// OCEAN HORIZON — golden-hour sea and sky.
+//  p0 = (speed, sun elevation °, sea state, clouds)  p1 = (haze, follow the sun, time lapse)
+//  colorA deep water, colorB sunlight tint.
+//  Follow the Sun: u.sun / u.moon / u.sky carry the real sun and moon (MetalRenderer.liveSky);
+//  the day's arc maps across the frame, and once the sun is well down the moon takes over as
+//  the key light (sky glow, clouds, glitter path), with stars.
+//  Compiled twice: `live` is a constant in each copy, so the manual mode (Golden Hour,
+//  Afterlight) carries none of the live code — this shader is register-bound — and the
+//  live copy sits behind one out-of-line call.
+static inline float4 nature_ocean(float2 uv, float2 res, float2 px, float t, constant FXUniforms& u,
+                                 const bool live) {
+    float speed = u.p0.x, waves = clamp(u.p0.z, 0.0, 1.0), haze = clamp(u.p1.x, 0.0, 1.0);
+    float aspect = res.x / res.y;
+    float2 sp = float2((uv.x - 0.5) * 2.0 * aspect, (0.5 - uv.y) * 2.0);
+    const float F = 1.65, pitch = 0.055;
+    float3 fwd = float3(0.0, sin(pitch), cos(pitch));
+    float3 up = float3(0.0, cos(pitch), -sin(pitch));
+    float3 rd = normalize(fwd * F + float3(1.0, 0.0, 0.0) * sp.x + up * sp.y);
+
+    NatureOceanP P;
+    P.se = nature_oceanSunEl(u, live);
+    P.sd = nature_oceanSunDir(u, live);
+    P.esun = nature_oceanTint(u, live) * 9.5;
+    P.mie = 0.008 + 0.065 * haze;
+    P.tauS = NATURE_RAYLEIGH + P.mie;
+    P.tauT = P.tauS + float3(0.016, 0.047, 0.002) + 0.02 * haze;
+    P.clouds = clamp(u.p0.w, 0.0, 1.0);
+    P.tc = t * speed * 0.004;
+    P.pix = 2.0 / (res.y * F);
+    P.live = live;
+    P.ms = length(P.esun) * (0.3 + 0.7 * smoothstep(-0.1, 0.15, P.se));
+    P.amb = length(P.esun);
+    P.tw = 0.0;
+    P.sh = float2(0.0, 1.0);
+    bool keyMoon = false;
+    if (live) {
+        float dd = nature_liveDD(u);
+        float fall = nature_liveFall(dd);
+        // Skylight after sunset (the blue hour's), and the clouds' ambient, fade with depth.
+        P.ms *= fall;
+        P.amb *= mix(0.25, 1.0, smoothstep(-6.0, 2.0, -dd)) * fall;
+        // Twilight glows over the set sun (all their terms are 0 at both ends of 2°…18°).
+        if (dd > -2.0 && dd < 18.0) P.tw = length(P.esun) * smoothstep(18.0, 12.0, dd);
+        P.sh = normalize(P.sd.xz + float2(0.0, 1e-5));
+        // Clear air: less milky haze under a high sun, and on a night sky.
+        P.mie *= (1.0 - 0.55 * nature_liveDay(u)) * (1.0 - 0.45 * smoothstep(4.0, 12.0, dd));
+        P.tauS = NATURE_RAYLEIGH + P.mie;
+        // Night: the moon becomes the key light once the sun's own light has left even
+        // the cirrus (below ~5°), fading in so nothing pops at the hand-over.
+        if (dd > 5.0) {
+            keyMoon = true;
+            float mel;
+            P.sd = nature_oceanMoonDir(u, mel);
+            P.se = mel;
+            P.esun = nature_liveMoonE(u, dd);
+            P.amb += 0.7 * length(P.esun);
+        }
+    }
+    float3 Tsun = exp(-P.tauT * nature_airmass(P.se));
+
+    // The horizon pixel row is shared: sky covers the part of the pixel above it, sea the
+    // rest (one row of pixels evaluates both), so the horizon is crisp but antialiased.
+    float hcov = saturate(0.5 + rd.y / P.pix);
+    float3 col = float3(0.0), colSea = float3(0.0);
+    if (hcov > 0.0) {
+        float3 sky = nature_oceanAtmos(rd, P, u);
+        if (!keyMoon) {
+            // Sun disc (flattened by refraction near the horizon), limb-darkened.
+            float3 dv = rd - P.sd;
+            float flat = mix(0.82, 1.0, smoothstep(0.0, 0.08, P.se));
+            float ad = length(float2(dv.x, dv.y / flat));
+            const float R = 0.0075;
+            float disc = smoothstep(R + P.pix, R - P.pix, ad);
+            float limb = sqrt(max(1.0 - (ad / R) * (ad / R), 0.0));
+            sky += P.esun * Tsun * disc * (0.45 + 0.55 * limb) * 60.0;
+        }
+        // (The moon: only rows within its reach call out to draw it.)
+        if (live && abs(rd.y - sin(0.40 * tanh(u.moon.x / 0.40))) < 0.02)
+            sky += nature_oceanMoonNear(rd, u, P.tauT, P.pix);
+        float cov;
+        col = nature_oceanClouds(rd, sky, P, 5, cov, u);
+        // Stars behind the clouds: only what the clouds leave open is worth computing.
+        if (live && nature_liveDD(u) > 8.5 && cov < 0.98)
+            col += nature_oceanStars(rd, u, P.pix, t) * (1.0 - cov);
+    }
+    if (hcov < 1.0) {
+        // Sea: the sum of 21 wave trains, each filtered by the pixel's footprint on the water.
+        float3 rw = rd;
+        rw.y = min(rw.y, -0.3 * P.pix);                    // (horizon row: the part below it)
+        rw = normalize(rw);
+        const float camH = 4.0;
+        float dist = camH / -rw.y;
+        float2 w = rw.xz * dist;
+        // Footprint: one pixel spans dist·pix across the view, and dist·pix/sin(grazing)
+        // along it on the water.
+        float fx = dist * P.pix;
+        float fz = fx / max(-rw.y, 1e-4);
+        float2 vh = normalize(rw.xz);
+        float ts = t * speed;
+        float2 slope = float2(0.0);
+        float sharp = 0.0;                                  // Gerstner crest sharpening
+        float unres = 0.0;                                  // slope variance filtered out (LEAN)
+        float steep = 0.028 + 0.07 * waves;
+        float rip = sqrt(0.0006 * waves + 0.00008);        // wind-ripple slopes
+        float swell = 1.0, warp = 0.0, prev = 0.0;
+        for (int i = 0; i < 21; ++i) {
+            float4 W = NATURE_WAVES[i];                     // direction, phase, wavelength
+            float2 KW = NATURE_WAVEK[i];                    // wavenumber, angular frequency
+            float s = i < 3 ? steep * (0.5 + 0.8 * waves) : (i < 11 ? steep * 0.62 : (i < 17 ? steep * 0.55 : rip));
+            // Ripples ride the swells (strongest on the crests); below, each is also gated by
+            // its neighbour's phase (wave groups) and bent by the chop and the next-longer
+            // ripple, so crossing trains make short irregular wavelets, not a lattice.
+            if (i >= 17) s *= swell;
+            // Pixel-footprint filter: a sinusoid averaged over the footprint f along its
+            // direction (an ellipse: dist·pix across, stretched by 1/sin(grazing) along the
+            // view) keeps ≈ (1 − (k·f/3)²)² of its amplitude — gone by λ ≈ 2f (Nyquist).
+            // What is filtered out is kept as slope variance (LEAN), not lost, and costs no trig.
+            float a = dot(W.xy, vh), b = W.x * vh.y - W.y * vh.x;
+            float q = KW.x * KW.x * (a * a * fz * fz + b * b * fx * fx) * (1.0 / 9.0);
+            if (q >= 1.0) { unres += s * s * (i >= 17 ? 0.22 : 0.5); continue; }
+            if (i >= 17) s *= 0.6 + 0.4 * prev;
+            float rs = (1.0 - q) * (1.0 - q);
+            float ph = dot(w, W.xy) * KW.x - KW.y * ts + W.z;
+            float cph, sph = 0.0;
+            if (i < 10) sph = sincos(ph, cph);
+            else cph = cos(ph + (i >= 17 ? warp * (1.0 + 0.26 * float(i - 17)) + 2.2 * prev : 0.0));
+            slope += W.xy * (cph * s * rs);
+            // Gerstner: normals tip faster over the crests and lie flatter in the troughs.
+            sharp += sph * s * rs * 1.3;
+            unres += (1.0 - rs * rs) * s * s * 0.5;
+            if (i == 2) swell = clamp(1.0 + 0.6 * sharp / (1.3 * steep * (0.5 + 0.8 * waves)), 0.35, 1.8);
+            if (i >= 4) warp += 1.6 * sph;
+            prev = cph;
+        }
+        float3 n = normalize(float3(-slope.x, max(1.0 - sharp, 0.4), -slope.y));
+        float3 v = -rw;
+        float3 rr = reflect(rw, n);
+        // Rough-mirror average: facets tilted toward the eye dominate what we see, so a
+        // rough patch mirrors sky from higher up (darker, bluer) than a flat mirror would.
+        // (A smooth max, so the reflected elevation never folds into hard bands.)
+        float sig = sqrt(unres + 0.0004);
+        float ry = rr.y;
+        rr.y = 0.5 * (ry + sqrt(ry * ry + (sig + 0.004) * (sig + 0.004))) + 0.3 * sig;
+        rr = normalize(rr);
+        float F0 = nature_schlick(max(dot(n, v), 0.0));
+        float3 sky = nature_oceanAtmos(rr, P, u);
+        float rcov;
+        float3 refl = nature_oceanClouds(rr, sky, P, 2, rcov, u);
+        // Sun glitter: Beckmann lobe over the filtered slope variance, so the sun's path
+        // widens and softens into a glitter column with distance.
+        float sig2 = 0.0005 + 0.0010 * waves + unres + 0.006 * (1.0 - exp(-dist / 150.0));
+        float3 h = normalize(P.sd + v);
+        float hn = max(dot(h, n), 1e-3);
+        float t2 = (1.0 - hn * hn) / (hn * hn);
+        float D = exp(-t2 / sig2) / (NATURE_PI * sig2 * hn * hn * hn * hn);
+        float Fh = nature_schlick(max(dot(h, v), 0.0));
+        float sunUp = smoothstep(-0.012, 0.004, P.se);
+        // Sparkle: resolvable facets catching the sun, flickering as the sea moves; where a
+        // pixel covers many of them it sees their average.
+        float near = smoothstep(0.10, 0.025, fz);
+        float sp = 0.0, spark = 0.775;
+        if (near > 0.0) {
+            sp = pcg3(float3(floor(w * 3.0 / max(fz, 0.02)), floor(ts * 6.0))).x;
+            spark = mix(0.775, 0.6 + 3.5 * smoothstep(0.9, 1.0, sp), near);
+        }
+        float3 glint = P.esun * Tsun * sunUp * Fh * D * spark / (4.0 * max(dot(n, v), 0.08)) * 0.1;
+        float day = live ? nature_liveDay(u) : 0.0;
+        if (day > 0.0 && near > 0.0) {
+            // High sun (its mirror point is below the frame): steep wind-ripple facets still
+            // flash it back, scattered as single-pixel sparkles across the near water.
+            float s2w = sig2 + 0.05;
+            float Dw = exp(-t2 / s2w) / (NATURE_PI * s2w * hn * hn * hn * hn);
+            float fl = smoothstep(0.96, 1.0, sp);
+            glint += P.esun * Tsun * Fh * Dw * fl * fl * day * 24.0 * near;
+        }
+        // Light scattered up out of the water body.
+        float3 deep = srgbToLinear(u.colorA.rgb);
+        // Skylight on the water ≈ the sky it reflects (already in hand), a bit bluer.
+        // Haze colour: the horizon's own. (Live: far off, the roughened reflection already
+        // looks at the horizon sky, so it doubles as that — one sky evaluation fewer.)
+        float3 hz = sky;
+        if (!live) hz = nature_oceanAtmos(normalize(float3(rw.x, 0.004, rw.z)), P, u);
+        float bodySun = live ? smoothstep(-0.07, 0.0, P.se) : 1.0;
+        // (A high sun lights the water column itself: the sea turns blue, not grey.)
+        float3 body = deep * (sky * float3(0.9, 1.0, 1.15) + P.esun * Tsun * (0.04 + 0.8 * day) * max(P.sd.y + 0.1, 0.0) * bodySun);
+        // Smith-style masking: on rough water at grazing angles, much of the mirror is
+        // hidden behind wave crests, so the far sea sits darker than the sky it reflects.
+        float G = 1.0 / (1.0 + 0.5 * sqrt(unres + 0.0015) / max(-rw.y, 0.004));
+        colSea = refl * F0 * G + body * (1.0 - F0 * G) + glint;
+        // Haze over distance, toward the horizon's own colour.
+        colSea = mix(colSea, hz, 1.0 - exp(-dist * (0.00004 + 0.00012 * haze)));
+    }
+    col = mix(colSea, col, hcov);
+    // Partial white balance toward the low sun (as a camera would): gold, not red.
+    // (Live: only while the sun is up, so the hand-over to moonlight is seamless.)
+    float seS = nature_oceanSunEl(u, live);
+    float3 TsunS = exp(-P.tauT * nature_airmass(seS));
+    float3 wb = TsunS / max(max(TsunS.r, TsunS.g), 1e-4);
+    float wbAmt = live ? 0.12 * smoothstep(-0.07, -0.02, seS) : 0.12;
+    col /= mix(float3(1.0), max(wb, 0.05), wbAmt);
+    if (live) col *= nature_oceanExpo(u);
+    return float4(nature_display(col, px), 1.0);
+}
+__attribute__((noinline))
+static float4 nature_oceanLive(float2 uv, float2 res, float2 px, float t, constant FXUniforms& u) {
+    return nature_ocean(uv, res, px, t, u, true);
 }
 
 // ---------------------------------------------------------------- rain on glass (case 58)

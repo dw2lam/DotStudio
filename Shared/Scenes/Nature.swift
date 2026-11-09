@@ -20,13 +20,17 @@ extension SceneCatalog {
             colorALabel: "Night", colorBLabel: "City Lights"),
         .oceanHorizon: SceneSpec(
             name: "Ocean Horizon",
-            blurb: "Open sea at golden hour: a sun path glittering across real waves.",
+            blurb: "Open sea at golden hour, or live: the real sun and moon crossing the day.",
             shaderID: 59,
             params: [ParamSpec("speed", "Speed", 0, 2, def: 1),
                      ParamSpec("sun", "Sun Height", -2, 12, def: 4),
                      ParamSpec("waves", "Sea State", 0, 1, def: 0.45),
                      ParamSpec("clouds", "Clouds", 0, 1, def: 0.55),
-                     ParamSpec("haze", "Haze", 0, 1, def: 0.55)],
+                     ParamSpec("haze", "Haze", 0, 1, def: 0.55),
+                     // Live: the real sun and moon for this place and time (Sun Height is
+                     // then ignored). Time Lapse = minutes per simulated day, 0 = real time.
+                     ParamSpec("live", "Follow the Sun", 0, 1, def: 0, toggle: true),
+                     ParamSpec("lapse", "Time Lapse", 0, 60, step: 1, def: 0)],
             colorA: RGBA(0.02, 0.09, 0.13), colorB: RGBA(1.0, 0.85, 0.62),
             colorALabel: "Deep Water", colorBLabel: "Sunlight"),
         .nightSky: SceneSpec(
@@ -65,6 +69,7 @@ extension SceneCatalog {
         }
         return [
             scene("Golden Hour", .oceanHorizon),
+            scene("Tidewater", .oceanHorizon, ["live": 1]),
             scene("Afterlight", .oceanHorizon, ["sun": -1.2, "waves": 0.3, "clouds": 0.75, "haze": 0.5],
                   a: RGBA(0.02, 0.06, 0.12), b: RGBA(1.0, 0.70, 0.62)),
             scene("Night Sky", .nightSky),
