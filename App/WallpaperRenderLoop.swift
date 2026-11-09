@@ -1,9 +1,17 @@
 //  WallpaperRenderLoop.swift — the live wallpaper's frame work, off the main thread.
 //
-//  One dedicated thread at .utility QoS — on Apple Silicon the scheduler runs utility
-//  work preferentially on the efficiency cores — owns everything a frame touches: each
-//  display's MetalRenderer, its CAMetalLayer's drawables, the display links (attached
-//  to this thread's run loop), the clock timer, the pacing plan and the media decoders.
+//  One dedicated thread owns everything a frame touches: each display's MetalRenderer,
+//  its CAMetalLayer's drawables, the display links (attached to this thread's run
+//  loop), the clock timer, the pacing plan and the media decoders. It runs at .utility
+//  QoS for 30/60 fps and clock ticks, so on a busy Mac the user's own work goes first
+//  (and on chips with efficiency cores the scheduler may place it there); while a
+//  display link runs above 60 Hz (Smooth on ProMotion) it runs at .userInitiated,
+//  because an 8.3 ms frame has no room for the scheduling delay utility work sees
+//  under load. (Measured on an M5 Pro with every core busy at default QoS: at 120 Hz,
+//  utility showed 2% of frames late with gaps up to 190 ms; user-initiated 0.1%, max
+//  42 ms, like the old main-thread loop. The trade-off at 30 fps: under that same full
+//  load the wallpaper slips to ~15-20 fps for the first 30-40 s, where the main-thread
+//  loop held 30. With any idle core it holds 30.)
 //
 //  The main thread keeps the windows and the policy. It decides *what* may run (hard
 //  pauses, which displays are visible, fps, still, style) and posts immutable snapshots
@@ -37,19 +45,15 @@ struct WallpaperSurfaceConfig: Equatable {
     var refreshRate: Double
 }
 
-/// The GPU the wallpaper draws on.
+/// The GPU a display's wallpaper draws on.
 enum WallpaperGPU {
-    /// On a Mac with several GPUs (Intel MacBook Pros with automatic graphics switching)
-    /// the integrated, low-power one, so a wallpaper never powers up the discrete GPU;
-    /// listing devices doesn't trigger a GPU switch. On Apple Silicon (one GPU) the
-    /// system default.
-    static func preferred() -> MTLDevice? {
-        let all = MTLCopyAllDevices()
-        if all.count > 1,
-           let low = all.first(where: { $0.isLowPower && !$0.isHeadless && !$0.isRemovable }) {
-            return low
-        }
-        return MTLCreateSystemDefaultDevice() ?? all.first
+    /// The GPU currently driving `display`, so a finished frame never has to be copied
+    /// across GPUs to reach the screen (Mac Pro / eGPU setups, external displays wired
+    /// to the discrete GPU). On Apple Silicon that is the one GPU. Not a power choice: on
+    /// a dual-GPU Intel Mac the app's previews already hold the system default (discrete)
+    /// device, and that GPU then drives the built-in display too.
+    static func device(for display: CGDirectDisplayID) -> MTLDevice? {
+        CGDirectDisplayCopyCurrentMetalDevice(display) ?? MTLCreateSystemDefaultDevice()
     }
 }
 
@@ -106,6 +110,8 @@ final class WallpaperRenderLoop {
                 for s in surfaces.values {
                     s.renderer.location = location
                     s.renderer.apply(preset, source: source)   // may load an image/video
+                    // A freshly loaded video starts playing; hold it if frames are held.
+                    s.renderer.setMediaPaused(mediaPaused)
                     s.warming = true
                 }
             }
@@ -146,6 +152,9 @@ final class WallpaperRenderLoop {
     private var style: (Preset, SourceSpec)?
     private var location: (lat: Double, lon: Double)?
     private var clockTimer: Timer?
+    /// Whether media decoders should be held. Invariant: every surface's renderer has
+    /// been told this value since its media last changed (addSurface and setStyle push
+    /// it after `apply`), so `setMediaPaused` may skip calls that wouldn't change it.
     private var mediaPaused = false
     private var activity: NSObjectProtocol?
     private var framesDrawn = 0
@@ -175,7 +184,7 @@ final class WallpaperRenderLoop {
         }
         if !loggedThread {
             loggedThread = true
-            log("render thread qos=\(qos_class_self().rawValue) (utility=\(QOS_CLASS_UTILITY.rawValue)) gpu=\(device.name) lowPower=\(device.isLowPower)")
+            log("render thread qos=\(qos_class_self().rawValue) (utility=\(QOS_CLASS_UTILITY.rawValue)) gpu=\(device.name)")
         }
         link.isPaused = true
         link.add(to: .current, forMode: .common)
@@ -189,12 +198,25 @@ final class WallpaperRenderLoop {
     /// of a style, which builds lazy assets (the Clocks text atlas fans out over every
     /// core with concurrentPerform; Universe decodes its planet maps) — runs at
     /// user-initiated QoS: it is the direct result of the user picking a style, and at
-    /// utility the atlas alone took ~15 s on the efficiency cores. Steady-state frames
-    /// stay at utility.
+    /// utility the atlas alone took ~16 s instead of ~5 s (Debug build). Steady-state
+    /// frames go back to `frameQoS`.
     private func boosted<T>(_ work: () -> T) -> T {
         pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0)
-        defer { pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0) }
+        defer { pthread_set_qos_class_self_np(frameQoS, 0) }
         return work()
+    }
+
+    /// This thread's QoS between one-time setups: utility, or user-initiated while any
+    /// display link runs above 60 Hz (see the header).
+    private var frameQoS = QOS_CLASS_UTILITY
+
+    private func updateFrameQoS() {
+        let fast = surfaces.values.contains { !$0.link.isPaused && $0.linkRate > 60 }
+        let q = fast ? QOS_CLASS_USER_INITIATED : QOS_CLASS_UTILITY
+        guard q.rawValue != frameQoS.rawValue else { return }
+        frameQoS = q
+        pthread_set_qos_class_self_np(q, 0)
+        if debug { log("frame qos \(q.rawValue) (\(fast ? ">60 Hz" : "≤60 Hz"))") }
     }
 
     private func configureSurface(_ id: CGDirectDisplayID, _ config: WallpaperSurfaceConfig) {
@@ -222,7 +244,7 @@ final class WallpaperRenderLoop {
         // The layer belongs to a view; let its last reference go on the main thread.
         let layer = s.layer
         DispatchQueue.main.async { withExtendedLifetime(layer) {} }
-        if surfaces.isEmpty { setPlan(.none) }
+        if surfaces.isEmpty { setPlan(.none) } else { updateFrameQoS() }
     }
 
     private func apply(_ s: WallpaperFrameState, forceDraw: Bool) {
@@ -253,6 +275,7 @@ final class WallpaperRenderLoop {
                 pauseLink(s)
             }
         }
+        updateFrameQoS()
         if case .after(let delay) = p, canDraw {
             armClock(after: delay)
         } else {
