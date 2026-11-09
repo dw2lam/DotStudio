@@ -91,7 +91,7 @@ enum EffectKind: String, Codable, CaseIterable {
     case nowPlaying                                           // Music    66
 
     // — new-scene slot 1 (shader id 67); rename the case freely on this line —
-    case studio1
+    case shallows
 
     // — new-scene slot 2 (shader id 68); rename the case freely on this line —
     case studio2
