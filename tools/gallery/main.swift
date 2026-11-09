@@ -9,6 +9,9 @@
 //  (no alloc/readback, immune to CPU load): the number to compare shader costs by.
 //  --solo keeps only each preset's first effect (benchmark one shader, not its post chain).
 //  --slides renders one frame per built-in slideshow photo; --looks skips the Scenes.
+//  Wall clock (clock scenes, Ocean Horizon's Follow the Sun): --clock 06:40[,07:00,…] renders
+//  each preset at each local time on --date 2026-06-21 (default today), in --tz America/Toronto
+//  (default the Mac's), at --loc 43.7,-79.4 (default San Francisco; "none" = the no-location fallback).
 
 import AppKit
 import Metal
@@ -27,6 +30,10 @@ var solo = false
 var gpuBench = false
 var looksOnly = false
 var W = 1600, H = 1000
+var clocks: [String] = []
+var dateArg: String?
+var tzArg: String?
+var loc: (lat: Double, lon: Double)? = (37.77, -122.42)
 while !args.isEmpty {
     let a = args.removeFirst()
     switch a {
@@ -49,6 +56,13 @@ while !args.isEmpty {
             let p = kv.split(separator: "=")
             if p.count == 2, let v = Double(p[1]) { overrides[String(p[0])] = v }
         }
+    case "--clock": clocks = args.removeFirst().split(separator: ",").map(String.init)
+    case "--date": dateArg = args.removeFirst()
+    case "--tz": tzArg = args.removeFirst()
+    case "--loc":
+        let v = args.removeFirst()
+        let p = v.split(separator: ",").compactMap { Double($0) }
+        loc = p.count == 2 ? (p[0], p[1]) : nil
     case "--size":
         let p = args.removeFirst().split(separator: "x").compactMap { Int($0) }
         if p.count == 2 { W = p[0]; H = p[1] }
@@ -58,7 +72,21 @@ while !args.isEmpty {
 
 let store = SharedStore(role: .app)
 guard let renderer = MetalRenderer(pixelFormat: .bgra8Unorm, store: store) else { print("no renderer"); exit(1) }
-renderer.location = (37.77, -122.42)
+renderer.location = loc
+if let tzArg, let tz = TimeZone(identifier: tzArg) { NSTimeZone.default = tz }
+/// Local wall time HH:MM on --date (or today) in the --tz zone.
+func wallDate(_ hhmm: String) -> Date? {
+    var cal = Calendar(identifier: .gregorian)
+    cal.timeZone = NSTimeZone.default
+    var dc = cal.dateComponents([.year, .month, .day], from: Date())
+    if let d = dateArg?.split(separator: "-").compactMap({ Int($0) }), d.count == 3 {
+        dc.year = d[0]; dc.month = d[1]; dc.day = d[2]
+    }
+    let hm = hhmm.split(separator: ":").compactMap { Int($0) }
+    guard hm.count == 2 else { return nil }
+    dc.hour = hm[0]; dc.minute = hm[1]
+    return cal.date(from: dc)
+}
 let lib = DefaultPresets.makeLibrary()
 var presets = lib.presets
 if includePack { presets += DefaultPresets.coolPack() }
@@ -116,6 +144,9 @@ if gpuBench {
             u.p1 = simd_float4(astro.sun.x, astro.sun.y, astro.sun.z, 0)
             u.p2 = simd_float4(astro.userLon, astro.userLat, astro.hasLoc ? 1 : 0, (inst.params["orbits"] ?? 1) > 0.5 ? 1 : 0)
         }
+        let wall = clocks.first.flatMap(wallDate) ?? Date()
+        (u.clock, u.date) = MetalRenderer.wallClock(wall)
+        MetalRenderer.fillLiveSky(&u, inst: inst, now: wall, time: 0, location: renderer.location)
         var samples: [Double] = []
         for rep in 0..<14 {
             let cmd = queue.makeCommandBuffer()!
@@ -170,7 +201,10 @@ if bench {
     exit(0)
 }
 
+let clockList: [String?] = clocks.isEmpty ? [nil] : clocks
 for p in presets {
+    for clk in clockList {
+    renderer.clockOverride = clk.flatMap(wallDate)
     for t in times {
         let t0 = CFAbsoluteTimeGetCurrent()
         guard let cg = renderer.renderThumbnail(preset: p, source: source, width: W, height: H, time: t,
@@ -179,8 +213,11 @@ for p in presets {
         let rep = NSBitmapImageRep(cgImage: cg)
         guard let data = rep.representation(using: .png, properties: [:]) else { continue }
         let name = p.name.replacingOccurrences(of: " ", with: "-").replacingOccurrences(of: "/", with: "-")
-        let suffix = times.count > 1 ? "@\(Int(t))" : ""
+        let tl = t == t.rounded() ? "\(Int(t))" : String(format: "%.3f", t)
+        var suffix = times.count > 1 ? "@" + tl : ""
+        if let clk { suffix += "@" + clk.replacingOccurrences(of: ":", with: "") }
         try? data.write(to: URL(fileURLWithPath: outDir).appendingPathComponent("\(name)\(suffix).png"))
         print(String(format: "%@%@ %@  %.0f ms", p.isScene ? "[scene] " : "[look]  ", p.name, suffix, ms))
+    }
     }
 }
