@@ -657,16 +657,107 @@ static inline float nature_cloudNoise(float2 p, int oct, float fp, thread float3
     return s;
 }
 
+// Partly cloudy (weather): how far the cloud layer has gathered into fair-weather cumulus, 0…1
+// (from the cover; gone again as an overcast closes in, or in fog). Uniform: from the uniforms,
+// not held in NatureOceanP (the sea and sky are register-bound). WeatherLink.cumulus matches it.
+static inline float nature_wxCu(constant FXUniforms& u) {
+    return smoothstep(0.30, 0.48, u.weather.x) * (1.0 - smoothstep(0.80, 0.95, u.weather.x))
+         * (1.0 - smoothstep(0.35, 0.6, u.weather2.y));
+}
+// Partly cloudy (weather): fair-weather cumulus — heaps a kilometre or two across with flat bases
+// at 1.1 km and domed, billowed tops up to ~1.2 km above, blue sky between. A 2D field over the
+// base plane (km) says where they stand and how tall (> 0 inside a heap, more = taller); .yz its
+// slope (which flank faces where). `bill`: the billows (rounded bumps with creases), faded out
+// as they near a cycle per pixel (fp: the pixel's footprint, km).
+static inline float3 nature_wxCuField(float2 p, float thr, float fp, int bill) {
+    float3 a = nature_gnoised(p * 0.38);
+    float v = 0.8 * a.x - thr;
+    const float2x2 R = float2x2(0.8, 0.6, -0.6, 0.8);
+    if (bill > 0) v += 0.15 * smoothstep(0.45, 0.15, fp * 1.9) * (0.3 - abs(nature_gnoise(p * 1.9 + 1.9)));
+    if (bill > 1) v += 0.075 * smoothstep(0.45, 0.15, fp * 4.1) * (0.3 - abs(nature_gnoise(R * p * 4.1 + 7.3)));
+    return float3(v, a.yz * 0.304);
+}
+static inline float2 nature_wxCuDrift(NatureOceanP P) { return float2(P.tc * 2.2 + 31.7, P.tc * 0.7 + 12.4); }
+static inline float nature_wxCuThr(constant FXUniforms& u) { return mix(0.22, -0.03, smoothstep(0.3, 0.85, u.weather.x)); }
+// The heaps along v (v.y > 0), drawn as a height field over the base, its relief found by slices
+// up through it front to back — the base (a ray meeting the heaps' flat undersides), then higher,
+// where only the taller heaps reach — so low in the sky their sides crowd into a bank and a heap
+// hides what lies behind it. Sunlit on the flank facing the sun, grey beneath, silver-lined toward
+// it, fading into the haze with distance. (High up, the slices all but coincide: the base alone.)
+// Returns (colour, cover).
+static inline float4 nature_wxCumulus(float3 v, float3 sky, NatureOceanP P, float cu, float thr,
+                                      constant FXUniforms& u) {
+    const float hb = 1.1, H = 1.2;
+    float c = dot(v, P.sd);
+    float3 sunE = P.esun * nature_sunAt(P, 1.8, u);
+    float3 amb = sky * 0.45 + P.amb * float3(0.0040, 0.0050, 0.0085);
+    float fs = nature_hg(c, 0.6);
+    float2 drift = nature_wxCuDrift(P), toSun = normalize(P.sd.xz + 1e-4);
+    float keep = 1.0;
+    float3 acc = float3(0.0);
+    float up = smoothstep(0.6, 0.4, v.y);                      // (the flanks fade out overhead)
+    int nS = up > 0.0 ? 3 : 1;
+    for (int i = 0; i < nS; ++i) {
+        float hf = i == 0 ? 0.0 : (i == 1 ? 0.4 : 0.8);       // how far up the heaps
+        float tt = (hb + hf * H) / v.y;                        // km along the ray
+        float fp = tt * P.pix / max(v.y, 0.02);
+        float3 f = nature_wxCuField(v.xz * tt + drift, thr, fp, i == 0 ? 2 : 1);
+        float x = f.x - 0.16 * hf;                             // (a heap this tall reaches here)
+        float a = smoothstep(0.0, 0.03 + 0.6 * fp, x) * exp(-tt * 0.010) * cu * (i == 0 ? 1.0 : up);
+        if (a <= 0.0) continue;
+        float thin = saturate(1.0 - x * 7.0);                  // the rims
+        float3 L;
+        if (i == 0) {
+            // The flat base: grey, lit by the light diffused down through the heap (rims brighter).
+            L = amb * 0.8 + sunE * ((0.03 + 0.2 * thin) * (0.3 + 2.0 * fs));
+        } else {
+            // A flank: -grad points out of the heap; the higher, the more it faces up (the dome).
+            float2 gd = -f.yz * rsqrt(dot(f.yz, f.yz) + 0.01);
+            float lam = saturate(0.35 + 0.65 * dot(normalize(float3(gd.x, 0.25 + 1.3 * hf, gd.y)), P.sd));
+            float sh = exp(-3.0 * max(dot(f.yz, toSun), 0.0) - 1.2 * saturate(x));
+            L = amb + sunE * (0.30 * lam * sh + 0.9 * fs * thin);
+        }
+        acc += keep * a * L;
+        keep *= 1.0 - a;
+        if (keep < 0.01) break;
+    }
+    float cov = 1.0 - keep;
+    return float4(acc / max(cov, 1e-4), cov);
+}
+// The heaps' shadow at sea point w (m): their outline toward the sun, through the middle of the
+// layer (soft: the sun's penumbra, and their thin rims). 0…1 = in shadow.
+static inline float nature_wxCuShadow(float2 w, NatureOceanP P, float thr) {
+    float2 p = w * 0.001 + P.sd.xz * (1.6 / max(P.sd.y, 0.035)) + nature_wxCuDrift(P);
+    return smoothstep(-0.03, 0.08, nature_wxCuField(p, thr, 1.0, 0).x);
+}
+
 // Altocumulus deck + cirrus over the atmosphere along v (v.y > 0). `oct` trades detail
 // for speed (reflections use fewer octaves).
 static inline float3 nature_oceanClouds(float3 v, float3 sky, NatureOceanP P, int oct, thread float &cov,
-                                        constant FXUniforms& u, float ang = 0.0, const bool wx = false) {
+                                        constant FXUniforms& u, float ang = 0.0, const bool wx = false,
+                                        const bool cu = false) {
     cov = 0.0;                                                        // (how much sky they hide)
     // Live, deep night: cirrus and the clouds' reflections fade out (dark on dark, unseen).
     // (Weather: a deck lit by lightning shows in the sea too, for the flash.)
     float nf = P.live ? smoothstep(8.5, 5.5, nature_liveDD(u)) : 1.0;
     if (wx && P.flash.b > 0.0) nf = 1.0;
-    if (v.y < 0.004 || P.clouds <= 0.0 || (oct < 5 && nf <= 0.0)) return sky;
+    if (v.y < 0.004) return sky;
+    // Partly cloudy: the cumulus is the lowest layer, in front of the rest (behind a solid heap
+    // nothing else is worked out).
+    // (Only the cumulus copy, fx_wx_ocean_cu, carries this: see Weather_fragment.h. The sky's
+    // only: in the sea's rough mirror the high layer's reflection stands in for them.)
+    float4 cum = float4(0.0);
+    if (wx && cu && oct >= 5) {
+        float cuA = nature_wxCu(u);
+        if (cuA > 0.0) {
+            cum = nature_wxCumulus(v, sky, P, cuA, nature_wxCuThr(u), u);
+            if (cum.w > 0.995) { cov = 1.0; return cum.rgb; }
+        }
+    }
+    if (P.clouds <= 0.0 || (oct < 5 && nf <= 0.0)) {
+        if (wx && cu) { cov = cum.w; return mix(sky, cum.rgb, cum.w); }
+        return sky;
+    }
     float c = dot(v, P.sd);
     float vis = 1.0;
     float3 Tc = nature_sunAt(P, 2.5, u);                                 // sunlight at the deck
@@ -708,8 +799,9 @@ static inline float3 nature_oceanClouds(float3 v, float3 sky, NatureOceanP P, in
     // Live, deep night: only the moon lights the deck, and its finest billows don't read —
     // the detail filter's floor rises (smoothly, no pop) until the last octave is skipped.
     float fpd = (P.live && oct >= 5) ? max(fp, 0.032 * smoothstep(7.0, 10.0, nature_liveDD(u))) : fp;
-    // (Weather: a full deck is soft; its finest billows go — they'd be lost in the rain haze.)
-    float n = nature_cloudNoise(p + w * 0.6, (wx && oct >= 5 && P.deck > 0.99) ? 4 : oct, fpd, gl);
+    // (Weather: a full deck is soft; its finest billows go — they'd be lost in the rain haze. In
+    // rain or snow the next-finest too: the falling rain and snow veil them.)
+    float n = nature_cloudNoise(p + w * 0.6, (wx && oct >= 5 && P.deck > 0.99) ? (u.weather.y > 0.05 ? 3 : 4) : oct, fpd, gl);
     float cover = P.clouds;
     float lo = 0.78 - 0.45 * cover;
     float resolved = smoothstep(0.5, 0.12, fp);
@@ -718,6 +810,7 @@ static inline float3 nature_oceanClouds(float3 v, float3 sky, NatureOceanP P, in
     // Reflections: where a pixel spans more cloud than it can resolve (a grazing or rough
     // mirror), it sees the deck's average, not a magnified sliver of its edges.
     if (oct < 5) nv = mix(nv, 0.5, smoothstep(0.3, 2.0, fp));
+    // Partly cloudy (weather): the layer gathers into separate heaps, crisp-edged, blue between.
     float dens = smoothstep(lo - soft, lo + 0.28 + soft, nv);
     float fade = exp(-tA * 0.012);                                  // aerial perspective
     if (oct < 5) fade *= smoothstep(0.02, 0.2, v.y);                // no grazing streaks in reflections
@@ -759,6 +852,10 @@ static inline float3 nature_oceanClouds(float3 v, float3 sky, NatureOceanP P, in
         }
         col = mix(col, cc, a);
         cov = 1.0 - (1.0 - kc) * (1.0 - a);
+    }
+    if (wx && cu) {
+        col = mix(col, cum.rgb, cum.w);
+        cov = 1.0 - (1.0 - cov) * (1.0 - cum.w);
     }
     return col;
 }
@@ -1130,18 +1227,21 @@ static inline float3 nature_oceanStars(float3 rd, constant FXUniforms& u, float 
 //  Compiled twice: `live` is a constant in each copy, so the manual mode (Golden Hour,
 //  Afterlight) carries none of the live code — this shader is register-bound — and the
 //  live copy sits behind one out-of-line call.
-//  Weather (`wx`, u.weather*): two more copies, compiled in their own unit and drawn by their own
-//  pipeline (fx_wx_ocean, Shared/Weather/Weather.metal) only while the sky differs from the
-//  scene's clear one: cloud cover from broken cumulus to a full, lower stratus deck lit by the
-//  light it lets through (in the manual mode it ends just above the low sun, which shines in under
-//  it), fog by visibility, rain and snow on depth layers, rain rings and whitecaps on the water,
-//  rain curtains, lightning. The clear-sky copies above are untouched (and cost what they did).
+//  Weather (`wx`, u.weather*): more copies, compiled in their own unit and drawn by their own
+//  pipelines (fx_wx_ocean, Shared/Weather/Weather.metal) only while the sky differs from the
+//  scene's clear one: cloud cover from fair-weather cumulus (`cu`: the partly-cloudy copy,
+//  fx_wx_ocean_cu, with their shadows on the sea) to a full, lower stratus deck lit by the light it
+//  lets through (in the manual mode it ends just above the low sun, which shines in under it; live,
+//  by night, it carries a coast's skyglow and the moon behind it), fog by visibility, rain and
+//  snow on depth layers (snow: bokeh flakes up close, a veil far off, a calm sea), rain rings and
+//  whitecaps on the water, rain curtains, lightning. The clear-sky copies above are untouched
+//  (and cost what they did).
 static inline float4 nature_ocean(float2 uv, float2 res, float2 px, float t, constant FXUniforms& u,
-                                 const bool live, const bool wx = false) {
+                                 const bool live, const bool wx = false, const bool cu = false) {
     float speed = u.p0.x, waves = clamp(u.p0.z, 0.0, 1.0), haze = clamp(u.p1.x, 0.0, 1.0);
     // Weather (wx copies): the wind sets the sea; see Shared/Weather/Weather_funcs.h.
     WxState W = wx ? wx_state(u) : WxState{};
-    if (wx) waves = wx_seaState(waves, W.wind);
+    if (wx) waves = wx_seaState(waves, W.wind) * (1.0 - 0.45 * smoothstep(0.0, 0.4, W.snow));   // (snow: a calm sea)
     float aspect = res.x / res.y;
     float2 sp = float2((uv.x - 0.5) * 2.0 * aspect, (0.5 - uv.y) * 2.0);
     const float F = 1.65, pitch = 0.055;
@@ -1203,7 +1303,8 @@ static inline float4 nature_ocean(float2 uv, float2 res, float2 px, float t, con
         float c0 = P.clouds, cv = W.cover;
         P.clouds = cv < 0.25 ? c0 * mix(0.3, 1.0, cv * 4.0) : mix(c0, 1.05, smoothstep(0.25, 0.9, cv));
         P.deck = W.deck;
-        P.clouds += 0.6 * P.deck;
+        // (Partly cloudy: the high layer thins round the cumulus heaps, so blue shows between.)
+        P.clouds = mix(P.clouds, c0 * 0.3, nature_wxCu(u)) + 0.6 * P.deck;
         P.tc = (t + u.weather3.x) * speed * 0.004;
         float heavy = max(W.rain, W.storm);
         P.hb = mix(2.5, mix(1.6, 0.85, heavy), P.deck);
@@ -1229,6 +1330,15 @@ static inline float4 nature_ocean(float2 uv, float2 res, float2 px, float t, con
         P.lb = mix(P.lb, luma(P.lb) * float3(0.95, 0.99, 1.07) * 1.3, W.snow);    // snow: pale, bright
         P.aur = P.esun * Ttop * exp(-tau * 0.11) * 0.08;
         P.cdark = 0.38 + 0.12 * W.rain + 0.55 * W.storm;
+        // By night under cloud (live) the deck isn't black: its base carries the faint skyglow
+        // of a distant coast (warmer still in the haze along the horizon: the fog's light, below)
+        // and, while the moon is up, the moon diffusing through — a soft bright patch in thin
+        // cloud (the aureole), none through a storm's. All in the deck's own terms: no cost.
+        float nk = live ? smoothstep(3.0, 12.0, nature_liveDD(u)) * smoothstep(0.55, 0.95, cv) : 0.0;
+        if (live) {
+            P.lb += float3(0.0034, 0.0031, 0.0030) * nk;
+            if (keyMoon) P.aur += P.esun * (0.8 * nk * exp(-tau * 0.05) * smoothstep(-0.03, 0.06, P.sd.y));
+        }
         float tS = P.hb / max(P.sd.y, 0.002);
         sunVis = 1.0 - P.deck * smoothstep(P.dx * 1.3, P.dx * 0.8, tS);
         // Near its edge the deck's underside catches the bright gap and the light diffusing
@@ -1240,7 +1350,8 @@ static inline float4 nature_ocean(float2 uv, float2 res, float2 px, float t, con
         fogH = mix(mix(600.0, 220.0, smoothstep(0.3, 0.9, W.fog)), 180.0, saturate(W.wet * 2.0));
         // Fog's own light: the diffuse light all round, whitened (droplets scatter every colour).
         fogA = luma(ambL) * float3(0.98, 1.0, 1.04) * (1.0 + 0.4 * smoothstep(0.4, 0.9, W.fog))
-             + P.esun * Tsun * sunVis * 0.05 * smoothstep(0.5, 0.85, W.fog) * (1.0 - W.wet);
+             + P.esun * Tsun * sunVis * 0.05 * smoothstep(0.5, 0.85, W.fog) * (1.0 - W.wet)
+             + float3(1.0, 0.76, 0.56) * (0.0080 * nk * (1.0 - 0.5 * smoothstep(0.3, 0.8, W.fog)));   // (the coast's glow, in the haze)
         // The low sun through it: dimmed, never quite gone (a pale disc in fog, a glow in rain).
         sunT = exp(-min(fogB * min(fogH / max(P.sd.y, 0.004), 30000.0), 2.6));
         // Lightning: inside the cloud, or a bolt to the sea; as bright after the live camera's
@@ -1260,20 +1371,21 @@ static inline float4 nature_ocean(float2 uv, float2 res, float2 px, float t, con
 
     // Rain and snow on their depth layers: their coverage of this pixel, worked out now while
     // little else is live (the shader is register-bound), composited at the end.
-    float rainA = 0.0, snowA = 0.0;
+    float rainA = 0.0;
+    float2 snowA = float2(0.0);
     if (wx && W.wet > 0.005) {
         float pixS = 2.0 / res.y, ts = t * speed;
-        // Rain falls as streaks, snow as flakes; sleet (half and half) falls like rain — its
-        // pellets streak — so a pixel pays for one or the other (both only mid-change).
+        // Rain falls as streaks, snow as flakes, sleet as both: icy pellets streaking down
+        // through fewer, smaller, wetter flakes.
         float share = saturate(u.weather.z);
-        float sk = smoothstep(0.6, 0.72, share);
-        if (sk < 1.0) {
+        float rk = 1.0 - smoothstep(0.62, 0.9, share), sk = smoothstep(0.2, 0.42, share);
+        if (rk > 0.0) {
             float sl = clamp(W.wind * 0.03, 0.0, 0.45) * (1.0 + 0.25 * sin(ts * 0.45) * (1.0 - W.wind / max(W.gust, 0.1)));
-            rainA = (1.0 - sk) * wx_streaks(sp, ts, pixS, F, saturate(W.wet * 1.4), sl, rd.y, 4.0,
-                                            max(smoothstep(0.35, 0.12, W.wet), 0.5 * share));
+            rainA = rk * wx_streaks(sp, ts, pixS, F, saturate(W.wet * 1.4) * (1.0 - 0.4 * sk), sl, rd.y, 4.0,
+                                    max(smoothstep(0.35, 0.12, W.wet), 0.5 * share));
         }
         if (sk > 0.0)
-            snowA = sk * wx_flakes(sp, ts, pixS, F, saturate(W.wet * 1.5), W.wind, rd.y, 4.0);
+            snowA = sk * wx_flakes(sp, ts, pixS, F, min(W.wet * 1.55, 1.4) * (1.0 - 0.45 * rk), W.wind, rd.y, 4.0, rk);
     }
 
     // The horizon pixel row is shared: sky covers the part of the pixel above it, sea the
@@ -1392,7 +1504,11 @@ static inline float4 nature_ocean(float2 uv, float2 res, float2 px, float t, con
         // The reflected sky is seen through a rough, curved mirror: each pixel spans about
         // 2σ of slope plus however fast the mirror turns from pixel to pixel.
         float spread = 2.0 * sig + length(fwidth(rr));
-        float3 refl = nature_oceanClouds(rr, sky, P, 2, rcov, u, spread, wx);
+        // (Weather: under a closed deck that reaches the horizon its lumps don't survive the rough
+        // mirror — the deck's own light, the atmosphere's 'air', stands in for them; not while
+        // lightning lights the deck from inside.)
+        float3 refl = (wx && P.deck > 0.99 && P.dx > 1000.0 && P.flash.b <= 0.0)
+                    ? sky : nature_oceanClouds(rr, sky, P, 2, rcov, u, spread, wx, cu);
         if (wx) {
             if (flashE > 0.0 && ev.z < 0.4)
                 refl += float3(0.85, 0.88, 1.0) * (P.flash.b * 60.0) * wx_bolt(rr, ev.x * 0.7, atan(P.hb / (2.5 + 6.0 * ev.y)), ev.w * 97.0, spread * 0.5 + P.pix);
@@ -1409,7 +1525,13 @@ static inline float4 nature_ocean(float2 uv, float2 res, float2 px, float t, con
         float t2 = (1.0 - hn * hn) / (hn * hn);
         float D = exp(-t2 / sig2) / (NATURE_PI * sig2 * hn * hn * hn * hn);
         float Fh = nature_schlick(max(dot(h, v), 0.0));
-        float sunUp = smoothstep(-0.012, 0.004, P.se) * (sunVis * sunT);
+        // (Partly cloudy: the heaps' shadows drift over the sea — no glitter, no sunlit water.)
+        float cuSh = 1.0;
+        if (wx && cu) {
+            float cuA = nature_wxCu(u);
+            if (cuA > 0.0) cuSh = 1.0 - 0.88 * cuA * nature_wxCuShadow(w, P, nature_wxCuThr(u));
+        }
+        float sunUp = smoothstep(-0.012, 0.004, P.se) * (sunVis * sunT) * cuSh;
         float3 glint = P.esun * Tsun * sunUp * Fh * D * 0.775 / (4.0 * max(dot(n, v), 0.08)) * 0.1;
         // Near the camera the glitter resolves into separate glints: one capillary facet per
         // cell of water, its slope rocking slowly as the ripples pass, flashing where it sweeps
@@ -1451,7 +1573,7 @@ static inline float4 nature_ocean(float2 uv, float2 res, float2 px, float t, con
         // looks at the horizon sky, so it doubles as that — one sky evaluation fewer.)
         float3 hz = sky;
         if (!live) hz = nature_oceanAtmos(normalize(float3(rw.x, 0.004, rw.z)), P, u);
-        float bodySun = (live ? smoothstep(-0.07, 0.0, P.se) : 1.0) * (sunVis * sunT);
+        float bodySun = (live ? smoothstep(-0.07, 0.0, P.se) : 1.0) * (sunVis * sunT) * cuSh;
         float day = live ? nature_liveDay(u) : 0.0;
         // (A high sun lights the water column itself: the sea turns blue, not grey.)
         float3 body = deep * (sky * float3(0.9, 1.0, 1.15) + P.esun * Tsun * (0.04 + 0.8 * day) * max(P.sd.y + 0.1, 0.0) * bodySun);
@@ -1501,7 +1623,7 @@ static inline float4 nature_ocean(float2 uv, float2 res, float2 px, float t, con
         if (live && abs(rd.y - sin(0.40 * tanh(u.moon.x / 0.40))) < 0.02)
             sky += nature_oceanMoonNear(rd, u, P.tauT, P.pix) * (wx ? (keyMoon ? sunVis * sunT : 1.0 - P.deck) : 1.0);
         float cov;
-        col = nature_oceanClouds(rd, sky, P, 5, cov, u, 0.0, wx);
+        col = nature_oceanClouds(rd, sky, P, 5, cov, u, 0.0, wx, cu);
         if (wx) {
             // Rain curtains hanging off the deck far out; fog; a bolt down to the sea (in front
             // of the curtains, seen through the rain — it is bright enough to show through a lot).
@@ -1534,12 +1656,28 @@ static inline float4 nature_ocean(float2 uv, float2 res, float2 px, float t, con
     }
     col = mix(colSea, col, hcov);
     if (wx && W.wet > 0.005) {
+        float cs = dot(rd, P.sd);
+        if (W.snow > 0.0) {
+            // Snow too far off to see as flakes: a pale veil, thickest along the horizon (a
+            // softer, lower-contrast line), lit like the flakes.
+            float vk = W.snow * (0.10 + 0.42 * exp(-abs(rd.y) * 28.0));
+            col = mix(col, fogA * 1.05 + ambL * 0.1, vk);
+        }
         // Rain or snow between the camera and everything (coverage found up front, above).
         // (A drop is a tiny wide-angle lens: it shows the whole bright sky, and glints backlit.)
-        float3 dropL = ambL * 1.8 + P.esun * Tsun * (sunVis * sqrt(sunT)) * nature_hg(dot(rd, P.sd), 0.8) * 0.08 + P.flash * 0.25;
+        float3 dropL = ambL * 1.8 + P.esun * Tsun * (sunVis * sqrt(sunT)) * nature_hg(cs, 0.8) * 0.08 + P.flash * 0.25;
         col = mix(col, dropL, rainA);
-        // (Flakes are lit from above: grey against the bright sky, white against the sea.)
-        col = mix(col, ambL * 1.3 + P.flash * 0.25, snowA);
+        // Flakes: lit by the whole sky above them — white over the sea, and still brighter than a
+        // pale sky, which their faint shadow ring parts them from — and by the sun where it gets
+        // in under the cloud, most of all toward it (snow backlit by a low sun glows).
+        // (By night they catch the glow of the cloud and the coast, a little whiter than it.)
+        float nK = live ? smoothstep(3.0, 12.0, nature_liveDD(u)) : 0.0;
+        // (Snow is white: the low sun's red is half lost in it — gold-white, brightest toward it.)
+        float3 fsun = P.esun * Tsun * (sunVis * sqrt(sqrt(sunT))) * (0.015 + 0.5 * nature_hg(cs, 0.65));
+        float3 flakeL = mix(ambL, float3(luma(ambL)), 0.2 + 0.3 * nK) * (2.2 + 1.3 * nK)
+                      + mix(fsun, float3(luma(fsun)), 0.45) + P.flash * 0.3;
+        col *= 1.0 - 0.22 * snowA.y;
+        col = mix(col, flakeL, snowA.x);
     }
     // Partial white balance toward the low sun (as a camera would): gold, not red.
     // (Live: only while the sun is up, so the hand-over to moonlight is seamless — and

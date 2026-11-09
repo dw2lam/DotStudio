@@ -12,7 +12,7 @@
 //  --slides renders one frame per built-in slideshow photo; --looks skips the Scenes.
 //  Weather (Ocean Horizon, Shallows): --weather rain[,thunderstorm,…] renders each preset under each
 //  condition (WeatherCondition raw values, or "live" = the real weather.json; also storm, overcast,
-//  partly) in place of the live feed — a scene's fixed Weather pick still wins.
+//  partly, lightSnow, heavySnow) in place of the live feed — a scene's fixed Weather pick still wins.
 //  Wall clock (clock scenes, Ocean Horizon's Follow the Sun): --clock 06:40[,07:00:30.5,…] renders
 //  each preset at each local time on --date 2026-06-21 (default today), in --tz America/Toronto
 //  (default the Mac's), at --loc 43.7,-79.4 (default San Francisco; "none" = the no-location fallback).
@@ -138,6 +138,12 @@ while !args.isEmpty {
 func weatherMix(_ name: String) -> WeatherMix? {
     let aliases = ["storm": "thunderstorm", "overcast": "cloudy", "partly": "partlyCloudy", "heavy": "heavyRain"]
     if name == "live" { return nil }
+    // Light and heavy snow (WMO 71 / 75 as the live feed reads them): the snow preset, sparser or denser.
+    if name == "lightSnow" || name == "heavySnow" {
+        var m = WeatherMix.preset(.snow)
+        m.precip = name == "lightSnow" ? 0.30 : 0.85
+        return m
+    }
     guard let c = WeatherCondition(rawValue: aliases[name] ?? name) else {
         print("unknown weather \(name): \(WeatherCondition.allCases.map(\.rawValue))"); exit(2)
     }
@@ -476,7 +482,8 @@ if gpuBench {
                 let enc = cmd.makeRenderCommandEncoder(descriptor: rpd)!
                 // (Weather: the scene's own weather pipeline, as WeatherLink binds it in the renderer.)
                 enc.setRenderPipelineState(u.weather2.w > 0.5
-                    ? (WeatherLink.pipeline(for: inst.kind, device: dev, format: .bgra8Unorm) ?? pso) : pso)
+                    ? (WeatherLink.pipeline(for: inst.kind, device: dev, format: .bgra8Unorm,
+                                            cumulus: WeatherLink.cumulus(u)) ?? pso) : pso)
                 enc.setFragmentBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
                 enc.setFragmentTexture(input, index: 0)
                 enc.setFragmentTexture(input, index: 1)

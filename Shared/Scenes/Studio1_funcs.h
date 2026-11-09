@@ -250,8 +250,9 @@ static inline float4 studio1_shallows(float2 uv, float2 res, float2 px, float t,
     float clar = clamp(u.p0.w, 0.0, 1.0);
     float clouds = clamp(u.p1.w, 0.0, 1.0);
     // Weather (the fx_wx_shallows copy, Shared/Weather): the wind sets the sea, cloud cover the
-    // shadows passing over — a full deck puts the whole floor in soft shade (no sharp net), rain
-    // rings the surface, a storm flashes. See Shared/Weather/Weather_funcs.h.
+    // shadows passing over — partly cloudy, cumulus shadows drifting across the frame; a full deck
+    // puts the whole floor in soft shade (no sharp net) — rain rings the surface, snow falls past
+    // the lens to the water, a storm flashes. See Shared/Weather/Weather_funcs.h.
     WxState W = wx ? wx_state(u) : WxState{};
     if (wx) {
         sea = wx_seaState(sea, W.wind);
@@ -363,7 +364,22 @@ static inline float4 studio1_shallows(float2 uv, float2 res, float2 px, float t,
     float2 q = P + D * (Tv + Mv * g1);                         // (1) apparent floor point
 
     float cover = clouds > 0.001 ? studio1_cloud(q, t, speed, clouds) : 0.0;
-    if (wx) cover = max(cover, W.deck);
+    float coverE = cover;                                      // (what the exposure adapts to)
+    if (wx) {
+        cover = max(cover, W.deck);
+        coverE = cover;
+        // Partly cloudy: fair-weather cumulus overhead — their shadows (soft-edged: a heap a
+        // kilometre up has a penumbra metres wide) drift over the shallows down-wind, so the frame
+        // is part sun, part shade most of the time, the edge slowly crossing it.
+        float cu = smoothstep(0.30, 0.48, W.cover) * (1.0 - smoothstep(0.80, 0.95, W.cover))
+                 * (1.0 - smoothstep(0.35, 0.6, W.fog));            // (as nature_wxCu)
+        if (cu > 0.0) {
+            // (The offset puts an edge in the frame in the opening seconds.)
+            float2 cq = q * (1.0 / 14.0) + float2(-0.19081, -0.98163) * (t * speed * (0.55 / 14.0)) + float2(4.5, 1.7);
+            float sh = smoothstep(-0.10, 0.16, nature_gnoise(cq) + 0.225 * nature_gnoise(cq * 2.3 + 5.1) + 0.1);
+            cover = max(cover, cu * sh);
+        }
+    }
     // Under a cloud the direct light (and with it the caustics) drops to 30%, the cloud's own
     // glow lifts the skylight, and the exposure adapts most of the rest of the way: under full
     // cover the frame as a whole dims by under 10% while the net softens to a third.
@@ -372,7 +388,10 @@ static inline float4 studio1_shallows(float2 uv, float2 res, float2 px, float t,
 
     // Exposure: like an eye, opens up as the light goes (low sun, twilight, moonlight, cloud), not
     // all the way — night stays night. Set so lit sand sits at mid-tone, out of the shoulder.
-    float Ebar = luma(Ek) * Ts * cosTt * smoothstep(-0.01, 0.06, el) * sunDim + luma(EambC);
+    // (Not to a passing cumulus' shadow: the eye takes in the whole frame, so its shade shows.)
+    float sunDimE = wx ? 1.0 - (0.7 + 0.27 * W.deck) * coverE : sunDim;
+    float Ebar = luma(Ek) * Ts * cosTt * smoothstep(-0.01, 0.06, el) * sunDimE
+               + luma(wx ? Eamb + Ek * (0.22 * coverE) * float3(0.94, 0.98, 1.04) : EambC);
     float expo = 0.63 * clamp(pow(max(Ebar, 1e-6) / 0.95, -0.62), 0.7, 60.0);
 
     // ---- Surface: Schlick sky reflection (~2% straight down, more toward the top) and glints.
@@ -498,6 +517,17 @@ static inline float4 studio1_shallows(float2 uv, float2 res, float2 px, float t,
         float4 ev;
         float fl = (W.storm > 0.0 && u.weather3.y > 0.5) ? wx_lightning(t, W.storm, ev) : 0.0;
         if (fl > 0.0) col += (sand * 0.85 + float3(0.02, 0.06, 0.08)) * float3(0.8, 0.84, 1.0) * (fl * 0.18 / max(expo, 1e-3));
+        // Snow (and sleet's wetter flakes): falling past the lens toward the water, lit by the
+        // sky above them and what sun gets through — white over the sand and the water, with the
+        // faint shadow ring that parts them from a pale floor. (Rain shows in its rings alone.)
+        float share = saturate(u.weather.z), sk = smoothstep(0.2, 0.42, share);
+        if (W.wet > 0.005 && sk > 0.0) {
+            float2 fa = sk * wx_flakesDown(r, cv, t * speed, 2.0 / res.y, F, min(W.wet * 1.55, 1.4) * (1.0 - 0.45 * (1.0 - smoothstep(0.62, 0.9, share))),
+                                           W.wind, Hc, 1.0 - smoothstep(0.62, 0.9, share));
+            float3 flakeL = (EambC * 1.25 + Ek * (Ts * sunDim * 0.35)) * float3(0.97, 0.99, 1.02);
+            col *= 1.0 - 0.2 * fa.y;
+            col = mix(col, flakeL, fa.x);
+        }
     }
 
     // Night: the eye loses colour and shifts blue (as a moonlit scene reads), gently.
