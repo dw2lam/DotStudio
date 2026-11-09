@@ -28,9 +28,16 @@ enum SceneCatalog {
         .merging(nature) { a, _ in a }
         .merging(retro) { a, _ in a }
         .merging(music) { a, _ in a }
+        .merging(studio1) { a, _ in a }
+        .merging(studio2) { a, _ in a }
+        .merging(studio3) { a, _ in a }
+        .merging(studio4) { a, _ in a }
+        .merging(studio5) { a, _ in a }
+        .merging(studio6) { a, _ in a }
 
     static func spec(_ kind: EffectKind) -> SceneSpec? { all[kind] }
 
     /// Default-library presets contributed by the packs, in pack order.
-    static var presets: [Preset] { clocksPresets + flowingPresets + naturePresets + retroPresets + musicPresets }
+    static var presets: [Preset] { clocksPresets + flowingPresets + naturePresets + retroPresets + musicPresets
+        + studio1Presets + studio2Presets + studio3Presets + studio4Presets + studio5Presets + studio6Presets }
 }
