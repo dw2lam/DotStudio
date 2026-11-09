@@ -40,7 +40,7 @@ final class AppModel: ObservableObject {
     /// Shows the welcome sheet (first launch, or Help ▸ Welcome to DotStudio…).
     @Published var showOnboarding = false
     /// Whether DotStudio is installed and picked in System Settings.
-    @Published private(set) var setupStatus: Installer.Status = Installer.status
+    @Published private(set) var setupStatus: Installer.Status = DemoHooks.setupOverride ?? Installer.status
 
     init() {
         switch store.loadLibrary() {
@@ -163,50 +163,15 @@ final class AppModel: ObservableObject {
     }
 
     func refreshSetupStatus() {
-        let s = Installer.status
+        let s = DemoHooks.setupOverride ?? Installer.status
         if s != setupStatus { setupStatus = s }
     }
 
-    // MARK: Playback
-
-    enum PlaybackMode: String, CaseIterable, Identifiable {
-        case single = "One Style"
-        case rotate = "Rotate"
-        case dayNight = "Day & Night"
-        var id: String { rawValue }
-        var symbol: String {
-            switch self {
-            case .single: return "play.rectangle"
-            case .rotate: return "arrow.triangle.2.circlepath"
-            case .dayNight: return "sun.horizon"
-            }
-        }
-    }
-
-    /// Rotation and day/night collapse into one mode, so they never fight.
-    var playbackMode: PlaybackMode {
-        get {
-            if library.schedule?.enabled == true { return .dayNight }
-            if library.rotation?.enabled == true { return .rotate }
-            return .single
-        }
-        set {
-            var rot = library.rotation ?? RotationSpec()
-            var sch = library.schedule ?? ScheduleSpec()
-            rot.enabled = (newValue == .rotate)
-            sch.enabled = (newValue == .dayNight)
-            if newValue == .dayNight {
-                // Seed sensible picks so the mode works the moment it's chosen.
-                if sch.dayPresetID == nil { sch.dayPresetID = library.activeID ?? library.presets.first?.id }
-                if sch.nightPresetID == nil {
-                    sch.nightPresetID = library.presets.first { $0.isScene }?.id ?? library.presets.last?.id
-                }
-            }
-            library.rotation = rot
-            library.schedule = sch
-            save()
-        }
-    }
+    // MARK: Playback (stored form)
+    //
+    // The UI speaks in destinations — see Destinations.swift for the Screensaver
+    // playlist / night pick model and how it maps onto `activeID`, `rotation` and
+    // `schedule`. These are the raw accessors it builds on.
 
     var rotation: RotationSpec { library.rotation ?? RotationSpec() }
     var schedule: ScheduleSpec { library.schedule ?? ScheduleSpec() }
@@ -217,46 +182,6 @@ final class AppModel: ObservableObject {
 
     func updateSchedule(_ change: (inout ScheduleSpec) -> Void) {
         var s = schedule; change(&s); library.schedule = s; save()
-    }
-
-    /// nil presetIDs = every style rotates.
-    func isInRotation(_ id: UUID) -> Bool {
-        guard let ids = rotation.presetIDs, !ids.isEmpty else { return true }
-        return ids.contains(id)
-    }
-
-    func toggleRotation(_ id: UUID) {
-        updateRotation { r in
-            var ids = r.presetIDs.flatMap { $0.isEmpty ? nil : $0 } ?? library.presets.map(\.id)
-            if let i = ids.firstIndex(of: id) {
-                guard ids.count > 1 else { return }          // keep at least one style rotating
-                ids.remove(at: i)
-            } else {
-                ids.append(id)
-            }
-            ids = library.presets.map(\.id).filter(ids.contains)   // library order, no strays
-            r.presetIDs = ids.count == library.presets.count ? nil : ids
-        }
-    }
-
-    var rotationCount: Int { library.presets.filter { isInRotation($0.id) }.count }
-
-    /// What the screensaver shows for a style, in the current mode (for tile badges).
-    enum Role { case none, active, rotating, day, night, dayAndNight }
-    func role(of id: UUID) -> Role {
-        switch playbackMode {
-        case .single: return library.activeID == id ? .active : .none
-        case .rotate: return isInRotation(id) ? .rotating : .none
-        case .dayNight:
-            let d = schedule.dayPresetID == id, n = schedule.nightPresetID == id
-            return d && n ? .dayAndNight : d ? .day : n ? .night : .none
-        }
-    }
-
-    /// One-click "show this one": switches to single mode and makes it active.
-    func useAsScreensaver(_ id: UUID) {
-        library.activeID = id
-        if playbackMode != .single { playbackMode = .single } else { save() }
     }
 
     func preset(_ id: UUID) -> Preset? { library.presets.first { $0.id == id } }
@@ -283,7 +208,7 @@ final class AppModel: ObservableObject {
             p.name = uniqueName(p.name.trimmingCharacters(in: .whitespaces).isEmpty ? "My Style" : p.name)
             library.presets.append(p)
         }
-        useAsScreensaver(p.id)
+        playAsScreensaver(p.id)
         save()
         return p.name
     }
@@ -329,7 +254,6 @@ final class AppModel: ObservableObject {
         copy.effects = sel.effects.map { var e = $0; e.id = UUID(); return e }
         let at = (library.presets.firstIndex { $0.id == id } ?? library.presets.count - 1) + 1
         library.presets.insert(copy, at: at)
-        if let ids = library.rotation?.presetIDs, ids.contains(id) { library.rotation?.presetIDs?.append(copy.id) }
         selectedID = copy.id
         save()
         return copy.id
@@ -342,11 +266,20 @@ final class AppModel: ObservableObject {
 
     func delete(_ id: UUID) {
         guard let idx = library.presets.firstIndex(where: { $0.id == id }) else { return }
+        // Read the lineup before the style disappears, then write it back without it.
+        let before = screensaverLineup
         library.presets.remove(at: idx)
         if library.activeID == id { library.activeID = library.presets.first?.id }
         library.rotation?.presetIDs?.removeAll { $0 == id }
         if library.schedule?.dayPresetID == id { library.schedule?.dayPresetID = nil }
         if library.schedule?.nightPresetID == id { library.schedule?.nightPresetID = nil }
+        if before.contains(id), !library.presets.isEmpty {
+            var after = before
+            after.playlist.removeAll { $0 == id }
+            if after.night == id { after.night = nil }
+            applyLineup(after, persist: false)
+        }
+        if WallpaperSlot.shared.styleID == id { WallpaperSlot.shared.stop() }
         if editingID == id { editingID = nil }
         let neighbor = library.presets.indices.contains(idx) ? idx : library.presets.count - 1
         selectedID = neighbor >= 0 ? library.presets[neighbor].id : nil

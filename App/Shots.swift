@@ -65,8 +65,6 @@ enum UIShots {
             win.contentView = nil
         }
 
-        let only = ProcessInfo.processInfo.environment["DOTSTUDIO_UI_MODE"]
-        if let m = only.flatMap(AppModel.PlaybackMode.init(rawValue:)) { model.playbackMode = m }
         for dark in [false, true] {
             model.editingID = nil
             snap("library", size, dark: dark, ContentView())

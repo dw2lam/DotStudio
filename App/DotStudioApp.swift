@@ -75,7 +75,7 @@ struct DotStudioApp: App {
                 Button("Back to Library") { model.closeEditor() }
                     .disabled(model.editingID == nil)
                 Divider()
-                Button("Use as Screensaver") { if let id = model.selectedID { model.useAsScreensaver(id) } }
+                Button("Play as Screensaver") { if let id = model.selectedID { model.playAsScreensaver(id) } }
                     .disabled(model.selectedID == nil)
                 Button("Preview Full Screen") {
                     if let id = model.editingID ?? model.selectedID, let p = model.preset(id) {
