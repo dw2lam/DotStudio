@@ -146,13 +146,35 @@ final class WeatherLink {
     private static let psoLock = NSLock()
     private static var slots: [String: Slot] = [:]
     private static var libraries: [UInt64: MTLLibrary] = [:]
-    private static let functionNames = ["fx_wx_ocean", "fx_wx_ocean_cu", "fx_wx_shallows"]
+    /// The saver's pipeline archive (PipelineArchive.swift), which holds these pipelines too.
+    private static var archives: [UInt64: MTLBinaryArchive] = [:]
+    static let functionNames = ["fx_wx_ocean", "fx_wx_ocean_cu", "fx_wx_shallows"]
 
     /// Hands over a renderer's library (the same metallib), so the pipelines don't load a
-    /// second copy of it.
-    static func adopt(_ library: MTLLibrary, device: MTLDevice) {
+    /// second copy of it, and its pipeline archive if it has one.
+    static func adopt(_ library: MTLLibrary, device: MTLDevice, archive: MTLBinaryArchive? = nil) {
         psoLock.lock(); defer { psoLock.unlock() }
         if libraries[device.registryID] == nil { libraries[device.registryID] = library }
+        if let archive, archives[device.registryID] == nil { archives[device.registryID] = archive }
+    }
+
+    /// Whether every weather pipeline `preset` can switch to (what prewarm builds) is built — or
+    /// can't be. A renderer that never waits on a compile (the screensaver's) holds its first
+    /// frame for them, so the weather never pops in a moment after the scene.
+    static func pipelinesReady(for preset: Preset, device: MTLDevice, format: MTLPixelFormat) -> Bool {
+        let kinds = Set(preset.effects.filter { $0.enabled && usesWeather($0.kind) }.map(\.kind))
+        var ready = true
+        for k in kinds {
+            for cumulus in k == .oceanHorizon ? [false, true] : [false] {
+                // Starts the build if nothing has (a style not applied yet, after a purge).
+                if pipeline(for: k, device: device, format: format, cumulus: cumulus, wait: false) != nil { continue }
+                let name = k == .shallows ? functionNames[2] : (cumulus ? functionNames[1] : functionNames[0])
+                psoLock.lock()
+                if case .failed? = slots["\(device.registryID)/\(format.rawValue)/\(name)"] {} else { ready = false }
+                psoLock.unlock()
+            }
+        }
+        return ready
     }
 
     /// Builds, off the calling thread, the weather pipelines `preset`'s scenes can switch to
@@ -160,12 +182,9 @@ final class WeatherLink {
     /// compile when the weather turns.
     static func prewarm(for preset: Preset, device: MTLDevice, format: MTLPixelFormat) {
         let kinds = Set(preset.effects.filter { $0.enabled && usesWeather($0.kind) }.map(\.kind))
-        guard !kinds.isEmpty else { return }
-        DispatchQueue.global(qos: .utility).async {
-            for k in kinds {
-                _ = pipeline(for: k, device: device, format: format, cumulus: false)
-                if k == .oceanHorizon { _ = pipeline(for: k, device: device, format: format, cumulus: true) }
-            }
+        for k in kinds {
+            _ = pipeline(for: k, device: device, format: format, cumulus: false, wait: false)
+            if k == .oceanHorizon { _ = pipeline(for: k, device: device, format: format, cumulus: true, wait: false) }
         }
     }
 
@@ -175,6 +194,7 @@ final class WeatherLink {
         psoLock.lock(); defer { psoLock.unlock() }
         slots = slots.filter { if case .building = $0.value { return true } else { return false } }
         libraries = [:]
+        archives = [:]
     }
 
     /// Ocean Horizon's cover is in the fair-weather cumulus' range (partly cloudy, no fog): draw it
@@ -186,9 +206,10 @@ final class WeatherLink {
 
     /// The weather pipeline for a scene, built on first use (then cached per GPU and format; a
     /// failure is cached too). nil (no such function in the library) leaves fx_fragment drawing
-    /// the scene's clear sky.
+    /// the scene's clear sky. `wait: false` (prewarm) starts the build on a background queue
+    /// and returns nil unless it's already there.
     static func pipeline(for kind: EffectKind, device: MTLDevice, format: MTLPixelFormat,
-                         cumulus: Bool = false) -> MTLRenderPipelineState? {
+                         cumulus: Bool = false, wait: Bool = true) -> MTLRenderPipelineState? {
         let name = kind == .shallows ? functionNames[2] : (cumulus ? functionNames[1] : functionNames[0])
         let key = "\(device.registryID)/\(format.rawValue)/\(name)"
         psoLock.lock()
@@ -199,6 +220,7 @@ final class WeatherLink {
             psoLock.unlock(); return nil
         case .building(let g)?:
             psoLock.unlock()
+            guard wait else { return nil }
             g.wait()                                     // the build already under way
             psoLock.lock(); defer { psoLock.unlock() }
             if case .ready(let p)? = slots[key] { return p }
@@ -210,26 +232,25 @@ final class WeatherLink {
         g.enter()
         slots[key] = .building(g)
         let cachedLib = libraries[device.registryID]
+        let archive = archives[device.registryID]
         psoLock.unlock()
 
-        // The metallib in this code's own bundle (the app, or the .saver — not the host's),
-        // unless a renderer handed over its own (adopt).
-        let lib = cachedLib ?? (try? device.makeDefaultLibrary(bundle: Bundle(for: WeatherLink.self))) ?? device.makeDefaultLibrary()
-        var pso: MTLRenderPipelineState?
-        if let lib, let vfn = lib.makeFunction(name: "fx_vertex"), let ffn = lib.makeFunction(name: name) {
-            let d = MTLRenderPipelineDescriptor()
-            d.vertexFunction = vfn
-            d.fragmentFunction = ffn
-            d.colorAttachments[0].pixelFormat = format
-            pso = try? device.makeRenderPipelineState(descriptor: d)
+        func build() -> MTLRenderPipelineState? {
+            // The metallib in this code's own bundle (the app, or the .saver — not the host's),
+            // unless a renderer handed over its own (adopt).
+            let lib = cachedLib ?? (try? device.makeDefaultLibrary(bundle: Bundle(for: WeatherLink.self))) ?? device.makeDefaultLibrary()
+            let pso = lib.flatMap { FXPipelines.renderDescriptor($0, fragment: name, format: format, archive: archive) }
+                .flatMap { FXPipelines.makeRender($0, device: device) }
+            psoLock.lock()
+            if cachedLib == nil, let lib, libraries[device.registryID] == nil { libraries[device.registryID] = lib }
+            slots[key] = pso.map(Slot.ready) ?? .failed
+            psoLock.unlock()
+            g.leave()
+            return pso
         }
-
-        psoLock.lock()
-        if cachedLib == nil, let lib, libraries[device.registryID] == nil { libraries[device.registryID] = lib }
-        slots[key] = pso.map(Slot.ready) ?? .failed
-        psoLock.unlock()
-        g.leave()
-        return pso
+        if wait { return build() }
+        DispatchQueue.global(qos: .utility).async { _ = build() }
+        return nil
     }
 
     /// Stateless packing (tools/gallery's GPU bench): `drift` = the clouds' clock offset, s.

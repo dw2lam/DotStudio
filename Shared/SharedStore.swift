@@ -34,6 +34,14 @@ final class SharedStore {
         realHome.appendingPathComponent("Library/Application Support/\(folderName)", isDirectory: true)
     }
 
+    /// The folder the app's store uses: `sharedDir`, or DOTSTUDIO_STORE_DIR (dev/test).
+    static var appBaseDir: URL {
+        if let dir = ProcessInfo.processInfo.environment["DOTSTUDIO_STORE_DIR"] {
+            return URL(fileURLWithPath: dir, isDirectory: true)
+        }
+        return sharedDir
+    }
+
     /// Pre-1.3 location, inside the screensaver host's container.
     static var legacyContainerDir: URL {
         realHome.appendingPathComponent(
