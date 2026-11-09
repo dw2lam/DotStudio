@@ -105,6 +105,14 @@ final class AppModel: ObservableObject {
             lib.version = 3
         }
         for i in lib.presets.indices { lib.presets[i].source = nil }   // strip legacy field
+        // Live weather (Ocean Horizon's new Weather menu defaults to Live): Afterlight keeps its
+        // clear sky. Only where the param is missing, so a user's own pick sticks.
+        for i in lib.presets.indices where lib.presets[i].name == "Afterlight" {
+            for j in lib.presets[i].effects.indices where lib.presets[i].effects[j].kind == .oceanHorizon
+                && lib.presets[i].effects[j].params["weather"] == nil {
+                lib.presets[i].effects[j].params["weather"] = 1
+            }
+        }
         lib = offerNewBuiltIns(lib)
         if lib.version < 4 { lib.version = 4 }
         return lib

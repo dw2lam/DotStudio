@@ -126,6 +126,9 @@ no reinstalling, no System Settings. Everything renders through a single Metal Ã
 Inspired by [grain.rad](https://grainrad.com) and [ditherit.com](https://ditherit.com).
 Built with SwiftUI + Metal.
 
+Live weather in **Ocean Horizon** and **Shallows**: [Weather data by Open-Meteo.com](https://open-meteo.com/),
+licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
 Earth and planet maps in the **Universe** screensaver are from
 [Solar System Scope](https://www.solarsystemscope.com/textures/) â€” licensed
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).

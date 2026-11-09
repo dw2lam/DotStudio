@@ -14,6 +14,7 @@ struct VOut {
 };
 
 // Fullscreen triangle from a single draw of 3 vertices.
+#ifndef DOTSTUDIO_WEATHER_UNIT   // (Shared/Weather/Weather.metal re-includes this file for its helpers)
 vertex VOut fx_vertex(uint vid [[vertex_id]]) {
     float2 p = float2(float((vid << 1) & 2), float(vid & 2));
     VOut o;
@@ -21,6 +22,7 @@ vertex VOut fx_vertex(uint vid [[vertex_id]]) {
     o.uv  = float2(p.x, 1.0 - p.y);   // flip Y so textures are top-left origin
     return o;
 }
+#endif
 
 // ---------------------------------------------------------------- helpers
 
@@ -962,6 +964,7 @@ static inline float3 silk_surface(float2 p, float ts) {
 
 // ---------------------------------------------------------------- fragment
 
+#ifndef DOTSTUDIO_WEATHER_UNIT   // (the entry points below belong to this unit only)
 fragment float4 fx_fragment(VOut in [[stage_in]],
                             constant FXUniforms& u [[buffer(0)]],
                             texture2d<float> src   [[texture(0)]],
@@ -2693,3 +2696,4 @@ kernel void dither_final(device half4* st [[buffer(1)]],
     st[N + i].xyz = half3(q);
     outTex.write(float4(u.p0.z > 0.5 ? mix(u.colorA.rgb, u.colorB.rgb, q.x) : q, 1.0), gid);
 }
+#endif // DOTSTUDIO_WEATHER_UNIT
