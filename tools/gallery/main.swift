@@ -362,7 +362,7 @@ if gpuBench {
                 enc.setFragmentTexture(tex.earthNight, index: 3)
                 enc.setFragmentTexture(tex.planets, index: 4)
                 enc.setFragmentTexture(input, index: 5)
-                enc.setFragmentTexture(input, index: 6)
+                enc.setFragmentTexture(TextAtlas.texture(dev, uniforms: u) ?? input, index: 6)   // Clocks: the real atlas
                 enc.setFragmentTexture(artTex, index: 7)
                 enc.setFragmentTexture(artTex, index: 8)
                 enc.setFragmentSamplerState(samp, index: 0)
