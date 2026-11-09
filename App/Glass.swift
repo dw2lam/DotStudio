@@ -18,7 +18,10 @@ extension View {
     @ViewBuilder
     func glassSurface<S: Shape>(_ style: GlassStyle = .regular, in shape: S,
                                 tint: Color? = nil, interactive: Bool = false) -> some View {
-        if #available(macOS 26, *) {
+        // Offscreen UI shots (Shots.swift): Liquid Glass draws nothing in a never-ordered-in
+        // window, so cards and capsules vanished from the renders and their edges couldn't be
+        // judged. There the material fallback stands in, so the shapes are visible.
+        if #available(macOS 26, *), !OffscreenCapture.isActive {
             self.glassEffect(makeGlass(style, tint: tint, interactive: interactive), in: shape)
         } else {
             self.background {
@@ -81,7 +84,7 @@ extension View {
     /// `.glass` / `.glassProminent` on macOS 26, bordered styles before.
     @ViewBuilder
     func glassButton(_ kind: GlassButtonKind = .normal) -> some View {
-        if #available(macOS 26, *) {
+        if #available(macOS 26, *), !OffscreenCapture.isActive {
             switch kind {
             case .normal: self.buttonStyle(.glass)
             case .prominent: self.buttonStyle(.glassProminent)
@@ -104,6 +107,13 @@ extension View {
     @ViewBuilder
     func softScrollEdges() -> some View {
         if #available(macOS 26, *) { self.scrollEdgeEffectStyle(.soft, for: .top) } else { self }
+    }
+
+    /// No edge effects on a scroll view nested in another (a sideways strip of chips): it
+    /// inherits the page's soft top edge, which would draw a frosted band behind the strip.
+    @ViewBuilder
+    func noScrollEdgeEffects() -> some View {
+        if #available(macOS 26, *) { self.scrollEdgeEffectHidden(true, for: .all) } else { self }
     }
 }
 
