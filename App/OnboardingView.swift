@@ -408,13 +408,10 @@ private struct PickPage: View {
         VStack(spacing: layout.sectionGap) {
             PageHeader(title: "Make Your Screensaver",
                        subtitle: "Start from a preset, or create your own. You can change it any time.")
-            Picker("Mode", selection: $mode.animation(.easeOut(duration: 0.18))) {
-                ForEach(OnboardingView.PickMode.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .adaptiveControlSize()
-            .fillingSegments(width: Space.grid(80), alignment: .center)   // 320: two equal segments
+            ScaledSegmentedPicker(title: "Mode", selection: $mode.animation(.easeOut(duration: 0.18)),
+                                  options: OnboardingView.PickMode.allCases.map { ($0.rawValue, $0) },
+                                  fills: true, alignment: .center)
+                .frame(maxWidth: layout.scaled(Space.grid(80)))   // 320: two equal segments
         }
     }
 
@@ -439,8 +436,9 @@ private struct CreatePanel: View {
     @Binding var draft: Preset
     @Binding var nameEdited: Bool
     let livePreview: Bool
-    /// Stacked: details above the pickers, inside the page's scroll (the pickers get a fixed
-    /// height). Side by side: the pickers fill the height beside the details.
+    /// Stacked: a full-width row (preview beside the name and blurb) above the full-width
+    /// pickers, inside the page's scroll (the pickers get a fixed height). Side by side: the
+    /// pickers fill the height beside the details column.
     let stacked: Bool
 
     /// Side by side, the details column has a fixed height to fit in; from .xxLarge text on
@@ -448,6 +446,11 @@ private struct CreatePanel: View {
     static func stacks(_ layout: LayoutMetrics) -> Bool {
         layout.prefersStacking || layout.typeSize >= .xxLarge
     }
+
+    /// The stacked preview's width at the default text size (grows with `layout.scaled`). Kept
+    /// small so the row stays short and the effect picker — the step's main control — starts
+    /// on the first screen.
+    private static let stackedPreviewWidth = Space.grid(60)   // 240
     @State private var tab: Tab = .effect
 
     enum Tab: String, CaseIterable, Identifiable {
@@ -459,25 +462,33 @@ private struct CreatePanel: View {
 
     var body: some View {
         if stacked {
+            // Spans the page like the header and the preset grid: no empty half beside it.
             VStack(alignment: .leading, spacing: layout.sectionGap) {
-                details
-                    .frame(maxWidth: layout.scaled(360), alignment: .leading)
+                HStack(alignment: .top, spacing: layout.sectionGap) {
+                    preview
+                        .frame(width: layout.scaled(Self.stackedPreviewWidth))
+                    detailText
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 effectPanel
                     .frame(height: layout.scaled(360))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             HStack(alignment: .top, spacing: layout.sectionGap) {
-                details
-                    .frame(width: layout.scaled(300)...layout.scaled(360), alignment: .top)
+                VStack(alignment: .leading, spacing: layout.itemGap) {
+                    preview
+                    detailText
+                }
+                .frame(width: layout.scaled(300)...layout.scaled(360), alignment: .top)
                 effectPanel
             }
         }
     }
 
-    private var details: some View {
+    /// Name, effect and what it makes — under the preview side by side, beside it stacked.
+    private var detailText: some View {
         VStack(alignment: .leading, spacing: layout.itemGap) {
-            preview
             TextField("Name", text: nameBinding)
                 .textFieldStyle(.roundedBorder)
                 .textRole(.pageSubtitle)
@@ -492,8 +503,8 @@ private struct CreatePanel: View {
                 }
             }
             Text(draft.isScene
-                 ? "This is a Scene — it draws itself. Add layers later in the editor."
-                 : "This is a Look — it restyles your canvas. Add more effects in the editor.")
+                 ? "A Scene draws itself. Add more layers in the editor."
+                 : "A Look restyles your canvas. Add more effects in the editor.")
                 .textRole(.caption)
                 .foregroundStyle(.secondary)
                 .wrapping()
@@ -502,12 +513,8 @@ private struct CreatePanel: View {
 
     private var effectPanel: some View {
         VStack(spacing: layout.controlGap) {
-            Picker("Section", selection: $tab) {
-                ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .adaptiveControlSize()
+            ScaledSegmentedPicker(title: "Section", selection: $tab,
+                                  options: Tab.allCases.map { ($0.rawValue, $0) })
 
             Group {
                 switch tab {
@@ -663,8 +670,11 @@ private struct EnablePage: View {
                 .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).strokeBorder(Color.primary.opacity(0.07)))
 
                 statusLine
-                    .animation(.easeOut(duration: 0.2), value: status)
             }
+            // The status flips live on the poll. Row layout keeps the card's height (the
+            // button-height strut); stacked, a finished step's button row goes away, so the
+            // card and the status line under it ease into place instead of snapping.
+            .animation(.easeOut(duration: 0.2), value: status)
         }
         // ~1s poll while this step is on screen; cancelled when it goes away.
         // (ContentView also refreshes whenever the app becomes active.)
@@ -688,7 +698,7 @@ private struct EnablePage: View {
                 .transition(.scale(scale: 0.9).combined(with: .opacity))
         case .notChosen:
             HStack(spacing: layout.iconGap) {
-                ProgressView().controlSize(.small)
+                ProgressView().adaptiveControlSize(.small)
                 Text("Waiting for you to choose DotStudio in System Settings…")
                     .textRole(.callout)
                     .foregroundStyle(.secondary)
@@ -833,7 +843,9 @@ private struct DonePage: View {
     var body: some View {
         PageScroll {
             VStack(spacing: layout.sectionGap) {
-                VStack(spacing: Space.m) {
+                // The glyph's own side bearing and the title's ascent already add ~11 pt, so
+                // the tightest step keeps the icon visibly grouped with its header.
+                VStack(spacing: Space.xxs) {
                     Image(systemName: status == .ready ? "checkmark.seal.fill" : "sparkles")
                         .scaledFont { .scaled(points: 46, $0) }
                         .symbolRenderingMode(.hierarchical)
@@ -850,7 +862,7 @@ private struct DonePage: View {
                     VStack(alignment: .leading, spacing: layout.itemGap) {
                         Tip(symbol: "arrow.triangle.2.circlepath", tint: .orange, iconColumn: iconColumn,
                             title: "Mix it up",
-                            detail: "Add styles to the Screensaver card to rotate them, or pick a different one for night.")
+                            detail: "Add styles to the Screensaver card to rotate them, or set one for night.")
                         Tip(symbol: "cursorarrow.click.2", tint: .purple, iconColumn: iconColumn,
                             title: "Edit anything",
                             detail: "Double-click any tile to change its effects, colors and motion.")
