@@ -122,7 +122,7 @@ enum DefaultPresets {
         "Liquid Chrome", "Aurora", "Universe", "Topography", "Black Hole", "Afterglow",
         "Glass Clock", "Flip Clock", "Word Clock", "Window Light",
         "Lava Lamp", "Currents", "Fireflies",
-        "Golden Hour", "Night Sky", "First Snow",
+        "Golden Hour", "Tidewater", "Night Sky", "First Snow",
         "Neon Horizon", "Pipeworks", "Light Tunnel", "Light Ribbons",
         // Looks
         "Film", "Riso Duotone", "Cyanotype", "Floyd–Steinberg", "Atkinson", "ASCII", "Amber CRT", "Soft Focus",

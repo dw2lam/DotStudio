@@ -36,6 +36,12 @@ typedef struct {
     FX_FLOAT4 clock;        // local wall time: (hour 0–24 with fraction, minute 0–60 with fraction,
                             //                   second 0–60 with fraction, weekday 1=Sun…7)
     FX_FLOAT4 date;         // (year, month 1–12, day 1–31, day of year 1–366)
+
+    // Live sky for Ocean Horizon's "Follow the Sun" mode (filled per frame by MetalRenderer
+    // .liveSky; zero otherwise). Angles in radians, apparent (refracted) elevations.
+    FX_FLOAT4 sun;          // (elevation, hour angle −π…π (0 = solar noon), rise→set half-arc 0…π, latitude)
+    FX_FLOAT4 moon;         // (elevation, hour angle, rise→set half-arc, elongation 0…2π: < π waxing)
+    FX_FLOAT4 sky;          // (local sidereal time, 1 = live values present, 0, 0)
 } FXUniforms;
 
 #endif /* EffectUniforms_h */
