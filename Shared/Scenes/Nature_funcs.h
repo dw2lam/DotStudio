@@ -357,6 +357,18 @@ static inline float3 nature_liveMoonE(constant FXUniforms& u, float dd) {
     return float3(0.62, 0.80, 1.0) * 9.5 * 0.0042 * pf * smoothstep(5.0, 10.0, dd);
 }
 
+// Fast sine of a phase in turns (≈2e-3 error): a corrected parabola per half period. The 21
+// wave trains below were mostly sin/cos — this halves their cost, with no visible change.
+static inline float nature_sinT(float x) {
+    float y = x - floor(x + 0.5);                       // [-0.5, 0.5)
+    float a = 8.0 * y - 16.0 * y * abs(y);
+    return 0.225 * (a * abs(a) - a) + a;
+}
+static inline float nature_sincosT(float x, thread float &c) {
+    c = nature_sinT(x + 0.25);
+    return nature_sinT(x);
+}
+
 // Ocean wave trains: (direction toward the camera ± spread, phase, wavelength m), from
 // 80 m swell down to 0.5 m (ratio 0.73), then four wind ripples down to 6 cm (ratio 0.53),
 // spread wider and riding the swells.
@@ -388,8 +400,8 @@ static inline float nature_airmass(float e) {
     return 1.0 / (sin(ec) + 0.50572 * pow(max(ec * 57.29578 + 6.07995, 0.5), -1.6364));
 }
 static inline float nature_hg(float c, float g) {
-    float d = 1.0 + g * g - 2.0 * g * c;
-    return (1.0 - g * g) / (4.0 * NATURE_PI * d * sqrt(d));
+    float r = rsqrt(1.0 + g * g - 2.0 * g * c);
+    return (1.0 - g * g) / (4.0 * NATURE_PI) * r * r * r;
 }
 
 // Sunlight reaching altitude h km: the sun sits higher above that point's own horizon
@@ -458,7 +470,8 @@ static inline float nature_oceanExpo(constant FXUniforms& u) {
 // the purple light high above it (stratospheric dust, ~3–7° depression), the pink
 // anti-twilight band low all round, and the deep blue of the blue hour. Called for a sun
 // 2°…18° down only (every term here is 0 at both ends).
-static inline float3 nature_twilight(float3 v, float2 hs, float tw, constant FXUniforms& u) {
+static inline float3 nature_twilight(float3 v, float2 hs, float tw, constant FXUniforms& u,
+                                               const bool refl) {
     float ev = max(v.y, 0.0);
     float dd = nature_liveDD(u);
     float2 hv = v.xz * rsqrt(max(dot(v.xz, v.xz), 1e-8));
@@ -476,40 +489,53 @@ static inline float3 nature_twilight(float3 v, float2 hs, float tw, constant FXU
         float3 ca = mix(float3(1.0, 0.52, 0.20), float3(0.80, 0.17, 0.06), smoothstep(0.5, 8.0, dp));
         L += ca * Ia * exp(-ev / ha - away * mix(2.5, 4.0, smoothstep(0.0, 8.0, dp))) * 0.12;
         // Purple light: a soft rose-violet patch ~15–25° up over the sun's azimuth.
+        // (Each term below is skipped once the sun is too deep for it to show: those are
+        // uniform branches, and the night sky is the scene's costliest.)
         float pd = (dd - 4.0) / 2.2;
-        float pe = (ev - 0.32 + 0.02 * dp) / 0.20;
-        L += float3(0.70, 0.36, 0.72) * exp(-pd * pd - pe * pe - away * 1.2) * 0.0025;
+        if (!refl && abs(pd) < 2.7) {
+            float pe = (ev - 0.32 + 0.02 * dp) / 0.20;
+            L += float3(0.70, 0.36, 0.72) * exp(-pd * pd - pe * pe - away * 1.2) * 0.0025;
+        }
         // Pink belt: low and all round, strongest away from the sun.
         float Ib = smoothstep(-2.0, 0.5, dd) * exp(-dp / 2.0);
-        float be = (ev - 0.07 - 0.008 * dp) / 0.07;
-        L += float3(0.85, 0.48, 0.55) * Ib * exp(-be * be) * (0.25 + 0.75 * saturate(away * 0.6)) * 0.004;
+        if (!refl && Ib > 0.004) {
+            float be = (ev - 0.07 - 0.008 * dp) / 0.07;
+            float bb = max(1.0 - be * be * (1.0 / 3.0), 0.0);         // ≈ exp(−be²), no exp
+            L += float3(0.85, 0.48, 0.55) * Ib * (bb * bb * bb) * (0.25 + 0.75 * saturate(away * 0.6)) * 0.004;
+        }
     }
     return L * tw;
 }
 
 // Follow the Sun's sky on top of the single scattering: a deep-blue clear midday zenith, the
 // twilight glows (out of line), and the airglow/starlight floor.
-static inline float3 nature_atmosLive(float3 L, float3 v, NatureOceanP P, constant FXUniforms& u) {
+static inline float3 nature_atmosLive(float3 L, float3 v, NatureOceanP P, constant FXUniforms& u,
+                                                const bool refl) {
     float ev = max(v.y, 0.0);
     float dd = nature_liveDD(u);
     // Clear midday: the zenith deepens to the saturated blue a polariser-free eye sees,
     // over a pale white-blue horizon.
     float day = nature_liveDay(u);
     if (day > 0.0) L *= mix(float3(1.0), float3(0.62, 0.80, 1.06), day * smoothstep(0.02, 0.6, ev));
-    if (P.tw > 0.0) L += nature_twilight(v, P.sh, P.tw, u);
+    if (P.tw > 0.0) L += nature_twilight(v, P.sh, P.tw, u, refl);
     // Airglow + starlight: deep navy, so moonless nights still have a horizon.
     L += float3(0.0007, 0.0012, 0.0028) * smoothstep(2.0, 12.0, dd) * (1.0 + 2.0 * exp(-ev * 7.0));
     return L;
 }
 
 // Sky radiance along v (no sun disc, no clouds).
-static inline float3 nature_oceanAtmos(float3 v, NatureOceanP P, constant FXUniforms& u) {
+// `refl`: seen in the sea's rough mirror, where the faint purple light and pink belt don't
+// survive the blur (they are skipped there).
+static inline float3 nature_oceanAtmos(float3 v, NatureOceanP P, constant FXUniforms& u,
+                                                 const bool refl = false) {
     float ev = max(v.y, 0.0);
     float c = dot(v, P.sd);
     float3 betaR = NATURE_RAYLEIGH;
     float pr = 0.0597 * (1.0 + c * c);
     float pm = nature_hg(c, 0.76) + 0.08 * nature_hg(c, 0.4) + 0.06 * nature_hg(c, 0.98);
-    float mv = nature_airmass(asin(ev));
+    // (Kasten–Young of the view elevation, straight from its sine: asin(ev) ≈ ev(1 + ev²/6)
+    // only matters in the small horizon term, where it is exact enough.)
+    float mv = 1.0 / (ev + 0.50572 * pow(ev * (1.0 + ev * ev * (1.0 / 6.0)) * 57.29578 + 6.07995, -1.6364));
     float3 tauV = P.tauS * mv;
     // Light reaching the scatterers: views near the zenith scatter higher up, where the
     // sun's path is shorter (so the zenith stays blue after the horizon turns red).
@@ -520,16 +546,16 @@ static inline float3 nature_oceanAtmos(float3 v, NatureOceanP P, constant FXUnif
     // Multiple scattering, roughly: a soft skylight that survives after sunset.
     // (Kept bluish: it is mostly light that scattered high up, before the sun reddened.)
     L += P.ms * float3(0.0011, 0.0042, 0.0165) * (1.0 - 0.35 * ev);
-    if (P.live) L = nature_atmosLive(L, v, P, u);
+    if (P.live) L = nature_atmosLive(L, v, P, u, refl);
     return L;
 }
 
-// Gradient noise as gnoise, on an arithmetic hash (no sin): the sky's clouds evaluate ~10
-// of these per pixel, which made them most of the scene's cost.
+// Gradient noise as gnoise, on an integer hash (no sin, and cheaper than the fract hash it
+// replaced): the sky's clouds evaluate ~8 of these per pixel, most of the scene's cost.
 static inline float2 nature_ghash(float2 p) {
-    float3 p3 = fract(float3(p.xyx) * float3(0.1031, 0.1030, 0.0973));
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.xx + p3.yz) * p3.zy) * 2.0 - 1.0;
+    uint2 q = uint2(int2(p) + 0x10000) * uint2(1597334673u, 3812015801u);
+    uint n = (q.x ^ q.y) * 1597334673u;
+    return float2(uint2(n, n * 48271u)) * (2.0 / 4294967296.0) - 1.0;
 }
 static inline float nature_gnoise(float2 p) {
     float2 i = floor(p), f = p - i;
@@ -540,14 +566,43 @@ static inline float nature_gnoise(float2 p) {
     float d = dot(nature_ghash(i + float2(1, 1)), f - float2(1, 1));
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
+// The same noise with its analytic gradient: (value, d/dx, d/dy). The gradient comes almost
+// free with the value, and stands in for a second noise (the cloud warp) and for a whole
+// second density lookup (the clouds' self-shadowing).
+static inline float3 nature_gnoised(float2 p) {
+    float2 i = floor(p), f = p - i;
+    float2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    float2 du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
+    float2 ga = nature_ghash(i), gb = nature_ghash(i + float2(1, 0));
+    float2 gc = nature_ghash(i + float2(0, 1)), gd = nature_ghash(i + float2(1, 1));
+    float va = dot(ga, f), vb = dot(gb, f - float2(1, 0));
+    float vc = dot(gc, f - float2(0, 1)), vd = dot(gd, f - float2(1, 1));
+    float k = va - vb - vc + vd;
+    float v = va + u.x * (vb - va) + u.y * (vc - va) + u.x * u.y * k;
+    float2 g = ga + u.x * (gb - ga) + u.y * (gc - ga) + u.x * u.y * (ga - gb - gc + gd)
+             + du * (u.yx * k + float2(vb - va, vc - va));
+    return float3(v, g);
+}
 
 // Cloud density noise: soft large-scale cover + billowy detail (rounded puffs with creases).
-static inline float nature_cloudNoise(float2 p, int oct) {
+// `fp` is the pixel's footprint in noise units: each detail octave fades to its mean as it
+// approaches a cycle per pixel (filtered, not aliased, and skipped once gone). `grad`
+// returns the gradient of the two large-scale octaves (the shape the light falls across).
+static inline float nature_cloudNoise(float2 p, int oct, float fp, thread float2 &grad) {
     const float2x2 R = float2x2(0.8, 0.6, -0.6, 0.8);
-    float s = 0.55 * nature_gnoise(p) + 0.28 * nature_gnoise(R * p * 2.03 + 1.7);
-    float a = 0.22;
+    float3 n0 = nature_gnoised(p);
+    float3 n1 = nature_gnoised(R * p * 2.03 + 1.7);
+    float s = 0.55 * n0.x + 0.28 * n1.x;
+    // d/dp of g(R·p·2.03) = 2.03·Rᵀ·∇g
+    grad = 0.55 * n0.yz + 0.28 * 2.03 * (transpose(R) * n1.yz);
+    float a = 0.22, fr = 4.1;
     float2 q = R * R * p * 4.1 + 3.3;
-    for (int i = 2; i < oct; ++i) { s += a * (0.35 - abs(nature_gnoise(q))); q = R * q * 2.07; a *= 0.5; }
+    for (int i = 2; i < oct; ++i) {
+        float k = smoothstep(0.55, 0.22, fr * fp);
+        if (k <= 0.0) { s += 0.21 * a * (2.0 - exp2(float(i + 1 - oct))); break; }   // (E[0.35 − |g|] ≈ 0.21)
+        s += a * mix(0.21, 0.35 - abs(nature_gnoise(q)), k);
+        q = R * q * 2.07; a *= 0.5; fr *= 2.07;
+    }
     return s;
 }
 
@@ -570,7 +625,9 @@ static inline float3 nature_oceanClouds(float3 v, float3 sky, NatureOceanP P, in
         float2 q = v.xz * tC;
         float2 qs = float2(q.x * 0.6 + q.y * 0.25, q.y * 0.08 - q.x * 0.1) * 0.22 + float2(P.tc * 0.25, 0.0);
         const float2x2 Rc = float2x2(0.8, 0.6, -0.6, 0.8);
-        float ci = 0.5 * nature_gnoise(qs) + 0.25 * nature_gnoise(Rc * qs * 2.03) + 0.35;
+        // (One noise: its gradient across the streaks stands in for the finer octave.)
+        float3 cn = nature_gnoised(qs);
+        float ci = 0.5 * cn.x + 0.1 * dot(cn.yz, Rc[1]) + 0.35;
         float cir = smoothstep(0.30, 0.85, ci) * P.clouds * exp(-tC * 0.006);
         float3 cirC = P.esun * nature_sunAt(P, 8.0, u) * (0.10 + 1.6 * nature_hg(c, 0.7)) * 0.12 + sky * 0.6;
         kc = cir * 0.55 * nf;
@@ -580,15 +637,22 @@ static inline float3 nature_oceanClouds(float3 v, float3 sky, NatureOceanP P, in
     // Altocumulus at 2.5 km.
     float tA = 2.5 / v.y;
     float2 p = v.xz * tA * 0.32 + float2(P.tc, P.tc * 0.3);
-    float2 w = float2(nature_gnoise(p * 0.35 + 3.1), nature_gnoise(p * 0.35 + 7.7));
-    float n = nature_cloudNoise(p + w * 0.6, oct);
-    float cover = P.clouds;
-    float lo = 0.78 - 0.45 * cover;
     // Pixel footprint in noise units: where the deck is too foreshortened to resolve,
     // fade texture into its average (no venetian-blind aliasing at the horizon).
     // (ang: the angle a reflected pixel spans — the rough, curved mirror's spread — which
     // softens the clouds it sees exactly as distance does.)
     float fp = tA * max(P.pix, ang) * 0.32 / max(v.y, 0.004);
+    // Domain warp: one noise and its gradient (a second, independent noise cost as much).
+    // (Reflections skip it: through the rough mirror the warp's shapes don't survive.)
+    float2 w = float2(0.0);
+    if (oct >= 5) {
+        float3 wq = nature_gnoised(p * 0.35 + 3.1);
+        w = float2(wq.x, 0.28 * (0.6 * wq.y - 0.8 * wq.z));
+    }
+    float2 gl;
+    float n = nature_cloudNoise(p + w * 0.6, oct, fp, gl);
+    float cover = P.clouds;
+    float lo = 0.78 - 0.45 * cover;
     float resolved = smoothstep(0.5, 0.12, fp);
     float soft = (oct < 5 ? 0.32 : 0.0) + 0.3 * (1.0 - resolved);
     float nv = n * 0.75 + 0.5 + 0.18 * w.x;
@@ -599,13 +663,14 @@ static inline float3 nature_oceanClouds(float3 v, float3 sky, NatureOceanP P, in
     float fade = exp(-tA * 0.012);                                  // aerial perspective
     if (oct < 5) fade *= smoothstep(0.02, 0.2, v.y);                // no grazing streaks in reflections
     if (dens > 0.0) {
-        // Self-shadowing: how much cloud lies a little way toward the sun.
+        // Self-shadowing: how much cloud lies a little way toward the sun — the large-scale
+        // density stepped along its own gradient (no second lookup).
         float shade = 1.0;
         // (Unlit, nothing to shade; under the moon (live, sun > 5° down) the faint key light
-        // doesn't earn the extra noise pass.)
+        // doesn't earn it.)
         if (oct >= 5 && P.esun.b > 0.0 && !(P.live && nature_liveDD(u) > 5.0)) {
             float2 toSun = normalize(P.sd.xz + 1e-4) * 0.55;
-            float n2 = nature_cloudNoise(p + toSun + w * 0.6, 2);
+            float n2 = n + clamp(dot(gl, toSun), -0.35, 0.35);
             float d2 = smoothstep(lo, lo + 0.28, n2 * 0.75 + 0.5 + 0.18 * w.x);
             shade = exp(-2.2 * d2) * 0.85 + 0.15;
         }
@@ -797,24 +862,65 @@ static inline float nature_vn3(float3 p) {
 static inline float4 nature_milkyWayLite(float3 g) {
     if (abs(g.z) > 0.36) return float4(0.0, 0.0, 0.0, 1.0);
     float l = atan2(g.y, g.x);
-    float b = asin(clamp(g.z, -1.0, 1.0));
-    float cl = cos(l);
+    float b = g.z * (1.0 + g.z * g.z * (1.0 / 6.0));          // asin, to 6e-4 rad here
+    float cl = g.x * rsqrt(max(g.x * g.x + g.y * g.y, 1e-8));  // cos l
     float width = 0.075 + 0.05 * max(cl, 0.0);
+    float3 c = mix(float3(0.66, 0.76, 1.0), float3(1.0, 0.80, 0.58),
+                   clamp(smoothstep(-0.2, 0.9, cl) * 0.8, 0.0, 1.0));
+    float halo = exp(-(b * b) / (width * width * 9.0)) * 0.08;
+    // Off the plane only the unresolved halo is left: no noise to evaluate.
+    if (abs(b) > 0.3) return float4(c * halo, 1.0);
     float disc = exp(-(b * b) / (width * width)) * (0.35 + 0.65 * (0.5 + 0.5 * cl));
     float bulge = exp(-(l * l + b * b * 2.4) / (0.30 * 0.30)) * 1.6;
-    float3 p = g * 9.0;
-    float n1 = (nature_vn3(p) * 0.5 + nature_vn3(p * 2.07 + 1.3) * 0.25) / 0.75;
+    float n1 = nature_vn3(g * 9.0);
     float n2 = nature_vn3(g * 26.0 + 7.0);
     float clouds = smoothstep(0.35, 0.8, n1) * (0.3 + 1.0 * n2);
-    float halo = exp(-(b * b) / (width * width * 9.0)) * 0.08;
     float glow = disc * (0.12 + 1.8 * clouds) + bulge * (0.5 + 0.9 * n1) + halo;
     float rb = (b - 0.025 - 0.02 * sin(l * 3.0)) / 0.028;
     float rift = exp(-rb * rb) * smoothstep(1.4, 0.2, abs(l - 0.6));
-    float lanes = smoothstep(0.45, 0.8, nature_vn3(g * 14.0 + 3.0)) * exp(-(b * b) / 0.012);
+    float lanes = abs(b) < 0.22 ? smoothstep(0.45, 0.8, nature_vn3(g * 14.0 + 3.0)) * exp(-(b * b) / 0.012) : 0.0;
     float T = exp(-(1.6 * rift * (0.5 + n2) + 1.1 * lanes));
-    float3 c = mix(float3(0.66, 0.76, 1.0), float3(1.0, 0.80, 0.58),
-                   clamp(smoothstep(-0.2, 0.9, cl) * 0.8 + bulge * 0.2, 0.0, 1.0));
+    c = mix(float3(0.66, 0.76, 1.0), float3(1.0, 0.80, 0.58),
+            clamp(smoothstep(-0.2, 0.9, cl) * 0.8 + bulge * 0.2, 0.0, 1.0));
     return float4(c * glow * T, T);
+}
+
+// Stars over the sea: nature_galStars' three layers and magnitude law on one cheap integer
+// hash per cell (pcg3 twice per layer was most of the night sky's cost over the water).
+// `faint` weights the faintest layer (skipped at 0: while the stars fade in it can't show).
+static inline float3 nature_seaStars(float3 g, float pix, float band, float dust, float t, float twk,
+                                     float faint) {
+    float az = atan2(g.x, g.y);
+    float sz = g.z;
+    float ce = max(sqrt(max(1.0 - sz * sz, 0.0)), 0.05);
+    float3 acc = float3(0.0);
+    int NL = faint > 0.0 ? 3 : 2;
+    for (int L = 0; L < NL; ++L) {
+        float sc = L == 0 ? 60.0 : (L == 1 ? 140.0 : 320.0);
+        float2 q = float2(az, sz) * sc;
+        float2 cell = floor(q);
+        uint2 ci = uint2(int2(cell) + 0x10000);
+        uint n = (ci.x * 0x8da6b343u) ^ (ci.y * 0xd8163841u) ^ (uint(L) * 0xcb1ab31fu);
+        n = (n ^ (n >> 16u)) * 0x7feb352du;
+        n ^= n >> 15u;
+        float3 h = float3(float(n & 0x3ffu), float((n >> 10u) & 0x3ffu), float(n >> 20u)) * float3(1.0 / 1024.0, 1.0 / 1024.0, 1.0 / 4096.0);
+        float2 off = (q - cell) - (0.15 + 0.7 * h.xy);
+        float r = length(float2(off.x * ce, off.y / ce) / sc) / pix;
+        float thr = (L == 0 ? 0.80 : (L == 1 ? 0.70 : 0.62)) - (L == 0 ? 0.05 : 0.22) * band;
+        // (Reach: the faint layers' Gaussians are gone by ~2–3 px; a tight cut keeps whole
+        // SIMD groups from running the star body for pixels that see nothing.)
+        if (h.z < thr || r > (L == 0 ? 4.0 : (L == 1 ? 3.0 : 2.2))) continue;
+        n = n * 0x2c1b3c6du;
+        float3 h2 = float3(float(n >> 22u), float((n >> 12u) & 0x3ffu), float((n >> 2u) & 0x3ffu)) * (1.0 / 1024.0);
+        float m = h2.x, m2 = m * m, m4 = m2 * m2;
+        float b = L == 0 ? 0.8 * m4 * m4 + 0.02 : (L == 1 ? 0.07 * m4 + 0.008 : 0.012 * m + 0.003);
+        float sig = 0.48 + 0.4 * sqrt(min(b, 1.0));
+        float tw = 1.0 + twk * 0.45 * nature_sinT(t * (0.477 + 0.955 * h2.y) + h2.y * 9.55);
+        float3 tint = h2.z < 0.5 ? mix(float3(0.62, 0.74, 1.0), float3(1.0), h2.z * 2.0)
+                                 : mix(float3(1.0), float3(1.0, 0.70, 0.42), (h2.z - 0.5) * 2.0);
+        acc += tint * b * tw * exp(-r * r / (2.0 * sig * sig)) * dust * (L == 2 ? faint : 1.0);
+    }
+    return acc;
 }
 
 // Follow the Sun, stars and a faint Milky Way on the real sidereal sky (local sidereal time
@@ -831,20 +937,22 @@ static inline float3 nature_oceanStars(float3 rd, constant FXUniforms& u, float 
     const float3 E = float3(-1, 0, 0), N = float3(0, 0, -1), U = float3(0, 1, 0);
     float3 Pp = cos(lat) * N + sin(lat) * U;
     float3 Mq = -sin(lat) * N + cos(lat) * U;
-    float dec = asin(clamp(dot(rd, Pp), -1.0, 1.0));
-    if (u.sun.w < 0.0) dec = -dec;
-    float ha = atan2(-dot(rd, E), dot(rd, Mq));
-    float ra = u.sky.x - ha;
-    float3 q = float3(cos(dec) * cos(ra), cos(dec) * sin(ra), sin(dec));
+    // Hour angle → right ascension is a rotation by the sidereal time, so the equatorial
+    // vector comes straight from the ray's components (no asin/atan2 per pixel):
+    // cos δ·cos H = rd·Mq, cos δ·sin H = −rd·E, sin δ = rd·P, and ra = lst − H.
+    float ca = dot(rd, Mq), sa = -dot(rd, E), sd = dot(rd, Pp);
+    float sl, cl = sincos(u.sky.x, sl);
+    float3 q = float3(cl * ca + sl * sa, sl * ca - cl * sa, u.sun.w < 0.0 ? -sd : sd);
     float3 g = NATURE_EQ2GAL * q;
     float ext = exp(-0.06 / (rd.y + 0.04));
     float wash = 1.0 / (1.0 + 2.5 * moonSky);
     float vis = smoothstep(8.5, 15.0, dd);
     float mwv = smoothstep(10.0, 17.0, dd);
-    float4 mw = mwv > 0.0 ? nature_milkyWayLite(g) : float4(0.0, 0.0, 0.0, 1.0);
+    // (Below ~3% the band is invisible over the sea: not worth its noise.)
+    float4 mw = mwv > 0.03 ? nature_milkyWayLite(g) : float4(0.0, 0.0, 0.0, 1.0);
     float band = exp(-(g.z * g.z) / 0.02);
     float twk = smoothstep(0.5, 0.0, rd.y);
-    float3 st = nature_galStars(g, pix, band * mwv, mix(1.0, mw.w, 0.85), t, twk) * 0.5 * mix(1.0, wash, 0.5);
+    float3 st = nature_seaStars(g, pix, band * mwv, mix(1.0, mw.w, 0.85), t, twk, smoothstep(0.45, 0.7, vis)) * 0.5 * mix(1.0, wash, 0.5);
     return (st * vis + mw.rgb * 0.035 * mwv * wash) * ext / expo;
 }
 
@@ -974,8 +1082,8 @@ static inline float4 nature_ocean(float2 uv, float2 res, float2 px, float t, con
             float rs = (1.0 - q) * (1.0 - q);
             float ph = dot(w, W.xy) * KW.x - KW.y * ts + W.z;
             float cph, sph = 0.0;
-            if (i < 10) sph = sincos(ph, cph);
-            else cph = cos(ph + (i >= 17 ? warp * (1.0 + 0.26 * float(i - 17)) + 2.2 * prev : 0.0));
+            if (i < 10) sph = nature_sincosT(ph * 0.15915494, cph);
+            else cph = nature_sinT(ph * 0.15915494 + (i >= 17 ? 0.15915494 * (warp * (1.0 + 0.26 * float(i - 17)) + 2.2 * prev) : 0.0) + 0.25);
             if (i < 17) slope += W.xy * (cph * s * rs);
             else { rslope += W.xy * (cph * s * rs); rvar += s * s * rs * rs * 0.5; }
             // Gerstner: normals tip faster over the crests and lie flatter in the troughs.
@@ -1003,7 +1111,7 @@ static inline float4 nature_ocean(float2 uv, float2 res, float2 px, float t, con
         rr.y = 0.5 * (ry + sqrt(ry * ry + (sig + 0.004) * (sig + 0.004))) + 0.3 * sig;
         rr = normalize(rr);
         float F0 = nature_schlick(max(dot(nr, v), 0.0));
-        float3 sky = nature_oceanAtmos(rr, P, u);
+        float3 sky = nature_oceanAtmos(rr, P, u, true);
         float rcov;
         // The reflected sky is seen through a rough, curved mirror: each pixel spans about
         // 2σ of slope plus however fast the mirror turns from pixel to pixel.
@@ -1018,23 +1126,37 @@ static inline float4 nature_ocean(float2 uv, float2 res, float2 px, float t, con
         float D = exp(-t2 / sig2) / (NATURE_PI * sig2 * hn * hn * hn * hn);
         float Fh = nature_schlick(max(dot(h, v), 0.0));
         float sunUp = smoothstep(-0.012, 0.004, P.se);
-        // Sparkle: resolvable facets catching the sun, flickering as the sea moves; where a
-        // pixel covers many of them it sees their average.
-        float near = smoothstep(0.10, 0.025, fz);
-        float sp = 0.0, spark = 0.775;
-        if (near > 0.0) {
-            sp = pcg3(float3(floor(w * 3.0 / max(fz, 0.02)), floor(ts * 6.0))).x;
-            spark = mix(0.775, 0.6 + 3.5 * smoothstep(0.9, 1.0, sp), near);
-        }
-        float3 glint = P.esun * Tsun * sunUp * Fh * D * spark / (4.0 * max(dot(n, v), 0.08)) * 0.1;
-        float day = live ? nature_liveDay(u) : 0.0;
-        if (day > 0.0 && near > 0.0) {
-            // High sun (its mirror point is below the frame): steep wind-ripple facets still
-            // flash it back, scattered as single-pixel sparkles across the near water.
-            float s2w = sig2 + 0.05;
-            float Dw = exp(-t2 / s2w) / (NATURE_PI * s2w * hn * hn * hn * hn);
-            float fl = smoothstep(0.96, 1.0, sp);
-            glint += P.esun * Tsun * Fh * Dw * fl * fl * day * 24.0 * near;
+        float3 glint = P.esun * Tsun * sunUp * Fh * D * 0.775 / (4.0 * max(dot(n, v), 0.08)) * 0.1;
+        // Near the camera the glitter resolves into separate glints: one capillary facet per
+        // cell of water, its slope rocking slowly as the ripples pass, flashing where it sweeps
+        // through the sun's mirror slope. Facets hold the sun's own radiance, drift with the
+        // wind, live several frames (no per-frame flicker) and are drawn as dots filtered by
+        // the pixel footprint. Cells scale with the output, so thumbnails sparkle like 5K.
+        float cs = 0.07 * max(P.pix * 2380.0, 1.0);
+        float near = smoothstep(cs * 0.55, cs * 0.25, fz);
+        if (near > 0.0 && sunUp > 0.0) {
+            float2 sh = h.xz / h.y - n.xz / n.y;              // mirror slope − surface slope
+            const float sm = 0.10;                            // capillary facet slope spread
+            if (dot(sh, sh) < 9.0 * sm * sm) {
+                float2 wc = w - float2(0.25, -0.9) * ts * 0.18;   // facets drift down-wind
+                float2 cid = floor(wc / cs);
+                float3 h1 = pcg3(float3(cid, 17.0)), h2 = pcg3(float3(cid, 29.0));
+                float2 m = (h1.xy - 0.5) * 1.6 * sm
+                         + 0.75 * sm * float2(sin(ts * (0.9 + 0.9 * h1.z) + h2.x * 6.283),
+                                              cos(ts * (0.7 + 0.9 * h2.x) + h1.z * 6.283));
+                float2 dl = sh + m;
+                float flash = exp(-dot(dl, dl) * (1.0 / 0.0012));
+                if (flash > 0.002) {
+                    float2 dd = wc - (cid + 0.25 + 0.5 * h2.yz) * cs;
+                    // A short dash along the crest (facets are longer across the view).
+                    float rg = cs * 0.09, rgx = rg * (1.6 + 0.8 * h1.x);
+                    float ra = max(rg / fz, 0.7), rb = max(rgx / fx, 0.8);    // radii, pixels
+                    float da = dot(dd, vh) / fz, db = (dd.x * vh.y - dd.y * vh.x) / fx;
+                    float dot2 = exp(-(da * da) / (ra * ra) - (db * db) / (rb * rb));
+                    float en = min((rg / fz) * (rgx / fx) / (ra * rb), 1.0);
+                    glint += P.esun * Tsun * sunUp * Fh * 40.0 * flash * dot2 * en * near;
+                }
+            }
         }
         // Light scattered up out of the water body.
         float3 deep = srgbToLinear(u.colorA.rgb);
@@ -1044,6 +1166,7 @@ static inline float4 nature_ocean(float2 uv, float2 res, float2 px, float t, con
         float3 hz = sky;
         if (!live) hz = nature_oceanAtmos(normalize(float3(rw.x, 0.004, rw.z)), P, u);
         float bodySun = live ? smoothstep(-0.07, 0.0, P.se) : 1.0;
+        float day = live ? nature_liveDay(u) : 0.0;
         // (A high sun lights the water column itself: the sea turns blue, not grey.)
         float3 body = deep * (sky * float3(0.9, 1.0, 1.15) + P.esun * Tsun * (0.04 + 0.8 * day) * max(P.sd.y + 0.1, 0.0) * bodySun);
         // Smith-style masking: on rough water at grazing angles, much of the mirror is
@@ -1069,76 +1192,142 @@ static float4 nature_oceanLive(float2 uv, float2 res, float2 px, float t, consta
     return nature_ocean(uv, res, px, t, u, true);
 }
 
+
 // ---------------------------------------------------------------- rain on glass (case 58)
 //
 // Behind the glass: a night street, entirely out of focus — lamps, lit windows, traffic —
 // drawn as bokeh discs whose size and brightness follow the blur (energy-conserving: a
-// light defocused to twice the radius is a quarter as bright). On the glass: beads at
-// two scales that appear and evaporate, and drops that run down in stop-go jerks,
-// leaving a trail of droplets and a clear streak through the condensation. Each drop is
-// a tiny lens: it shows a sharp, inverted, wide-angle image of the street.
+// light defocused to twice the radius is a quarter as bright).
+// On the glass, the three kinds of water a real window carries in the rain:
+//  • mist — a film of tiny droplets (what makes glass look fogged): it veils the street into
+//    a soft haze and gives the glass its fine stippled texture;
+//  • beads — drops at two scales that land, linger and evaporate, each clearing a little
+//    ring of mist around itself;
+//  • runners — big drops that slide down in stop-go jerks, wiping a clear, wet trail through
+//    the mist and leaving a line of small beads behind.
+// Every drop is a real lens: a spherical cap (contact angle ~45–75°) refracting by Snell's
+// law, so it shows a sharp, inverted, wide-angle picture of the street (its lights become
+// bright points), darkens toward the rim where the light is totally internally reflected,
+// and carries a small highlight of the street lamp above. Drop outlines, the refracted
+// picture (sampled with a blur at least as wide as the pixel's footprint in it) and the
+// mist droplets are all filtered by the pixel footprint, so nothing crawls at any size.
 
+// The water on the glass as one height field (screen units): the smooth union of every
+// drop's spherical cap, so drops that touch merge through a curved neck of water instead
+// of meeting on a hard seam. It goes negative outside the drops (continuing the rim's
+// slope), which gives each outline its antialiased coverage.
 struct NatureRainDrop {
-    float2 o;      // offset from the drop centre in drop radii (|o| < 1 inside)
-    float2 c;      // drop centre (screen units)
-    float  h;      // cap height 0..1 (0 = no drop)
-    float  trail;  // wet streak / cleared fog 0..1
+    float  H;      // water height (screen units); < 0 outside, by the distance to the rim × slope
+    float2 G;      // its gradient (the surface slope; points uphill, toward the drop centre)
+    float  r;      // radius of the tallest drop here (screen units)
+    float  near;   // distance to the nearest drop rim, in its radii (mist clears around drops)
+    float  trail;  // wet streak / cleared mist 0..1
     float  tdx;    // signed position across the streak, -1..1
 };
 
-// Keep the tallest cap at p. `shape` gives each drop its own slightly irregular outline
-// (water on glass is never a perfect circle), heavier toward the bottom.
-static inline void nature_dropTake(thread NatureRainDrop &D, float2 p, float2 c, float2 r, float2 shape) {
+// A cheap integer hash of a 2D lattice point (+ seed) → three floats in [0,1): one multiply
+// round instead of pcg3's two, for the many per-cell lookups the glass makes per pixel.
+static inline float3 nature_hash3(float2 id, uint seed) {
+    uint2 ui = uint2(int2(id) + 0x8000);
+    uint n = (ui.x * 0x8da6b343u) ^ (ui.y * 0xd8163841u) ^ (seed * 0x9e3779b9u);
+    n = (n ^ (n >> 16u)) * 0x7feb352du;
+    n ^= n >> 15u;
+    return float3(float(n & 0x3ffu), float((n >> 10u) & 0x3ffu), float(n >> 20u))
+         * float3(1.0 / 1024.0, 1.0 / 1024.0, 1.0 / 4096.0);
+}
+
+// Polynomial smooth max of two water surfaces (heights a, b; gradients ga, gb), blend k.
+static inline void nature_waterUnion(thread float &H, thread float2 &G, float h, float2 g, float k) {
+    float w = saturate(0.5 + 0.5 * (h - H) / k);
+    H = mix(H, h, w) + k * w * (1.0 - w);
+    G = mix(G, g, w);
+}
+
+// Add one drop (centre c, radii r, outline irregularity `shape`, seed k → contact angle).
+// Water on glass is never a perfect circle: `shape` gives each its own slightly irregular
+// outline, heavier toward the bottom.
+static inline void nature_dropTake(thread NatureRainDrop &D, float2 p, float2 c, float2 r, float2 shape,
+                                   float k, float pix) {
     float2 o = (p - c) / r;
-    float l = length(o);
-    if (l > 1.25) return;
+    float l2 = dot(o, o);
+    if (l2 > 3.3) return;                                  // beyond 1.6 radii even after `shape`
+    float l = sqrt(l2);
     float2 n = o / max(l, 1e-4);
-    float rf = 1.0 + 0.09 * (n.x * n.x - n.y * n.y) * shape.x + 0.07 * n.x * n.y * shape.y + 0.06 * n.y;
+    float rf = 1.0 + 0.09 * (n.x * n.x - n.y * n.y) * shape.x + 0.07 * n.x * n.y * shape.y + 0.06 * n.y
+             + 0.05 * n.x * (n.x * n.x - 3.0 * n.y * n.y) * shape.y;
     o /= rf;
-    float d2 = dot(o, o);
-    if (d2 < 1.0) {
-        float h = sqrt(1.0 - d2);
-        if (h > D.h) { D.h = h; D.o = o; D.c = c; }
+    l /= rf;
+    D.near = min(D.near, l);
+    // Spherical cap, sin(contact angle) st (30°–53°: rain on window glass): sphere radius
+    // Rs = 1/st drop radii, rim slope tan θc = 1/√(Rs² − 1).
+    float st = mix(0.50, 0.80, k);
+    float Rs2 = 1.0 / (st * st);
+    float c0 = sqrt(Rs2 - 1.0), tEdge = 1.0 / c0;
+    float2 dl = float2(o.x / r.x, o.y / r.y) / max(l, 1e-4);             // ∂l/∂p
+    float h;
+    float2 g;
+    if (l < 1.0) {
+        float s = sqrt(Rs2 - l * l);
+        h = r.x * (s - c0);
+        g = -r.x * (l / s) * dl;
+    } else {
+        h = (1.0 - l) * r.x * tEdge;
+        g = -r.x * tEdge * dl;
     }
+    if (h > D.H) D.r = r.x;
+    nature_waterUnion(D.H, D.G, h, g, 0.3 * r.x * (sqrt(Rs2) - c0) + 0.5 * pix);
 }
 
 // Static beads on a grid of cell size `cs`; they grow in, linger, then evaporate.
-static inline void nature_beads(thread NatureRainDrop &D, float2 p, float cs, float density, float t, float seed) {
+// Static beads on a grid of cell size `cs`; they grow in, linger, then evaporate. Rain lands
+// unevenly — some patches of glass carry more beads than others — judged at each bead's own
+// centre (judged per pixel, a bead could be half there, cut along the patch's contour).
+// `one`: small beads kept well inside their own cell, so only that cell is looked up.
+static inline void nature_beads(thread NatureRainDrop &D, float2 p, float cs, float density, float t,
+                                float seed, float pix, const bool one = false) {
     float2 g = p / cs;
     float2 ci = floor(g);
-    float2 dir = float2(g.x - ci.x < 0.5 ? -1.0 : 0.0, g.y - ci.y < 0.5 ? -1.0 : 0.0);
-    // Rain lands unevenly: patches of glass carry more beads than others.
-    float patchy = smoothstep(-0.25, 0.35, gnoise(p * 2.5 + seed));
-    float dens = density * (0.35 + 0.9 * patchy);
-    for (int k = 0; k < 4; ++k) {
+    float2 dir = one ? float2(0.0) : float2(g.x - ci.x < 0.5 ? -1.0 : 0.0, g.y - ci.y < 0.5 ? -1.0 : 0.0);
+    uint sd = uint(seed) * 0x9e3779b9u;
+    for (int k = 0; k < (one ? 1 : 4); ++k) {
         float2 id = ci + dir + float2(float(k & 1), float(k >> 1));
-        float3 h = pcg3(float3(id, seed));
-        if (h.z > dens) continue;
-        float2 c = (id + 0.2 + 0.6 * h.xy) * cs;
+        uint2 ui = uint2(int2(id) + 0x8000);
+        uint n = (ui.x * 0x8da6b343u) ^ (ui.y * 0xd8163841u) ^ sd;
+        n = (n ^ (n >> 16u)) * 0x7feb352du;
+        n ^= n >> 15u;
+        float3 h = float3(float(n & 0x3ffu), float((n >> 10u) & 0x3ffu), float(n >> 20u))
+                 * float3(1.0 / 1024.0, 1.0 / 1024.0, 1.0 / 4096.0);
+        float2 c = (id + (one ? 0.32 + 0.36 * h.xy : 0.2 + 0.6 * h.xy)) * cs;
+        float patch = 0.5 + 0.5 * nature_sinT(c.x * 0.61 + seed * 0.37) * nature_sinT(c.y * 0.83 + 0.11 * seed)
+                    + 0.25 * nature_sinT(c.x * 1.7 - c.y * 1.3 + seed);
+        if (h.z > density * (0.35 + 0.9 * saturate(patch))) continue;
         float2 dv = p - c;
-        if (dot(dv, dv) > cs * cs * 0.3) continue;                      // too far to touch p
+        if (dot(dv, dv) > cs * cs * 0.49) continue;                     // too far to touch p
         float3 h2 = fract(h.yzx * 91.37 + h.zxy * 17.13 + 0.31);     // second draw, no rehash
         float life = fract(t * (0.03 + 0.05 * h2.y) + h2.x);
-        float grow = smoothstep(0.0, 0.06, life) * smoothstep(1.0, 0.7, life);
-        float r = cs * (0.12 + 0.30 * h2.z * h2.z) * grow;
-        if (r <= 1e-4) continue;
-        nature_dropTake(D, p, c, float2(r, r * (0.9 + 0.15 * h2.x)), h.xy * 2.0 - 1.0);
+        float grow = smoothstep(0.0, 0.05, life) * smoothstep(1.0, 0.7, life);
+        // (Water gathers as it runs down: beads are bigger low on the glass. Capped so the
+        // bead, its irregular outline and its mist ring stay inside the 2×2 cells searched.)
+        float r = min(cs * (0.11 + 0.31 * h2.z * h2.z) * grow * (0.85 + 0.3 * saturate(c.y)), (one ? 0.25 : 0.40) * cs);
+        if (r <= 0.5 * pix) continue;
+        nature_dropTake(D, p, c, float2(r, r * (0.92 + 0.14 * h2.x)), h.xy * 2.0 - 1.0, h2.y, pix);
     }
 }
 
 // Running drops: one per column, sliding down in jerks along a meandering path.
-static inline void nature_runners(thread NatureRainDrop &D, float2 p, float cw, float density, float t) {
+static inline void nature_runners(thread NatureRainDrop &D, float2 p, float cw, float density, float t,
+                                  float pix) {
     float col = floor(p.x / cw);
     for (int k = -1; k <= 1; ++k) {
         float id = col + float(k);
-        float3 h = pcg3(float3(id, 5.0, 19.0));
+        float3 h = nature_hash3(float2(id, 5.0), 19u);
         if (h.z > density) continue;
         float tau = t * (0.05 + 0.07 * h.x) + h.y * 7.0;
         float cyc = floor(tau);
-        float seedx = pcg3(float3(id, cyc, 31.0)).x;
+        float seedx = nature_hash3(float2(id, cyc), 31u).x;
         float x0 = (id + 0.25 + 0.5 * seedx) * cw;
-        if (abs(p.x - x0) > 0.55 * cw) continue;           // path, drop and trail stay within this
-        float3 h2 = pcg3(float3(id, 8.0, 23.0));
+        if (abs(p.x - x0) > 0.6 * cw) continue;            // path, drop and trail stay within this
+        float3 h2 = nature_hash3(float2(id, 8.0), 23u);
         float ft = fract(tau);
         // Stop-go: the drop gathers, lurches, gathers again.
         float steps = 7.0;
@@ -1151,11 +1340,11 @@ static inline void nature_runners(thread NatureRainDrop &D, float2 p, float cw, 
         float yd = y;
         float xd = x0 + cw * (0.30 * (nature_n1(yd * 4.0 + sx) - 0.5) + 0.07 * (nature_n1(yd * 16.0 + sx2) - 0.5));
         float r = cw * (0.14 + 0.08 * h2.y);
-        // The drop: a little wider at the bottom (teardrop).
+        // The drop: a little wider at the bottom (teardrop), stretched along its run.
         float2 dc = float2(xd, yd);
         float2 q = p - dc;
-        float ry = r * (q.y < 0.0 ? 1.35 : 1.0);
-        nature_dropTake(D, p, dc, float2(r, ry), float2(0.5, h2.x - 0.5));
+        float ry = r * (q.y < 0.0 ? 1.45 : 1.05);
+        nature_dropTake(D, p, dc, float2(r, ry), float2(0.5, h2.x - 0.5), 0.75 + 0.25 * h2.z, pix);
         // The trail above it: a wet streak and a line of tiny droplets left behind.
         float above = yd - p.y;
         float tl = 0.35 + 0.3 * h2.z;
@@ -1167,13 +1356,13 @@ static inline void nature_runners(thread NatureRainDrop &D, float2 p, float cw, 
             if (tr > D.trail) { D.trail = tr; D.tdx = (p.x - px0) / tw; }
             float cs = r * 0.9;
             float yi = floor(p.y / cs);
-            float3 hb = pcg3(float3(id, yi, cyc + 47.0));
+            float3 hb = nature_hash3(float2(id * 131.0 + cyc, yi), 47u);
             if (hb.z < 0.55 * fade + 0.15) {
                 float rr = r * (0.18 + 0.25 * hb.x) * (0.5 + 0.5 * fade);
                 float cy = (yi + 0.5) * cs;
                 float cx = x0 + cw * (0.30 * (nature_n1(cy * 4.0 + sx) - 0.5) + 0.07 * (nature_n1(cy * 16.0 + sx2) - 0.5))
                          + (hb.y - 0.5) * r * 0.6;
-                nature_dropTake(D, p, float2(cx, cy), float2(rr, rr), hb.xy - 0.5);
+                nature_dropTake(D, p, float2(cx, cy), float2(rr, rr), hb.xy - 0.5, hb.y, pix);
             }
         }
     }
@@ -1181,28 +1370,36 @@ static inline void nature_runners(thread NatureRainDrop &D, float2 p, float cw, 
 
 // One bokeh layer: lights on a grid (cell `cs`), radius grows with blur, brightness falls
 // as 1/r² so the light's energy is conserved, with a faint glow skirt (lens veiling).
-// `kind` picks colours/placement; `pres` is the share of cells holding a light.
+// `kind` picks colours/placement; `pres` is the share of cells holding a light. `minR`
+// floors the disc radius (a refracted view is filtered by its own pixel footprint).
 static inline float3 nature_bokehLayer(float2 p, float cs, float r0, float blur, float2 drift,
-                                       float yLo, float yHi, int kind, float3 lamp, float seed, float pres) {
-    if (p.y < yLo - cs * 0.65 || p.y > yHi + cs * 0.65) return float3(0.0);   // outside the band
+                                       float yLo, float yHi, int kind, float3 lamp, float seed, float pres,
+                                       float minR = 0.0, float halo = 0.0, bool cheap = false) {
+    float reach = 0.65 + 0.35 * halo;
+    if (p.y < yLo - cs * reach || p.y > yHi + cs * reach) return float3(0.0);   // outside the band
     float2 q = (p + drift) / cs;
     float2 ci = floor(q);
     // Only the 2×2 cells nearest p can reach it: radii stay under ~0.48 cell (with the
     // glow skirt, under 0.65), and centres sit at least 0.15 cell inside their cell.
     float2 dir = float2(q.x - ci.x < 0.5 ? -1.0 : 0.0, q.y - ci.y < 0.5 ? -1.0 : 0.0);
-    float R = r0 * (0.08 + 1.0 * blur);
-    float soft = R * (0.06 + 0.22 * blur) + 0.0012;
+    // (Capped so disc, edge and glow stay inside the 2×2 cells searched: ≤ 0.65 cell.)
+    float R = min(max(r0 * (0.08 + 1.0 * blur), minR), 0.36 * cs);
+    // (Through mist (halo) the disc's edge dissolves into a glow.)
+    float soft = min(R * (0.06 + 0.22 * blur + 0.45 * halo) + 0.0012 + minR * 0.5, 0.09 * cs);
     float3 acc = float3(0.0);
     for (int k = 0; k < 4; ++k) {
         float2 id = ci + dir + float2(float(k & 1), float(k >> 1));
-        float3 h = pcg3(float3(id, seed));
+        // (The refracted views inside drops are tiny and inverted: no one can tell their
+        // lights from the street's, so they take the cheap hash.)
+        float3 h = cheap ? nature_hash3(id, uint(seed)) : pcg3(float3(id, seed));
         if (h.z > pres) continue;
         float2 c = (id + 0.15 + 0.7 * h.xy) * cs - drift;
         if (c.y < yLo || c.y > yHi) continue;
         float3 h2 = fract(h.yzx * 91.37 + h.zxy * 17.13 + 0.31);     // second draw, no rehash
         float d = length(p - c);
         float rr = R * (0.55 + 0.9 * h2.z);
-        if (d > rr * 1.35 + soft) continue;
+        float rh = min(rr * (1.35 + 1.4 * halo) + soft, 0.65 * cs);
+        if (d > rh) continue;
         float3 col;
         if (kind == 0) {          // lit windows: warm, cool and the odd coloured one
             col = h2.x < 0.55 ? float3(1.0, 0.72, 0.42) : (h2.x < 0.85 ? float3(0.70, 0.82, 1.0) : float3(0.30, 0.95, 0.85));
@@ -1215,9 +1412,13 @@ static inline float3 nature_bokehLayer(float2 p, float cs, float r0, float blur,
         }
         col *= 0.15 + 0.85 * h2.y * h2.y;                              // a wide range of brightness
         float disc = smoothstep(rr + soft, rr - soft, d);
-        float rim = 1.0 + 0.3 * smoothstep(rr * 0.6, rr, d) * blur;   // brighter, slightly ringed edge
+        // A real lens's defocused disc: a little brighter toward its rim.
+        float rim = 1.0 + 0.22 * smoothstep(rr * 0.5, rr, d) * blur;
         float energy = (r0 * 0.45) * (r0 * 0.45) / max(rr * rr, 1e-6);
-        float skirt = exp(-max(d - rr, 0.0) / (rr * 0.12 + 1e-4)) * 0.12 * smoothstep(rr * 1.35 + soft, rr, d);
+        // Veiling glow: the lens's, and (halo > 0) the mist's, which spreads each light into a
+        // soft corona.
+        float skirt = exp(-max(d - rr, 0.0) / (rr * (0.12 + 0.55 * halo) + 1e-4)) * (0.12 + 0.30 * halo)
+                    * smoothstep(rh, rr, d);
         acc += col * (disc * rim + skirt) * min(energy, 30.0);
     }
     return acc;
@@ -1225,7 +1426,7 @@ static inline float3 nature_bokehLayer(float2 p, float cs, float r0, float blur,
 
 // The street behind the glass at blur 0..1 (0 = sharp pinpoints).
 static inline float3 nature_street(float2 p, float aspect, float blur, float t, float3 night, float3 lamp,
-                                   bool lite = false) {
+                                   bool lite = false, float minR = 0.0, float halo = 0.0) {
     float y = p.y;
     float3 col = night * (0.55 + 1.5 * smoothstep(0.1, 0.95, y));                // sky → street glow
     // Big defocused colour washes: lamp-lit street low down, a neon glow, cool sky light.
@@ -1235,12 +1436,122 @@ static inline float3 nature_street(float2 p, float aspect, float blur, float t, 
     col += float3(0.9, 0.18, 0.55) * 0.020 * exp(-dot(nd, nd));
     float2 cd = (p - float2(aspect * 0.18, 0.2)) / float2(0.4, 0.25);
     col += float3(0.25, 0.55, 0.9) * 0.012 * exp(-dot(cd, cd));
-    if (!lite) col += nature_bokehLayer(p, 0.055, 0.016, blur, float2(0.0), 0.05, 0.60, 0, lamp, 3.0, 0.22) * 0.6;
-    col += nature_bokehLayer(p, 0.165, 0.050, blur, float2(0.0), 0.10, 0.58, 0, lamp, 5.0, 0.30) * 0.7;
-    col += nature_bokehLayer(p, 0.165, 0.050, blur, float2(0.0), 0.30, 0.50, 3, lamp, 11.0, 0.18) * 0.9;
-    col += nature_bokehLayer(p, 0.31, 0.095, blur, float2(0.0), 0.24, 0.58, 1, lamp, 9.0, 0.85) * 1.6;
-    col += nature_bokehLayer(p, 0.105, 0.032, blur, float2(t * 0.020, 0.0), 0.62, 0.74, 2, lamp, 15.0, 0.62) * 1.5;
-    col += nature_bokehLayer(p, 0.14, 0.042, blur, float2(-t * 0.035, 0.0), 0.70, 0.90, 2, lamp, 21.0, 0.55) * 1.3;
+    if (!lite) col += nature_bokehLayer(p, 0.055, 0.016, blur, float2(0.0), 0.05, 0.60, 0, lamp, 3.0, 0.22, minR, halo, lite) * 0.6;
+    col += nature_bokehLayer(p, 0.165, 0.050, blur, float2(0.0), 0.10, 0.58, 0, lamp, 5.0, 0.30, minR, halo, lite) * 0.7;
+    if (!lite) col += nature_bokehLayer(p, 0.165, 0.050, blur, float2(0.0), 0.30, 0.50, 3, lamp, 11.0, 0.18, minR, halo, lite) * 0.9;
+    col += nature_bokehLayer(p, 0.31, 0.095, blur, float2(0.0), 0.24, 0.58, 1, lamp, 9.0, 0.85, minR, halo, lite) * 1.6;
+    col += nature_bokehLayer(p, 0.105, 0.032, blur, float2(t * 0.020, 0.0), 0.62, 0.74, 2, lamp, 15.0, 0.62, minR, halo, lite) * 1.5;
+    col += nature_bokehLayer(p, 0.14, 0.042, blur, float2(-t * 0.035, 0.0), 0.70, 0.90, 2, lamp, 21.0, 0.55, minR, halo, lite) * 1.3;
+    return col;
+}
+
+// asin to ~7e-5 (Abramowitz & Stegun 4.4.45), x in [0, 1].
+static inline float nature_asin01(float x) {
+    return 1.5707963 - sqrt(max(1.0 - x, 0.0)) * (1.5707288 + x * (-0.2121144 + x * (0.0742610 - 0.0187293 * x)));
+}
+
+// The mist droplet nearest p on a jittered grid: (coverage, radial position in its radii).
+// Sizes spread widely, as condensation's do; cells scale with the output (at least ~6 px),
+// so the stipple stays a fine stipple at any size.
+static inline float2 nature_mist(float2 p, float pix, float density) {
+    float cs = max(0.0062, 6.0 * pix);
+    float2 g = p / cs;
+    float2 ci = floor(g);
+    float3 h = nature_hash3(ci, 61u);
+    if (h.z > density) return float2(0.0, 1.0);
+    float sz = h.z / max(density, 1e-3);                      // 0..1, uniform among the present
+    float r = cs * (0.08 + 0.26 * sz * sz);
+    float2 c = (ci + 0.5 + (h.xy - 0.5) * (0.92 - 2.0 * r / cs)) * cs;
+    float rho = length(p - c) / r;
+    return float2(saturate((1.0 - rho) * r / pix + 0.5), rho);
+}
+
+// RAIN ON GLASS. p0 = (speed, rain, condensation, city blur); colorA night, colorB lamp light.
+static inline float3 nature_rainGlass(float2 uv, float2 res, float t, constant FXUniforms& u) {
+    float speed = u.p0.x, rain = clamp(u.p0.y, 0.0, 1.0), fogAmt = clamp(u.p0.z, 0.0, 1.0);
+    float blur = clamp(u.p0.w, 0.0, 1.0);
+    float aspect = res.x / res.y;
+    float2 p = float2(uv.x * aspect, uv.y);
+    float pix = 1.0 / res.y;
+    float ts = t * speed;
+    float3 night = nature_lin(u.colorA.rgb);
+    float3 lamp = srgbToLinear(u.colorB.rgb);
+
+    NatureRainDrop D;
+    D.H = -1.0; D.G = float2(0.0); D.r = 0.01; D.near = 9.0; D.trail = 0.0; D.tdx = 0.0;
+    nature_runners(D, p, 0.11, 0.25 + 0.6 * rain, ts, pix);
+    float trail = D.trail;
+    NatureRainDrop B = D;
+    B.H = -1.0; B.G = float2(0.0);
+    nature_beads(B, p, 0.075, 0.14 + 0.50 * rain, ts, 2.0, pix);
+    nature_beads(B, p, 0.024, 0.20 + 0.62 * rain, ts, 7.0, pix, true);
+    // Beads and runners are one body of water: where they touch, they merge.
+    if (B.H > D.H) D.r = B.r;
+    nature_waterUnion(D.H, D.G, B.H, B.G, 0.002);
+    D.near = B.near;
+
+    // Mist (condensation): patchy, thinner near the warm middle, wiped clean along trails,
+    // and thinned in a ring around each drop (the drop drew those droplets in).
+    float fogN = 0.7 + 0.5 * nature_gnoise(p * 3.0 + 1.7);
+    float clearRing = smoothstep(1.0, 1.5, D.near);
+    float fog = fogAmt * clamp(fogN, 0.0, 1.0) * (1.0 - 0.8 * trail) * (0.75 + 0.25 * clearRing);
+
+    // The refracted view through the water under p (computed for every pixel, so the
+    // footprint derivative below is well defined): the ray leaving the water bends by
+    // Snell's law toward the uphill side — an inverted, wide-angle picture of the street.
+    float sl = length(D.G);
+    float2 gd = D.G / max(sl, 1e-5);
+    float sa = sl * rsqrt(1.0 + sl * sl);                   // sine of the surface tilt
+    float x = min(1.333 * sa, 1.0);
+    float dev = nature_asin01(x) - nature_asin01(sa);       // deviation, radians
+    float2 smp = p + gd * dev * 0.9;
+    float fw = length(fwidth(smp));
+    // Drop outline coverage: signed distance to the rim (height / slope), in pixels.
+    float cov = saturate(D.H / (max(sl, 0.25) * pix) + 0.5);
+
+    // (Each view is only evaluated where it shows: inside a drop the street behind the
+    // glass is hidden, so whole SIMD groups inside drops skip it.)
+    float3 col = float3(0.0);
+    float bBack = blur * (0.7 + 0.3 * fog) + 0.06 + 0.25 * fog;
+    if (cov < 1.0) {
+        // A runner's wet streak is a thin cylindrical lens: it squeezes the street sideways.
+        float2 sp = p + float2(D.tdx * 0.008 * trail, 0.0);
+        col = nature_street(sp, aspect, bBack, ts, night, lamp, false, 0.0, fog);
+        // The mist scatters light: lifts and flattens the street behind it, a cool veil.
+        float3 fogC = night * 2.0 + lamp * 0.010;
+        col = mix(col, fogC + col * 0.55, fog * 0.6);
+        // Its droplets: each a tiny lens, a little brighter where it gathers the light behind
+        // it and a little darker at its rim.
+        float2 m = nature_mist(p, pix, 0.55 + 0.35 * fogAmt);
+        if (m.x > 0.0) {
+            float3 mc = col * (0.90 + 0.22 * smoothstep(0.85, 0.0, m.y))
+                      + (night * 0.6 + lamp * 0.008) * smoothstep(0.4, 0.0, m.y) * 0.3;
+            col = mix(col, mc, m.x * smoothstep(0.08, 0.35, fog) * clearRing);
+        }
+        // The streak's water film: a faint sheen along its edges.
+        float ae = abs(D.tdx);
+        col += (night * 0.9 + lamp * 0.01) * smoothstep(0.35, 0.95, ae) * trail * 0.5;
+    }
+    if (cov > 0.0) {
+        // Through the water: sharp (a drop's focal length is tiny), filtered by the pixel's
+        // footprint in the refracted picture.
+        float3 seen = nature_street(smp, aspect, 0.10, ts, night, lamp, true, clamp(fw * 0.5, 0.0, 0.05));
+        // Fresnel loss on the way out, rising to total internal reflection where the surface
+        // is steepest (there the water shows the dark room behind the camera). The water and
+        // glass also scatter a little of the soft view into it.
+        float ct = sqrt(max(1.0 - x * x, 0.0));
+        float Tr = (1.0 - nature_schlick(ct)) * smoothstep(0.0, 0.25, ct);
+        float3 dc = (seen * 1.05 + night * 0.9 + lamp * 0.006) * Tr + night * 0.5 * (1.0 - Tr);
+        // Light gathered into the lower edge, where the surface turns down (a caustic).
+        float lower = smoothstep(0.2, 0.6, sl) * smoothstep(0.2, 0.9, -gd.y) * Tr;
+        dc += (seen * 0.5 + night * 1.2 + lamp * 0.025) * lower;
+        // The street lamp above-left mirrored in the water: a soft highlight with a hot core
+        // where the surface faces it, faded out once smaller than a pixel.
+        float2 hl = (D.G - float2(0.17, 0.25)) * 4.0;
+        float hs = smoothstep(1.0, 3.0, D.r * 0.25 / pix);
+        dc += (night * 3.0 + lamp * 0.10) * (exp(-dot(hl, hl) * 1.6) + 2.5 * exp(-dot(hl, hl) * 12.0)) * hs;
+        col = mix(col, dc, cov);
+    }
     return col;
 }
 
@@ -1263,36 +1574,80 @@ struct NatureSnowP {
 
 constant float NATURE_SNOW_CAMH = 1.7;
 
-// Silhouette of a pine row at depth z: .x = coverage, .y = snow lying on the branch tiers.
-static inline float2 nature_pineRow(float2 sp, float z, float h0, float seed, float pix) {
+// The forest edge stands on rolling ground, not a ruled line: each tree row sits on its own
+// snowbank — a ridge of drifted snow and buried scrub whose height (metres) wanders along
+// the row — which hides the trunks and the ground behind it.
+// (1D value noise on a well-mixed integer hash: nature_h1's neighbours run correlated, which
+// left long stretches of ridge flat.)
+static inline float nature_nr(float x) {
+    float i = floor(x), f = x - i;
+    uint2 n = uint2(int2(int(i), int(i) + 1) + 0x8000) * 0x9e3779b9u;
+    n ^= n >> 16u; n *= 0x7feb352du; n ^= n >> 15u; n *= 0x846ca68bu; n ^= n >> 16u;
+    float2 h = float2(n >> 8u) * (1.0 / 16777216.0);
+    return mix(h.x, h.y, f * f * (3.0 - 2.0 * f));
+}
+// The bank's mounds (what a tree stands on) and, on top, the scrub along its crest.
+static inline float nature_snowMound(float wx, float seed, float amp) {
+    float m = nature_nr(wx * 0.05 + seed);
+    return amp * (0.25 + 1.1 * m * m) + 0.4 * amp * nature_nr(wx * 0.15 + seed * 1.7);
+}
+static inline float nature_snowRidge(float wx, float seed, float amp) {
+    return nature_snowMound(wx, seed, amp) + 0.22 * nature_nr(wx * 0.9 + seed * 3.1) + 0.10 * nature_nr(wx * 2.7 + seed);
+}
+
+// Spruce silhouettes in a row at depth z, standing on its ridge: .x = coverage, .y = snow
+// lying on the branches, .z = −1…1 across the tree (for the lamp-side light). Each tree is
+// a stack of drooping branch tiers, widest at each tier's foot and narrowing to a spire,
+// with needle clumps ragging the outline differently on each side.
+static inline float3 nature_pineRow(float2 sp, float z, float h0, float seed, float pix, float amp) {
     float wx = sp.x * z;                              // metres across at that depth
-    float gy = h0 - NATURE_SNOW_CAMH / z;             // ground line at that depth (screen)
-    float wy = (sp.y - gy) * z;                       // metres above the ground there
-    if (wy < 0.0) return float2(1.0, 0.0);
-    if (wy > 22.0) return float2(0.0);
+    float wyE = (sp.y - h0) * z;                      // metres relative to the eye there
     const float sp_ = 4.2;
     float ci = floor(wx / sp_);
-    float cov = 0.0, snow = 0.0;
+    float cov = 0.0, snow = 0.0, side = 0.0;
+    float aa = pix * z * 1.2;                         // a pixel, in metres at that depth
     for (int j = -1; j <= 1; ++j) {
         float id = ci + float(j);
-        float3 h = pcg3(float3(id, seed, 5.0));
-        if (h.z < 0.18) continue;
+        float3 h = nature_hash3(float2(id, 5.0), uint(seed));
+        if (h.z < 0.14) continue;
         float cx = (id + 0.2 + 0.6 * h.x) * sp_;
-        float H = 9.0 + 12.0 * h.y;
-        if (wy > H) continue;
-        float rel = 1.0 - wy / H;
-        float tier = fract(wy / (H * 0.13) + h.z * 3.0);
-        float hw = H * 0.26 * rel * (0.72 + 0.28 * (1.0 - tier)) + 0.12;
-        float aa = pix * z * 1.5;
-        float dx = abs(wx - cx);
-        float c = smoothstep(hw + aa, hw - aa, dx);
+        float H = 8.0 + 13.0 * h.y * h.y + 3.0 * h.z;
+        if (h.z < 0.30) H *= 0.35;                    // young trees and scrub at the edge
+        // (Cheap bounds first — the mound lies between 0.25 and 1.8 × amp — so the sky above
+        // the forest and the bank below it skip the tree.)
+        float wb = wyE + NATURE_SNOW_CAMH + 0.6;
+        if (wb < 0.25 * amp || wb > 1.75 * amp + H + 0.6) continue;
+        float base = nature_snowMound(cx, seed, amp) - NATURE_SNOW_CAMH - 0.6;
+        float wy = wyE - base;                        // metres above this tree's foot
+        if (wy < 0.0 || wy > H + 0.6) continue;
+        float rel = saturate(1.0 - wy / H);           // 1 at the foot, 0 at the tip
+        float nT = 7.0 + floor(5.0 * h.x);
+        float env = H * 0.25 * rel + 0.05;
+        float dx = wx - cx;
+        float sgn = dx < 0.0 ? -1.0 : 1.0;
+        float u0 = saturate(abs(dx) / env);
+        // Needle clumps: ragged, and different on each side.
+        float rag = nature_n1(wy * 3.1 + sgn * 7.3 + id * 1.37) - 0.5;
+        float rag2 = nature_n1(wy * 9.0 + sgn * 3.1 + id * 2.11) - 0.5;
+        // Tiers: each a drooping skirt, widest at its foot; the branches sag toward their tips,
+        // so each tier's lower edge curves down and out (no ruled horizontal steps).
+        float tt = fract(wy / H * nT + h.z * 3.0 + 0.32 * u0 * u0 + 0.10 * rag2);   // 0 foot … 1 top
+        float w = env * (0.48 + 0.52 * pow(1.0 - tt, 0.7)) * (1.0 - 0.14 * smoothstep(0.10, 0.0, tt));
+        w *= 1.0 + 0.30 * rag * smoothstep(0.0, 0.25, rel) + 0.14 * rag2;
+        w = max(w, 0.06 + 0.06 * rel);               // the stem
+        float c = smoothstep(w + aa, w - aa, abs(dx)) * step(wy, H + 0.6 * (1.0 - smoothstep(0.0, 0.08, abs(dx))));
+        c *= smoothstep(H + 0.6, H - 0.2, wy + abs(dx) * 3.0);   // the spire
         if (c > cov) {
             cov = c;
-            // Snow sits on each tier's ledge, thickest toward the branch tips.
-            snow = smoothstep(0.32, 0.05, tier) * smoothstep(0.15, 0.8, dx / hw) * (0.6 + 0.4 * h.y);
+            float u = abs(dx) / max(w, 1e-3);
+            // Snow lies on each tier's upper face, out toward the branch tips, in clumps.
+            float clump = nature_n1(wx * 2.3 + wy * 1.7 + id * 5.0);
+            snow = smoothstep(0.45, 0.08, tt) * smoothstep(0.2, 0.75, u) * (0.45 + 0.75 * clump)
+                 * (0.55 + 0.45 * h.y) * smoothstep(0.02, 0.2, rel);
+            side = dx / max(w, 1e-3);
         }
     }
-    return float2(cov, snow);
+    return float3(cov, snow, side);
 }
 
 // The lamp is shaded: it throws a cone of light downward (soft-edged, ~55° half-angle).
@@ -1301,8 +1656,27 @@ static inline float nature_lampCone(float3 fromLamp) {
     return 0.06 + 0.94 * smoothstep(0.42, 0.70, c);
 }
 
-// Everything behind the snow: sky, pine rows in fog, the lamp post, lit snowy ground.
-// Returns colour; `zb` is the depth of the first opaque surface (for flake occlusion).
+// Lamp light (both lamps) landing on snow at world point W (metres, eye-relative), facing up.
+static inline float nature_snowPool(float3 W, NatureSnowP P) {
+    float3 toL = P.L - W;
+    float d2 = dot(toL, toL);
+    float pool = P.lampI * max(toL.y, 0.0) / (d2 * sqrt(d2) + 0.5) * nature_lampCone(-toL);
+    float3 toL2 = float3(-9.5, 3.0, 19.5) - W;                    // the far lamp's pool
+    float e2 = dot(toL2, toL2);
+    pool += P.lampI * max(toL2.y, 0.0) / (e2 * sqrt(e2) + 0.5) * nature_lampCone(-toL2) * 0.8;
+    return pool;
+}
+
+// The path: trodden snow winding from the near lamp to the far one.
+static inline float nature_snowPath(float x, float z) {
+    float xc = mix(3.2, -9.0, smoothstep(5.0, 19.5, z)) + 0.7 * sin(z * 0.31 + 1.0);
+    float w = 0.75 + 0.012 * z;
+    return smoothstep(w, w * 0.45, abs(x - xc)) * smoothstep(20.5, 18.5, z) * smoothstep(1.5, 3.0, z);
+}
+
+// Everything behind the snow: sky, the forest edge on its snowbanks in fog, the lamp posts,
+// the lit snowy ground with its path. Returns colour; `zb` is the depth of the first opaque
+// surface (for flake occlusion).
 static inline float3 nature_snowBack(float2 sp, NatureSnowP P, thread float &zb) {
     float3 col;
     zb = 1e4;
@@ -1310,21 +1684,29 @@ static inline float3 nature_snowBack(float2 sp, NatureSnowP P, thread float &zb)
     float2 lampS = float2(P.L.x / P.L.z, P.h0 + P.L.y / P.L.z);
     float dl = length(sp - lampS);
     if (y < 0.0) {
-        // Ground: depth from the ground plane; the lamp's pool of light on the snow.
+        // Ground: depth from the ground plane; the lamps' pools of light on the snow.
         float z = NATURE_SNOW_CAMH / max(-y, 1e-4);
         float3 W = float3(sp.x * z, -NATURE_SNOW_CAMH, z);
-        float3 toL = P.L - W;
-        float d2 = dot(toL, toL);
-        float pool = P.lampI * (P.L.y + NATURE_SNOW_CAMH) / (d2 * sqrt(d2) + 0.5) * nature_lampCone(-toL);
-        float3 toL2 = float3(-9.5, 3.0, 19.5) - W;                    // the far lamp's pool
-        float e2 = dot(toL2, toL2);
-        pool += P.lampI * 4.7 / (e2 * sqrt(e2) + 0.5) * nature_lampCone(-toL2) * 0.8;
-        float3 snow = P.sky * 2.2 + P.lampC * pool * 2.6;
-        // Soft drifts and the odd glint near the lamp.
-        float drift = gnoise(float2(W.x * 0.35, z * 0.5)) * 0.15 + gnoise(float2(W.x * 1.3, z * 2.0)) * 0.06;
-        snow *= 0.92 + drift;
-        float3 g = pcg3(float3(floor(sp * 1100.0), 3.0));
-        snow += P.lampC * pool * 12.0 * step(0.9985, g.x) * smoothstep(12.0, 3.0, z);
+        float pool = nature_snowPool(W, P);
+        // Soft drifts: their slopes face the sky (and the lamp) a little more or less.
+        float drift = nature_gnoise(float2(W.x * 0.35, z * 0.5)) * 0.18 + nature_gnoise(float2(W.x * 1.3, z * 2.0)) * 0.07;
+        float path = nature_snowPath(W.x, z);
+        float3 snow = P.sky * 2.2 * (0.92 + drift) + P.lampC * pool * 2.6 * (0.9 + drift * 1.5);
+        // Trodden snow: packed flatter (fewer drifts) and a touch darker in its trough, its
+        // berms catching the light.
+        float berm = path * (1.0 - path) * 4.0;
+        snow = mix(snow, (P.sky * 1.55 + P.lampC * pool * 2.0), path * 0.85) + (P.sky * 0.35 + P.lampC * pool * 0.6) * berm * 0.6;
+        // Glitter: ice crystals catching the lamp, fixed in the snow (world-space cells, at
+        // least ~2 px), each a soft point, only where the lamp reaches.
+        float fx = z * P.pix, fz = fx * z / NATURE_SNOW_CAMH;   // a pixel on the snow, metres
+        float2 cs = max(float2(0.04), 2.6 * float2(fx, fz));
+        float2 gc = float2(W.x, z) / cs;
+        float2 gi = floor(gc);
+        float3 g = nature_hash3(gi, 3u);
+        if (g.z > 0.965) {
+            float2 gd = (gc - gi - (0.25 + 0.5 * g.xy)) * cs / float2(fx, fz);   // pixels
+            snow += P.lampC * pool * 9.0 * exp(-dot(gd, gd) * 1.4) * smoothstep(12.0, 3.0, z) * (1.0 - path);
+        }
         float fogF = 1.0 - exp(-z * 0.045);
         col = mix(snow, P.fogC, fogF);
         zb = z;
@@ -1333,47 +1715,100 @@ static inline float3 nature_snowBack(float2 sp, NatureSnowP P, thread float &zb)
         col = P.sky * (0.9 + 1.4 * exp(-y * 3.0));
         col = mix(col, P.fogC, exp(-y * 7.0));
     }
-    // Pine rows, far to near, each veiled by its depth's fog.
-    for (int r = 0; r < 3; ++r) {
+    // The forest edge, near to far: each row behind its snowbank, veiled by its depth's fog,
+    // composited front to back so whatever a nearer bank or tree hides is never evaluated.
+    float3 acc = float3(0.0);
+    float T = 1.0, zr = 1e4;
+    for (int r = 2; r >= 0 && T > 0.004; --r) {
         float z = r == 0 ? 70.0 : (r == 1 ? 38.0 : 21.0);
-        float2 pr = nature_pineRow(sp, z, P.h0, float(r) * 13.0 + 1.0, P.pix);
+        if (z > zb) continue;
+        float amp = r == 0 ? 7.0 : (r == 1 ? 3.6 : 2.2);
+        float seed = float(r) * 13.0 + 1.0;
+        float fogF = 1.0 - exp(-z * 0.042);
+        float wx = sp.x * z;
+        // The snowbank in front of the row (hiding the trunks): its crest silhouette, then its
+        // face — snow at that depth, the crest's lip catching the sky.
+        // (Above the highest the bank can reach, skip it: ridge ≤ 1.75·amp + 0.32 m.)
+        float rc = 0.0, yr = 0.0;
+        if ((sp.y - P.h0) * z + NATURE_SNOW_CAMH < 1.75 * amp + 0.35) {
+            float ridge = nature_snowRidge(wx, seed, amp);
+            yr = P.h0 + (ridge - NATURE_SNOW_CAMH) / z;
+            rc = smoothstep(yr + P.pix * 0.7, yr - P.pix * 0.7, sp.y);
+        }
+        if (rc > 0.0) {
+            float3 W = float3(wx, (sp.y - P.h0) * z, z);
+            float pool = nature_snowPool(W, P);
+            float crest = smoothstep(0.6, 0.0, (yr - sp.y) * z);
+            float under = smoothstep(0.4, 2.2, (yr - sp.y) * z);          // its shaded face below
+            float3 bank = P.sky * (2.2 + 0.5 * crest - 0.35 * under) + P.lampC * pool * 2.4;
+            acc += T * rc * mix(bank, P.fogC, fogF * 0.92);
+            T *= 1.0 - rc;
+            if (rc > 0.5) zr = min(zr, z);
+        }
+        if (T <= 0.004) break;
+        float3 pr = nature_pineRow(sp, z, P.h0, seed, P.pix, amp);
         float cov = pr.x;
-        if (cov > 0.0 && z < zb) {
-            float3 tc = P.sky * 0.22 + P.lampC * P.lampI * 0.002 / (r == 2 ? 1.0 : 3.0);
-            tc = mix(tc, P.sky * 2.0 + P.lampC * P.lampI * 0.004, pr.y * 0.45);
-            float fogF = 1.0 - exp(-z * 0.042);
-            col = mix(col, mix(tc, P.fogC, fogF), cov);
-            if (cov > 0.5) zb = z;
+        if (cov > 0.0) {
+            // Needles: dark blue-green in the dusk, lifted on the side facing the lamp by its
+            // light at that distance; snow on the tiers lit by sky and lamp.
+            float3 W = float3(wx, (sp.y - P.h0) * z, z);
+            float3 toL = P.L - W;
+            float lampAt = P.lampI * 6.0 / (dot(toL, toL) + 4.0);
+            float facing = saturate(0.5 + 0.5 * pr.z * (toL.x > 0.0 ? 1.0 : -1.0));
+            float3 tc = P.sky * 0.20 * (0.85 + 0.3 * facing) + P.lampC * lampAt * (0.02 + 0.10 * facing * facing);
+            tc = mix(tc, P.sky * 3.0 + P.lampC * lampAt * (0.45 + 0.4 * facing), saturate(pr.y) * 0.75);
+            acc += T * cov * mix(tc, P.fogC, fogF);
+            T *= 1.0 - cov;
+            if (cov > 0.5) zr = min(zr, z);
         }
     }
+    col = acc + T * col;
+    zb = min(zb, zr);
     // A second lamp far down the path, mostly lost in the snow: depth, and somewhere to go.
     {
         const float3 L2 = float3(-9.5, 3.0, 19.5);
         float2 l2s = float2(L2.x / L2.z, P.h0 + L2.y / L2.z);
         float d2l = length(sp - l2s);
         float fog2 = exp(-L2.z * 0.03);
-        if (abs(sp.x - l2s.x) < 0.05 / L2.z && sp.y < l2s.y && sp.y > P.h0 - NATURE_SNOW_CAMH / L2.z && L2.z < zb)
-            col = mix(col, P.sky * 0.1, fog2);
+        float pw2 = max(0.05 / L2.z, P.pix * 0.6);
+        float pole2 = smoothstep(pw2 + P.pix, pw2 - P.pix * 0.5, abs(sp.x - l2s.x));
+        if (pole2 > 0.0 && sp.y < l2s.y && sp.y > P.h0 - NATURE_SNOW_CAMH / L2.z && L2.z < zb)
+            col = mix(col, P.sky * 0.1, fog2 * pole2);
         col += P.lampC * P.lampI * (0.00006 / (d2l * d2l + 0.00002) + 0.02 * exp(-d2l * 8.0)) * (0.4 + 0.6 * fog2);
     }
-    // The lamp post (7 m away): a dark pole and the lantern.
+    // The lamp post (7 m away): a slim iron pole, lit along the side facing... its own lamp
+    // above barely reaches it; its base sits in a little drift.
     float poleX = lampS.x;
     float poleTop = lampS.y - 0.02;
     float groundAt = P.h0 - NATURE_SNOW_CAMH / P.L.z;
-    float pw = 0.06 / P.L.z;
-    if (sp.y < poleTop && sp.y > groundAt && abs(sp.x - poleX) < pw) { col = P.sky * 0.06; zb = P.L.z; }
-    // Lantern: a dark cap over a glowing glass bowl.
+    float pw = (0.055 + 0.012 * smoothstep(poleTop, groundAt, sp.y)) / P.L.z;     // tapered
+    float pc = smoothstep(pw + P.pix, pw - P.pix, abs(sp.x - poleX));
+    if (pc > 0.0 && sp.y < poleTop && sp.y > groundAt - P.pix) {
+        float glint = exp(-pow((sp.x - poleX) / pw + 0.45, 2.0) * 10.0);      // a soft specular line
+        float3 pcol = P.sky * 0.06 + P.lampC * P.lampI * 0.02 * glint * smoothstep(groundAt, poleTop, sp.y);
+        col = mix(col, pcol, pc);
+        zb = P.L.z;
+    }
+    // Lantern: a dark cap (with a little snow on it) over a glowing glass bowl.
     float2 lq = (sp - lampS) * P.L.z;                     // metres around the lamp head
     float capY = 0.16 - 0.55 * lq.x * lq.x;
-    if (abs(lq.x) < 0.42 && lq.y > capY - 0.05 && lq.y < capY + 0.04) { col = P.sky * 0.08; zb = P.L.z; }
+    float ea = P.pix * P.L.z;                             // a pixel in metres there
+    float capC = smoothstep(0.42 + ea, 0.42 - ea, abs(lq.x)) * smoothstep(capY - 0.05 - ea, capY - 0.05 + ea, lq.y)
+               * smoothstep(capY + 0.04 + ea, capY + 0.04 - ea, lq.y);
+    if (capC > 0.0) {
+        float snowCap = smoothstep(capY + 0.0, capY + 0.035, lq.y) * smoothstep(0.40, 0.2, abs(lq.x));
+        col = mix(col, mix(P.sky * 0.08, P.sky * 1.6, snowCap), capC);
+        zb = P.L.z;
+    }
     float2 bq = lq / float2(0.24, 0.17);
-    if (dot(bq, bq) < 1.0 && lq.y < capY - 0.05) { col = P.lampC * P.lampI * 7.0 + 0.5; zb = P.L.z; }
+    float bowl = smoothstep(1.0 + ea * 6.0, 1.0 - ea * 6.0, length(bq)) * step(lq.y, capY - 0.05);
+    if (bowl > 0.0) { col = mix(col, P.lampC * P.lampI * 7.0 + 0.5, bowl); zb = P.L.z; }
     // Glow of the lamp in the falling snow and mist (single scattering around a point light).
     float glow = P.lampI * (0.0014 / (dl * dl + 0.0005) + 0.035 * exp(-dl * 3.5));
     // The cone of light in the snowy air: brightest near the lamp, soft-edged.
     float2 rel = sp - lampS;
     float ca = -rel.y / max(length(rel), 1e-4);
-    float cone = smoothstep(0.45, 0.75, ca) * exp(-length(rel) * 1.6) * step(sp.y, lampS.y);
+    float cone = smoothstep(0.45, 0.75, ca) * exp(-length(rel) * 1.6) * smoothstep(lampS.y + 0.01, lampS.y - 0.03, sp.y);
     col += P.lampC * (glow + P.lampI * 0.06 * cone);
     return col;
 }
@@ -1403,15 +1838,19 @@ static inline float3 nature_snowFlakes(float2 sp, NatureSnowP P, float zb) {
         float fogT = exp(-z * 0.045);
         for (int k = 0; k < nk; ++k) {
             float2 id = ci + dir + float2(float(k & 1), float(k >> 1));
-            float3 h = pcg3(float3(id, float(i) * 7.0 + 1.0));
+            float3 h = nature_hash3(id, uint(i) * 7u + 1u);
             if (h.z > P.amount) continue;
-            float3 h2 = pcg3(float3(id, float(i) * 7.0 + 4.0));
+            float3 h2 = fract(h.yzx * 91.37 + h.zxy * 17.13 + 0.31);     // second draw, no rehash
             float jit = one ? 0.4 : 0.5;
             float2 c = (id + (1.0 - jit) * 0.5 + jit * h.xy) * cell - off;
-            c.x += sin(P.ts * (0.9 + 0.8 * h2.x) + h2.y * 6.28) * cell * (one ? 0.1 : 0.15);  // flutter
-            float d = length(sp - c);
             float rr = R * (0.6 + 0.8 * h2.z);
             if (one) rr = min(rr, 0.19 * cell / 1.6);
+            float fa = cell * (one ? 0.1 : 0.15);                          // flutter amplitude
+            // (Coarse reject before the flutter's sine: most cells' flakes are far from p.)
+            float2 dq = sp - c;
+            if (abs(dq.y) > rr * 1.6 || abs(dq.x) > rr * 1.6 + fa) continue;
+            c.x += nature_sinT(P.ts * (0.143 + 0.127 * h2.x) + h2.y) * fa;   // flutter
+            float d = length(sp - c);
             if (d > rr * 1.6) continue;
             // World position → lamp light (inverse square, forward-scattering lobe).
             float3 W = float3(c.x * z, (c.y - P.h0) * z, z);
