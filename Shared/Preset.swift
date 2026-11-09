@@ -125,4 +125,9 @@ struct Library: Codable, Equatable {
     var rotation: RotationSpec?
     /// Day/night scheduling; when enabled it overrides rotation.
     var schedule: ScheduleSpec?
+    /// Music card / take-over settings (Shared/Music/MusicSpec.swift); nil = defaults.
+    var music: MusicSpec?
+    /// Names of built-in presets this library has already been offered, so new built-ins
+    /// (e.g. Now Playing, Tidewater) are added to existing libraries exactly once (migration v4).
+    var seenBuiltIns: [String]?
 }
