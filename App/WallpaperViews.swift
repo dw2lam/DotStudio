@@ -73,6 +73,7 @@ struct WallpaperSettingsSection: View {
     @ObservedObject private var wallpaper = WallpaperController.shared
     @ScaledLength(relativeTo: .body) private var segmentWidth: CGFloat = SettingsMetrics.segmentWidth
     @ScaledLength(relativeTo: .body) private var popUpMaxWidth: CGFloat = SettingsMetrics.popUpMaxWidth
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var loginStatus = SMAppService.mainApp.status
     @State private var loginError: String?
 
@@ -81,47 +82,35 @@ struct WallpaperSettingsSection: View {
             Toggle("Use a style as your desktop wallpaper", isOn: Binding(
                 get: { wallpaper.isActive },
                 set: { wallpaper.setEnabled($0) }))
+                .formSwitchSize()
             LabeledContent("Style") {
-                Picker("Style", selection: Binding(
-                    get: { wallpaper.settings.presetID },
-                    set: { newID in
-                        guard let id = newID else { return }
-                        if wallpaper.isActive { wallpaper.use(id) } else { wallpaper.update { $0.presetID = id } }
-                    })) {
-                    if wallpaper.settings.presetID.flatMap(model.preset) == nil { Text("None").tag(UUID?.none) }
-                    ForEach(model.library.presets) { p in Text(menuName(p.name)).tag(UUID?.some(p.id)) }
-                }
-                .labelsHidden()
-                .frame(maxWidth: popUpMaxWidth, alignment: .trailing)   // a long name truncates, never squeezes "Style"
-                .help(wallpaper.settings.presetID.flatMap(model.preset)?.name ?? "None")
+                stylePicker
+                    .frame(maxWidth: popUpMaxWidth, alignment: .trailing)   // a long name truncates, never squeezes "Style"
+                    .help(wallpaper.settings.presetID.flatMap(model.preset)?.name ?? "None")
             }
             // Segmented pickers share one width so their leading edges line up.
-            LabeledContent("Frame Rate") {
-                Picker("Frame Rate", selection: Binding(
+            SettingsValueRow("Frame Rate", valueWidth: segmentWidth) {
+                ScaledSegmentedPicker(title: "Frame Rate", selection: Binding(
                     get: { wallpaper.settings.frameRate },
-                    set: { v in wallpaper.update { $0.frameRate = v } })) {
-                    ForEach(WallpaperSettings.FrameRate.allCases) { f in Text(f.title).tag(f) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fillingSegments(width: segmentWidth)
+                    set: { v in wallpaper.update { $0.frameRate = v } }),
+                    options: WallpaperSettings.FrameRate.allCases.map { ($0.title, $0) },
+                    fills: true)
             }
-            LabeledContent("Quality") {
-                Picker("Quality", selection: Binding(
+            SettingsValueRow("Quality", valueWidth: segmentWidth) {
+                ScaledSegmentedPicker(title: "Quality", selection: Binding(
                     get: { wallpaper.settings.quality },
-                    set: { v in wallpaper.update { $0.quality = v } })) {
-                    ForEach(WallpaperSettings.Quality.allCases) { q in Text(q.title).tag(q) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fillingSegments(width: segmentWidth)
+                    set: { v in wallpaper.update { $0.quality = v } }),
+                    options: WallpaperSettings.Quality.allCases.map { ($0.title, $0) },
+                    fills: true)
             }
             Toggle("Freeze on battery", isOn: Binding(
                 get: { wallpaper.settings.freezeOnBattery },
                 set: { v in wallpaper.update { $0.freezeOnBattery = v } }))
+                .formSwitchSize()
             Toggle("Open DotStudio at login", isOn: Binding(
                 get: { loginStatus == .enabled || loginStatus == .requiresApproval },
                 set: setOpenAtLogin))
+                .formSwitchSize()
             if loginStatus == .requiresApproval {
                 Text("Allow DotStudio in System Settings › General › Login Items.")
                     .textRole(.caption).foregroundStyle(.orange).wrapping()
@@ -138,6 +127,41 @@ struct WallpaperSettingsSection: View {
             }
         }
         .onAppear { loginStatus = SMAppService.mainApp.status }
+    }
+
+    private var styleSelection: Binding<UUID?> {
+        Binding(get: { wallpaper.settings.presetID },
+                set: { newID in
+                    guard let id = newID else { return }
+                    if wallpaper.isActive { wallpaper.use(id) } else { wallpaper.update { $0.presetID = id } }
+                })
+    }
+
+    @ViewBuilder private var styleChoices: some View {
+        if wallpaper.settings.presetID.flatMap(model.preset) == nil { Text("None").tag(UUID?.none) }
+        ForEach(model.library.presets) { p in Text(menuName(p.name)).tag(UUID?.some(p.id)) }
+    }
+
+    /// The stock pop-up while its 13-pt title matches the row labels; from .xxLarge (where the
+    /// segmented pickers switch to role-sized titles too) a pull-down whose title follows the
+    /// text size, with the same checkmarked list inside.
+    @ViewBuilder private var stylePicker: some View {
+        if typeSize < SettingsMetrics.scaledControlsFrom {
+            Picker("Style", selection: styleSelection) { styleChoices }
+                .labelsHidden()
+        } else {
+            Menu {
+                Picker("Style", selection: styleSelection) { styleChoices }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+            } label: {
+                Text(menuName(wallpaper.settings.presetID.flatMap(model.preset)?.name ?? "None"))
+                    .textRole(.body)
+                    .lineLimit(1)
+            }
+            .menuStyle(.button)
+            .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private func setOpenAtLogin(_ on: Bool) {
