@@ -442,6 +442,124 @@ static inline float liquidGlassHeight(float2 p, float ts) {
     return h + 0.45 * gnoise(q * 0.8 + float2(ts * 0.4, -ts * 0.3));
 }
 
+// ---- Liquid Chrome (45) -------------------------------------------------------------
+// Surface: the original two-stage domain-warped swell (same sculptural forms), plus
+// travelling fine ripples carried by the warp. Returns (h, dh/dx, dh/dy) with the
+// gradient ANALYTIC (chain rule through both warps), so normals are exact at any
+// resolution: no finite-difference smear, no stepping. Both warps have |Jacobian| > 0.5,
+// so the surface never folds or pinches.
+static inline float3 chrome_surface(float2 p, float ts, float ripple) {
+    float s1 = p.y * 0.83 + ts, s2 = p.x * 0.71 - ts * 0.8;
+    float2 q1 = p + 0.65 * float2(sin(s1), cos(s2));
+    float a1 = 0.5395 * cos(s1), b1 = -0.4615 * sin(s2);        // dq1.x/dy, dq1.y/dx
+    float t1 = q1.y * 1.7 - ts * 0.6, t2 = q1.x * 1.5 + ts * 0.7;
+    float2 q = q1 + 0.35 * float2(sin(t1), cos(t2));
+    float a2 = 0.595 * cos(t1), b2 = -0.525 * sin(t2);
+    float A = q.x * 1.15 + ts * 0.6, B = q.y * 1.45 - ts * 0.5, C = (q.x + q.y) * 0.9 + ts * 0.9;
+    float h = sin(A) * 0.5 + sin(B) * 0.4 + sin(C) * 0.3;
+    float cC = 0.27 * cos(C);
+    float2 g = float2(0.575 * cos(A) + cC, 0.58 * cos(B) + cC);
+    // Fine ripples: three slow wave trains in warped space, so they follow the flow.
+    // Swell-modulated so they gather on the broad crests instead of tiling evenly.
+    float env = ripple * (0.65 + 0.35 * sin(h * 1.7 + ts * 0.4));
+    const float2 d1 = float2(0.8, 0.6), d2 = float2(-0.447, 0.894), d3 = float2(0.958, -0.287);
+    float w1 = dot(q, d1) * 3.3 - ts * 2.2;
+    float w2 = dot(q, d2) * 4.6 + ts * 2.6;
+    float w3 = dot(q, d3) * 6.1 - ts * 3.1;
+    h += env * (0.090 * sin(w1) + 0.055 * sin(w2) + 0.034 * sin(w3));
+    g += env * (0.297 * cos(w1) * d1 + 0.253 * cos(w2) * d2 + 0.2074 * cos(w3) * d3);
+    // grad_p = J1^T J2^T grad_q, with J = [[1, a], [b, 1]]
+    float2 g2 = float2(g.x + b2 * g.y, a2 * g.x + g.y);
+    return float3(h, g2.x + b1 * g2.y, a1 * g2.x + g2.y);
+}
+
+// A rounded-rectangle studio light seen from the origin. c is its centre direction,
+// R/U its axes; gnomonic-projected so its edges stay straight like a real softbox.
+// blur = (x, y) prefilter width from roughness/brushing; edges are AA'd by fwidth.
+static inline float chrome_softbox(float3 r, float3 c, float3 R, float3 U, float2 hsz,
+                                   float rad, float soft, float2 blur) {
+    float facing = dot(r, c);
+    float2 l = float2(dot(r, R), dot(r, U)) / max(facing, 0.08);
+    float2 q = abs(l) - hsz + rad;
+    float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - rad;
+    float2 fw = fwidth(l) * 0.6;
+    float w = length(fw + blur) + soft;
+    float body = smoothstep(w, -w, d);
+    float2 ln = l / hsz;
+    float falloff = 1.0 - 0.3 * dot(ln, ln);              // brighter centre, like diffusion cloth
+    return body * falloff * smoothstep(0.0, 0.25, facing);
+}
+
+// Procedural photo studio, in linear light (HDR). r = reflected direction (y up,
+// +z = behind the camera). Bands in r.y read as horizon / strip light / black flag:
+// the crisp light-and-dark contour lines that make chrome look like chrome.
+static inline float3 chrome_env(float3 r, float3 B, float rough, float aniso) {
+    float y = r.y;
+    // Prefilter widths: pixel footprint (AA) combined with surface roughness; brushing
+    // smears reflections along y (grain runs horizontally).
+    float aay = fwidth(y) * 0.6;
+    float by = rough * 0.09 + aniso * 0.22;
+    float bx = rough * 0.09;
+    float wy = sqrt(aay * aay + by * by) + 0.0015;
+    float2 blur = float2(bx, by);
+
+    float sky = smoothstep(-wy, wy, y);
+    float yu = max(y, 0.0), yd = max(-y, 0.0);
+    // cyclorama: a hot horizon rolling off into a dim ceiling
+    float3 up = B * (0.20 + 0.45 * exp(-yu * 1.8) + 0.9 * exp(-yu * 9.0))
+                  * (1.0 - 0.55 * smoothstep(0.45, 1.0, yu));
+    // floor: falls away to deep black, with a soft bounce under the horizon so the
+    // dark faces still model their form
+    float3 dn = B * (0.003 + 0.05 * exp(-yd * 3.5) + 0.07 * exp(-yd * 14.0));
+    float3 c = mix(dn, up, sky);
+    // strip light (the signature white contour)
+    float sw = 0.010;
+    c += B * 5.0 * smoothstep(sw + wy, sw - wy, abs(y - 0.30));
+    c += B * 0.16 * exp(-abs(y - 0.30) * 22.0);
+    // black flag (the signature dark contour): blocks everything behind it
+    float fw = 0.019;
+    c *= 1.0 - 0.96 * smoothstep(fw + wy, fw - wy, abs(y - 0.56));
+
+    // key softbox, upper left: big, diffused, the broad glints on the crests
+    float3 kc = normalize(float3(-0.55, 0.45, 0.70));
+    float3 kR = normalize(cross(float3(0, 1, 0), kc)), kU = cross(kc, kR);
+    c += B * 2.2 * chrome_softbox(r, kc, kR, kU, float2(0.30, 0.17), 0.12, 0.003, blur);
+    return c;
+}
+
+// Metal reflectance: Schlick Fresnel on a bright chrome F0, optionally through a thin
+// interference film (oil slick / anodised titanium). The film is spectral: eight
+// wavelengths through the Airy reflectance of a film on metal, summed with CIE→sRGB
+// weights, so colours progress like real interference orders (bronze, magenta, blue,
+// gold, green…) and fade at higher orders instead of looping a rainbow.
+static inline float3 chrome_reflectance(float cosI, float thicknessNm, float iris) {
+    const float F0 = 0.66;
+    float fr = pow(1.0 - cosI, 5.0);
+    float3 metal = float3(F0 + (1.0 - F0) * fr);
+    float amt = pow(max(iris, 0.0), 0.4);           // perceptual: low settings still read as a sheen
+    if (amt <= 0.001) return metal;
+    const float nf = 1.9, r1 = 0.50, r2 = 0.85;
+    float sinT = sqrt(max(1.0 - cosI * cosI, 0.0)) / nf;
+    float cosT = sqrt(max(1.0 - sinT * sinT, 0.0));
+    float opd = 2.0 * nf * thicknessNm * cosT;
+    const float4 cmf[8] = {
+        float4(410.0,  0.0163, -0.0132,  0.0973), float4(450.0,  0.0539, -0.0766,  0.8467),
+        float4(490.0, -0.1409,  0.1506,  0.2016), float4(530.0, -0.2591,  0.5745, -0.0547),
+        float4(570.0,  0.3225,  0.4023, -0.0667), float4(610.0,  0.7637, -0.0117, -0.0207),
+        float4(650.0,  0.2326, -0.0269, -0.0030), float4(690.0,  0.0109,  0.0010, -0.0005) };
+    float3 film = 0.0;
+    for (int i = 0; i < 8; ++i) {
+        float cp = 2.0 * r1 * r2 * cos(6.2831853 * opd / cmf[i].x);
+        float R = (r1 * r1 + r2 * r2 + cp) / (1.0 + r1 * r1 * r2 * r2 + cp);
+        film += R * cmf[i].yzw;
+    }
+    film = max(film, 0.0);
+    // keep chrome's brightness, take the film's hue; grazing angles still go white
+    film *= F0 / max(dot(film, float3(0.2126, 0.7152, 0.0722)), 0.05);
+    film = film + (1.0 - film) * fr;
+    return mix(metal, film, amt);
+}
+
 // ---------------------------------------------------------------- fragment
 
 fragment float4 fx_fragment(VOut in [[stage_in]],
@@ -1384,36 +1502,39 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
     case 45: { // LIQUID CHROME (scene) — a rippling mirror surface reflecting a studio
                // environment (hard horizon + softboxes), optional thin-film iridescence.
                // p0 = (speed, scale, iridescence); colorA shadow, colorB highlight.
+        // p0 = (speed, scale, iridescence, fine ripples); p1 = (roughness, brushed, film tone).
         float speed = u.p0.x, sc = max(u.p0.y, 0.2), iris = u.p0.z;
+        float ripple = u.p0.w, rough = u.p1.x, aniso = u.p1.y, film = u.p1.z;
         float ts = t * speed * 0.2;
         float aspect = res.x / res.y;
         float2 p = (uv - 0.5) * float2(aspect, 1.0) * sc * 3.0;
-        const float e = 0.015;
-        float h  = chromeHeight(p, ts);
-        float hx = chromeHeight(p + float2(e, 0.0), ts);
-        float hy = chromeHeight(p + float2(0.0, e), ts);
-        float3 n = normalize(float3(-(hx - h) / e * 0.8, (hy - h) / e * 0.8, 1.0));
-        // Camera looks slightly down, so flat metal mirrors the bright sky above the horizon;
-        // every tilt sweeps the reflection across horizon, strip lights and ground.
-        float3 r = reflect(normalize(float3(0.0, 0.28, -1.0)), n);
+        float3 hs = chrome_surface(p, ts, ripple);
+        float3 n = normalize(float3(-hs.y * 0.8, hs.z * 0.8, 1.0));
+        // Camera looks slightly down, so flat metal mirrors the cyclorama above the horizon;
+        // every tilt sweeps the reflection across horizon, strip lights, flags and floor.
+        float3 v = normalize(float3(0.0, 0.28, -1.0));
+        float3 r = reflect(v, n);
 
-        float3 A = u.colorA.rgb, B = u.colorB.rgb;
-        float ey = r.y;
-        float3 skyc = mix(B, mix(A, B, 0.45), smoothstep(0.02, 0.9, ey));
-        float3 grnd = mix(mix(A, B, 0.22), A, smoothstep(-0.01, -0.35, ey));
-        float3 c = mix(grnd, skyc, smoothstep(-0.008, 0.008, ey));
-        c = mix(c, A, smoothstep(0.035, 0.0, abs(ey - 0.55)) * 0.85);          // dark rafter band
-        c += B * smoothstep(0.025, 0.0, abs(ey - 0.30)) * 0.8;                  // strip light
-        c += B * smoothstep(0.05, 0.0, abs(ey + 0.42)) * 0.35;                  // floor bounce
-        c += B * 0.6 * pow(max(dot(r, normalize(float3(-0.55, 0.45, 0.70))), 0.0), 64.0);
-        float fres = pow(1.0 - n.z, 2.0);
-        c = mix(c, mix(A, B, 0.6), fres * 0.3);
-
-        float ph = h * 0.35 + dot(n.xy, float2(0.9, 0.5)) * 1.1 + ts * 0.15;
-        float3 irc = 0.5 + 0.5 * cos(6.2831853 * (ph + float3(0.0, 0.33, 0.67)));
-        c = mix(c, c * (0.35 + 1.25 * irc) + irc * 0.06, iris);
-        c += bandDither(px) * 2.0;
-        return float4(c, 1.0);
+        float3 Bl = srgbToLinear(u.colorB.rgb);
+        float3 c = chrome_env(r, Bl, rough, aniso);
+        // film thickness drifts slowly over the forms (nm): 1st–3rd interference orders
+        // and follows the forms, so the colour bands run with the contours like a real film
+        float thick = mix(180.0, 520.0, film) + 90.0 * sin(hs.x * 1.1 + n.x * 0.9 + p.x * 0.3 - p.y * 0.2 + ts * 0.3);
+        c *= chrome_reflectance(saturate(dot(n, -v)), thick, iris);
+        // poured-metal depth: troughs sit slightly in their own shadow
+        c *= mix(0.8, 1.0, smoothstep(-1.1, 0.5, hs.x));
+        float2 vq = uv - 0.5;
+        c *= 1.0 - 0.22 * dot(vq, vq);
+        // Filmic: ACES on luminance (hue-preserving, so tinted highlights keep their tint),
+        // blended with per-channel ACES so the hottest lights still burn to white.
+        c *= 1.35;
+        float L = dot(c, float3(0.2126, 0.7152, 0.0722));
+        float3 tm = mix(c * (aces(float3(L)).x / max(L, 1e-5)), aces(c), 0.3);
+        float3 o = linearToSrgb(saturate(tm));
+        float3 A = u.colorA.rgb;                       // shadow colour = the black point
+        o = A + (1.0 - A) * o;
+        o += bandDither(px) * 1.5;
+        return float4(o, 1.0);
     }
 
     case 46: { // SILK (scene) — flow field rendered by animated line-integral convolution:
