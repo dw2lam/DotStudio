@@ -51,16 +51,28 @@ static inline float3 nature_stars(float3 rd, float pix, float amount, float t, f
     float az = atan2(rd.x, rd.z);
     float ce = max(sqrt(max(1.0 - rd.y * rd.y, 0.0)), 0.05);
     float3 acc = float3(0.0);
+    // Below ~1000 px tall (a thumbnail) the sky is shown as a downscale would show it: the
+    // fine layers fade out and the rest dim, instead of a snowstorm of 1 px dots.
+    float ratio = max(pix * (1000.0 * 1.3 / 2.0), 1.0);            // = 1000 / frame height
+    float dimR = ratio > 1.0 ? pow(ratio, -1.6) : 1.0;
+    float lod1 = smoothstep(3.0, 1.5, ratio) * dimR, lod2 = smoothstep(2.0, 1.1, ratio) * dimR;
     for (int L = 0; L < NL; ++L) {
         float sc = L == 0 ? 70.0 : (L == 1 ? 150.0 : 330.0);       // cells per radian
+        float lodF = L == 0 ? dimR : (L == 1 ? lod1 : lod2);
+        if (lodF <= 0.0) continue;
         float2 g = float2(az, rd.y) * sc;
         float2 cell = floor(g);
-        float3 h = pcg3(float3(cell, seed + float(L) * 17.0));
-        float2 off = (g - cell) - (0.2 + 0.6 * h.xy);
+        // Few cells hold a star (and most pixels are far from it): skip the rest early,
+        // on a cheap integer hash.
+        uint hh = (uint(int(cell.x) + 65536) * 0x8da6b343u) ^ (uint(int(cell.y) + 65536) * 0xd8163841u)
+                ^ (uint(seed + float(L) * 17.0) * 0xcb1ab31fu);
+        hh = (hh ^ (hh >> 15u)) * 0x2c1b3c6du; hh ^= hh >> 13u;
+        if (float(hh >> 22u) * (1.0 / 1024.0) < (L == 0 ? 0.80 : (L == 1 ? 0.72 : 0.62))) continue;
+        float2 hxy = float2(float((hh >> 11u) & 2047u), float(hh & 2047u)) * (1.0 / 2048.0);
+        float2 off = (g - cell) - (0.2 + 0.6 * hxy);
         float2 dAng = float2(off.x * ce, off.y / ce) / sc;          // radians on the sky
         float r = length(dAng) / pix;                                // pixels
-        // Few cells hold a star (and most pixels are far from it): skip the rest early.
-        if (h.z < (L == 0 ? 0.80 : (L == 1 ? 0.72 : 0.62)) || r > 4.0) continue;
+        if (r > 4.0) continue;
         float3 h2 = pcg3(float3(cell + 913.0, seed + 5.0));
         // Magnitude follows a steep power law.
         float m = h2.x;
@@ -69,7 +81,7 @@ static inline float3 nature_stars(float3 rd, float pix, float amount, float t, f
         float tw = 1.0 + 0.35 * sin(t * (2.0 + 5.0 * h2.y) + h2.y * 50.0) * smoothstep(0.35, 0.0, rd.y);
         float3 tint = mix(float3(0.62, 0.74, 1.0), float3(1.0, 0.72, 0.45), h2.z * h2.z);
         tint = mix(tint, float3(1.0), 0.35);
-        acc += tint * b * tw * exp(-r * r / (2.0 * sig * sig));
+        acc += tint * b * tw * exp(-r * r / (2.0 * sig * sig)) * lodF;
     }
     return acc * amount;
 }
@@ -117,9 +129,11 @@ static inline float nature_curl(float x, float k, float ts, thread float &d) {
 }
 
 // Emission collected where the ray crosses curtain k at along-sheet coordinate x,
-// altitude alt (km). Returns linear radiance before the path-length factor.
+// altitude alt (km). Returns linear radiance before the path-length factor. fx = the
+// pixel's footprint along the sheet (km): where a fold is seen nearly edge-on it spans
+// many rays, so the finer ray octaves fade to their mean instead of aliasing into moiré.
 static inline float3 nature_curtainLight(float x, float alt, float k, constant FXUniforms& u,
-                                         NatureAuroraP P) {
+                                         NatureAuroraP P, float fx) {
     float ts = P.ts;
     // Brightness gathers in patches along the sheet, breathing slowly.
     float patch = smoothstep(0.18, 0.78, nature_n1(x * 0.011 + k * 13.0 - ts * 0.022));
@@ -132,9 +146,9 @@ static inline float3 nature_curtainLight(float x, float alt, float k, constant F
     if (dy < -10.0) return halo * patch;
     // Field-aligned rays: three octaves of 1D noise along the sheet, drifting sideways.
     float drift = ts * (0.35 + 0.5 * P.act);
-    float r1 = nature_n1(x * 0.32 + drift + k * 31.0);
-    float r2 = nature_n1(x * 0.95 - drift * 1.6 + k * 17.0);
-    float r3 = nature_n1(x * 0.085 + drift * 0.3 + k * 5.0);
+    float r1 = mix(nature_n1(x * 0.32 + drift + k * 31.0), 0.5, smoothstep(0.25, 0.6, fx * 0.32));
+    float r2 = mix(nature_n1(x * 0.95 - drift * 1.6 + k * 17.0), 0.5, smoothstep(0.25, 0.6, fx * 0.95));
+    float r3 = mix(nature_n1(x * 0.085 + drift * 0.3 + k * 5.0), 0.5, smoothstep(0.25, 0.6, fx * 0.085));
     float q = 0.5 * r1 + 0.32 * r2 + 0.18 * r3;
     float ray = 0.30 + 1.6 * q * q * q;
     // Broad brightness swells along the sheet (tens of km), under the fine rays.
@@ -223,11 +237,17 @@ static inline float3 nature_curtains(float3 rd, constant FXUniforms& u, NatureAu
                 x = sc * d2.x;
                 float sl = tilt - A * (fd + cd);
                 // |cos| between the ray and the sheet's horizontal normal (sl, 1) → path length.
-                float cosT = abs(d2.x * sl + d2.y) * rsqrt(1.0 + sl * sl) * cosE;
-                float path = 1.0 / max(cosT, 0.11);
+                float isl = rsqrt(1.0 + sl * sl);
+                float cosH = abs(d2.x * sl + d2.y) * isl;           // in top view
+                float cosT = cosH * cosE;
+                // Edge-on folds blaze, but a real sheet has thickness: right at the tangent
+                // the two crossings merge and the light falls off smoothly, not as a 1 px
+                // hard edge (which aliased into dotted diagonal lines).
+                float path = smoothstep(0.0, 0.13, cosT) / max(cosT, 0.11);
                 float alt = sc * tanE - sc * sc * (1.0 / 12742.0);   // Earth curvature drop
+                float fx = P.pix * sc * isl / max(cosT, 0.02);       // the pixel's footprint in x, km
                 if (alt > 40.0 && alt < 140.0 + 300.0 * P.height)    // skip crossings that see nothing
-                    ck += nature_curtainLight(x, alt, fk, u, P) * path;
+                    ck += nature_curtainLight(x, alt, fk, u, P, fx) * path;
             }
             gp = g;
         }
@@ -242,15 +262,18 @@ static inline float3 nature_curtains(float3 rd, constant FXUniforms& u, NatureAu
 static inline float3 nature_auroraLand(float az, float e, float pix) {
     if (e > 0.10) return float3(0.0);
     // Far range, ~40 km off: ridged noise for sharp peaks, gathered into a massif.
-    float x = az * 7.0 + 3.0;
-    float m = 0.0, a = 0.5, f = 1.0;
-    for (int i = 0; i < 4; ++i) {
-        float n = 1.0 - abs(gnoise(float2(x * f, 1.7 + float(i) * 3.1)) * 2.2);
-        m += a * n * n; a *= 0.47; f *= 2.13;
-    }
     float massif = 0.25 + 0.75 * smoothstep(-0.7, 0.8, sin(az * 2.1 + 1.1));
-    float mElev = 0.010 + 0.085 * m * massif;
-    float mtn = smoothstep(mElev + pix, mElev - pix, e);
+    float mElev = 1.0, mtn = 0.0;
+    if (e < 0.010 + 0.110 * massif + pix) {                 // (no peak can reach higher: n² ≤ 1.44)
+        float x = az * 7.0 + 3.0;
+        float m = 0.0, a = 0.5, f = 1.0;
+        for (int i = 0; i < 4; ++i) {
+            float n = 1.0 - abs(gnoise(float2(x * f, 1.7 + float(i) * 3.1)) * 2.2);
+            m += a * n * n; a *= 0.47; f *= 2.13;
+        }
+        mElev = 0.010 + 0.085 * m * massif;
+        mtn = smoothstep(mElev + pix, mElev - pix, e);
+    }
     // Near hills a few km off, rolling, forested.
     float hill = 0.006 + 0.020 * nature_n1(az * 9.0 + 4.0) * nature_n1(az * 3.0 + 1.3) + 0.004 * nature_n1(az * 40.0);
     float forest = smoothstep(hill + pix, hill - pix, e);
@@ -673,8 +696,10 @@ static inline float3 nature_galStars(float3 g, float pix, float band, float dust
 }
 
 // Milky Way surface brightness (linear, before exposure) at galactic direction g; .w is
-// the dust transmission, for dimming the stars behind it.
-static inline float4 nature_milkyWay(float3 g) {
+// the dust transmission, for dimming the stars behind it. `pix` = radians per pixel: the
+// star clouds carry a grain a few pixels across — the countless stars a camera just
+// resolves — so the band reads as stars, not smoke, at any output size.
+static inline float4 nature_milkyWay(float3 g, float pix) {
     if (abs(g.z) > 0.42) return float4(0.0, 0.0, 0.0, 1.0);   // far off the band: nothing to add
     float l = atan2(g.y, g.x);                    // galactic longitude, 0 = centre
     float b = asin(clamp(g.z, -1.0, 1.0));
@@ -686,50 +711,117 @@ static inline float4 nature_milkyWay(float3 g) {
     float n1 = nature_dirNoise(g * 9.0, 4);                  // star clouds
     float n2 = nature_dirNoise(g * 26.0 + 7.0, 3);           // fine mottling
     float n3 = nature_dirNoise(g * 70.0 + 2.0, 2);           // knots
+    float gf = 0.42 / pix;                                   // grain cells ≈ 2.4 px
+    float grain = bh_vn3(g * gf);
+    grain = grain * grain * grain * 3.2;                     // sparse bright specks, like stars
     float clouds = smoothstep(0.35, 0.8, n1) * (0.3 + 1.0 * n2) * (0.6 + 0.8 * n3 * n3);
     float halo = exp(-(b * b) / (width * width * 9.0)) * 0.08;  // unresolved glow around the band
-    float glow = disc * (0.12 + 1.8 * clouds) + bulge * (0.5 + 0.9 * n1) * (0.7 + 0.6 * n3) + halo;
-    // Dust: the Great Rift just above the plane from Cygnus to the centre, plus lanes.
-    float rb = (b - 0.025 - 0.02 * sin(l * 3.0)) / 0.028;
-    float rift = exp(-rb * rb) * smoothstep(1.4, 0.2, abs(l - 0.6));
+    float glow = disc * (0.12 + 1.8 * clouds * (0.55 + 0.6 * grain))
+               + bulge * (0.5 + 0.9 * n1) * (0.7 + 0.6 * n3) * (0.8 + 0.3 * grain) + halo;
+    // Dust: the Great Rift just above the plane from Cygnus to the centre — broken into
+    // lobes and patches, its edge wandering — plus lanes.
+    float rn = nature_dirNoise(g * 16.0 + 9.0, 3);
+    float rb = (b - 0.025 - 0.02 * sin(l * 3.0) - 0.045 * (rn - 0.5)) / (0.020 + 0.022 * n1);
+    float rift = exp(-rb * rb) * smoothstep(1.4, 0.2, abs(l - 0.6)) * smoothstep(0.22, 0.62, rn + 0.3 * (n2 - 0.5));
     float lanes = abs(b) < 0.3 ? smoothstep(0.45, 0.8, nature_dirNoise(g * 14.0 + 3.0, 3)) * exp(-(b * b) / 0.012) : 0.0;
-    float T = exp(-(1.6 * rift * (0.5 + n2) + 1.1 * lanes));
-    float3 warm = float3(1.0, 0.80, 0.58), cool = float3(0.66, 0.76, 1.0);
-    float3 c = mix(cool, warm, clamp(smoothstep(-0.2, 0.9, cl) * 0.8 + bulge * 0.2, 0.0, 1.0));
+    float T = exp(-(2.0 * rift * (0.5 + n2) + 1.1 * lanes));
+    float3 warm = float3(1.0, 0.78, 0.55), cool = float3(0.64, 0.75, 1.0);
+    float3 c = mix(cool, warm, clamp(smoothstep(-0.2, 0.9, cl) * 0.8 + bulge * 0.25, 0.0, 1.0));
+    c = mix(c, float3(0.86, 0.66, 0.50), (1.0 - T) * 0.5);      // light through thin dust reddens
     // Faint pink emission nebulae, sparse, right on the plane.
     float hii = abs(b) < 0.12 ? smoothstep(0.78, 0.95, nature_dirNoise(g * 30.0 + 11.0, 2)) * exp(-(b * b) / 0.0016) : 0.0;
     return float4(c * glow * T + float3(1.0, 0.35, 0.45) * hii * 0.6 * T, T);
 }
 
-// Silhouette coverage of the ridge, hill and pines, in (azimuth from north, elevation).
-static inline float nature_nightLand(float az, float e, float pix) {
-    if (e > 0.20) return 0.0;
-    float x = az * 5.0 + 11.0;
+// The foreground as a matte in SCREEN space: X across (the frame is 2 tall), y up from the
+// true horizon line, pw = half a pixel. Verticals stay vertical however far the camera
+// tilts up (drawn in (azimuth, elevation), the tilted wide lens leaned every pine toward the
+// zenith). Returns (near hill + spruces, far ridge) coverage; the far ridge is drawn
+// hazier, for depth.
+static inline float nature_nightHill(float X) {
+    return 0.030 + 0.25 * smoothstep(-0.2, -1.6, X) * (0.86 + 0.14 * nature_n1(X * 11.0 + 3.0));
+}
+static inline float2 nature_nightLand(float X, float y, float pw) {
+    if (y > 0.50) return float2(0.0);
+    // Far ridge: a long, low range.
+    float x = X * 2.3 + 11.0;
     float m = 0.0, a = 0.5, f = 1.0;
-    for (int i = 0; i < 3; ++i) { m += a * gnoise(float2(x * f, 0.5 + float(i))); a *= 0.5; f *= 2.2; }
-    float ridge = 0.035 + 0.045 * m;
-    // A near hill rising on the left of the frame (east of south).
-    float hill = 0.02 + 0.12 * smoothstep(-0.15, -0.95, az - 3.14159) * (0.85 + 0.15 * nature_n1(az * 25.0))
-               + 0.006 * nature_n1(az * 90.0);
-    float top = max(ridge, hill);
-    float land = smoothstep(top + pix, top - pix, e);
-    // Pines along the hill's crest.
-    const float tw = 0.012;
-    float ci = floor(az / tw);
-    for (int j = -1; j <= 1; ++j) {
+    for (int i = 0; i < 4; ++i) { m += a * gnoise(float2(x * f, 0.5 + float(i))); a *= 0.5; f *= 2.2; }
+    float farH = 0.060 + 0.080 * m;
+    float far = smoothstep(farH + pw, farH - pw, y);
+    // Near hill rising toward the left edge, a few metres of rough ground in front.
+    float hill = nature_nightHill(X) + 0.005 * nature_n1(X * 70.0) + 0.0025 * nature_n1(X * 190.0);
+    float near = smoothstep(hill + pw, hill - pw, y);
+    // Spruces along the hill: narrow crowns of irregular, drooping branch whorls,
+    // each side ragged on its own, a thin leader at the top.
+    const float tw = 0.026;
+    float ci = floor(X / tw);
+    for (int j = -2; j <= 2; ++j) {
         float id = ci + float(j);
-        if (nature_h1(id * 3.1 + 2.0) < 0.45) continue;
-        float pxc = (id + 0.5 + (nature_h1(id + 8.0) - 0.5) * 0.6) * tw;
-        float base = 0.02 + 0.12 * smoothstep(-0.15, -0.95, pxc - 3.14159) - 0.004;
-        if (base < 0.05) continue;
-        float H = 0.03 + 0.04 * nature_h1(id + 31.0);
-        float y = e - base;
-        float rel = clamp(1.0 - y / H, 0.0, 1.0);
-        float tier = fract((H - y) / (H * 0.11) + nature_h1(id));
-        float hw = H * 0.2 * rel * (0.5 + 0.5 * tier) + pix * 0.5;
-        land = max(land, smoothstep(hw + pix, hw - pix, abs(az - pxc)) * step(y, H));
+        float base = nature_nightHill((id + 0.5) * tw) - 0.006;
+        if (base < 0.075 || nature_h1(id * 3.1 + 2.0) < 0.30) continue;
+        float pxc = (id + 0.5 + (nature_h1(id + 8.0) - 0.5) * 0.7) * tw;
+        float H = (0.060 + 0.080 * nature_h1(id + 31.0)) * smoothstep(0.07, 0.16, base);
+        float yy = y - base;
+        if (yy < -pw || yy > H + pw) continue;
+        float rel = clamp(yy / H, 0.0, 1.0);
+        float dx = X - pxc;
+        float side = dx < 0.0 ? 0.0 : 1.0;
+        // Whorls, irregular in spacing and reach, each side on its own; fine tufts on top.
+        float tierF = 11.0 + 6.0 * nature_h1(id + 3.0);
+        float sd = id * 1.7 + side * 13.0;
+        float tp = rel * tierF + nature_h1(id + 5.0 + side * 7.0) + 0.6 * nature_n1(rel * 9.0 + sd);
+        float tier = tp - floor(tp);                        // 0 at a whorl … 1 just under the next
+        float reach = 0.55 + 0.45 * nature_h1(floor(tp) * 1.3 + id * 2.1 + side * 5.0);
+        float prof = mix(0.62, 1.0, reach * sqrt(tier));    // branch tips sweep out and droop
+        prof *= 0.86 + 0.14 * nature_n1(rel * 70.0 + sd * 3.0);   // needle tufts
+        float taper = (1.0 - rel) * (0.75 + 0.25 * (1.0 - rel)); // a slimmer spire
+        float hw = H * 0.26 * taper * prof + pw * 0.35;     // + the leader
+        float cov = smoothstep(hw + pw, hw - pw, abs(dx)) * smoothstep(H + pw, H - pw, yy);
+        near = max(near, cov);
     }
-    return land;
+    return float2(near, far);
+}
+
+// The Moon's near side, so the face reads as the real one: the main maria as soft-edged
+// caps at their selenographic (lon, lat, radius) in degrees, ragged by noise, plus
+// highland mottling and Tycho's bright rays. P = unit vector in the Moon's frame
+// (x toward the sky's west / right, y lunar north / up, z toward the viewer).
+constant float4 NATURE_MARIA[12] = {
+    float4(-16.0, 33.0, 17.0, 1.0),   // Imbrium
+    float4( 17.0, 28.0, 10.0, 1.0),   // Serenitatis
+    float4( 31.0,  8.0, 12.0, 1.0),   // Tranquillitatis
+    float4( 59.0, 17.0,  7.5, 1.0),   // Crisium
+    float4( 51.0, -8.0,  9.0, 0.9),   // Fecunditatis
+    float4( 35.0,-15.0,  5.0, 0.9),   // Nectaris
+    float4(-57.0, 18.0, 20.0, 0.85),  // Procellarum (north)
+    float4(-45.0, -4.0, 16.0, 0.8),   // Procellarum (south)
+    float4(-17.0,-21.0, 10.0, 0.85),  // Nubium
+    float4(-39.0,-24.0,  6.0, 0.9),   // Humorum
+    float4(  3.0, 13.0,  6.0, 0.8),   // Vaporum / Medii
+    float4(  5.0, 56.0,  7.0, 0.7)};  // Frigoris
+static inline float nature_moonAlbedo(float3 P) {
+    float wob = nature_dirNoise(P * 3.2 + 3.0, 3) - 0.5;            // ragged mare shores
+    float mare = 0.0;
+    for (int i = 0; i < 12; ++i) {
+        float4 m = NATURE_MARIA[i];
+        float lo = m.x * 0.0174533, la = m.y * 0.0174533;
+        float3 C = float3(sin(lo) * cos(la), sin(la), cos(lo) * cos(la));
+        float d = acos(clamp(dot(P, C), -1.0, 1.0)) / (m.z * 0.0224);
+        mare = max(mare, m.w * smoothstep(1.25, 0.62, d + wob * 1.1));
+    }
+    float hi = nature_dirNoise(P * 11.0 + 7.0, 3);                    // highland mottling, craters
+    float alb = (0.86 - 0.40 * mare) * (0.90 + 0.20 * hi);
+    // Tycho (−11°, −43°): a bright crater with long rays; Copernicus a smaller bright splash.
+    float3 T = float3(sin(-0.192) * cos(-0.750), sin(-0.750), cos(-0.192) * cos(-0.750));
+    float dt = acos(clamp(dot(P, T), -1.0, 1.0));
+    float3 ax = normalize(cross(T, float3(0.0, 1.0, 0.0)));
+    float ra = atan2(dot(P, cross(T, ax)), dot(P, ax));
+    float rays = smoothstep(0.45, 1.0, nature_n1(ra * 5.0 + 3.0)) * exp(-dt * 2.6) * smoothstep(0.03, 0.15, dt) * 0.10;
+    float3 Co = float3(sin(-0.349) * cos(0.175), sin(0.175), cos(-0.349) * cos(0.175));
+    float dc = acos(clamp(dot(P, Co), -1.0, 1.0));
+    alb += exp(-dt * dt * 700.0) * 0.22 + rays + exp(-dc * dc * 1200.0) * 0.12;
+    return alb;
 }
 
 // Follow the Sun, the moon over the sea: a phase-lit sphere (Lommel–Seeliger) lit from the
