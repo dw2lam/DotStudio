@@ -66,6 +66,31 @@ jobs:
           test "$SAVER" = "${GITHUB_REF_NAME#v}"
           codesign --verify --deep "$APP"
 
+      - name: Sign with the stable release identity
+        # A stable self-signed identity (scripts/setup-signing.sh) keeps macOS privacy grants —
+        # e.g. Automation for Spotify/Music — across updates; ad-hoc signatures change every build.
+        # The cert needn't be trusted for codesign, so no interactive trust step is required.
+        env:
+          SIGNING_P12_BASE64: ${{ secrets.SIGNING_P12_BASE64 }}
+          SIGNING_P12_PASSWORD: ${{ secrets.SIGNING_P12_PASSWORD }}
+        run: |
+          if [ -z "$SIGNING_P12_BASE64" ] || [ -z "$SIGNING_P12_PASSWORD" ]; then
+            echo "::error::SIGNING_P12_BASE64 / SIGNING_P12_PASSWORD not set — run scripts/setup-signing.sh once"
+            exit 1
+          fi
+          KC="$RUNNER_TEMP/signing.keychain-db"; KCPASS=$(openssl rand -hex 16)
+          echo "$SIGNING_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/id.p12"
+          security create-keychain -p "$KCPASS" "$KC"
+          security set-keychain-settings -lut 3600 "$KC"
+          security unlock-keychain -p "$KCPASS" "$KC"
+          security import "$RUNNER_TEMP/id.p12" -k "$KC" -P "$SIGNING_P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KCPASS" "$KC" >/dev/null
+          rm -f "$RUNNER_TEMP/id.p12"
+          ID=$(security find-identity -p codesigning "$KC" | awk '/DotStudio Release Signing/{print $2; exit}')
+          test -n "$ID"
+          zsh scripts/sign-app.sh build/DD/Build/Products/Release/DotStudio.app "$ID" "$KC"
+          security delete-keychain "$KC"
+
       - name: Package DMG
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
