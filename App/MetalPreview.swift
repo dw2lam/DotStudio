@@ -8,6 +8,10 @@ struct MetalPreview: NSViewRepresentable {
     let source: SourceSpec
     let location: (lat: Double, lon: Double)?
     let store: SharedStore
+    /// Caps the frame rate below the style's own (small, always-on previews).
+    var maxFPS: Int? = nil
+
+    private var fps: Int { min(preset.fps, maxFPS ?? preset.fps) }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -25,14 +29,14 @@ struct MetalPreview: NSViewRepresentable {
             r.apply(preset, source: source)
             context.coordinator.renderer = r
         }
-        view.preferredFramesPerSecond = preset.fps
+        view.preferredFramesPerSecond = fps
         return view
     }
 
     func updateNSView(_ view: MTKView, context: Context) {
         context.coordinator.renderer?.location = location
         context.coordinator.renderer?.apply(preset, source: source)
-        view.preferredFramesPerSecond = preset.fps
+        view.preferredFramesPerSecond = fps
     }
 
     final class Coordinator {

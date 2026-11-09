@@ -10,25 +10,44 @@ struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var hero
 
     /// Offscreen UI renders (Shots.swift) must never present the sheet or touch the flag.
     private static let isRenderingShots = ProcessInfo.processInfo.environment["DOTSTUDIO_UI_SHOTS"] != nil
 
+    /// The style open in the editor, if it still exists.
+    private var editing: Preset? { model.editingID.flatMap(model.preset) }
+
     var body: some View {
+        let editing = editing
         ZStack {
-            if let id = model.editingID, model.preset(id) != nil {
-                EditorView(id: id)
-                    .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.985)),
-                                            removal: .opacity))
-            } else {
-                LibraryView()
+            // The gallery stays alive under the editor (scroll position, hover state) and
+            // recedes slightly while the editor is up front.
+            LibraryView()
+                .opacity(editing == nil ? 1 : 0)
+                .scaleEffect(editing == nil || reduceMotion ? 1 : 0.985)
+                .allowsHitTesting(editing == nil)
+                .accessibilityHidden(editing != nil)
+
+            if let editing {
+                EditorView(id: editing.id)
                     .transition(.opacity)
+                    .zIndex(1)
             }
         }
-        .animation(.easeOut(duration: 0.2), value: model.editingID)
+        .background {
+            AmbientBackdrop(presetID: editing?.id ?? model.nowPlayingID)
+                .ignoresSafeArea()
+        }
+        .environment(\.heroNamespace, reduceMotion ? nil : hero)
+        .animation(Motion.pick(Motion.hero, reduceMotion: reduceMotion), value: model.editingID)
+        .navigationTitle(editing?.name ?? "DotStudio")
+        .navigationSubtitle(editing.map { $0.isScene ? "Scene" : "Look" } ?? "")
         .frame(minWidth: 880, minHeight: 600)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.refreshSetupStatus()   // user may have just picked us in System Settings
+            WallpaperSlot.shared.refresh()
         }
         .sheet(isPresented: $model.showOnboarding, onDismiss: {
             hasCompletedOnboarding = true   // finishing, skipping, or Esc all count
@@ -67,17 +86,26 @@ struct ContentView: View {
     }
 }
 
-/// DEV-ONLY hooks for website screen grabs; inert unless one of these env vars is set:
-///   DOTSTUDIO_DEMO_EDIT=<style name>    open that style in the editor on launch
-///   DOTSTUDIO_DEMO_ONBOARDING=create    open the welcome sheet on its "Create Your Own" tab
-///   DOTSTUDIO_DEMO_WINDOW=1440x900      size the main window's content
-///   DOTSTUDIO_DEMO_WALLPAPER=<name>     turn the live wallpaper on with that style
-///                                       (WallpaperController.applyDevOverrides; more knobs there)
-///   DOTSTUDIO_DEMO_CLOSE_WINDOW=1       close the main window after launch (wallpaper-only,
-///                                       as after a login launch) for power measurements
-///   DOTSTUDIO_DEMO_COVER_DESKTOP=<s>    for <s> seconds, hide the desktop behind an opaque,
-///                                       click-through window ordered beneath every app window,
-///                                       to verify the occlusion pause without touching others' windows
+/// DEV-ONLY hooks for website screen grabs and design review; inert unless set:
+///   DOTSTUDIO_DEMO_EDIT=<style name>      open that style in the editor on launch
+///   DOTSTUDIO_DEMO_ONBOARDING=create      open the welcome sheet on its "Create Your Own" tab
+///   DOTSTUDIO_DEMO_WINDOW=1440x900        size the main window's content
+///   DOTSTUDIO_DEMO_APPEARANCE=dark|light  force the app's appearance
+///   DOTSTUDIO_DEMO_FILTER=<chip>          start the gallery on a filter chip (all, playing, scenes, looks, clocks, nature, flowing, retro, space, abstract)
+///   DOTSTUDIO_DEMO_SEARCH=<text>          start the gallery with a search
+///   DOTSTUDIO_DEMO_HOVER=<style name>     show that tile in its hover state
+///   DOTSTUDIO_DEMO_PLAYLIST=<a>|<b>|…     set the screensaver playlist by name
+///   DOTSTUDIO_DEMO_NIGHT=<style name>     set the night style by name
+///   DOTSTUDIO_DEMO_SETUP=notInstalled|notChosen|ready   pin the setup state
+///   DOTSTUDIO_DEMO_WALLPAPER_STUB=<name>  in-memory wallpaper slot playing that style
+///   DOTSTUDIO_DEMO_STILL=1                stills instead of live previews (stable captures)
+///   DOTSTUDIO_DEMO_WALLPAPER=<name>       turn the LIVE wallpaper on with that style
+///                                         (WallpaperController.applyDevOverrides; more knobs there)
+///   DOTSTUDIO_DEMO_CLOSE_WINDOW=1         close the main window after launch (wallpaper-only,
+///                                         as after a login launch) for power measurements
+///   DOTSTUDIO_DEMO_COVER_DESKTOP=<s>      for <s> seconds, hide the desktop behind an opaque,
+///                                         click-through window ordered beneath every app window,
+///                                         to verify the occlusion pause without touching others' windows
 /// While any is set the first-launch sheet never auto-presents. Pair with DOTSTUDIO_STORE_DIR.
 enum DemoHooks {
     private static let env = ProcessInfo.processInfo.environment
@@ -87,18 +115,56 @@ enum DemoHooks {
         let p = s.split(separator: "x").compactMap { Double($0) }
         return p.count == 2 ? CGSize(width: p[0], height: p[1]) : nil
     }
-    static let wallpaperName = env["DOTSTUDIO_DEMO_WALLPAPER"]
+    static let appearance = env["DOTSTUDIO_DEMO_APPEARANCE"]
+    static let filter = env["DOTSTUDIO_DEMO_FILTER"].flatMap(GalleryFilter.init(demoName:))
+    static let search = env["DOTSTUDIO_DEMO_SEARCH"]
+    static let hoverName = env["DOTSTUDIO_DEMO_HOVER"]
+    static let playlistNames = env["DOTSTUDIO_DEMO_PLAYLIST"]?.split(separator: "|").map(String.init)
+    static let nightName = env["DOTSTUDIO_DEMO_NIGHT"]
+    static let setupOverride: Installer.Status? = {
+        switch env["DOTSTUDIO_DEMO_SETUP"] {
+        case "notInstalled": return .notInstalled
+        case "notChosen": return .notChosen
+        case "ready": return .ready
+        default: return nil
+        }
+    }()
+    static let wallpaperName = env["DOTSTUDIO_DEMO_WALLPAPER_STUB"]
+    static let wallpaperStub: WallpaperSlot.Backend? = wallpaperName.map { _ in .memory(initial: nil) }
+    static let stillPreviews = env["DOTSTUDIO_DEMO_STILL"] != nil
+    static let liveWallpaperName = env["DOTSTUDIO_DEMO_WALLPAPER"]
     static let closeWindow = env["DOTSTUDIO_DEMO_CLOSE_WINDOW"] == "1"
     static let coverSeconds = env["DOTSTUDIO_DEMO_COVER_DESKTOP"].flatMap(Double.init)
     private static var cover: NSWindow?
+
     static var isActive: Bool {
-        editName != nil || onboardingCreate || windowSize != nil || wallpaperName != nil || closeWindow
-            || coverSeconds != nil
+        editName != nil || onboardingCreate || windowSize != nil || appearance != nil || filter != nil
+            || search != nil || hoverName != nil || playlistNames != nil || nightName != nil
+            || setupOverride != nil || wallpaperName != nil
+            || liveWallpaperName != nil || closeWindow || coverSeconds != nil
     }
 
     @MainActor static func apply(to model: AppModel) {
+        func id(_ name: String) -> UUID? { model.library.presets.first { $0.name == name }?.id }
+        if let a = appearance {
+            NSApp.appearance = NSAppearance(named: a == "dark" ? .darkAqua : .aqua)
+        }
+        if let names = playlistNames {
+            var l = model.screensaverLineup
+            l.playlist = names.compactMap(id)
+            model.applyLineup(l)
+        }
+        if let n = nightName {
+            model.setNight(id(n))
+        }
+        if let w = wallpaperName, let wid = id(w) { WallpaperSlot.shared.set(wid) }
         if let name = editName, let p = model.library.presets.first(where: { $0.name == name }) {
-            model.edit(p.id)
+            // DOTSTUDIO_DEMO_EDIT_DELAY=<sec> opens it later, animated (to review the zoom).
+            if let delay = env["DOTSTUDIO_DEMO_EDIT_DELAY"].flatMap(Double.init) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { model.edit(p.id) }
+            } else {
+                model.edit(p.id)
+            }
         }
         DispatchQueue.main.async {
             if let size = windowSize,
@@ -107,6 +173,10 @@ enum DemoHooks {
                 win.center()
             }
             if onboardingCreate { model.showOnboarding = true }
+            if env["DOTSTUDIO_DEMO_ACTIVATE"] != nil {
+                NSApp.activate(ignoringOtherApps: true)
+                NSApp.windows.first(where: { $0.isVisible && $0.styleMask.contains(.titled) })?.makeKeyAndOrderFront(nil)
+            }
         }
     }
 
@@ -128,32 +198,6 @@ enum DemoHooks {
             w.orderBack(nil)      // beneath every app window: hides only the desktop
             cover = w
             DispatchQueue.main.asyncAfter(deadline: .now() + secs) { cover?.orderOut(nil); cover = nil }
-        }
-    }
-}
-
-/// Shared "what does this style do for the screensaver right now" badge.
-struct RoleBadge: View {
-    let role: AppModel.Role
-
-    var body: some View {
-        if let (text, symbol) = content {
-            Label(text, systemImage: symbol)
-                .font(.caption2.weight(.semibold))
-                .labelStyle(.titleAndIcon)
-                .foregroundStyle(.white)
-                .padding(.horizontal, 7).padding(.vertical, 3)
-                .background(Capsule().fill(Color.accentColor))
-        }
-    }
-
-    private var content: (String, String)? {
-        switch role {
-        case .none, .rotating: return nil
-        case .active: return ("Screensaver", "checkmark")
-        case .day: return ("Day", "sun.max.fill")
-        case .night: return ("Night", "moon.fill")
-        case .dayAndNight: return ("Day & Night", "circle.lefthalf.filled")
         }
     }
 }
