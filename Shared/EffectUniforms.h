@@ -54,8 +54,9 @@ typedef struct {
     FX_FLOAT4 musicRect;    // where the foreground draws the artwork, in uv (x, y from the top, w, h)
 
     // Per-scene data the CPU works out once a frame, where every pixel would otherwise derive
-    // the same values (Sand Garden: its three sweeps and the ball — SandGarden.fill, called
-    // from MetalRenderer.fillLiveSky). Zero for scenes that don't use it.
+    // the same values (Zen Garden: the rake cart and the head of its track — SandGarden.Cache
+    // .prepare in Studio2.swift, called from MetalRenderer.encodePasses). Zero for scenes that
+    // don't use it.
     FX_FLOAT4 scene[16];
 } FXUniforms;
 
