@@ -29,8 +29,45 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private var errBuf: MTLBuffer?
     private var gridW = 0, gridH = 0
 
+    /// Media-clock origin of the animation time: t = now − startTime. With the instance
+    /// time base it's when the source was applied; with the wall-clock base it is re-derived
+    /// every frame from local midnight (see `timeBase`).
     private var startTime: CFTimeInterval = CACurrentMediaTime()
     private var loggedFirstFrame = false
+
+    /// What the animation time `t` counts from.
+    enum TimeBase: Equatable {
+        /// Seconds since this renderer applied its current source (the default): every
+        /// preview, saver and wallpaper instance starts its own motion from zero.
+        case instance
+        /// Seconds since local midnight, read from the wall clock each frame, so every
+        /// renderer using it (screensaver, live wallpaper) draws the same frame at the same
+        /// moment — the screensaver picks up exactly where the desktop was.
+        ///
+        /// Kept under one day so Float time keeps ~8 ms resolution at worst (the per-instance
+        /// base reaches that after a day of running too). At local midnight it wraps to 0;
+        /// the renderer hides the jump with a 2 s crossfade from the old time to the new, which
+        /// every synced renderer performs at the same wall time. DST days are 23/25 h; the
+        /// wrap still happens at midnight. A video source keeps its own decoder clock.
+        case wallClock
+    }
+
+    /// Switching bases mid-show crossfades (the time jumps); before the first frame it's free.
+    var timeBase: TimeBase = .instance {
+        didSet {
+            guard timeBase != oldValue else { return }
+            if timeBase == .instance { startTime = CACurrentMediaTime() }
+            if let p = preset, outgoing == nil, drewOnce {
+                outgoing = (p, packedUniforms, startTime)
+                transitionBegan = CACurrentMediaTime()
+                transitionDuration = 1.0
+            }
+            if timeBase == .wallClock { syncWallClockOrigin(CACurrentMediaTime(), allowWrapFade: false) }
+        }
+    }
+    private var dayStart: Date?
+    private var nextDayStart: Date?
+    private var drewOnce = false
 
     // Cap frames-in-flight so drawables/IOSurfaces are recycled rather than queued up.
     private let inFlight = DispatchSemaphore(value: 2)
@@ -61,6 +98,23 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private var transitionDuration: Double = 0
     private var fadeOld: MTLTexture?
     private var fadeNew: MTLTexture?
+
+    // Now Playing (scene 66): artwork in slot 7, the previous track's in slot 8 while the
+    // background cross-fades. See setMusic(_:).
+    private var hostMusic: MusicSnapshot?
+    private var ownMusicFeed: MusicFeed?
+    private var lastMusicPoll: CFTimeInterval = -.infinity
+    private var musicArtImage: CGImage?
+    private var musicArtTex: MTLTexture?
+    private var musicArtPrevTex: MTLTexture?
+    private var musicArtChangedAt: CFTimeInterval = -.infinity
+    private var musicPrepared = false
+    private var musicPalette: [RGBA] = []
+    private var musicPaletteKey: (CGImage?, [RGBA]?) = (nil, nil)
+    /// Paused-track linger (Library.musicSettings.linger) for deciding "nothing playing".
+    var musicLingerMinutes: Double = MusicSpec().linger
+    /// Accessibility Reduce Motion: the Now Playing background drifts at a third of the speed.
+    var reduceMotion = false
 
     /// - device: the GPU to render on (the live wallpaper uses the one driving its
     ///   display); nil = the system default.
@@ -126,9 +180,36 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             return u
         }
         if sourceChanged {
-            startTime = CACurrentMediaTime()
+            if timeBase == .instance { startTime = CACurrentMediaTime() }
             loadMedia(for: source)
         }
+    }
+
+    /// The animation time (seconds) a frame drawn at `now` uses, per the time base. With
+    /// `.wallClock` every renderer on the Mac returns the same value at the same moment.
+    func animationTime(at now: CFTimeInterval = CACurrentMediaTime()) -> Double {
+        if timeBase == .wallClock { syncWallClockOrigin(now, allowWrapFade: false) }
+        return now - startTime
+    }
+
+    /// Wall-clock time base: put `startTime` where t = seconds since local midnight. At the
+    /// day boundary t jumps back to ~0; that frame starts a crossfade whose outgoing chain
+    /// keeps the old origin, so the motion never visibly jumps.
+    private func syncWallClockOrigin(_ now: CFTimeInterval, allowWrapFade: Bool) {
+        let wall = Date()
+        if dayStart == nil || nextDayStart.map({ wall >= $0 }) ?? true || wall < dayStart! {
+            let cal = Calendar.current
+            let start = cal.startOfDay(for: wall)
+            dayStart = start
+            nextDayStart = cal.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86_400)
+        }
+        let origin = now - wall.timeIntervalSince(dayStart!)
+        if allowWrapFade, origin - startTime > 3_600, let p = preset, outgoing == nil {
+            outgoing = (p, packedUniforms, startTime)     // keeps counting past 86 400 for 2 s
+            transitionBegan = now
+            transitionDuration = 2.0
+        }
+        startTime = origin
     }
 
     /// Opt-in GPU accounting (live wallpaper power stats): GPU execution time of drawn
@@ -151,6 +232,104 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// wallpaper's pause must stop the decoder too, not just the draws).
     func setMediaPaused(_ paused: Bool) {
         (media as? VideoSource)?.setPaused(paused)
+    }
+
+    // MARK: Music (Now Playing)
+
+    /// What's playing, for the Now Playing scene. A host that polls its own MusicFeed (the
+    /// saver, the wallpaper's render thread, previews) hands each new snapshot here, on the
+    /// thread that draws. Until a host does, a renderer drawing a Now Playing style reads the
+    /// shared music.json itself, about once a second. The artwork texture is rebuilt only
+    /// when the artwork changes.
+    func setMusic(_ snapshot: MusicSnapshot) {
+        hostMusic = snapshot
+    }
+
+    private var currentMusic: MusicSnapshot { hostMusic ?? ownMusicFeed?.snapshot ?? .empty }
+
+    /// Poll (own feed only), and upload new artwork into this frame's command buffer ahead
+    /// of the passes that sample it. `fade` = cross-fade the background from the old art.
+    private func prepareMusic(_ cmd: MTLCommandBuffer, now: CFTimeInterval, wall: Date, fade: Bool) {
+        if hostMusic == nil {
+            if ownMusicFeed == nil { ownMusicFeed = MusicFeed(baseDir: store.baseDir) }
+            if now - lastMusicPoll >= 1 {
+                lastMusicPoll = now
+                ownMusicFeed?.poll()
+            }
+        }
+        let snap = currentMusic
+        // Nothing playing (or paused past the linger) shows the idle background.
+        let art = snap.state?.isVisible(at: wall, lingerMinutes: musicLingerMinutes) == true ? snap.artwork : nil
+        if art !== musicArtImage || !musicPrepared {
+            musicArtPrevTex = musicArtTex
+            musicArtTex = art.flatMap { uploadArt($0, cmd) }
+            musicArtImage = art
+            // The very first artwork just appears; later changes cross-fade.
+            musicArtChangedAt = (fade && musicPrepared) ? now : -.infinity
+            if !(fade && musicPrepared) { musicArtPrevTex = nil }
+            musicPrepared = true
+        } else if musicArtPrevTex != nil, now - musicArtChangedAt > 2 {
+            musicArtPrevTex = nil                          // fade done: free the old artwork
+        }
+        if musicPaletteKey.0 !== snap.artwork || musicPaletteKey.1 != snap.state?.palette {
+            musicPaletteKey = (snap.artwork, snap.state?.palette)
+            musicPalette = snap.palette
+        }
+    }
+
+    /// Drop the artwork textures (and stop reading music.json) once no chain shows Now Playing.
+    private func releaseMusic() {
+        guard musicPrepared || ownMusicFeed != nil else { return }
+        musicArtTex = nil; musicArtPrevTex = nil; musicArtImage = nil
+        musicPrepared = false
+        ownMusicFeed = nil
+        lastMusicPoll = -.infinity
+    }
+
+    /// Per-frame Now Playing uniforms (palette, progress, artwork flags, its place on screen).
+    private func fillMusic(_ u: inout FXUniforms, size: CGSize, now: CFTimeInterval, wall: Date) {
+        let snap = currentMusic
+        let flags = (musicArtTex != nil ? 1 : 0) + (musicArtPrevTex != nil ? 2 : 0)
+        let visible = snap.state?.isVisible(at: wall, lingerMinutes: musicLingerMinutes) == true
+        let progress = visible ? (snap.state?.progress(at: wall) ?? -1) : -1
+        u.music = simd_float4(Float(flags), Float(progress), snap.state?.isPlaying == true ? 1 : 0,
+                              Float(min(max(now - musicArtChangedAt, 0), 10_000)))
+        let pal = visible ? musicPalette : []
+        func slot(_ i: Int) -> simd_float4 {
+            guard i < pal.count else { return .zero }
+            return simd_float4(Float(pal[i].r), Float(pal[i].g), Float(pal[i].b), 1)
+        }
+        u.musicPal0 = slot(0); u.musicPal1 = slot(1); u.musicPal2 = slot(2)
+        let layout = MusicLayoutKind(rawValue: Int(u.p0.x.rounded())) ?? .album
+        let r = MusicGeometry.artUV(layout, size: size)
+        u.musicRect = simd_float4(r.x, r.y, r.w, r.h)
+        if reduceMotion { u.p0.z *= 0.33 }
+    }
+
+    /// Artwork → mipmapped RGBA8 (raw sRGB values, like ImageSource) on this renderer's
+    /// device; the mip chain is built on the GPU in `cmd`, before any pass samples it.
+    private func uploadArt(_ cg: CGImage, _ cmd: MTLCommandBuffer) -> MTLTexture? {
+        let w = cg.width, h = cg.height
+        guard w > 0, h > 0 else { return nil }
+        var bytes = [UInt8](repeating: 0, count: w * h * 4)
+        let drawn: Bool = bytes.withUnsafeMutableBytes { buf in
+            guard let ctx = CGContext(data: buf.baseAddress, width: w, height: h, bitsPerComponent: 8,
+                                      bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return false }
+            ctx.interpolationQuality = .high
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        guard drawn else { return nil }
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: w, height: h, mipmapped: true)
+        d.usage = .shaderRead
+        guard let tex = device.makeTexture(descriptor: d) else { return nil }
+        tex.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0, withBytes: bytes, bytesPerRow: w * 4)
+        if let blit = cmd.makeBlitCommandEncoder() {
+            blit.generateMipmaps(for: tex)
+            blit.endEncoding()
+        }
+        return tex
     }
 
     /// Switch presets with a GPU crossfade. Falls back to a hard cut when there's
@@ -288,7 +467,15 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
 
         let now = CACurrentMediaTime()
+        if timeBase == .wallClock { syncWallClockOrigin(now, allowWrapFade: drewOnce) }
+        drewOnce = true
         let t = Float(now - startTime)
+        // Now Playing: poll / upload artwork before any pass samples it.
+        if preset.isMusicScene || (outgoing?.preset.isMusicScene ?? false) {
+            prepareMusic(cmd, now: now, wall: clockOverride ?? Date(), fade: true)
+        } else {
+            releaseMusic()
+        }
         // Slideshow state comes from the source clock, so both chains of a preset
         // crossfade show the same photo.
         // Scenes ignore the source, so an idle slideshow doesn't decode photos.
@@ -378,6 +565,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         enc.setFragmentTexture(planets.earthNight, index: 3)
         enc.setFragmentTexture(planets.planets, index: 4)
         enc.setFragmentTexture(oldTex, index: 5)
+        enc.setFragmentTexture(dummy, index: 6)
+        enc.setFragmentTexture(dummy, index: 7)
+        enc.setFragmentTexture(dummy, index: 8)
         enc.setFragmentSamplerState(sampler, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()
@@ -466,6 +656,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                     u.p2 = simd_float4(a.userLon, a.userLat, a.hasLoc ? 1 : 0, orbits)
                 }
                 MetalRenderer.fillLiveSky(&u, inst: inst!, now: wall, time: time, location: location)
+                if inst!.kind == .nowPlaying {
+                    fillMusic(&u, size: size, now: CACurrentMediaTime(), wall: wall)
+                }
             }
 
             enc.setFragmentBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
@@ -478,6 +671,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             // fadePrev: real only during a preset crossfade, or the slideshow's incoming photo.
             enc.setFragmentTexture((i == 0 ? slides?.texB : nil) ?? dummy, index: 5)
             enc.setFragmentTexture(TextAtlas.texture(device, effect: u.effect) ?? dummy, index: 6)
+            // musicArt / musicArtPrev: real only for the Now Playing pass.
+            let music = u.effect == EffectKind.nowPlaying.shaderID
+            enc.setFragmentTexture((music ? musicArtTex : nil) ?? dummy, index: 7)
+            enc.setFragmentTexture((music ? musicArtPrevTex : nil) ?? dummy, index: 8)
             enc.setFragmentSamplerState(sampler, index: 0)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             enc.endEncoding()
@@ -673,6 +870,11 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         if thumbTex == nil, source.kind == .collection, !preset.isScene {
             slides = thumbCollection(for: source, width: width, height: height)?.frame(at: Double(time), sync: true)
             thumbTex = slides?.texA
+        }
+
+        // Now Playing: the current artwork, settled (no cross-fade in a still).
+        if preset.isMusicScene {
+            prepareMusic(cmd, now: CACurrentMediaTime(), wall: clockOverride ?? Date(), fade: false)
         }
 
         encodePasses(cmd, finalDescriptor: desc, pingA: pingA, pingB: pingB,

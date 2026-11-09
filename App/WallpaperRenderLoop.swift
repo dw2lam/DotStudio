@@ -63,9 +63,12 @@ final class WallpaperRenderLoop {
 
     private let thread = RenderThread()
     private let store: SharedStore
+    /// Accessibility Reduce Motion, read on the main thread at creation.
+    private let reduceMotion: Bool
 
     init(store: SharedStore) {
         self.store = store
+        reduceMotion = MusicOverlayLayer.systemReduceMotion
         thread.name = "DotStudio Wallpaper Render"
         thread.qualityOfService = .utility
         thread.start()
@@ -95,18 +98,45 @@ final class WallpaperRenderLoop {
             for id in Array(surfaces.keys) { removeSurface(id) }
             setPlan(.none)
             style = nil
+            music = nil            // drop the cover; the controller re-sends it on restart
+        }
+    }
+
+    /// What's playing, for a Now Playing style (an immutable snapshot polled on the main
+    /// thread; the CGImage is shared read-only, each renderer uploads its own texture).
+    func setMusic(_ snapshot: MusicSnapshot, lingerMinutes: Double) {
+        thread.async { [self] in
+            music = (snapshot, lingerMinutes)
+            for s in surfaces.values {
+                s.renderer.musicLingerMinutes = lingerMinutes
+                s.renderer.setMusic(snapshot)
+            }
+        }
+    }
+
+    /// The animation time base (wall clock while the wallpaper matches the screensaver).
+    func setTimeBase(_ base: MetalRenderer.TimeBase) {
+        thread.async { [self] in
+            timeBase = base
+            for s in surfaces.values { s.renderer.timeBase = base }
         }
     }
 
     /// The style every display draws (value types: copied across, nothing shared).
-    func setStyle(_ preset: Preset, source: SourceSpec, location: (lat: Double, lon: Double)?) {
+    /// - fade: crossfade seconds (only meaningful while frames run continuously); 0 = cut.
+    func setStyle(_ preset: Preset, source: SourceSpec, location: (lat: Double, lon: Double)?,
+                  fade: Double = 0) {
         thread.async { [self] in
             style = (preset, source)
             self.location = location
             boosted {
                 for s in surfaces.values {
                     s.renderer.location = location
-                    s.renderer.apply(preset, source: source)   // may load an image/video
+                    if fade > 0.05 {
+                        s.renderer.transition(to: preset, source: source, duration: fade)
+                    } else {
+                        s.renderer.apply(preset, source: source)   // may load an image/video
+                    }
                     // A freshly loaded video starts playing; hold it if frames are held.
                     s.renderer.setMediaPaused(mediaPaused)
                     s.warming = true
@@ -148,6 +178,8 @@ final class WallpaperRenderLoop {
     private var plan: WallpaperPacing.Plan = .none
     private var style: (Preset, SourceSpec)?
     private var location: (lat: Double, lon: Double)?
+    private var music: (snapshot: MusicSnapshot, linger: Double)?
+    private var timeBase: MetalRenderer.TimeBase = .instance
     private var clockTimer: Timer?
     /// Whether media decoders should be held. Invariant: every surface's renderer has
     /// been told this value since its media last changed (addSurface and setStyle push
@@ -171,6 +203,12 @@ final class WallpaperRenderLoop {
             guard let r = MetalRenderer(pixelFormat: layer.pixelFormat, store: store, device: device) else { return nil }
             r.measuresGPUTime = debug
             r.location = location
+            r.timeBase = timeBase
+            r.reduceMotion = reduceMotion
+            if let music {
+                r.musicLingerMinutes = music.linger
+                r.setMusic(music.snapshot)
+            }
             if let (preset, source) = style { r.apply(preset, source: source) }
             return r
         }

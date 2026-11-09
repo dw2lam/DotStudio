@@ -42,6 +42,16 @@ typedef struct {
     FX_FLOAT4 sun;          // (elevation, hour angle −π…π (0 = solar noon), rise→set half-arc 0…π, latitude)
     FX_FLOAT4 moon;         // (elevation, hour angle, rise→set half-arc, elongation 0…2π: < π waxing)
     FX_FLOAT4 sky;          // (local sidereal time, 1 = live values present, 0, 0)
+
+    // Now Playing (scene 66; filled per frame by MetalRenderer.fillMusic, zero otherwise).
+    // The artwork itself is texture slot 7 (musicArt, mipmapped), the previous track's
+    // artwork slot 8 (musicArtPrev) while they cross-fade.
+    FX_FLOAT4 musicPal0;    // artwork palette, display sRGB, brightest first; .a = 1 when present
+    FX_FLOAT4 musicPal1;
+    FX_FLOAT4 musicPal2;
+    FX_FLOAT4 music;        // (has artwork 0/1, progress 0–1 or −1 = unknown, playing 0/1,
+                            //  seconds since the artwork changed — cross-fade clock)
+    FX_FLOAT4 musicRect;    // where the foreground draws the artwork, in uv (x, y from the top, w, h)
 } FXUniforms;
 
 #endif /* EffectUniforms_h */

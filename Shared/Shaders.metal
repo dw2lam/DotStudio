@@ -410,6 +410,7 @@ static inline float3 uniShade(int i, float3 c, float3 n0, float3 rd, float fp, f
 #include "Scenes/Flowing_funcs.h"
 #include "Scenes/Nature_funcs.h"
 #include "Scenes/Retro_funcs.h"
+#include "Scenes/Music_funcs.h"
 
 // ---------------------------------------------------------------- slideshow source
 
@@ -593,6 +594,8 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
                             texture2d_array<float> planetTex [[texture(4)]],
                             texture2d<float> fadePrev [[texture(5)]],   // outgoing preset during a crossfade
                             texture2d<float> textAtlas [[texture(6)]],  // Clocks pack SDF type (TextAtlas.swift)
+                            texture2d<float> musicArt  [[texture(7)]],  // Now Playing artwork (mipmapped)
+                            texture2d<float> musicArtPrev [[texture(8)]],  // the previous track's, while cross-fading
                             sampler samp           [[sampler(0)]])
 {
     float2 uv  = in.uv;
@@ -1779,11 +1782,12 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         return src.sample(samp, g);
     }
 
-    // ---- scene packs (ids 50–65), one file each
+    // ---- scene packs (ids 50–66), one file each
 #include "Scenes/Clocks_cases.h"
 #include "Scenes/Flowing_cases.h"
 #include "Scenes/Nature_cases.h"
 #include "Scenes/Retro_cases.h"
+#include "Scenes/Music_cases.h"
 
     case 41: { // INTERNAL crossfade — set by the renderer during preset rotation,
                // never by an EffectInstance. src = incoming frame, fadePrev = outgoing.

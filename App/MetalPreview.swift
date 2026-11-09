@@ -1,4 +1,8 @@
 //  MetalPreview.swift — live Metal preview of a preset inside SwiftUI.
+//
+//  A Now Playing style also shows its foreground (MusicOverlayView above the Metal view),
+//  fed by the app's shared MusicFeedHub; pass `musicCard` to show the corner card over any
+//  other style too (as the screensaver would).
 
 import SwiftUI
 import MetalKit
@@ -10,37 +14,122 @@ struct MetalPreview: NSViewRepresentable {
     let store: SharedStore
     /// Caps the frame rate below the style's own (small, always-on previews).
     var maxFPS: Int? = nil
+    /// Music settings for the corner card over non-music styles; nil = no card (gallery
+    /// tiles, the editor). Now Playing styles always show their own foreground.
+    var musicCard: MusicSpec? = nil
 
     private var fps: Int { min(preset.fps, maxFPS ?? preset.fps) }
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator { Coordinator(store: store) }
 
-    func makeNSView(context: Context) -> MTKView {
+    func makeNSView(context: Context) -> PreviewContainer {
         let view = MTKView()
         view.framebufferOnly = true
         view.enableSetNeedsDisplay = false
         view.isPaused = false
         view.colorPixelFormat = .bgra8Unorm
         view.layer?.isOpaque = true
+        let container = PreviewContainer(metal: view)
         if let r = MetalRenderer(pixelFormat: view.colorPixelFormat, store: store) {
             view.device = r.device
             view.delegate = r
             r.location = location
+            r.reduceMotion = MusicOverlayLayer.systemReduceMotion
             r.apply(preset, source: source)
             context.coordinator.renderer = r
         }
         view.preferredFramesPerSecond = fps
-        return view
+        context.coordinator.container = container
+        context.coordinator.update(preset: preset, card: musicCard)
+        return container
     }
 
-    func updateNSView(_ view: MTKView, context: Context) {
+    func updateNSView(_ container: PreviewContainer, context: Context) {
         context.coordinator.renderer?.location = location
         context.coordinator.renderer?.apply(preset, source: source)
-        view.preferredFramesPerSecond = fps
+        container.metal.preferredFramesPerSecond = fps
+        context.coordinator.update(preset: preset, card: musicCard)
+    }
+
+    static func dismantleNSView(_ container: PreviewContainer, coordinator: Coordinator) {
+        coordinator.stopMusic()
+    }
+
+    /// The MTKView plus, while music is shown, the overlay above it.
+    final class PreviewContainer: NSView {
+        let metal: MTKView
+        var overlay: MusicOverlayView?
+
+        init(metal: MTKView) {
+            self.metal = metal
+            super.init(frame: .zero)
+            metal.frame = bounds
+            metal.autoresizingMask = [.width, .height]
+            addSubview(metal)
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+        func setOverlay(_ on: Bool) -> MusicOverlayView? {
+            if on, overlay == nil {
+                let ov = MusicOverlayView(frame: bounds)
+                addSubview(ov, positioned: .above, relativeTo: metal)
+                overlay = ov
+            } else if !on, let ov = overlay {
+                ov.removeFromSuperview()
+                overlay = nil
+            }
+            return overlay
+        }
     }
 
     final class Coordinator {
         var renderer: MetalRenderer?
+        weak var container: PreviewContainer?
+        private let store: SharedStore
+        private var token: MusicFeedHub.Token?
+        private var preset: Preset?
+        private var card: MusicSpec?
+
+        init(store: SharedStore) { self.store = store }
+
+        /// Subscribe to the hub only while this preview shows music.
+        func update(preset: Preset, card: MusicSpec?) {
+            self.preset = preset
+            self.card = card
+            let wants = preset.isMusicScene || (card?.isCardEnabled ?? false)
+            if wants, token == nil {
+                token = MusicFeedHub.shared.subscribe(store: store) { [weak self] snap, changed in
+                    self?.tick(snap, changed: changed, animated: true)
+                }
+            } else if !wants {
+                stopMusic()
+            } else {
+                tick(MusicFeedHub.shared.snapshot(store: store), changed: false, animated: false)
+            }
+        }
+
+        func stopMusic() {
+            token = nil
+            _ = container?.setOverlay(false)
+        }
+
+        private func tick(_ snap: MusicSnapshot, changed: Bool, animated: Bool) {
+            guard let preset else { return }
+            if changed { renderer?.setMusic(snap) }
+            let settings = card ?? MusicSpec()
+            renderer?.musicLingerMinutes = settings.linger
+            let mode: MusicOverlayLayer.Mode
+            if let inst = preset.musicScene {
+                mode = .full(MusicSceneOptions(inst))
+            } else if let card, card.isCardEnabled {
+                mode = .card(card.corner)
+            } else {
+                mode = .hidden
+            }
+            guard let ov = container?.setOverlay(mode != .hidden) else { return }
+            ov.overlay.update(mode: mode, music: snap, settings: settings, animated: animated)
+        }
     }
 }
 

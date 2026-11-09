@@ -41,10 +41,27 @@ final class WallpaperController: ObservableObject {
 
     /// The wallpaper is on and its style still exists.
     var isActive: Bool { settings.enabled && currentPreset != nil }
+    /// The style on the desktop: the chosen one, or — while matching the screensaver —
+    /// exactly what the screensaver would show now (rotation slot, night style, music take-over).
     var currentPreset: Preset? {
+        guard let lib = model?.library else { return nil }
+        if settings.followsScreensaver {
+            return lib.presets.isEmpty ? nil : Playback.effectivePreset(in: lib, now: Date(), musicActive: musicActive)
+        }
         guard let id = settings.presetID else { return nil }
-        return model?.library.presets.first { $0.id == id }
+        return lib.presets.first { $0.id == id }
     }
+
+    // Music: the shared feed (MusicFeedHub), followed only while something on the desktop
+    // depends on it and someone can see it. Overlays tick on the main thread at 1 Hz on
+    // their own; the Metal pacing never has to speed up for them.
+    private var musicToken: MusicFeedHub.Token?
+    private var musicSubscribing = false
+    private var musicActive = false
+    private var musicSnapshot = MusicSnapshot.empty
+    /// Re-evaluates the followed lineup at rotation slot boundaries (and each minute for the
+    /// night schedule) while matching the screensaver.
+    private var slotTimer: Timer?
 
     private weak var model: AppModel?
     private var settingsURL: URL?
@@ -80,7 +97,7 @@ final class WallpaperController: ObservableObject {
         // The gallery (tiles, Wallpaper card, editor) talks to WallpaperSlot; plug in.
         if DemoHooks.wallpaperStub == nil {
             WallpaperSlot.shared.connect(.init(
-                styleID: { [weak self] in self?.isActive == true ? self?.settings.presetID : nil },
+                styleID: { [weak self] in self?.isActive == true ? self?.currentPreset?.id : nil },
                 set: { [weak self] in self?.use($0) },
                 stop: { [weak self] in self?.stop() },
                 changes: objectWillChange.map { _ in }.eraseToAnyPublisher()))
@@ -100,11 +117,35 @@ final class WallpaperController: ObservableObject {
 
     // MARK: Public actions
 
+    /// Show one chosen style (stops matching the screensaver).
     func use(_ presetID: UUID) {
-        update { $0.enabled = true; $0.presetID = presetID }
+        update { $0.enabled = true; $0.presetID = presetID; $0.followsScreensaver = false }
         userPaused = false
         start()
     }
+
+    /// "Match Screensaver": the wallpaper shows what the screensaver would show right now
+    /// (Playback.effectivePreset with the same music take-over), re-evaluated at rotation
+    /// slot boundaries with the rotation's crossfade, on the shared wall-clock time base —
+    /// and sets `Library.syncTimeBase` so the screensaver uses that time base too, starting
+    /// on exactly the frame the desktop shows. Off: back to `presetID`, per-instance time
+    /// (the library flag is cleared). Turns the wallpaper on when switching on.
+    func setFollowsScreensaver(_ on: Bool) {
+        if let model, (model.library.syncTimeBase ?? false) != on {
+            model.library.syncTimeBase = on ? true : nil
+            model.save()
+        }
+        update {
+            $0.followsScreensaver = on
+            if on { $0.enabled = true }
+        }
+        if on {
+            userPaused = false
+            start()
+        }
+    }
+
+    var followsScreensaver: Bool { settings.followsScreensaver }
 
     func stop() {
         update { $0.enabled = false }
@@ -113,7 +154,11 @@ final class WallpaperController: ObservableObject {
     }
 
     func setEnabled(_ on: Bool) {
-        if on {
+        if on, settings.followsScreensaver {
+            update { $0.enabled = true }
+            userPaused = false
+            start()
+        } else if on {
             let id = settings.presetID.flatMap { id in model?.preset(id)?.id }
                 ?? model?.library.activeID ?? model?.library.presets.first?.id
             if let id { use(id) }
@@ -136,7 +181,11 @@ final class WallpaperController: ObservableObject {
         settings = s
         if let url = settingsURL { s.save(to: url) }
         guard s.enabled, !hosts.isEmpty else { return }
-        if s.presetID != old.presetID { applyStyle() }
+        if s.followsScreensaver != old.followsScreensaver {
+            applyTimeBase()
+            scheduleSlotTimer()
+        }
+        if s.presetID != old.presetID || s.followsScreensaver != old.followsScreensaver { applyStyle() }
         if s.quality != old.quality {
             hosts.values.forEach { configure($0) }
             reevaluate(forceDraw: true)
@@ -183,7 +232,14 @@ final class WallpaperController: ObservableObject {
             log("start style=\(currentPreset?.name ?? "?") fps=\(settings.frameRate.rawValue) quality=\(settings.quality.rawValue)")
         }
         rebuildHosts(store: model.store)
+        applyTimeBase()
+        // Hand the render thread the current music before the first frame (Now Playing).
+        let snap = MusicFeedHub.shared.snapshot(store: model.store)
+        musicSnapshot = snap
+        musicActive = snap.isVisible(settings: model.library.musicSettings)
+        renderLoop?.setMusic(snap, lingerMinutes: model.library.musicSettings.linger)
         applyStyle()
+        scheduleSlotTimer()
         reevaluate(forceDraw: true)
     }
 
@@ -194,6 +250,10 @@ final class WallpaperController: ObservableObject {
         for h in hosts.values { h.close() }
         hosts.removeAll()
         applied = nil
+        musicToken = nil
+        musicSnapshot = .empty
+        slotTimer?.invalidate()
+        slotTimer = nil
         power.stop()
         power.onChange = nil
         for o in observers {
@@ -284,20 +344,115 @@ final class WallpaperController: ObservableObject {
             stop()
             return
         }
+        // Music settings (card, linger, take-over) and the rotation live in the library too.
+        renderLoop?.setMusic(musicSnapshot, lingerMinutes: model?.library.musicSettings.linger ?? MusicSpec().linger)
         applyStyle()
+        scheduleSlotTimer()
+        updateMusicOverlays(animated: true)
+        updateMusicSubscription()
     }
 
     /// Push the current style + shared source to every display (only when it changed).
-    private func applyStyle() {
+    /// - fade: a lineup-driven switch while matching the screensaver (rotation slot, night,
+    ///   music take-over) crossfades like the saver — when both styles animate continuously
+    ///   (a held frame can't play a crossfade); edits and manual picks cut.
+    private func applyStyle(fade: Bool = false) {
         guard let model, let preset = currentPreset else { return }
         let source = model.library.source
         if let a = applied, a.preset == preset, a.source == source { return }
         let styleChanged = applied?.preset.id != preset.id
-        renderLoop?.setStyle(preset, source: source, location: model.locationTuple)
+        let newProfile = WallpaperPacing.profile(for: preset, source: source)
+        var seconds = 0.0
+        if fade, styleChanged, applied != nil, profile == .motion, newProfile == .motion, stillReason == nil {
+            seconds = model.library.rotation?.transitionSeconds ?? 1.5
+        }
+        renderLoop?.setStyle(preset, source: source, location: model.locationTuple, fade: seconds)
         applied = (preset, source)
-        profile = WallpaperPacing.profile(for: preset, source: source)
-        if styleChanged { log("style \(preset.name) profile=\(profile)") }
+        profile = newProfile
+        if styleChanged { log("style \(preset.name) profile=\(profile)\(seconds > 0 ? " fade=\(seconds)" : "")") }
         reevaluate(forceDraw: true)   // an edit shows even when holding a still
+        updateMusicOverlays(animated: true)
+    }
+
+    private func applyTimeBase() {
+        renderLoop?.setTimeBase(settings.followsScreensaver ? .wallClock : .instance)
+    }
+
+    /// While matching the screensaver with a rotation or night schedule: re-evaluate just
+    /// after each slot boundary (the saver's own slots are the same wall-clock slots), and at
+    /// least once a minute when a night schedule can flip at sunset.
+    private func scheduleSlotTimer() {
+        slotTimer?.invalidate()
+        slotTimer = nil
+        guard settings.enabled, settings.followsScreensaver, !hosts.isEmpty, let lib = model?.library else { return }
+        let rotating = Playback.secondsUntilNextSlot(in: lib, now: Date())
+        let scheduled = lib.schedule?.enabled ?? false
+        guard rotating != nil || scheduled else { return }
+        let delay = min(rotating ?? 60, scheduled ? 60 : .infinity) + 0.02
+        let t = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+            self?.applyStyle(fade: true)
+            self?.scheduleSlotTimer()
+        }
+        t.tolerance = 0.02
+        RunLoop.main.add(t, forMode: .common)
+        slotTimer = t
+    }
+
+    // MARK: Music
+
+    /// Whether anything on the desktop depends on what's playing.
+    private var needsMusic: Bool {
+        guard settings.enabled, !hosts.isEmpty, let lib = model?.library else { return false }
+        let m = lib.musicSettings
+        return (currentPreset?.isMusicScene ?? false)
+            || (m.isCardEnabled && m.showsCardOnWallpaper)
+            || (settings.followsScreensaver && m.takesOver)
+    }
+
+    /// Follow the feed only while it matters and someone can see the desktop: covered,
+    /// locked or paused costs nothing (the overlays keep their last state).
+    private func updateMusicSubscription() {
+        let run = needsMusic && hardPauseReason == nil && hosts.values.contains(where: isVisible)
+        if run, musicToken == nil, !musicSubscribing, let store = model?.store {
+            musicSubscribing = true
+            musicToken = MusicFeedHub.shared.subscribe(store: store) { [weak self] snap, changed in
+                self?.musicTick(snap, changed: changed)
+            }
+            musicSubscribing = false
+        } else if !run, musicToken != nil {
+            musicToken = nil
+        }
+    }
+
+    private func musicTick(_ snap: MusicSnapshot, changed: Bool) {
+        guard let lib = model?.library else { return }
+        let ms = lib.musicSettings
+        musicSnapshot = snap
+        if changed { renderLoop?.setMusic(snap, lingerMinutes: ms.linger) }
+        let active = snap.isVisible(settings: ms)
+        if active != musicActive {
+            musicActive = active
+            if settings.followsScreensaver && ms.takesOver { applyStyle(fade: true) }
+        }
+        // A new cover shows even while the background holds a frame.
+        if changed, currentPreset?.isMusicScene == true { reevaluate(forceDraw: true) }
+        updateMusicOverlays(animated: true)
+    }
+
+    /// The Now Playing foreground when that's the style; else the card when it's on for the
+    /// wallpaper; else no overlay at all.
+    private func updateMusicOverlays(animated: Bool) {
+        guard let lib = model?.library else { return }
+        let ms = lib.musicSettings
+        let mode: MusicOverlayLayer.Mode
+        if settings.enabled, let inst = currentPreset?.musicScene {
+            mode = .full(MusicSceneOptions(inst))
+        } else if ms.isCardEnabled && ms.showsCardOnWallpaper {
+            mode = .card(ms.corner)
+        } else {
+            mode = .hidden
+        }
+        for h in hosts.values { h.setMusic(mode: mode, music: musicSnapshot, settings: ms, animated: animated) }
     }
 
     // MARK: Policy
@@ -356,6 +511,7 @@ final class WallpaperController: ObservableObject {
         renderLoop?.update(WallpaperFrameState(canDraw: hard == nil, visible: visible, profile: profile,
                                                fps: targetFPS, still: still != nil),
                            forceDraw: forceDraw)
+        updateMusicSubscription()
     }
 
     // MARK: Dev hooks + logging
@@ -415,6 +571,9 @@ final class WallpaperHost {
     let window: WallpaperWindow
     let view: WallpaperMetalView
     let metalLayer: CAMetalLayer
+    /// The window's content: the Metal view, plus the music overlay above it while shown.
+    private let container: NSView
+    private var overlay: MusicOverlayView?
 
     init(screen: NSScreen, displayID: CGDirectDisplayID, device: MTLDevice, token: UInt64) {
         self.displayID = displayID
@@ -454,7 +613,12 @@ final class WallpaperHost {
         w.animationBehavior = .none
         w.tabbingMode = .disallowed
         w.title = "DotStudio Wallpaper"
-        w.contentView = v
+        let c = NSView(frame: CGRect(origin: .zero, size: screen.frame.size))
+        c.wantsLayer = true
+        c.autoresizingMask = [.width, .height]
+        c.addSubview(v)
+        container = c
+        w.contentView = c
         w.setFrame(screen.frame, display: false)
         window = w
 
@@ -471,6 +635,37 @@ final class WallpaperHost {
 
     func follow(_ screen: NSScreen) {
         if window.frame != screen.frame { window.setFrame(screen.frame, display: false) }
+        overlay?.overlay.safeInsets = Self.insets(screen)
+    }
+
+    /// Show what's playing above the Metal view (`.hidden` removes the overlay entirely).
+    /// The wallpaper's overlay has no ambient motion: no equalizer bounce, no gliding bar,
+    /// so WindowServer recomposites it once a second at most.
+    func setMusic(mode: MusicOverlayLayer.Mode, music: MusicSnapshot, settings: MusicSpec, animated: Bool) {
+        if mode == .hidden {
+            overlay?.removeFromSuperview()
+            overlay = nil
+            return
+        }
+        let existed = overlay != nil
+        let ov: MusicOverlayView
+        if let o = overlay {
+            ov = o
+        } else {
+            ov = MusicOverlayView(frame: container.bounds)
+            ov.overlay.ambientMotion = false
+            if let screen = window.screen { ov.overlay.safeInsets = Self.insets(screen) }
+            container.addSubview(ov, positioned: .above, relativeTo: view)
+            overlay = ov
+        }
+        ov.overlay.update(mode: mode, music: music, settings: settings, animated: animated && existed)
+    }
+
+    /// The menu bar and Dock, as insets from the screen edges (points).
+    private static func insets(_ screen: NSScreen) -> MusicOverlayLayer.Insets {
+        let f = screen.frame, v = screen.visibleFrame
+        return MusicOverlayLayer.Insets(top: max(f.maxY - v.maxY, 0), left: max(v.minX - f.minX, 0),
+                                        bottom: max(v.minY - f.minY, 0), right: max(f.maxX - v.maxX, 0))
     }
 
     /// Drawable = display points × Quality's pixel density; the compositor upscales it.
