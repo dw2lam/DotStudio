@@ -52,6 +52,24 @@ struct MusicReport: Equatable {
     var isEpisode = false
 
     var isEmptyTrack: Bool { (title ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    /// Gate for an Apple Events read before it is ingested. ScriptingBridge turns a failed
+    /// event into nil / 0, which would read as real values: an empty title (clears the track),
+    /// a missing id (a "new" track: spurious cover lookup + cross-fade), position 0 (the bar
+    /// jumps back). So a read with ANY failed event (`errorCode` ≠ 0) is dropped whole, as is
+    /// one without a recognisable play state; track fields that all came back nil are dropped.
+    static func acceptingAppleEventsRead(_ report: MusicReport?, errorCode: Int) -> MusicReport? {
+        guard errorCode == 0, var r = report, r.state != nil else { return nil }
+        if r.hasTrackFields, r.title == nil, r.trackID == nil {
+            // The track's reads failed silently: keep only the play state (its position,
+            // read alongside, isn't trustworthy either).
+            r.hasTrackFields = false
+            r.artist = nil; r.album = nil; r.duration = nil; r.position = nil
+        }
+        if let p = r.position, !p.isFinite || p < 0 { r.position = nil }
+        if let p = r.position, let d = r.duration, d > 0, p > d + 5 { r.position = nil }
+        return r
+    }
 }
 
 enum MusicCommand: String { case playPause, next, previous }
@@ -177,13 +195,13 @@ struct MusicSpotifyAdapter: MusicPlayerAdapter {
         r.state = MusicPlayerStateCode.playState(a.playerState)
         guard r.state != nil else { return nil }   // the very first event failed: give up
         if r.state != .stopped, let t = a.currentTrack {
-            r.hasTrackFields = true
             r.title = t.name
             r.artist = t.artist
             r.album = t.album
             if let ms = t.duration, ms > 0 { r.duration = Double(ms) / 1000 }
             r.trackID = Self.normalizedURI(t.id?())
             r.position = a.playerPosition
+            r.hasTrackFields = r.title != nil || r.trackID != nil   // both nil = the reads failed
             Self.classify(&r)
         }
         return r
@@ -287,13 +305,13 @@ struct MusicAppleMusicAdapter: MusicPlayerAdapter {
         r.state = MusicPlayerStateCode.playState(a.playerState)
         guard r.state != nil else { return nil }
         if r.state != .stopped, let t = a.currentTrack {
-            r.hasTrackFields = true
             r.title = t.name
             r.artist = t.artist
             r.album = t.album
             if let d = t.duration, d > 0 { r.duration = d }
             if let pid = t.persistentID, !pid.isEmpty { r.trackID = "music:" + pid.uppercased() }
             r.position = a.playerPosition
+            r.hasTrackFields = r.title != nil || r.trackID != nil   // both nil = the reads failed
         }
         return r
     }

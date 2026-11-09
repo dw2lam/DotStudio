@@ -62,11 +62,18 @@ enum MusicArtOutcome {
 
 /// Counters for tests and the debug log.
 struct MusicArtStats {
+    /// Request times within the last 60 s (the rate limiter's window) — trimmed as they age
+    /// out, so a long session doesn't grow them; the totals below count every request.
     var appleRequests: [Date] = []
     var spotifyRequests: [Date] = []
+    var appleRequestTotal = 0
+    var spotifyRequestTotal = 0
     var downloads = 0
     var cacheHits = 0
     var appleEventFetches = 0
+    /// Apple Events artwork reads abandoned for taking longer than `appleEventsTimeout` (a
+    /// busy queue or a hung player) — the lookup went on to the public sources instead.
+    var appleEventTimeouts = 0
     /// Lookups that failed transiently (network) — never recorded as misses.
     var networkFailures = 0
 }
@@ -97,6 +104,13 @@ struct MusicRateLimiter {
     }
 }
 
+/// Lets exactly one of several racers through (`MusicArtworkResolver.first(within:_:)`).
+final class MusicOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func claim() -> Bool { lock.lock(); defer { lock.unlock() }; if done { return false }; done = true; return true }
+}
+
 // MARK: - Resolver
 
 actor MusicArtworkResolver {
@@ -114,12 +128,21 @@ actor MusicArtworkResolver {
         var country: String? = nil
         /// Tests: every request fails as if offline (nothing is sent).
         var simulateOffline = false
+        /// Longest the Apple Events artwork read may take before the public lookups run
+        /// anyway (the read's own event timeout is 2 s; this also covers time spent waiting
+        /// behind other events in the queue).
+        var appleEventsTimeout: TimeInterval = 3
     }
+
+    /// Definitive misses are retried after this long, and forgotten then.
+    static let missLifetime: TimeInterval = 1800
+    /// The request-time window kept in `stats` (the rate limiters' window).
+    static let statsWindow: TimeInterval = 60
 
     let cacheDir: URL
     private(set) var config: Config
     /// Runs the Apple Events artwork read (on the AE queue) — supplied by the monitor.
-    private let appleEventsFetch: (MusicArtRequest) async -> MusicArtPayload?
+    private let appleEventsFetch: @Sendable (MusicArtRequest) async -> MusicArtPayload?
     private let session: URLSession
 
     private var appleLimiter: MusicRateLimiter
@@ -128,11 +151,13 @@ actor MusicArtworkResolver {
     /// Keys with no artwork anywhere (definitive "no results"), retried after 30 min.
     private var misses: [String: Date] = [:]
     private(set) var stats = MusicArtStats()
+    /// The session was invalidated (`invalidate()`, on the monitor's stop).
+    private(set) var isInvalidated = false
     private let log: (String) -> Void
 
     init(cacheDir: URL, config: Config = Config(),
          log: @escaping (String) -> Void = { _ in },
-         appleEventsFetch: @escaping (MusicArtRequest) async -> MusicArtPayload?) {
+         appleEventsFetch: @escaping @Sendable (MusicArtRequest) async -> MusicArtPayload?) {
         self.cacheDir = cacheDir
         self.config = config
         self.log = log
@@ -150,6 +175,28 @@ actor MusicArtworkResolver {
     }
 
     func currentStats() -> MusicArtStats { stats }
+    var missCount: Int { misses.count }
+
+    /// Lets in-flight requests finish, then releases the session (and its delegate queue,
+    /// connection pool…). The resolver is done after this: the monitor makes a new one per start.
+    func invalidate() {
+        guard !isInvalidated else { return }
+        isInvalidated = true
+        session.finishTasksAndInvalidate()
+    }
+
+    /// Drops request times older than the stats window and misses past their lifetime.
+    func prune(now: Date = Date()) {
+        stats.appleRequests.removeAll { now.timeIntervalSince($0) >= Self.statsWindow }
+        stats.spotifyRequests.removeAll { now.timeIntervalSince($0) >= Self.statsWindow }
+        misses = misses.filter { now.timeIntervalSince($0.value) < Self.missLifetime }
+    }
+
+    /// Records a definitive "no artwork" for `key` (pruning expired ones first).
+    func noteMiss(_ key: String, at date: Date = Date()) {
+        prune(now: date)
+        misses[key] = date
+    }
     /// Tests: toggle `Config.simulateOffline`.
     func setSimulateOffline(_ on: Bool) { config.simulateOffline = on }
 
@@ -166,7 +213,13 @@ actor MusicArtworkResolver {
         // 2. Apple Events (local, cheap — no debounce).
         if req.useAppleEvents {
             stats.appleEventFetches += 1
-            switch await appleEventsFetch(req) {
+            let fetch = appleEventsFetch
+            let payload = await Self.first(within: config.appleEventsTimeout) { await fetch(req) }
+            if payload.timedOut {
+                stats.appleEventTimeouts += 1
+                log("art: Apple Events read took over \(config.appleEventsTimeout) s — trying the public lookups")
+            }
+            switch payload.value {
             case .data(let data)?:
                 if Task.isCancelled { return .none }
                 if let r = store(data, keys: [primary], origin: "appleEvents") { return .found(r) }
@@ -178,7 +231,7 @@ actor MusicArtworkResolver {
         }
         // 3. Public lookups, after the skip debounce.
         guard config.networkEnabled else { return .none }
-        if let missed = misses[primary], Date().timeIntervalSince(missed) < 1800 { return .none }
+        if let missed = misses[primary], Date().timeIntervalSince(missed) < Self.missLifetime { return .none }
         do { try await Task.sleep(nanoseconds: UInt64(config.debounce * 1e9)) } catch { return .none }
         // Another request may have cached it while we waited (same track re-reported).
         if let hit = cached(primary) { stats.cacheHits += 1; return .found(hit) }
@@ -222,7 +275,7 @@ actor MusicArtworkResolver {
             switch await appleSearchArtwork(artist: artist, album: req.album, title: req.title) {
             case .none:
                 // Definitive "no results" only — a failed request never lands here.
-                if !Task.isCancelled { misses[primary] = Date() }
+                if !Task.isCancelled { noteMiss(primary) }
                 return .none
             case .failed:
                 return .failed
@@ -231,6 +284,26 @@ actor MusicArtworkResolver {
                 guard let data = await download(url) else { return Task.isCancelled ? .none : .failed }
                 return store(data, keys: [primary, albumKey].compactMap { $0 }, origin: "itunes-search")
                     .map(MusicArtOutcome.found) ?? .none
+            }
+        }
+    }
+
+    // MARK: Timeout
+
+    /// Runs `op` but stops waiting after `seconds`: `(nil, timedOut: true)` then, and `op` is
+    /// cancelled (an Apple Events read stuck in its queue still finishes there, unwaited).
+    /// Not a task group — a group would wait for the stuck child before returning.
+    static func first<T: Sendable>(within seconds: TimeInterval,
+                                   _ op: @escaping @Sendable () async -> T?) async -> (value: T?, timedOut: Bool) {
+        let once = MusicOnce()
+        return await withCheckedContinuation { (cont: CheckedContinuation<(value: T?, timedOut: Bool), Never>) in
+            let work = Task {
+                let v = await op()
+                if once.claim() { cont.resume(returning: (v, false)) }
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1e9))
+                if once.claim() { work.cancel(); cont.resume(returning: (nil, true)) }
             }
         }
     }
@@ -313,7 +386,10 @@ actor MusicArtworkResolver {
             log("art: rate limit — waiting \(String(format: "%.1f", wait)) s")
             do { try await Task.sleep(nanoseconds: UInt64(wait * 1e9)) } catch { return false }
         }
-        if apple { stats.appleRequests.append(Date()) } else { stats.spotifyRequests.append(Date()) }
+        let now = Date()
+        prune(now: now)
+        if apple { stats.appleRequests.append(now); stats.appleRequestTotal += 1 }
+        else { stats.spotifyRequests.append(now); stats.spotifyRequestTotal += 1 }
         return !Task.isCancelled
     }
 
