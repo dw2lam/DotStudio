@@ -103,7 +103,7 @@ enum EffectKind: String, Codable, CaseIterable {
     case dichroic
 
     // — new-scene slot 5 (shader id 71); rename the case freely on this line —
-    case studio5
+    case soapFilm
 
     // — new-scene slot 6 (shader id 72); rename the case freely on this line —
     case studio6
