@@ -49,10 +49,14 @@ static inline float flowing_stream(float2 q, float ts, float s) {
 // ---------------------------------------------------------------- Lava Lamp (55)
 
 // Sum of compact (1 - r²/R²)³ kernels, one per blob, with its analytic gradient.
-// p is y-up. Returns (field, ∂f/∂x, ∂f/∂y).
-static inline float3 flowing_lavaField(float2 p, float ts, int n, float size, float seed, float spanX) {
+// p is y-up. Returns (field, ∂f/∂x, ∂f/∂y). `mound` gets (height, ∂/∂x) of the bulge the pool
+// raises under blobs settling into it: wider than the blob, so two blobs resting side by side
+// sit on one swell of wax instead of trapping a pocket of liquid between them.
+static inline float3 flowing_lavaField(float2 p, float ts, int n, float size, float seed, float spanX,
+                                       thread float2& mound) {
     float f = 0.0;
     float2 g = float2(0.0);
+    mound = float2(0.0);
     for (int i = 0; i < 10; ++i) {
         if (i >= n) break;
         float fi = float(i) + seed;
@@ -70,6 +74,12 @@ static inline float3 flowing_lavaField(float2 p, float ts, int n, float size, fl
         float sy = 1.0 + 0.45 * abs(vy) * (1.0 - 0.5 * h1);   // stretch along the motion
         float sx = rsqrt(sy);                                  // keep the area
         float2 d = p - c;
+        float lowK = smoothstep(-0.10, -0.34, c.y);
+        float Wb = 2.6 * r, xb = d.x / Wb;
+        if (lowK > 0.0 && abs(xb) < 1.0) {
+            float kb = 1.0 - xb * xb;
+            mound += lowK * float2(kb * kb, -4.0 * kb * xb / Wb);
+        }
         float2 e = float2(d.x / sx, d.y / sy);
         float R2 = r * r * 4.0;
         float q = dot(e, e) / R2;
