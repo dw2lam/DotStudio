@@ -2,11 +2,12 @@
 //
 //  Model (see Studio5.swift for the look):
 //   • Thickness d(x, y, t) in nm = the drainage profile D(y′) at a BACKWARD-ADVECTED point:
-//     3 midpoint steps back over a fixed window through a slowly drifting, divergence-free
+//     4 midpoint steps back over a fixed window through a slowly drifting, divergence-free
 //     flow (the curl of a 2-octave gradient-noise stream function with analytic gradients).
 //     The window is fixed, so d is a smooth function of t: no flow-map resets, no pulses.
-//     Plumes are thickness deficits applied in the pre-advection frame, so the flow carries
-//     and folds them too.
+//     The flow's strain number (displacement over the window in eddy sizes) is fixed per
+//     Turbulence and capped, so Scale is a pure zoom and no setting folds below a pixel.
+//     Plumes are thickness deficits applied in a partly advected frame, so the flow bends them.
 //   • Colour: the film's two-beam Airy reflectance is (to a few %) linear in cos δ,
 //     R(λ) = A + B cos(4π o/λ) with o = n d cos θt, so its colour is A + B·C(o), where
 //     C(o) = Σ_λ w(λ) cos(4π o/λ) is the CIE 1931 → linear-sRGB integral over 360–780 nm in
@@ -14,8 +15,11 @@
 //     pixel: exact, and a fraction of the cost. High orders wash out to white on their own
 //     (the integral averages the fringes away), and each pixel's thickness footprint (from
 //     the screen derivative of d) damps cos δ per channel, so steep zones never alias.
-//  Cost: everything per pixel is counted — table-gradient noise, predictors that reuse the
-//  last midpoint and see only the big eddies, the colour table — ≈ 4.5 ms at 5K (M5 Pro).
+//   • Edges that are steps, not bands — the Newton black film's line, an oil patch's margin —
+//     ramp over a few pixels measured by their own screen derivative: crisp at any size.
+//  Cost: everything per pixel is counted — table-gradient noise (9 lookups of it), predictors
+//  that reuse the last midpoint and see only the big eddies, the colour table — ≈ 5–6 ms at
+//  5K (M5 Pro), about Liquid Chrome's.
 //  Validation: with Turbulence and Plumes at 0 the film is a static wedge, 0 → ~1.4 µm;
 //  its bands run black, grey-blue, silver, straw, gold, magenta, indigo, blue, green-yellow,
 //  magenta, peacock, green, then pink/green pastels — Newton's series for a soap film.
@@ -195,7 +199,8 @@ static inline float studio5_noise(float2 p) {
 struct Studio5Flow {
     float2 o1, o2;      // drifting offsets of the two octaves (noise units)
     float fs;           // large-octave frequency (per screen height)
-    float amp;          // stream-function amplitude (≈ displacement over the window)
+    float amp;          // stream-function amplitude: S / fs², S the strain number
+    float a2;           // weight of the small eddies (stream function)
     float buoy;         // upward drift at the bottom margin
     float calmTop;      // 1: the flow quietens toward the top (soap); 0: uniform (oil)
     float hb;           // height of the black-film line (soap): calm above it
@@ -207,49 +212,51 @@ struct Studio5Flow {
 // e(y) quietens the flow toward the black film (∇(eψ) = e∇ψ + ψ∇e) over a long, gentle
 // ramp (a steep one would shear the bands into horizontal seams); it barely changes over
 // one window, so it is taken at the trajectory's start: (e, de/dy) in F.env.
-// a2 = 0 leaves out the small eddies.
-static inline float2 studio5_vel(float2 p, thread const Studio5Flow& F, float a2) {
+static inline float2 studio5_vel(float2 p, thread const Studio5Flow& F, bool small) {
     const float2x2 R = float2x2(0.8, 0.6, -0.6, 0.8);
     const float f2 = 2.13;
     float3 n = studio5_noised(p * F.fs + F.o1);
-    if (a2 > 0.0) {
+    if (small) {
         float3 n2 = studio5_noised(R * (p * (F.fs * f2)) + F.o2);
-        n += float3(a2 * n2.x, (a2 * f2) * (transpose(R) * n2.yz));
+        n += float3(F.a2 * n2.x, (F.a2 * f2) * (transpose(R) * n2.yz));
     }
     float2 g = F.env.x * F.fs * n.yz + float2(0.0, n.x * F.env.y);
     return F.amp * float2(g.y, -g.x);
 }
 
 // Backward advection over the fixed window (the field is frozen within a frame and drifts
-// between frames, so the result is smooth in t): 3 midpoint steps — a composition of smooth
+// between frames, so the result is smooth in t): N midpoint steps — a composition of smooth
 // maps, so no tears and no resets. A predictor only places its step's midpoint, so after
 // the first it reuses the previous midpoint's velocity (half a step stale: still second
-// order) and sees just the big eddies; the small ones join in the last step. Five noise
-// lookups instead of twelve.
-static inline float2 studio5_advect(float2 p, thread Studio5Flow& F) {
-    float h = p.y + 0.5;
-    const float span = -0.70;                            // smoothstep from hb + 0.05 down to hb − 0.65
-    float s = saturate((h - F.hb - 0.05) * (1.0 / span));
-    F.env = float2(1.0 - F.calmTop * 0.82 * (1.0 - s * s * (3.0 - 2.0 * s)),
-                   F.calmTop * 0.82 * 6.0 * s * (1.0 - s) * (1.0 / span));
-    const float hs = 1.0 / 3.0;
-    float2 v = studio5_vel(p, F, 0.0);
-    for (int i = 0; i < 3; ++i) {
-        v = studio5_vel(p - 0.5 * hs * v, F, i == 2 ? 1.0 : 0.0);
+// order) and sees just the big eddies. The small eddies act in every step, weakly: crowded
+// into one big step they nearly fold the map, and its creases show as straight seams.
+static inline float2 studio5_advect(float2 p, thread Studio5Flow& F, int N) {
+    // e(h) = 1 − 0.86·L, L a logistic step centred 0.3 below the line (5–95 % over
+    // hb − 0.65 … hb + 0.05). Smooth in every derivative: the velocity uses e′, and a ramp
+    // that ends (a smoothstep's e′ has a corner there) creases the bands along a straight line.
+    float L = 1.0 / (1.0 + exp((F.hb - 0.30 - (p.y + 0.5)) * (1.0 / 0.118)));
+    F.env = F.calmTop * 0.86 * float2(-L, -L * (1.0 - L) * (1.0 / 0.118));
+    F.env.x += 1.0;
+    float hs = 1.0 / float(N);
+    float2 v = studio5_vel(p, F, false);
+    for (int i = 0; i < N; ++i) {
+        v = studio5_vel(p - 0.5 * hs * v, F, true);
         p -= hs * v;
     }
     return p;
 }
 
 // Film colour (linear sRGB, 0…0.077) for optical path o (nm) changing by go across the
-// pixel: A + B·⟨C(o)⟩. The pixel average of each cos(4π o σ) is damped by exp(−(Δδ)²/18),
-// Δδ = 4π σ go its phase spread, with σ the channel's effective wavenumber.
+// pixel: A + B·⟨C(o)⟩. Each cos(4π o σ) is averaged over a Gaussian footprint about 1.3 px
+// wide, damping it by exp(−0.8·Δδ²), Δδ = 4π σ go its phase step per pixel and σ the
+// channel's effective wavenumber: bands too fine to draw cleanly (under ~6 px a period) melt
+// into their mean before they can alias or crawl.
 static inline float3 studio5_film(float o, float go, float A, float B) {
     float x = min(o * 0.125, 382.0);
     int i = int(x);
     float3 c = mix(float3(studio5_C[i].rgb), float3(studio5_C[i + 1].rgb), x - float(i));
     float3 k = (12.566371 * go) * float3(1.0 / 600.0, 1.0 / 540.0, 1.0 / 460.0);
-    return A + B * c * exp(-0.055 * k * k);
+    return A + B * c * exp(-0.8 * k * k);
 }
 
 // Display sRGB → linear for the two colour wells (polynomial fit, |err| < 0.003).
@@ -257,6 +264,9 @@ static inline float3 studio5_lin(float3 c) {
     c = saturate(c);
     return c * (c * (c * 0.305306011 + 0.682171111) + 0.012522878);
 }
+
+// 1 − smoothstep(0.12, 0.25, f): an octave of f cycles per pixel fades out before it can alias.
+static inline float studio5_lod(float f) { return 1.0 - smoothstep(0.12, 0.25, f); }
 
 static inline float4 studio5_soapFilm(float2 uv, float2 res, float2 px, float t, constant FXUniforms& u) {
     float speed = u.p0.x, swirl = saturate(u.p0.y), drain = saturate(u.p0.z), plumes = saturate(u.p0.w);
@@ -268,11 +278,20 @@ static inline float4 studio5_soapFilm(float2 uv, float2 res, float2 px, float t,
 
     // ---- flow
     Studio5Flow F;
-    F.fs = 2.1 / sc;
-    // Oil spreads in a free surface with no gravity drainage to calm it: stronger eddies,
-    // which fold its smooth thickness field into the streaks and tongues of a real slick.
-    F.amp = (oil ? 0.30 : 0.18) * swirl * sc;
-    float hb0 = 0.93 - 0.26 * drain;                         // black-film line (soap)
+    F.fs = (oil ? 2.4 : 2.75) / sc;
+    // The strain number S = amp·fs² is the window's displacement in eddy sizes. Holding it
+    // fixed makes Scale a pure zoom of the eddies (amp ∝ scale²), and capping it (0.7, with
+    // gentle small eddies and 4 steps) keeps every fold wider than its eddy can thin it in
+    // one window: no slider combination folds chaotically. Soap's Turbulence eases out toward
+    // the cap (swirl·(2 − swirl)), so the default already curls the bands into filaments.
+    // Oil's patches have far steeper margins than the soap's band ladder, so its flow folds
+    // more gently still (else the margins draw out into threads finer than a pixel).
+    float S = oil ? 0.36 * swirl : 0.70 * swirl * (2.0 - swirl);
+    F.amp = S / (F.fs * F.fs);
+    F.a2 = oil ? 0.10 : 0.30;                                // small-eddy weight
+    // Black-film line: drainage sets it; over ~10 minutes it sinks and recovers a little, so
+    // the layout is never quite the same twice.
+    float hb0 = 0.93 - 0.26 * drain + 0.028 * sin(ts * 0.0105 + 0.7);
     F.hb = hb0;
     F.calmTop = oil ? 0.0 : 1.0;
     F.buoy = oil ? 0.0 : 0.05 * swirl;
@@ -281,111 +300,153 @@ static inline float4 studio5_soapFilm(float2 uv, float2 res, float2 px, float t,
     float cur = oil ? -0.0060 : 0.0;
     F.o1 = ts * float2(-0.0026 + cur * F.fs, 0.0007) + float2(3.1, 7.7);
     F.o2 = ts * float2(0.0030 + cur * F.fs * 2.13, 0.0042) + float2(11.4, 2.9);
-    float2 q = studio5_advect(p, F);
+    float2 q = studio5_advect(p, F, 4);                      // ≤ ~0.2 eddy per step
     // gentle buoyancy at the bottom margin: the film there is drawn from a little lower
-    // (a C1 ramp: a kinked one would crease the bands along a line)
-    q.y -= F.buoy * (1.0 - smoothstep(-0.30, 0.35, q.y + 0.5));
+    // (a logistic ramp: one that ends would crease the bands along its end)
+    q.y -= F.buoy / (1.0 + exp((q.y + 0.475) * (1.0 / 0.11)));
     float h = q.y + 0.5;
+    // The fine thickness octaves fade out by the pixel's size (×3, the stretch a fold
+    // typically adds; anything finer reaches the colour as a steep thickness, which the film
+    // colour averages). A per-pixel footprint (fwidth) would fade them in 2×2 blocks.
+    float fp = 3.0 / res.y;
 
-    // ---- plumes: thin patches breaking off the bottom margin and rising (soap), or drifting
-    // with the current (oil), over ~60 s, broadening, faded in and out. Five staggered slots,
-    // each respawning every 145–193 s at a fresh spot: one new plume every ~30 s on average.
-    // A plume is a soft patch of thin film — dark (≈25 nm) or first-order gold (≈175 nm) —
-    // blended in log thickness by `pw`, so its flank shows the interference orders between
-    // it and the film around it as soft rings; around it the stratification is lifted
-    // (`bulge`), so the bands arch over the rising head like smoke over a thermal.
-    // It rides a sixth of the flow's displacement: bent by it, but not sheared into threads
-    // by the strong eddies at the margin.
-    float2 qp = mix(p, q, 0.16);
-    float bulge = 0.0, pw = 0.0, plt = 0.0;
+    // ---- plumes. Soap: thermals of thinner film rising off the bottom margin over ~70 s — a
+    // round head on a tapering stem rooted below the frame, the way marginal regeneration
+    // looks. Each is formed below the frame and rises into view whole, then fades slowly;
+    // it thins the film it covers by a factor (a relative deficit, so its rim crosses only
+    // a few orders: it reads as a plume, never as a bullseye), and lifts the stratification
+    // around it (`bulge`), so the bands arch over the head like smoke over a thermal.
+    // Oil: fresh sheen drawn out along the current. Five staggered slots, each respawning
+    // every 145–193 s at a fresh spot: one new plume every ~30 s on average. Plumes ride a
+    // third of the flow's displacement: bent and leaned by the eddies, not shredded.
+    float2 qp = mix(p, q, 0.33);
+    float bulge = 0.0, pdef = 0.0;
     if (plumes > 0.0) {
         for (int i = 0; i < 5; ++i) {
             float fi = float(i);
             float P = 145.0 + 12.0 * fi;                             // slot period, s
             float ph = ts + P * fract(fi * 0.618034 + 0.31);
-            float cyc = floor(ph / P), tau = ph - cyc * P, s = tau * (1.0 / 60.0);
+            float cyc = floor(ph / P), tau = ph - cyc * P, s = tau * (1.0 / 70.0);
             if (s >= 1.0) continue;                                  // uniform: idle slot
             // successive spawns of a slot walk a low-discrepancy sequence: well spread out
             float hx = fract(cyc * 0.7548777 + fi * 0.5698403);
-            float x0 = (hx - 0.5) * aspect * 0.85;
+            float sg = (0.055 + 0.04 * s) * sc;
+            // c0: the plume's centre before its wobble (≤ 0.03) and lean (≤ 0.04·scale); most
+            // pixels are far outside its reach (r < 3 radii) and skip the rest
+            float2 c0 = oil ? float2((hx - 0.5) * aspect * 0.9 + 0.36 * (s - 0.5) * sc,
+                                     (fract(hx * 3.7) - 0.5) * 0.8)
+                            : float2((hx - 0.5) * aspect * 0.85, -0.80 + 0.74 * s);
+            float2 reach = oil ? float2(3.0 * sg / 0.45, 3.0 * sg + 0.03)
+                               : float2(3.0 * sg + 0.03 + 0.04 * sc, 3.0 * sg);
+            float2 off = qp - c0;
+            if (abs(off.x) > reach.x || (oil ? abs(off.y) : off.y) > reach.y) continue;
             float wob = 0.03 * sin(tau * 0.19 + fi * 2.1);
-            float2 c = oil ? float2((hx - 0.5) * aspect * 0.9 + 0.36 * (s - 0.5) * sc,
-                                    (fract(hx * 3.7) - 0.5) * 0.8 + wob)
-                           : float2(x0 + wob, -0.62 + 0.55 * s);
-            float sg = (0.06 + 0.07 * s) * sc;
-            float fo = sin(3.14159265 * s * (1.25 - 0.25 * s));          // in by s≈0.25, out slowly
-            float amp = plumes * fo * fo;
-            float2 dq = (qp - c) * float2(1.0, 1.2);                 // a little wider than tall
-            float r2 = dot(dq, dq) / (sg * sg);
+            float r2;
+            if (oil) {
+                float2 dq = (off - float2(0.0, wob)) * float2(0.45, 1.0);   // a streak along the current
+                r2 = dot(dq, dq) / (sg * sg);
+            } else {
+                float2 c = c0 + float2(wob, 0.0);
+                const float yb = -0.95;                              // the stem's root
+                float ty = saturate((qp.y - yb) / (c.y - yb));
+                float ty2 = ty * ty;
+                float rr = sg * mix(0.42, 1.0, ty2 * ty2);               // stem tapers into the head
+                float2 dq = qp - float2(c.x - 0.04 * sc * (1.0 - ty), yb + ty * (c.y - yb));
+                r2 = dot(dq, dq) / (rr * rr);
+            }
             if (r2 < 9.0) {                                          // exp(−9): nothing left
-                float w = amp * exp(-r2);
-                float tl = oil ? 4.0 : (fract(hx * 7.31) < 0.4 ? 3.2 : 5.16);   // log nm
-                plt += w * tl; pw += w;
+                // soap: in while still below the frame; oil: in place, slowly; out slowly
+                float fo = smoothstep(0.0, oil ? 0.35 : 0.22, s) * (1.0 - smoothstep(0.5, 1.0, s));
+                float w = plumes * fo * exp(-r2);
+                pdef += w * (fract(hx * 7.31) < 0.4 ? 1.15 : 0.75);
                 bulge += w * sg;
             }
         }
     }
 
     // ---- thickness (log nm) in the pre-advection frame
-    float ld, hb = 0.0;
+    float ld, hb = 0.0, om = 1.0;
     if (!oil) {
-        // Black-film line: drainage sets it; it breathes over ~30 s, and hangs in rounded
+        // Black-film line: it breathes over ~30 s, tilts slowly, and hangs in rounded
         // scallops (cusps between them) of uneven width that drift along it.
         float xs = q.x * (5.0 / sc);
         float sx = sin(xs + 0.9 * sin(xs * 0.43 + ts * 0.011) + ts * 0.013);
-        hb = hb0 + 0.012 * sin(ts * 0.2027 + 1.3) + 0.006 * sin(ts * 0.1337 + 4.0)
-           - 0.024 * sqrt(sx * sx + 0.015);
+        float hbs = hb0 + 0.012 * sin(ts * 0.2027 + 1.3) + 0.006 * sin(ts * 0.1337 + 4.0)
+                  + 0.020 * sin(ts * 0.0071 + 2.0) * (q.x / aspect);
+        float scal = -0.024 * sqrt(sx * sx + 0.015);
+        hb = hbs + scal;
         // Drainage profile: ~linear through the strong 1st–3rd orders, then thickening
-        // faster toward the bottom, where the high orders wash out to silvery white.
-        float dx = hb - h + bulge;
+        // faster toward the bottom, where the high orders wash out to silvery white. The
+        // bands follow the scallops near the line only: carried all the way down, their
+        // cusps would crease the pale high orders along straight vertical lines.
+        float dl = max(hbs - h, 0.0);
+        float dx = hbs - h + scal / (1.0 + 160.0 * dl * dl) + bulge;
         // soft max(dx, 0); Scale zooms the eddies fully but the band ladder only by √scale,
         // so a close or wide view still spans the strong orders
         float x = 0.5 * (dx + sqrt(dx * dx + 1e-4)) * rsqrt(sc), xt = max(x - 0.42, 0.0);
-        ld = log(70.0 + 1150.0 * x + 1000.0 * xt * xt);
+        ld = log(40.0 + 1150.0 * x + 1000.0 * xt * xt);
+        // Marbling: a fine octave of thickness turbulence carried (and so drawn into
+        // filaments) by the flow, faint in the vivid orders and stronger in the pale ones.
+        float fm = 9.0 / sc;
+        float mk = studio5_lod(fm * fp);
+        if (mk > 0.0) {
+            float turb = studio5_noise(q * fm + float2(0.0, -0.012 * ts) + 19.0);
+            ld += mk * turb * mix(0.05, 0.08, smoothstep(6.0, 7.0, ld));
+        }
+        ld -= pdef;
+        // Newton black film (6.5 nm) above the line, its edge a step of a few pixels at any
+        // resolution. Where an eddy folds it down it stays black, edged by the first orders.
+        float e = h - hb;
+        float aw = 2.6 * fwidth(e) + 0.0004;
+        ld = mix(ld, 1.87, smoothstep(-aw, aw, e));
     } else {
-        // Oil: streaks drawn out along the current (to the right), ~90–900 nm: bronze and
-        // violet where thin, teal and the second orders where it pools.
+        // Oil: a sparse slick on dark water. A coverage field (two broad octaves and a fine
+        // one, drawn out along the current to the right) gives the oil's thickness: none over
+        // open water; from each patch's margin it rises quickly to ~170 nm — a fine silver
+        // rim, then the bronze, violet-navy and teal first orders — and pools a little
+        // thicker in the cores, into the gold and magenta of the second.
         float2 o = (q - float2(0.0, bulge)) / sc + float2(-0.0060 * ts, 0.0);
-        float f = studio5_noise(o * float2(0.8, 2.2) + float2(1.7, 4.2))
-                + 0.55 * studio5_noise(o * float2(1.7, 4.6) + float2(7.3, 1.1))
-                + 0.25 * studio5_noise(o * float2(3.6, 9.0) + float2(3.3, 9.4));
-        ld = log(mix(330.0, 200.0, drain)) + 1.2 * f;
-    }
-    if (pw > 0.0) ld = mix(ld, plt / pw, min(pw, 1.0));
-    // one fine octave of thickness turbulence where the film is thick: it ruffles the pale
-    // high orders (in the vivid ones, plume rims included, it would serrate every band edge)
-    if (!oil && ld > 6.4) {                                          // log 600 … log 1300 nm
-        float turb = studio5_noise(q * (11.0 / sc) + float2(0.0, -0.012 * ts) + 19.0);
-        ld += 0.08 * turb * smoothstep(6.4, 7.15, ld);
-    }
-    if (!oil) {
-        // Newton black film (6.5 nm) above the line. It is the lightest film there is: a
-        // strong eddy may fold it down a little way, never deep into the thick film (there it
-        // stays the silvery thin film it borders on).
-        float m = smoothstep(hb - 0.010, hb + 0.012, h) * smoothstep(hb0 - 0.42, hb0 - 0.20, p.y + 0.5);
-        ld = mix(ld, 1.87, m);
+        float f = studio5_noise(o * float2(0.80, 1.60) + float2(1.7, 4.2))
+                + 0.45 * studio5_noise(o * float2(1.60, 3.40) + float2(7.3, 1.1));
+        float k3 = studio5_lod(7.2 * fp / sc);
+        if (k3 > 0.0) f += 0.20 * k3 * studio5_noise(o * float2(2.88, 7.2) + float2(3.3, 9.4));
+        float cov = f + mix(-0.16, 0.18, drain) + 0.30 * min(pdef, 1.0);
+        float c0 = 0.5 * (cov + sqrt(cov * cov + 1e-5));         // soft max(cov, 0)
+        // The margin itself is a step (bare water → sheen) that the slope can make sharper
+        // than a pixel: it ramps in over a few pixels at any resolution, like the black film.
+        om = smoothstep(0.0, 5.0 * fwidth(cov) + 1e-4, cov);
+        // The rim's knee is held to a constant width on screen (the coverage zooms with Scale),
+        // and the thickness scales by √scale, like the soap's band ladder: a wide view packs
+        // its patches in, not their fringes.
+        float kk = 0.065 / sc;
+        ld = log(0.3 + (170.0 * (1.0 - exp(-c0 / kk)) + 380.0 * c0) * sqrt(sc));
     }
     float d = exp(ld);
-    float gd = length(float2(dfdx(d), dfdy(d)));
+    // The thickness spread across the pixel, never more than twice its thickness (it can't go
+    // below zero): at an oil margin, where the slope switches on within a pixel, the colour
+    // stays the bare water's instead of jumping to the averaged sheen.
+    float gd = min(length(float2(dfdx(d), dfdy(d))), 2.0 * d);
 
-    // ---- light: a big soft panel behind the camera, seen in the (slightly bowed) film
+    // ---- light: a big soft panel behind the camera, seen in the (slightly bowed) film. The
+    // film is in focus, so the panel's reflection is a defocused glow: its rounded edge always
+    // lies beyond the frame, and Light Size sets how fast the light falls off toward the
+    // corners, from a soft pool to an even field.
     float r2p = dot(p, p);
     float2 sp = p * (1.0 + 0.10 * r2p);                     // bow: reflection a touch barrel-shaped
-    float2 hw = float2(0.5 * aspect, 0.5) * mix(0.82, 1.45, panel);
-    const float rad = 0.20;
+    float2 hw = float2(0.5 * aspect, 0.5) * mix(1.26, 1.62, panel);
+    const float rad = 0.28;
     float2 qd = abs(sp) - (hw - rad);
     float sdf = length(max(qd, 0.0)) + min(max(qd.x, qd.y), 0.0) - rad;   // < 0 inside
-    float soft = mix(0.10, 0.20, panel);
+    float soft = mix(0.16, 0.24, panel);
     float win = 1.0 - smoothstep(-soft, soft * 0.7, sdf);
-    float ed = (sdf + soft * 0.35) / (soft * 0.45);
-    float Lp = (win + 0.10 * exp(-ed * ed)) / (1.0 + 1.2 * r2p) + 0.012;
+    float Lp = win * exp(-(0.45 + 2.4 * pow(1.0 - panel, 1.5)) * r2p) + 0.012;
     // Amplitude reflection coefficients: air|soap|air ±0.1416 (the π shift makes d → 0
     // black); air|oil|water −0.200, +0.060. A, B = the Airy line through R(cos δ = ±1).
     float n = oil ? 1.50 : 1.33;
     float sinI = 0.32 * sqrt(r2p);
     float nc = n * sqrt(1.0 - sinI * sinI / (n * n));                // n cos θt
     float A = oil ? 0.043053 : 0.038540, B = oil ? -0.023000 : -0.038540;
-    float3 R = studio5_film(d * nc, gd * nc, A, B);
+    float3 R = mix(float3(A + B), studio5_film(d * nc, gd * nc, A, B), om);
     // out-of-gamut (negative) channels pull toward the luminance, never clip to neon
     const float3 LUM = float3(0.2126, 0.7152, 0.0722);
     float Y = dot(R, LUM), mn = min(R.r, min(R.g, R.b));
@@ -393,7 +454,7 @@ static inline float4 studio5_soapFilm(float2 uv, float2 res, float2 px, float t,
     R = Y + (R - Y) * 0.72;
 
     // Oil: the camera exposes for the colour, so most of plain water's 2% glare goes to black.
-    if (oil) R = max(R - 0.015, 0.0) * 1.35;
+    if (oil) R = max(R - 0.018, 0.0) * 1.4;
     float3 col = studio5_lin(u.colorA.rgb) + R * (Lp * 8.0) * studio5_lin(u.colorB.rgb);
     // filmic: ACES on luminance (hue-preserving) mixed with per-channel ACES for the shoulder
     float L = dot(col, LUM);
