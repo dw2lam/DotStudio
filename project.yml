@@ -78,6 +78,9 @@ targets:
         NSHumanReadableCopyright: "DotStudio"
         # Music card: Apple Events to an already-running Spotify / Music (App/Music).
         NSAppleEventsUsageDescription: "DotStudio shows what's playing in Spotify and Music on your screensaver and can play or pause it."
+        # Starts as a menu-bar (UIElement) app; AppPresence makes it a regular Dock app
+        # before it activates — unless it's a login launch, which stays in the menu bar.
+        LSUIElement: true
         # Sparkle auto-update: appcast rides on the latest GitHub release.
         SUFeedURL: "https://github.com/dw2lam/DotStudio/releases/latest/download/appcast.xml"
         SUPublicEDKey: "5cK2ecNcpoVKWQrZc1RgdgBRk2n9Xsa/ygTSWfzEdrE="

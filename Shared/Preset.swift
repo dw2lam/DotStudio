@@ -115,7 +115,7 @@ struct Library: Codable, Equatable {
     var presets: [Preset] = []
     var source: SourceSpec = SourceSpec()
     var activeID: UUID?
-    var version: Int = 3          // 3 = slideshow source era (see AppModel.migrate)
+    var version: Int = 4          // 3 = slideshow source era, 4 = seenBuiltIns (see AppModel.migrate)
     var locationLat: Double?     // resolved device location (for the Universe marker)
     var locationLon: Double?
     /// Saver render resolution as a fraction of native (1 = full Retina). Optional so
