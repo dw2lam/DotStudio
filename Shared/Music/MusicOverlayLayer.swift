@@ -16,6 +16,11 @@
 //  The player's name never shows on screen. Paused = the progress bar dims (and a small
 //  pause glyph sits after the elapsed time, or where a stream's bar would be).
 //
+//  Song text is never cut off, in any layout (MusicText.fit): up to two balanced lines per
+//  field, then slightly smaller (85 %), then a slow marquee on the last line — or, with Reduce
+//  Motion, on the live wallpaper and in stills, a third line. The corner's column widens for
+//  long text, and every block stays inside the screen's margins (and clear of a notch).
+//
 //  Type: SF Pro (Display for the large lines, Text for the small — the system font's own
 //  optical sizes), Medium titles (Semibold only where a corner title gets small), Regular
 //  for the rest; every line carries MusicText's soft two-layer shadow.
@@ -46,13 +51,31 @@ final class MusicOverlayLayer: CALayer {
     /// Album is centred with margins wider than both; Stage centres its block in the area
     /// between them; the Cover type and the corner move off them.
     var safeInsets = Insets() { didSet { if safeInsets != oldValue { setNeedsLayout() } } }
-    /// Accessibility Reduce Motion: no flips, no scaling — fades only.
-    var reduceMotion = MusicOverlayLayer.systemReduceMotion
+    /// The camera housing's band at the top of a notched built-in display, in points (its
+    /// safe-area top; 0 = no notch, or not a full-screen host). A top corner keeps out of it
+    /// and out of the top 3 % of such a screen. MusicOverlayView sets it.
+    var notch: CGFloat = 0 { didSet { if notch != oldValue { groupKey = nil; setNeedsLayout() } } }
+    /// Accessibility Reduce Motion: no flips, no scaling, no marquee — fades only (a title too
+    /// long to scroll takes a third line instead).
+    var reduceMotion = MusicOverlayLayer.systemReduceMotion {
+        didSet { if reduceMotion != oldValue { groupKey = nil; setNeedsLayout() } }
+    }
     static var systemReduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
-    /// Continuous decoration: the progress bar gliding between ticks. It keeps WindowServer
-    /// compositing every refresh, so the live wallpaper turns it off (progress steps once a
-    /// second); the screensaver keeps it.
-    var ambientMotion = true
+    /// Continuous decoration: the progress bar gliding between ticks and the marquee of a line
+    /// too long to fit. It keeps WindowServer compositing every refresh, so the live wallpaper
+    /// turns it off (progress steps once a second, a long title takes a third line instead) —
+    /// as do stills (thumbnails); the screensaver keeps it.
+    var ambientMotion = true {
+        didSet { if ambientMotion != oldValue { groupKey = nil; setNeedsLayout() } }
+    }
+    /// Tools only: draw every marquee posed at this fraction of its travel (0 = resting at its
+    /// start, 1 = at its end) as a still bitmap — a faithful frame of the live layer, which
+    /// `render(in:)` can't capture (it ignores masks and animations). nil = live.
+    static var stillMarqueePose: CGFloat?
+
+    /// Tools: where the text and artwork landed (top-left points): "text" = a block's ink box,
+    /// "marquee" = a scrolling line's viewport, "art", and "block" = the corner's whole block.
+    var debugRects: [(kind: String, rect: CGRect)] { group?.debugRects ?? [] }
     /// A miniature of a real screen (the app's Screensaver hero, its still): the corner keeps
     /// its true share of the screen instead of the legibility floor a small preview of the
     /// saver itself gets (System Settings' thumbnail). Set before the first update.
@@ -154,7 +177,7 @@ final class MusicOverlayLayer: CALayer {
         if let d = display, let key {
             let g = MusicOverlayGroup(d, bounds: bounds, insets: safeInsets, scale: contentsScale,
                                       reduceMotion: reduceMotion, ambient: ambientMotion, cardSize: cardSize,
-                                      trueScale: trueScale)
+                                      trueScale: trueScale, notch: notch)
             g.tick(d, now: now, animated: false)
             addSublayer(g)
             group = g
@@ -262,10 +285,18 @@ private final class MusicOverlayGroup: CALayer {
     private var lastPlaying: Bool?
     private var lastFill: CGFloat = -1
     private let display: MusicDisplay
+    private let notch: CGFloat
+    /// Where the text and artwork landed (MusicOverlayLayer.debugRects).
+    private(set) var debugRects: [(kind: String, rect: CGRect)] = []
+
+    /// A line too long for its column scrolls (a marquee) only with motion allowed; otherwise
+    /// it takes one more line (MusicText.fit).
+    private var marquee: Bool { !reduceMotion && ambient }
 
     init(_ d: MusicDisplay, bounds: CGRect, insets: MusicOverlayLayer.Insets, scale: CGFloat, reduceMotion: Bool,
-         ambient: Bool, cardSize: MusicSpec.CardSize = .medium, trueScale: Bool = false) {
+         ambient: Bool, cardSize: MusicSpec.CardSize = .medium, trueScale: Bool = false, notch: CGFloat = 0) {
         self.ambient = ambient
+        self.notch = notch
         W = bounds.width; H = bounds.height
         u = MusicGeometry.unit(bounds.size)
         self.scale = scale
@@ -294,6 +325,7 @@ private final class MusicOverlayGroup: CALayer {
         W = g?.W ?? 0; H = g?.H ?? 0; u = g?.u ?? 1; scale = g?.scale ?? 2
         reduceMotion = g?.reduceMotion ?? false; ambient = g?.ambient ?? false; mode = g?.mode ?? .hidden
         display = g?.display ?? MusicDisplay(mode: .hidden, music: .empty)
+        notch = g?.notch ?? 0
         super.init(layer: layer)
     }
 
@@ -315,14 +347,123 @@ private final class MusicOverlayGroup: CALayer {
         (parent ?? self).addSublayer(l)
     }
 
-    /// Lay out and add a text block whose box starts at (x, top) within `width`; returns its
-    /// box height (0 when empty).
+    /// Add a fitted block (MusicText.fit) whose box starts at (x, top) in a column `width`
+    /// wide; returns its box height (0 when empty). A last line that overflows scrolls.
     @discardableResult
-    private func addText(_ s: String, _ style: MusicTextStyle, x: CGFloat, top: CGFloat, width: CGFloat) -> CGFloat {
-        let b = MusicText.layout(s, style, width: width)
-        guard let l = textLayer(b, x: x, top: top, width: width) else { return 0 }
-        addSublayer(l)
+    private func addBlock(_ b: MusicTextBlock, x: CGFloat, top: CGFloat, width: CGFloat) -> CGFloat {
+        guard !b.isEmpty else { return 0 }
+        let n = b.lines.count
+        let still = b.overflows ? b.slice(0..<(n - 1)) : b
+        if !still.isEmpty, let l = textLayer(still, x: x, top: top, width: width) {
+            addSublayer(l)
+            let inkW = still.lineWidths.max() ?? 0
+            let ix = still.style.alignment == .center ? x + (width - inkW) / 2
+                : still.style.alignment == .right ? x + width - inkW : x
+            debugRects.append(("text", CGRect(x: ix, y: top, width: inkW, height: still.height)))
+        }
+        if b.overflows {
+            addMarquee(b.slice((n - 1)..<n), x: x, top: top + CGFloat(n - 1) * b.lineStep, width: width)
+        }
         return b.height
+    }
+
+    // MARK: Marquee
+
+    /// The marquee's timing: it rests `hold` seconds at each end and eases between them at
+    /// about `speed` × its size per second — slow enough to read along (2.5…14 s a way).
+    private static let marqueeHold: Double = 2.6
+    private static let marqueeSpeed: CGFloat = 1.4
+    private static let marqueeRate = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+
+    /// The marquee's mask across its viewport (`vw` wide: the column plus `pad` either side):
+    /// gradient stops, and their opacities for a fade on the left `l` and right `r` (0 = hard
+    /// edge, 1 = faded) — transparent over the pad, easing in over `fade` inside the column.
+    private static func marqueeMask(vw: CGFloat, pad: CGFloat, fade: CGFloat,
+                                    l: CGFloat, r: CGFloat) -> (stops: [CGFloat], alphas: [CGFloat]) {
+        let a = pad / vw, b = (pad + fade) / vw
+        return ([0, a, b, 1 - b, 1 - a, 1], [1 - l, 1 - l, 1, 1, 1 - r, 1 - r])
+    }
+
+    /// A line wider than its column, scrolled: it rests at its start (lined up with the lines
+    /// above), eases to its end, rests, and eases back — forever, gently, never stepping. The
+    /// edge it is scrolling past fades softly; at rest the edge where the line begins or ends
+    /// is crisp. In a still it rests at its start (or at MusicOverlayLayer.stillMarqueePose).
+    private func addMarquee(_ b: MusicTextBlock, x: CGFloat, top: CGFloat, width: CGFloat) {
+        let lineW = ceil(b.lineWidths.first ?? 0)
+        guard lineW > 0 else { return }
+        let pad = MusicText.pad(b.style)
+        let fade = min(b.style.size * 1.2, width * 0.18)
+        let d = snap(max(lineW - width, 0))                 // how far it travels
+        let view = CGRect(x: x - pad, y: top - pad, width: width + pad * 2, height: b.height + pad * 2)
+        debugRects.append(("marquee", CGRect(x: x, y: top, width: width, height: b.height)))
+        let vw = snap(view.maxX) - snap(view.minX)
+        func ends(_ p: CGFloat) -> (l: CGFloat, r: CGFloat) { d > 0 ? (p > 0 ? 1 : 0, p < 1 ? 1 : 0) : (0, 0) }
+
+        if let pose = MusicOverlayLayer.stillMarqueePose {
+            // A still: the frame the live layer shows at this point of its travel, baked.
+            let p = min(max(pose, 0), 1)
+            let e = ends(p)
+            let mask = Self.marqueeMask(vw: vw, pad: pad, fade: fade, l: e.l, r: e.r)
+            guard let img = MusicText.marqueeFrame(b, viewport: vw, offset: snap(d * p), stops: mask.stops,
+                                                   alphas: mask.alphas, scale: scale) else { return }
+            let l = CALayer()
+            l.contents = img
+            l.contentsGravity = .resize
+            place(l, CGRect(x: view.minX, y: view.minY, width: vw, height: CGFloat(img.height) / scale))
+            return
+        }
+
+        guard let img = MusicText.image(b, boxWidth: lineW, scale: scale) else { return }
+        let imgW = CGFloat(img.width) / scale, imgH = CGFloat(img.height) / scale
+        let clip = CALayer()
+        place(clip, CGRect(x: view.minX, y: view.minY, width: vw, height: imgH))
+        let text = CALayer()
+        text.contents = img
+        text.contentsGravity = .resize
+        text.contentsScale = scale
+        text.anchorPoint = .zero
+        text.bounds = CGRect(x: 0, y: 0, width: imgW, height: imgH)
+        text.position = .zero                               // ink starts at the column's edge
+        clip.addSublayer(text)
+        let mask = CAGradientLayer()
+        mask.frame = clip.bounds
+        mask.contentsScale = scale
+        mask.startPoint = CGPoint(x: 0, y: 0.5)
+        mask.endPoint = CGPoint(x: 1, y: 0.5)
+        func colors(_ l: CGFloat, _ r: CGFloat) -> [CGColor] {
+            Self.marqueeMask(vw: vw, pad: pad, fade: fade, l: l, r: r).alphas.map { CGColor(gray: 0, alpha: $0) }
+        }
+        let rest = Self.marqueeMask(vw: vw, pad: pad, fade: fade, l: 0, r: 1)
+        mask.locations = rest.stops.map { NSNumber(value: Double($0)) }
+        mask.colors = colors(ends(0).l, ends(0).r)
+        clip.mask = mask
+        guard d > 0 else { return }
+
+        // Rest · ease to the end · rest · ease back. The fade on the edge being scrolled past
+        // comes in over the first part of a move (the ease is slow there) and leaves over its last.
+        let hold = Self.marqueeHold
+        let travel = min(max(Double(d / (b.style.size * Self.marqueeSpeed)), 2.5), 14)
+        let T = 2 * hold + 2 * travel, ramp = travel * 0.18
+        let ease = CAMediaTimingFunction(controlPoints: 0.45, 0, 0.55, 1)
+        let linear = CAMediaTimingFunction(name: .linear)
+        func k(_ t: Double) -> NSNumber { NSNumber(value: t / T) }
+        let move = CAKeyframeAnimation(keyPath: "position.x")
+        move.values = [0, 0, -d, -d, 0]
+        move.keyTimes = [0, k(hold), k(hold + travel), k(2 * hold + travel), 1]
+        move.timingFunctions = [linear, ease, linear, ease]
+        let edges = CAKeyframeAnimation(keyPath: "colors")
+        let s = colors(0, 1), mid = colors(1, 1), e = colors(1, 0)
+        edges.values = [s, s, mid, mid, e, e, mid, mid, s]
+        edges.keyTimes = [0, k(hold), k(hold + ramp), k(hold + travel - ramp), k(hold + travel),
+                          k(2 * hold + travel), k(2 * hold + travel + ramp), k(2 * hold + 2 * travel - ramp), 1]
+        for a in [move, edges] as [CAKeyframeAnimation] {
+            a.duration = T
+            a.repeatCount = .infinity
+            a.isRemovedOnCompletion = false
+            a.preferredFrameRateRange = Self.marqueeRate
+        }
+        text.add(move, forKey: "marquee")
+        mask.add(edges, forKey: "marquee")
     }
 
     private func textLayer(_ b: MusicTextBlock, x: CGFloat, top: CGFloat, width: CGFloat) -> CALayer? {
@@ -663,33 +804,58 @@ private final class MusicOverlayGroup: CALayer {
     /// The pause glyph's height for a line of `size`: about its cap height.
     private static func glyphHeight(_ size: CGFloat) -> CGFloat { size * 0.70 }
 
+    /// Title, artist and album set by MusicText.fit (never cut off): up to two lines each,
+    /// balanced, smaller down to 85 % if they must be, then a marquee (or a third line). The
+    /// secondary lines never outgrow a title that had to shrink. `squeeze` scales all three
+    /// (a layout short of height) without changing their weights.
+    private func fitType(_ d: MusicDisplay, _ ts: TypeSet, column c: CGFloat, album: Bool,
+                         squeeze: CGFloat = 1) -> (title: MusicTextBlock, artist: MusicTextBlock, album: MusicTextBlock?) {
+        var t = ts.title, a = ts.artist, l = ts.album
+        t.size *= squeeze; a.size *= squeeze; l.size *= squeeze
+        let tb = MusicText.fit(d.title, t, column: c, lines: 2, marquee: marquee)
+        let k = t.size > 0 ? tb.style.size / t.size : 1
+        let ab = MusicText.fit(d.artist, a, column: c, lines: 2, maxScale: k, marquee: marquee)
+        let lb = album ? MusicText.fit(d.album, l, column: c, lines: 2, maxScale: k, marquee: marquee) : nil
+        return (tb, ab, lb)
+    }
+
     /// Apple Music full screen: artwork left, type right, the group centred on the art.
     private func buildAlbum(_ d: MusicDisplay, _ o: MusicSceneOptions) {
         let art = MusicGeometry.artRect(.album, size: CGSize(width: W, height: H))
         addArt(d, art, radius: 0.028, shadow: 1)
+        debugRects.append(("art", art))
         let x = art.maxX + MusicGeometry.albumGap * u
         let colW = max(min(MusicGeometry.albumText * u, W - x - 0.06 * u), 40)
         // Sized for the far side of a room: the title's cap height is ≈ 4.5 % of a 16:10
         // screen's height (0.064 u); every other line in step with it.
         let ts = typeSet(title: 0.064 * u, artist: 0.040 * u, album: 0.030 * u, time: 0.0195 * u,
                          align: .left, titleLines: 2)
-        // Measure, then centre the whole column on the artwork.
-        let tb = measure(d.title, ts.title, width: colW)
-        let ab = measure(d.artist, ts.artist, width: colW)
-        let lb = o.showAlbum ? measure(d.album, ts.album, width: colW) : nil
         let barH = max(0.0062 * u, 3)
         let showBar = o.showProgress && d.hasDuration
         let rowGap = 0.054 * u
-        var h = tb.height
-        if !ab.isEmpty { h += 0.018 * u + ab.height }
-        if let lb, !lb.isEmpty { h += 0.010 * u + lb.height }
-        if showBar { h += rowGap + barH + 0.017 * u + ts.time.size * MusicGeometry.lineBox }
-        else { h += rowGap + Self.glyphHeight(ts.time.size) }
+        let margin = 0.05 * u
+        // Measure, then centre the whole column on the artwork — within the screen's margins,
+        // with smaller type only if a Reduce Motion third line would otherwise leave them.
+        var squeeze: CGFloat = 1
+        var fitted = fitType(d, ts, column: colW, album: o.showAlbum)
+        var h: CGFloat = 0
+        while true {
+            let (tb, ab, lb) = fitted
+            h = tb.height
+            if !ab.isEmpty { h += 0.018 * u + ab.height }
+            if let lb, !lb.isEmpty { h += 0.010 * u + lb.height }
+            if showBar { h += rowGap + barH + 0.017 * u + ts.time.size * MusicGeometry.lineBox }
+            else { h += rowGap + Self.glyphHeight(ts.time.size) }
+            if h <= H - 2 * margin || squeeze <= 0.7 { break }
+            squeeze -= 0.05
+            fitted = fitType(d, ts, column: colW, album: o.showAlbum, squeeze: squeeze)
+        }
+        let (tb, ab, lb) = fitted
         var y = max(art.midY - h / 2, art.minY)
-        addText(d.title, ts.title, x: x, top: y, width: colW)
-        y += tb.height
-        if !ab.isEmpty { y += 0.018 * u; addText(d.artist, ts.artist, x: x, top: y, width: colW); y += ab.height }
-        if let lb, !lb.isEmpty { y += 0.010 * u; addText(d.album, ts.album, x: x, top: y, width: colW); y += lb.height }
+        y = max(min(y, H - margin - h), margin)
+        y += addBlock(tb, x: x, top: y, width: colW)
+        if !ab.isEmpty { y += 0.018 * u; y += addBlock(ab, x: x, top: y, width: colW) }
+        if let lb, !lb.isEmpty { y += 0.010 * u; y += addBlock(lb, x: x, top: y, width: colW) }
         y += rowGap
         let glyphH = Self.glyphHeight(ts.time.size)
         if showBar {
@@ -704,27 +870,42 @@ private final class MusicOverlayGroup: CALayer {
     }
 
     /// Spotify TV: artwork centred, type centred below. The block (sized for a two-line
-    /// title — MusicGeometry.stageBlock) is centred between the menu bar and the Dock.
+    /// title — MusicGeometry.stageBlock) is centred between the menu bar and the Dock; the
+    /// artwork never moves for the text, so text that needs more room than that block (a
+    /// wrapped artist or album, a Reduce Motion third line) gets slightly smaller type
+    /// rather than leave the screen.
     private func buildStage(_ d: MusicDisplay, _ o: MusicSceneOptions, _ insets: MusicOverlayLayer.Insets) {
         typealias S = MusicGeometry.Stage
         let art = MusicGeometry.artRect(.stage, size: CGSize(width: W, height: H), options: o,
                                         insets: (insets.top, insets.bottom))
         addArt(d, art, radius: 0.024, shadow: 1)
+        debugRects.append(("art", art))
         let colW = min(W - 0.16 * u - insets.left - insets.right, 1.3 * u)
         let x = insets.left + (W - insets.left - insets.right - colW) / 2
         let ts = typeSet(title: S.title * u, artist: S.artist * u, album: S.album * u, time: S.times * u,
                          align: .center, titleLines: S.titleLines)
-        var y = art.maxY + S.artGap * u
-        y += addText(d.title, ts.title, x: x, top: y, width: colW)
-        let ah = addText(d.artist, ts.artist, x: x, top: y + S.artistGap * u, width: colW)
-        if ah > 0 { y += S.artistGap * u + ah }
-        if o.showAlbum {
-            let lh = addText(d.album, ts.album, x: x, top: y + S.albumGap * u, width: colW)
-            if lh > 0 { y += S.albumGap * u + lh }
-        }
         let barH = max(S.bar * u, 3)
         let glyphH = Self.glyphHeight(ts.time.size)
-        if o.showProgress && d.hasDuration {
+        let showBar = o.showProgress && d.hasDuration
+        let room = H - insets.bottom - 0.03 * u - (art.maxY + S.artGap * u)
+        var squeeze: CGFloat = 1
+        var fitted = fitType(d, ts, column: colW, album: o.showAlbum)
+        while true {
+            let (tb, ab, lb) = fitted
+            var h = tb.height
+            if !ab.isEmpty { h += S.artistGap * u + ab.height }
+            if let lb, !lb.isEmpty { h += S.albumGap * u + lb.height }
+            h += S.barGap * u + (showBar ? barH + S.timesGap * u + ts.time.size * MusicGeometry.lineBox : glyphH)
+            if h <= room || squeeze <= 0.7 { break }
+            squeeze -= 0.05
+            fitted = fitType(d, ts, column: colW, album: o.showAlbum, squeeze: squeeze)
+        }
+        let (tb, ab, lb) = fitted
+        var y = art.maxY + S.artGap * u
+        y += addBlock(tb, x: x, top: y, width: colW)
+        if !ab.isEmpty { y += S.artistGap * u; y += addBlock(ab, x: x, top: y, width: colW) }
+        if let lb, !lb.isEmpty { y += S.albumGap * u; y += addBlock(lb, x: x, top: y, width: colW) }
+        if showBar {
             y += S.barGap * u
             let bar = CGRect(x: art.minX, y: y, width: art.width, height: barH)
             addProgress(d, bar: bar, timesTop: y + barH + S.timesGap * u, time: ts.time)
@@ -747,6 +928,7 @@ private final class MusicOverlayGroup: CALayer {
         // Over full-bleed art the secondary lines need more weight than over the calm Album /
         // Stage backgrounds (the shader's scrim targets ≥ 7:1 for the title; these keep ≥ 4.5:1).
         ts.artist.color = Self.white(0.86); ts.album.color = Self.white(0.70); ts.time.color = Self.white(0.72)
+        let (tb, ab, lb) = fitType(d, ts, column: colW, album: o.showAlbum)
         // Bottom-up: times, bar, album, artist, title.
         var y = bottom
         let showBar = o.showProgress && d.hasDuration
@@ -765,15 +947,60 @@ private final class MusicOverlayGroup: CALayer {
             addPauseGlyph(height: glyphH, color: ts.time.color, at: CGPoint(x: left, y: y), followsElapsed: false)
             y -= 0.040 * u
         }
-        if o.showAlbum {
-            let lb = measure(d.album, ts.album, width: colW)
-            if !lb.isEmpty { y -= lb.height; addText(d.album, ts.album, x: left, top: y, width: colW); y -= 0.010 * u }
-        }
-        let ab = measure(d.artist, ts.artist, width: colW)
-        if !ab.isEmpty { y -= ab.height; addText(d.artist, ts.artist, x: left, top: y, width: colW); y -= 0.016 * u }
-        let tb = measure(d.title, ts.title, width: colW)
+        if let lb, !lb.isEmpty { y -= lb.height; addBlock(lb, x: left, top: y, width: colW); y -= 0.010 * u }
+        if !ab.isEmpty { y -= ab.height; addBlock(ab, x: left, top: y, width: colW); y -= 0.016 * u }
         y -= tb.height
-        addText(d.title, ts.title, x: left, top: y, width: colW)
+        addBlock(tb, x: left, top: y, width: colW)
+    }
+
+    /// One arrangement of the corner block, measured (planCorner).
+    private struct CornerPlan {
+        var s: CGFloat, gap: CGFloat
+        var column: CGFloat
+        var title: MusicTextBlock, artist: MusicTextBlock
+        var ts: TypeSet
+        var barH: CGFloat, barGap: CGFloat, artistGap: CGFloat
+        /// The text's height (title, artist, bar) and width (the bar spans it).
+        var textH: CGFloat, textW: CGFloat
+        var blockW: CGFloat { s + gap + textW }
+    }
+
+    /// The corner block at `squeeze` × its size: the artwork, then a column as narrow as sets
+    /// the title and artist in two lines each — widening for long ones up to `Card.grow` × the
+    /// size's nominal width (`Card.maxShare` of the screen, inside `maxWidth`) — and in it
+    /// MusicText.fit's rules.
+    private func planCorner(_ d: MusicDisplay, size: MusicSpec.CardSize, trueScale: Bool, maxWidth: CGFloat,
+                            squeeze: CGFloat) -> CornerPlan {
+        let g = MusicGeometry.Card.self
+        let f = g.size(size)
+        let floor = trueScale ? 0 : min(60, 0.2 * u) * f.height / g.size(.medium).height
+        let hc0 = max(f.height * u, floor)                    // the block's nominal height
+        let hc = hc0 * squeeze
+        let s = hc * g.art                                    // artwork side
+        let gap = s * g.gap
+        let wc = min(hc * f.width / f.height, W * 0.46)       // nominal width
+        let wMax = min(wc * g.grow, W * g.maxShare, maxWidth)
+        let twMax = max(wMax - s - gap, 20)                   // the widest the column may grow
+        let tw = min(max(wc - s - gap, 20), twMax)            // its nominal width
+        // Weights from the unsqueezed sizes: squeezing never turns a Medium title Semibold.
+        let s0 = hc0 * g.art
+        var ts = typeSet(title: s0 * g.title, artist: s0 * g.artist, album: s0 * g.artist, time: s0 * g.artist,
+                         align: .left, titleLines: 2)
+        ts.title.size *= squeeze; ts.artist.size *= squeeze; ts.album.size *= squeeze; ts.time.size *= squeeze
+        let need = [MusicText.neededWidth(d.title, ts.title, lines: 2, min: tw, max: twMax) ?? twMax,
+                    MusicText.neededWidth(d.artist, ts.artist, lines: 2, min: tw, max: twMax) ?? twMax]
+        let col = min(max(need.max() ?? tw, tw), twMax)
+        let (tb, ab, _) = fitType(d, ts, column: col, album: false)
+        let barH = max(s * g.bar, 2 / scale)
+        let barGap = s * 0.15, artistGap = s * 0.045
+        var th = tb.height
+        if !ab.isEmpty { th += artistGap + ab.height }
+        th += barGap + max(barH, d.hasDuration ? 0 : Self.glyphHeight(ts.artist.size))
+        // The block is as wide as what it shows (the bar spans the type), so a short title in a
+        // right-hand corner still sits against the margin.
+        let textW = min(col, max(ceil(max(tb.width, ab.width)), s * 1.5))
+        return CornerPlan(s: s, gap: gap, column: col, title: tb, artist: ab, ts: ts, barH: barH, barGap: barGap,
+                          artistGap: artistGap, textH: th, textW: textW)
     }
 
     /// Corner: rounded artwork with a soft shadow, then title, artist and a thin bar, drawn
@@ -782,54 +1009,57 @@ private final class MusicOverlayGroup: CALayer {
     /// further away — and in a small preview of the saver never drops below a legible
     /// minimum, in step with the size so Small / Medium / Large still differ there.
     /// `trueScale` (the app's miniatures) skips the minimum.
+    ///
+    /// Text is never cut off (owner, 2026-11-09; MusicText.fit): long titles and artists wrap
+    /// to two balanced lines in a column that widens for them, then shrink a little, then
+    /// scroll. The artwork stays put in its corner whatever the text does — text taller than
+    /// the artwork grows away from the screen's edge — and the whole block stays inside the
+    /// screen's margins; on a notched display a top corner also clears the camera housing.
     private func buildCorner(_ d: MusicDisplay, _ corner: MusicSpec.Corner, _ insets: MusicOverlayLayer.Insets,
                              size: MusicSpec.CardSize, trueScale: Bool) {
         let g = MusicGeometry.Card.self
-        let f = g.size(size)
-        let floor = trueScale ? 0 : min(60, 0.2 * u) * f.height / g.size(.medium).height
-        let hc = max(f.height * u, floor)                     // the block's nominal height
-        let wc = min(hc * f.width / f.height, W * 0.46)
-        let s = hc * g.art                                    // artwork side
-        let gap = s * g.gap
         let m = max(g.margin * u, min(20, 0.07 * u))
-        let tw = max(wc - s - gap, 20)                        // text column
-        let ts = typeSet(title: s * g.title, artist: s * g.artist, album: s * g.artist, time: s * g.artist,
-                         align: .left, titleLines: 1)
-        // The text block, centred on the artwork: title, artist, then the thin bar.
-        let tb = measure(d.title, ts.title, width: tw)
-        let ab = measure(d.artist, ts.artist, width: tw)
-        let barH = max(s * g.bar, 2 / scale)
-        let barGap = s * 0.15
-        var th = tb.height
-        if !ab.isEmpty { th += s * 0.045 + ab.height }
-        th += barGap + max(barH, d.hasDuration ? 0 : Self.glyphHeight(ts.artist.size))
-        // The block is as wide as what it shows (the bar spans the type), so a short title in a
-        // right-hand corner still sits against the margin.
-        let textW = min(tw, max(ceil(max(tb.width, ab.width)), s * 1.5))
-        let blockW = s + gap + textW
-        let x: CGFloat, y: CGFloat
-        switch corner {
-        case .bottomLeft: x = m + insets.left; y = H - m - insets.bottom - s
-        case .bottomRight: x = W - m - insets.right - blockW; y = H - m - insets.bottom - s
-        case .topLeft: x = m + insets.left; y = m + insets.top
-        case .topRight: x = W - m - insets.right - blockW; y = m + insets.top
+        // The area the block keeps inside: the margins past the safe insets (menu bar, Dock),
+        // and on a notched display, for a top corner, below the camera housing's band (at least
+        // the top 3 % of the screen) by half a margin.
+        let left = m + insets.left, right = W - m - insets.right
+        var top = m + insets.top
+        if notch > 0 { top = max(top, max(notch, 0.03 * H) + m * 0.5) }
+        let bottom = H - m - insets.bottom
+        // Full size unless the screen is too short for what must show (tiny previews only).
+        var squeeze: CGFloat = 1
+        var p = planCorner(d, size: size, trueScale: trueScale, maxWidth: right - left, squeeze: squeeze)
+        while max(p.textH, p.s) > bottom - top && squeeze > 0.5 {
+            squeeze -= 0.1
+            p = planCorner(d, size: size, trueScale: trueScale, maxWidth: right - left, squeeze: squeeze)
         }
+        let isLeft = corner == .bottomLeft || corner == .topLeft
+        let isTop = corner == .topLeft || corner == .topRight
+        let s = p.s
+        let x = isLeft ? left : right - p.blockW
+        let artY = isTop ? top : bottom - s
+        // Text centred on the artwork; taller than it, it grows away from the screen's edge.
+        let ty = p.textH <= s ? artY + (s - p.textH) / 2 : (isTop ? artY : artY + s - p.textH)
+        let blockTop = min(artY, ty), blockBottom = max(artY + s, ty + p.textH)
+        let block = CGRect(x: x, y: blockTop, width: p.blockW, height: blockBottom - blockTop)
+        debugRects.append(("block", block))
         // The scrim first (under everything), around what's actually drawn.
-        addScrim(around: CGRect(x: x, y: y, width: blockW, height: s), corner: corner, unit: s)
+        addScrim(around: block, corner: corner, unit: s)
 
-        addArt(d, CGRect(x: x, y: y, width: s, height: s), radius: 0.085, shadow: 0.8)
-        let tx = x + s + gap
-        var ty = y + max((s - th) / 2, 0)
-        addText(d.title, ts.title, x: tx, top: ty, width: tw)
-        ty += tb.height
-        if !ab.isEmpty { ty += s * 0.045; addText(d.artist, ts.artist, x: tx, top: ty, width: tw); ty += ab.height }
-        ty += barGap
+        let art = CGRect(x: x, y: artY, width: s, height: s)
+        addArt(d, art, radius: 0.085, shadow: 0.8)
+        debugRects.append(("art", art))
+        let tx = x + s + p.gap
+        var y = ty
+        y += addBlock(p.title, x: tx, top: y, width: p.column)
+        if !p.artist.isEmpty { y += p.artistGap; y += addBlock(p.artist, x: tx, top: y, width: p.column) }
+        y += p.barGap
         if d.hasDuration {
-            addProgress(d, bar: CGRect(x: tx, y: ty, width: textW, height: barH),
+            addProgress(d, bar: CGRect(x: tx, y: y, width: p.textW, height: p.barH),
                         timesTop: nil, time: nil, trackAlpha: 0.22)
         } else {
-            addPauseGlyph(height: Self.glyphHeight(ts.artist.size), color: ts.album.color,
-                          at: CGPoint(x: tx, y: ty), followsElapsed: false)
+            addPauseGlyph(height: Self.glyphHeight(p.ts.artist.size), color: p.ts.album.color,
+                          at: CGPoint(x: tx, y: y), followsElapsed: false)
         }
     }
 
