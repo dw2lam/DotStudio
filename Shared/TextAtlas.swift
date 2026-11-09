@@ -40,18 +40,20 @@ enum TextAtlas {
     private static let users: Set<Int32> = Set(SceneCatalog.clocks.values.map { $0.shaderID })
 
     private static let lock = NSLock()
-    private static var cached: MTLTexture?
-    private static var failed = false
+    // Per GPU: on a multi-GPU Mac the live wallpaper draws on the low-power GPU while
+    // previews use the default one, and a texture only belongs to its own device.
+    private static var cached: [UInt64: MTLTexture] = [:]
+    private static var failed: Set<UInt64> = []
 
     /// The atlas when `effect` needs it (built on first use, ~0.1 s, then shared), else nil.
     static func texture(_ device: MTLDevice, effect: Int32) -> MTLTexture? {
         guard users.contains(effect) else { return nil }
         lock.lock(); defer { lock.unlock() }
-        if cached == nil && !failed {
-            cached = build(device: device)
-            failed = (cached == nil)
+        let key = device.registryID
+        if cached[key] == nil && !failed.contains(key) {
+            if let t = build(device: device) { cached[key] = t } else { failed.insert(key) }
         }
-        return cached
+        return cached[key]
     }
 
     // MARK: - Build

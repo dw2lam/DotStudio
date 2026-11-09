@@ -2,23 +2,25 @@
 //
 //  One borderless window per display at the desktop window level — above the system
 //  wallpaper, below Finder's desktop icons — on every Space, invisible to clicks,
-//  Mission Control and the window cycle. Each hosts an MTKView driven by the shared
-//  MetalRenderer, rendering the chosen style at reduced resolution.
+//  Mission Control and the window cycle. Each hosts a CAMetalLayer that the shared
+//  MetalRenderer draws the chosen style into, at reduced resolution.
 //
 //  Frames are paced by each display's own display link (macOS 14 NSView.displayLink)
 //  at an exact divisor of that display's refresh rate, so every frame is held for the
-//  same number of refreshes — smooth at 30. MTKView's internal loop stays paused.
-//  Clocks idle on a one-shot timer aligned to the second and only switch the display
-//  link on while a figure is changing. When no display can show a frame (covered,
-//  locked, asleep, screensaver, Low Power, user pause) every link and timer is parked
-//  and the process does no work at all; the last frame stays on screen, so resuming
-//  never flashes or rebuilds anything.
+//  same number of refreshes — smooth at 30. Clocks idle on a one-shot timer aligned to
+//  the second and only switch the display link on while a figure is changing. When no
+//  display can show a frame (covered, locked, asleep, screensaver, Low Power, user
+//  pause) every link and timer is parked and the process does no work at all; the last
+//  frame stays on screen, so resuming never flashes or rebuilds anything.
 //
-//  Main thread only.
+//  Threads: this controller, the windows and the policy live on the main thread. All
+//  per-frame work — display links, uniforms, encoding, drawables, media decode and
+//  upload — runs on WallpaperRenderLoop's own utility-QoS thread (efficiency cores on
+//  Apple Silicon). The main thread hands it immutable snapshots and never waits on it.
 
 import AppKit
 import Combine
-import MetalKit
+import QuartzCore
 import SwiftUI
 
 /// A desktop-level window that never takes focus or clicks.
@@ -47,18 +49,17 @@ final class WallpaperController: ObservableObject {
     private var settingsURL: URL?
     private var hosts: [CGDirectDisplayID: WallpaperHost] = [:]
     private let power = WallpaperPowerMonitor()
-    private var timer: DispatchSourceTimer?
     private var observers: [NSObjectProtocol] = []
     private var librarySub: AnyCancellable?
     private var applied: (preset: Preset, source: SourceSpec)?
     private var profile: WallpaperPacing.Profile = .still
-    private var plan: WallpaperPacing.Plan = .none
     private var openMainWindowAction: (() -> Void)?
-
-    // Debug counters (only reported when the store's debug log is enabled).
-    private var framesDrawn = 0
-    private var statsSince = CACurrentMediaTime()
+    private var nextToken: UInt64 = 0
     private var lastLoggedState = ""
+
+    /// The render thread, started the first time a wallpaper turns on, then kept
+    /// (an idle run loop costs nothing).
+    private var renderLoop: WallpaperRenderLoop?
 
     /// DEV: treat every display as visible, to measure render cost on a desktop that is
     /// covered by windows (DOTSTUDIO_WALLPAPER_IGNORE_OCCLUSION=1).
@@ -136,7 +137,7 @@ final class WallpaperController: ObservableObject {
         guard s.enabled, !hosts.isEmpty else { return }
         if s.presetID != old.presetID { applyStyle() }
         if s.quality != old.quality {
-            hosts.values.forEach { $0.syncDrawableSize(quality: s.quality) }
+            hosts.values.forEach { configure($0) }
             reevaluate(forceDraw: true)
         } else {
             reevaluate()
@@ -186,14 +187,12 @@ final class WallpaperController: ObservableObject {
     }
 
     private func tearDown() {
-        guard !hosts.isEmpty || timer != nil else { return }
+        guard !hosts.isEmpty else { return }
         log("stop")
-        timer?.cancel(); timer = nil
+        renderLoop?.removeAll()
         for h in hosts.values { h.close() }
         hosts.removeAll()
         applied = nil
-        plan = .none
-        mediaPaused = false
         power.stop()
         power.onChange = nil
         for o in observers {
@@ -224,32 +223,57 @@ final class WallpaperController: ObservableObject {
         })
     }
 
+    private func makeRenderLoop(store: SharedStore) -> WallpaperRenderLoop {
+        if let renderLoop { return renderLoop }
+        let loop = WallpaperRenderLoop(store: store)
+        loop.onFirstFrame = { [weak self] id, token in
+            guard let h = self?.hosts[id], h.token == token else { return }
+            h.fadeIn()
+        }
+        loop.onSurfaceFailed = { [weak self] id, token in
+            guard let self, let h = self.hosts[id], h.token == token else { return }
+            self.log("display \(id): no renderer")
+            h.close()
+            self.hosts.removeValue(forKey: id)
+        }
+        renderLoop = loop
+        return loop
+    }
+
     /// One host per connected display; existing ones follow moves and resolution changes.
     private func rebuildHosts(store: SharedStore) {
+        let loop = makeRenderLoop(store: store)
         var seen = Set<CGDirectDisplayID>()
+        var device: MTLDevice?
         for screen in NSScreen.screens {
             guard let id = screen.displayID else { continue }
             seen.insert(id)
             if let h = hosts[id] {
-                h.follow(screen, quality: settings.quality)
-            } else if let h = WallpaperHost(screen: screen, displayID: id, store: store, quality: settings.quality) {
-                hosts[id] = h
-                h.onFrame = { [weak self, weak h] in
-                    guard let self, let h else { return }
-                    self.linkFired(h)
-                }
-                if let model {
-                    h.renderer.location = model.locationTuple
-                    h.renderer.measuresGPUTime = model.store.debugEnabled
-                    h.measuresPacing = model.store.debugEnabled
-                }
+                h.follow(screen)
+                configure(h)
+                continue
             }
+            if device == nil { device = hosts.values.first?.device ?? WallpaperGPU.preferred() }
+            guard let device else { continue }
+            nextToken += 1
+            let h = WallpaperHost(screen: screen, displayID: id, device: device, token: nextToken)
+            hosts[id] = h
+            let link = h.view.displayLink(target: WallpaperRenderLoop.linkTarget(loop, display: id),
+                                          selector: WallpaperRenderLoop.linkSelector)
+            loop.addDisplay(id, token: h.token, layer: h.metalLayer, link: link, device: device,
+                            config: h.surfaceConfig(quality: settings.quality))
         }
         for (id, h) in hosts where !seen.contains(id) {
+            loop.removeDisplay(id)
             h.close()
             hosts.removeValue(forKey: id)
         }
         applied = nil   // new hosts need the style
+    }
+
+    /// Hand a display's current drawable size and refresh rate to the render thread.
+    private func configure(_ h: WallpaperHost) {
+        renderLoop?.configure(h.displayID, h.surfaceConfig(quality: settings.quality))
     }
 
     // MARK: Style
@@ -270,10 +294,7 @@ final class WallpaperController: ObservableObject {
         let source = model.library.source
         if let a = applied, a.preset == preset, a.source == source { return }
         let styleChanged = applied?.preset.id != preset.id
-        for h in hosts.values {
-            h.renderer.location = model.locationTuple
-            h.renderer.apply(preset, source: source)
-        }
+        renderLoop?.setStyle(preset, source: source, location: model.locationTuple)
         applied = (preset, source)
         profile = WallpaperPacing.profile(for: preset, source: source)
         if styleChanged { log("style \(preset.name) profile=\(profile)") }
@@ -316,129 +337,26 @@ final class WallpaperController: ObservableObject {
         ignoreOcclusion || h.window.occlusionState.contains(.visible)
     }
 
-    /// Re-decide what runs: which displays draw, and how the next frames are paced.
+    /// Re-decide what runs, and hand the decision to the render thread as one snapshot.
     private func reevaluate(forceDraw: Bool = false) {
         guard settings.enabled, !hosts.isEmpty else { return }
         let hard = hardPauseReason
-        let anyVisible = hosts.values.contains(where: isVisible)
+        let visible = Set(hosts.values.filter(isVisible).map(\.displayID))
         let still = stillReason
 
         var status: String?
         if let hard { status = hard }
-        else if !anyVisible { status = "Paused — desktop covered" }
+        else if visible.isEmpty { status = "Paused — desktop covered" }
         else if let still { status = still }
         else if power.state.onBattery && settings.frameRate == .smooth { status = "30 fps — on battery" }
         if status != statusText { statusText = status }
 
-        let visibleCount = hosts.values.filter(isVisible).count
-        let stateLine = "hard=\(hard ?? "-") visible=\(visibleCount)/\(hosts.count) still=\(still ?? "-") fps=\(targetFPS)"
+        let stateLine = "hard=\(hard ?? "-") visible=\(visible.count)/\(hosts.count) still=\(still ?? "-") fps=\(targetFPS)"
         if stateLine != lastLoggedState { lastLoggedState = stateLine; log("state \(stateLine)") }
 
-        guard hard == nil, anyVisible else {
-            apply(.none)
-            return
-        }
-        // A fresh frame now when something changed or we're resuming from a hold;
-        // a running display link just keeps going.
-        let running: Bool
-        switch plan { case .continuous, .after: running = true; case .none: running = false }
-        if forceDraw || !running { drawVisible() }
-        apply(currentPlan())
-    }
-
-    private func currentPlan() -> WallpaperPacing.Plan {
-        WallpaperPacing.plan(profile, fps: targetFPS, still: stillReason != nil)
-    }
-
-    /// Start/stop the display links and the clock timer to match `p`.
-    private func apply(_ p: WallpaperPacing.Plan) {
-        plan = p
-        let canDraw = hardPauseReason == nil
-        for h in hosts.values {
-            if case .continuous(let fps) = p, canDraw, isVisible(h) {
-                h.runLink(at: WallpaperPacing.divisorRate(target: fps, refresh: h.refreshRate))
-            } else {
-                h.pauseLink()
-            }
-        }
-        if case .after(let delay) = p, canDraw {
-            arm(after: delay)
-        } else {
-            timer?.schedule(deadline: .distantFuture, repeating: .never)
-        }
-        switch p {
-        case .continuous: setMediaPaused(!canDraw)
-        default: setMediaPaused(true)
-        }
-    }
-
-    // MARK: Frames
-
-    /// One display link frame.
-    private func linkFired(_ h: WallpaperHost) {
-        guard isVisible(h), hardPauseReason == nil else { h.pauseLink(); return }
-        h.draw(fromLink: true)
-        noteFrames(1)
-        // A clock only animates around a change; hand back to the 1 Hz timer after.
-        if case .clock = profile {
-            let next = currentPlan()
-            if next != plan { apply(next) }
-        }
-    }
-
-    private func drawVisible() {
-        var n = 0
-        // A new display draws its first frame even before its occlusion state settles,
-        // so it can fade in over the system wallpaper with real content.
-        for h in hosts.values where isVisible(h) || !h.hasDrawn {
-            h.draw()
-            n += 1
-        }
-        noteFrames(n)
-    }
-
-    /// Clock tick from the timer.
-    private func timerFired() {
-        guard hardPauseReason == nil else { apply(.none); return }
-        drawVisible()
-        apply(currentPlan())
-    }
-
-    private func arm(after delay: TimeInterval) {
-        let t = timer ?? makeTimer()
-        // Clocks keep the leeway tight so the second turns over on time.
-        t.schedule(deadline: .now() + delay, repeating: .never, leeway: .milliseconds(5))
-    }
-
-    private func makeTimer() -> DispatchSourceTimer {
-        let t = DispatchSource.makeTimerSource(queue: .main)
-        t.setEventHandler { [weak self] in autoreleasepool { self?.timerFired() } }
-        t.resume()
-        timer = t
-        return t
-    }
-
-    /// A video source keeps decoding on its own clock; stop it with the frame loop.
-    private var mediaPaused = false
-    private func setMediaPaused(_ paused: Bool) {
-        guard paused != mediaPaused else { return }
-        mediaPaused = paused
-        for h in hosts.values { h.renderer.setMediaPaused(paused) }
-    }
-
-    private func noteFrames(_ n: Int) {
-        framesDrawn += n
-        let now = CACurrentMediaTime()
-        guard now - statsSince >= 10, model?.store.debugEnabled == true else { return }
-        let gpu = hosts.values.reduce(0) { $0 + $1.renderer.gpuSeconds }
-        hosts.values.forEach { $0.renderer.gpuSeconds = 0 }
-        let pacing = hosts.values.map { $0.takeIntervalStats() }.joined(separator: " ")
-        let span = now - statsSince
-        log(String(format: "stats %.1f fps, GPU busy %.2f%% (%.2f ms/frame) over %.0fs, intervals %@ (profile=%@)",
-                   Double(framesDrawn) / span, gpu / span * 100,
-                   framesDrawn > 0 ? gpu / Double(framesDrawn) * 1000 : 0, span, pacing, "\(profile)"))
-        framesDrawn = 0
-        statsSince = now
+        renderLoop?.update(WallpaperFrameState(canDraw: hard == nil, visible: visible, profile: profile,
+                                               fps: targetFPS, still: still != nil),
+                           forceDraw: forceDraw)
     }
 
     // MARK: Dev hooks + logging
@@ -471,39 +389,55 @@ final class WallpaperController: ObservableObject {
 
 // MARK: - One display
 
-/// The window, view, renderer and display link for one display.
+/// Draws into its CAMetalLayer from the render thread; AppKit never asks it to draw.
+final class WallpaperMetalView: NSView {
+    let metalLayer = CAMetalLayer()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .never
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func makeBackingLayer() -> CALayer { metalLayer }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {}
+    override var isOpaque: Bool { true }
+}
+
+/// The window and Metal layer for one display (main thread). The render thread owns
+/// the drawing into `metalLayer`; this side only places the window and sizes things.
 final class WallpaperHost {
     let displayID: CGDirectDisplayID
+    let token: UInt64
+    let device: MTLDevice
     let window: WallpaperWindow
-    let view: MTKView
-    let renderer: MetalRenderer
-    var onFrame: (() -> Void)?
-    private(set) var hasDrawn = false
+    let view: WallpaperMetalView
+    let metalLayer: CAMetalLayer
 
-    private var link: CADisplayLink?
-    private var linkRate: Double = 0
-    private let pacing = WallpaperPacingStats()
-    var measuresPacing = false
-
-    init?(screen: NSScreen, displayID: CGDirectDisplayID, store: SharedStore, quality: WallpaperSettings.Quality) {
-        guard let r = MetalRenderer(pixelFormat: .bgra8Unorm, store: store) else { return nil }
+    init(screen: NSScreen, displayID: CGDirectDisplayID, device: MTLDevice, token: UInt64) {
         self.displayID = displayID
-        renderer = r
+        self.device = device
+        self.token = token
 
-        let v = MTKView(frame: CGRect(origin: .zero, size: screen.frame.size), device: r.device)
-        v.colorPixelFormat = .bgra8Unorm
-        v.framebufferOnly = true
-        v.isPaused = true                 // MTKView's own loop off — our display link drives draw()
-        v.enableSetNeedsDisplay = false
-        v.autoResizeDrawable = false      // we size the drawable for the Quality setting
+        let v = WallpaperMetalView(frame: CGRect(origin: .zero, size: screen.frame.size))
         v.autoresizingMask = [.width, .height]
-        v.delegate = r
-        if let layer = v.layer as? CAMetalLayer {
-            layer.isOpaque = true
-            // Leak-guard learned in the saver: cap the drawable pool (it otherwise grows).
-            layer.maximumDrawableCount = 3
-        }
+        let layer = v.metalLayer
+        layer.device = device
+        layer.pixelFormat = .bgra8Unorm
+        layer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)   // as MTKView tagged it
+        layer.framebufferOnly = true              // never read back: the cheapest drawables
+        layer.isOpaque = true
+        layer.displaySyncEnabled = true           // present on vsync, no tearing
+        layer.presentsWithTransaction = false     // present straight from the render thread
+        // Leak-guard learned in the saver: cap the drawable pool (it otherwise grows).
+        // 3 = one on screen + the renderer's two in flight.
+        layer.maximumDrawableCount = 3
+        layer.allowsNextDrawableTimeout = true
         view = v
+        metalLayer = layer
 
         let w = WallpaperWindow(contentRect: screen.frame, styleMask: [.borderless],
                                 backing: .buffered, defer: false)
@@ -525,8 +459,7 @@ final class WallpaperHost {
         w.setFrame(screen.frame, display: false)
         window = w
 
-        syncDrawableSize(quality: quality)
-        // Ordered in transparent; the first draw fades it in over the system wallpaper,
+        // Ordered in transparent; the first frame fades it in over the system wallpaper,
         // so it never pops in or flashes black.
         w.alphaValue = 0
         w.orderFront(nil)
@@ -537,92 +470,38 @@ final class WallpaperHost {
         Double((window.screen ?? NSScreen.main)?.maximumFramesPerSecond ?? 60)
     }
 
-    func follow(_ screen: NSScreen, quality: WallpaperSettings.Quality) {
+    func follow(_ screen: NSScreen) {
         if window.frame != screen.frame { window.setFrame(screen.frame, display: false) }
-        syncDrawableSize(quality: quality)
     }
 
     /// Drawable = display points × Quality's pixel density; the compositor upscales it.
-    func syncDrawableSize(quality: WallpaperSettings.Quality) {
+    /// Also sets the layer's upscale filter (a compositing property, owned here).
+    func surfaceConfig(quality: WallpaperSettings.Quality) -> WallpaperSurfaceConfig {
         let backing = window.screen?.backingScaleFactor ?? window.backingScaleFactor
         let ppp = quality.pixelsPerPoint(backing: backing)
         let size = window.frame.size
         let target = CGSize(width: max((size.width * ppp).rounded(), 1),
                             height: max((size.height * ppp).rounded(), 1))
-        if view.drawableSize != target { view.drawableSize = target }
-        if let layer = view.layer as? CAMetalLayer {
-            // Whole-number upscales stay crisp with nearest; fractional ones need linear.
-            let factor = backing / ppp
-            layer.magnificationFilter = abs(factor - factor.rounded()) < 0.01 ? .nearest : .linear
-        }
+        // Whole-number upscales stay crisp with nearest; fractional ones need linear.
+        let factor = backing / ppp
+        let filter: CALayerContentsFilter = abs(factor - factor.rounded()) < 0.01 ? .nearest : .linear
+        if metalLayer.magnificationFilter != filter { metalLayer.magnificationFilter = filter }
+        return WallpaperSurfaceConfig(drawableSize: target, refreshRate: refreshRate)
     }
 
-    // MARK: Display link
-
-    func runLink(at fps: Double) {
-        if link == nil {
-            // NSView.displayLink (macOS 14) follows the window's display and its refresh.
-            let l = view.displayLink(target: LinkTarget(self), selector: #selector(LinkTarget.fire(_:)))
-            l.add(to: .main, forMode: .common)
-            link = l
-        }
-        if fps != linkRate, let link {
-            let r = Float(fps)
-            link.preferredFrameRateRange = CAFrameRateRange(minimum: r, maximum: r, preferred: r)
-            linkRate = fps
-        }
-        if link?.isPaused == true { pacing.reset() }
-        link?.isPaused = false
-    }
-
-    func pauseLink() {
-        guard let link, !link.isPaused else { return }
-        link.isPaused = true
-        pacing.reset()
-    }
-
-    fileprivate func linkFired() {
-        if measuresPacing { pacing.tick() }
-        onFrame?()
-    }
-
-    /// Display-link pacing since the last call (debug stats).
-    func takeIntervalStats() -> String {
-        pacing.take(slot: linkRate > 0 ? 1 / linkRate : 0, refresh: refreshRate)
-    }
-
-    func draw(fromLink: Bool = false) {
-        let p = pacing
-        renderer.onPresented = (measuresPacing && fromLink) ? { p.presented($0) } : nil
-        view.draw()
-        guard !hasDrawn else { return }
-        hasDrawn = true
+    func fadeIn() {
+        guard window.alphaValue < 1 else { return }
         let w = window
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {   // let the GPU land the frame
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.6
-                w.animator().alphaValue = 1
-            }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.6
+            w.animator().alphaValue = 1
         }
     }
 
     func close() {
-        link?.invalidate()
-        link = nil
-        view.delegate = nil
-        view.releaseDrawables()
         window.orderOut(nil)
         window.contentView = nil
         window.close()
-    }
-}
-
-/// CADisplayLink retains its target; this weak trampoline keeps the host free to go.
-private final class LinkTarget: NSObject {
-    weak var host: WallpaperHost?
-    init(_ host: WallpaperHost) { self.host = host }
-    @objc func fire(_ link: CADisplayLink) {
-        autoreleasepool { host?.linkFired() }
     }
 }
 

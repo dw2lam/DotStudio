@@ -60,8 +60,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private var fadeOld: MTLTexture?
     private var fadeNew: MTLTexture?
 
-    init?(pixelFormat: MTLPixelFormat, store: SharedStore) {
-        guard let device = MTLCreateSystemDefaultDevice(),
+    /// - device: the GPU to render on (the live wallpaper picks the low-power one on
+    ///   multi-GPU Macs); nil = the system default.
+    init?(pixelFormat: MTLPixelFormat, store: SharedStore, device preferredDevice: MTLDevice? = nil) {
+        guard let device = preferredDevice ?? MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue() else { return nil }
         self.device = device
         self.queue = queue
@@ -127,10 +129,18 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
     }
 
-    /// Opt-in GPU accounting (live wallpaper power stats): total GPU execution time of
-    /// drawn frames, in seconds, accumulated on the main thread.
+    /// Opt-in GPU accounting (live wallpaper power stats): GPU execution time of drawn
+    /// frames, accumulated from Metal's completion threads.
     var measuresGPUTime = false
-    var gpuSeconds: Double = 0
+    private let gpuLock = NSLock()
+    private var gpuAccum: Double = 0
+    /// Seconds of GPU time since the last call (thread-safe).
+    func takeGPUSeconds() -> Double {
+        gpuLock.lock(); defer { gpuLock.unlock() }
+        let s = gpuAccum
+        gpuAccum = 0
+        return s
+    }
     /// Debug pacing (live wallpaper): called on a Metal thread with each drawn frame's
     /// on-screen time (0 = never shown). Nil = no presented handler at all.
     var onPresented: ((CFTimeInterval) -> Void)?
@@ -227,70 +237,102 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             if texA == nil || texB == nil || drawableSize != ds {
                 mtkView(view, drawableSizeWillChange: ds)
             }
-            guard let preset = preset,
+            guard preset != nil,
                   let final = view.currentRenderPassDescriptor,
-                  let drawable = view.currentDrawable,
-                  let texA = texA, let texB = texB else { return }
-
-            // Throttle frames-in-flight; released in the command buffer's completion handler.
-            inFlight.wait()
-            guard let cmd = queue.makeCommandBuffer() else { inFlight.signal(); return }
-            cmd.addCompletedHandler { [inFlight] _ in inFlight.signal() }
-            if measuresGPUTime {
-                cmd.addCompletedHandler { [weak self] cb in
-                    let dt = max(cb.gpuEndTime - cb.gpuStartTime, 0)
-                    DispatchQueue.main.async { self?.gpuSeconds += dt }
-                }
-            }
-
-            let now = CACurrentMediaTime()
-            let t = Float(now - startTime)
-            // Slideshow state comes from the source clock, so both chains of a preset
-            // crossfade show the same photo.
-            // Scenes ignore the source, so an idle slideshow doesn't decode photos.
-            let wantsSource = !preset.isScene || (outgoing.map { !$0.preset.isScene } ?? false)
-            let slides = wantsSource ? collection?.frame(at: now - startTime, sync: false) : nil
-            let sTex = media?.currentTexture() ?? slides?.texA
-            if !loggedFirstFrame {
-                loggedFirstFrame = true
-                store.debug("first draw size=\(drawableSize) effects=\(preset.effects.count) srcTexNil=\(sTex == nil) sourceKind=\(source.kind.rawValue)")
-            }
-
-            var blended = false
-            if let out = outgoing {
-                let progress = (now - transitionBegan) / max(transitionDuration, 0.001)
-                if progress >= 1 {
-                    outgoing = nil
-                    fadeOld = nil; fadeNew = nil     // ~2 drawables of VRAM back until the next fade
-                } else {
-                    ensureFadeTextures(width: Int(ds.width), height: Int(ds.height),
-                                       format: view.colorPixelFormat)
-                    if let fo = fadeOld, let fn = fadeNew {
-                        // Outgoing chain → fadeOld (its own time base keeps its motion coherent).
-                        encodePasses(cmd, finalDescriptor: offscreenDescriptor(fo), pingA: texA, pingB: texB,
-                                     size: drawableSize, time: Float(now - out.startTime),
-                                     preset: out.preset, source: source, sourceTex: sTex,
-                                     slides: slides, packedUniforms: out.packed)
-                        // Incoming chain → fadeNew. The shared ping-pong is safe: the chains
-                        // encode sequentially and each result is parked before the next starts.
-                        encodePasses(cmd, finalDescriptor: offscreenDescriptor(fn), pingA: texA, pingB: texB,
-                                     size: drawableSize, time: t, preset: preset, source: source,
-                                     sourceTex: sTex, slides: slides, packedUniforms: packedUniforms)
-                        encodeBlend(cmd, final: final, newTex: fn, oldTex: fo,
-                                    progress: Float(progress), size: drawableSize)
-                        blended = true
-                    }
-                }
-            }
-            if !blended {
-                encodePasses(cmd, finalDescriptor: final, pingA: texA, pingB: texB,
-                             size: drawableSize, time: t, preset: preset, source: source,
-                             sourceTex: sTex, slides: slides, packedUniforms: packedUniforms)
-            }
-            if let onPresented { drawable.addPresentedHandler { onPresented($0.presentedTime) } }
-            cmd.present(drawable)
-            cmd.commit()
+                  let drawable = view.currentDrawable else { return }
+            encodeFrame(final: final, drawable: drawable, size: ds, format: view.colorPixelFormat)
         }
+    }
+
+    /// One frame straight into a CAMetalLayer, from whichever thread owns this renderer
+    /// (the live wallpaper's render thread). The layer's drawableSize is the render size.
+    /// - Returns: whether a frame was encoded and committed.
+    @discardableResult
+    func draw(to layer: CAMetalLayer) -> Bool {
+        autoreleasepool {
+            let ds = layer.drawableSize
+            guard preset != nil, ds.width > 0, ds.height > 0 else { return false }
+            if texA == nil || texB == nil || drawableSize != ds {
+                drawableSize = ds
+                (texA, texB) = makeOffscreen(width: Int(ds.width), height: Int(ds.height), format: layer.pixelFormat)
+            }
+            guard let drawable = layer.nextDrawable() else { return false }
+            // Every pass writes every pixel (fullscreen triangle, no blending), so the old
+            // contents never need loading or clearing.
+            let final = MTLRenderPassDescriptor()
+            final.colorAttachments[0].texture = drawable.texture
+            final.colorAttachments[0].loadAction = .dontCare
+            final.colorAttachments[0].storeAction = .store
+            return encodeFrame(final: final, drawable: drawable, size: ds, format: layer.pixelFormat)
+        }
+    }
+
+    /// Encode, present and commit one frame of the current preset into `final`.
+    @discardableResult
+    private func encodeFrame(final: MTLRenderPassDescriptor, drawable: MTLDrawable,
+                             size ds: CGSize, format: MTLPixelFormat) -> Bool {
+        guard let preset = preset, let texA = texA, let texB = texB else { return false }
+
+        // Throttle frames-in-flight; released in the command buffer's completion handler.
+        inFlight.wait()
+        guard let cmd = queue.makeCommandBuffer() else { inFlight.signal(); return false }
+        cmd.addCompletedHandler { [inFlight] _ in inFlight.signal() }
+        if measuresGPUTime {
+            cmd.addCompletedHandler { [weak self] cb in
+                let dt = max(cb.gpuEndTime - cb.gpuStartTime, 0)
+                guard let self else { return }
+                self.gpuLock.lock(); self.gpuAccum += dt; self.gpuLock.unlock()
+            }
+        }
+
+        let now = CACurrentMediaTime()
+        let t = Float(now - startTime)
+        // Slideshow state comes from the source clock, so both chains of a preset
+        // crossfade show the same photo.
+        // Scenes ignore the source, so an idle slideshow doesn't decode photos.
+        let wantsSource = !preset.isScene || (outgoing.map { !$0.preset.isScene } ?? false)
+        let slides = wantsSource ? collection?.frame(at: now - startTime, sync: false) : nil
+        let sTex = media?.currentTexture() ?? slides?.texA
+        if !loggedFirstFrame {
+            loggedFirstFrame = true
+            store.debug("first draw size=\(drawableSize) effects=\(preset.effects.count) srcTexNil=\(sTex == nil) sourceKind=\(source.kind.rawValue)")
+        }
+
+        var blended = false
+        if let out = outgoing {
+            let progress = (now - transitionBegan) / max(transitionDuration, 0.001)
+            if progress >= 1 {
+                outgoing = nil
+                fadeOld = nil; fadeNew = nil     // ~2 drawables of VRAM back until the next fade
+            } else {
+                ensureFadeTextures(width: Int(ds.width), height: Int(ds.height),
+                                   format: format)
+                if let fo = fadeOld, let fn = fadeNew {
+                    // Outgoing chain → fadeOld (its own time base keeps its motion coherent).
+                    encodePasses(cmd, finalDescriptor: offscreenDescriptor(fo), pingA: texA, pingB: texB,
+                                 size: drawableSize, time: Float(now - out.startTime),
+                                 preset: out.preset, source: source, sourceTex: sTex,
+                                 slides: slides, packedUniforms: out.packed)
+                    // Incoming chain → fadeNew. The shared ping-pong is safe: the chains
+                    // encode sequentially and each result is parked before the next starts.
+                    encodePasses(cmd, finalDescriptor: offscreenDescriptor(fn), pingA: texA, pingB: texB,
+                                 size: drawableSize, time: t, preset: preset, source: source,
+                                 sourceTex: sTex, slides: slides, packedUniforms: packedUniforms)
+                    encodeBlend(cmd, final: final, newTex: fn, oldTex: fo,
+                                progress: Float(progress), size: drawableSize)
+                    blended = true
+                }
+            }
+        }
+        if !blended {
+            encodePasses(cmd, finalDescriptor: final, pingA: texA, pingB: texB,
+                         size: drawableSize, time: t, preset: preset, source: source,
+                         sourceTex: sTex, slides: slides, packedUniforms: packedUniforms)
+        }
+        if let onPresented { drawable.addPresentedHandler { onPresented($0.presentedTime) } }
+        cmd.present(drawable)
+        cmd.commit()
+        return true
     }
 
     // MARK: Crossfade helpers
