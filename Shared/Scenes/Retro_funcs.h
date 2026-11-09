@@ -54,7 +54,7 @@ static inline float retro_ridge(float x, float seed) {
 
 struct RetroSynth {
     float3 neon, sunTop, sunMid, sunBot, top, haze, mtnDark;
-    float sunR, sunY, mtn, stripes, stars, clouds, t, sunGain;
+    float sunR, sunY, mtn, stripes, stars, clouds, t, sunGain, sunBlur;
 };
 
 // One mountain layer over sky colour `col`: dark body with haze at its foot, ridge-echo
@@ -103,9 +103,10 @@ static inline float3 retro_synthSky(float2 q, float aa, float stretch, float wit
     d.y /= stretch;
     float r = length(d);
     float sv = d.y / s.sunR;
-    float disk = clamp((s.sunR - r) / aa + 0.5, 0.0, 1.0);
+    float aaS = aa + s.sunBlur;                       // glossy reflections blur the sun the most
+    float disk = clamp((s.sunR - r) / aaS + 0.5, 0.0, 1.0);
     float ph = sv * 5.5 + s.t * 0.18;
-    float fw = max(fwidth(ph), 5.5 * aa / s.sunR);
+    float fw = max(fwidth(ph), 5.5 * aaS / s.sunR);
     float gapW = clamp((0.3 - sv) * 0.62, 0.0, 0.8) * s.stripes;
     float dc = abs(fract(ph + 0.5) - 0.5);
     disk *= 1.0 - retro_lineCov(dc, 0.5 * gapW, fw);
@@ -134,8 +135,9 @@ static inline float3 retro_synthSky(float2 q, float aa, float stretch, float wit
     float ax = abs(q.x);
     float hf = s.mtn * 0.16 * retro_ridge(q.x * 2.1 + 3.0, 1.7) * mix(0.14, 1.0, smoothstep(0.03, 0.6, ax));
     float hn = s.mtn * 0.12 * retro_ridge(q.x * 3.3 - 9.0, 5.1) * smoothstep(0.25, 0.9, ax);
-    col = retro_mtnLayer(col, q, hf, aa, 0.8, 0.0, 0.45, s);
-    col = retro_mtnLayer(col, q, hn, aa, 0.2, withStars * 0.8, 1.0, s);
+    float rimK = mix(0.4, 1.0, withStars);                // rims seen in the floor: dimmer, so they read as reflections
+    col = retro_mtnLayer(col, q, hf, aa, 0.8, 0.0, 0.45 * rimK, s);
+    col = retro_mtnLayer(col, q, hn, aa, 0.2, withStars * 0.8, rimK, s);
     return col;
 }
 
