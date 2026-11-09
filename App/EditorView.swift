@@ -8,6 +8,7 @@ struct EditorView: View {
     @ObservedObject private var wallpaper = WallpaperSlot.shared
     @Environment(\.heroNamespace) private var hero
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.layout) private var layout
     let id: UUID
     @State private var tab: Tab = .effects
     @State private var confirmDelete = false
@@ -22,16 +23,17 @@ struct EditorView: View {
     var body: some View {
         let binding = model.presetBinding(id)
         let preset = binding.wrappedValue
-        HStack(spacing: 0) {
+        // One margin on every side and between the two panes (20 · 32 · 48 by width).
+        HStack(spacing: layout.pagePadding) {
             previewPane(preset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            inspector(binding)
-                .frame(width: 344)
-                .glassCard(cornerRadius: 24)
-                .padding(.vertical, 14)
-                .padding(.trailing, 14)
+            inspector(binding, name: preset.name)
+                .frame(width: layout.inspectorWidth)
+                .frame(maxHeight: .infinity)
+                .glassCard(cornerRadius: Radius.card)
                 .transition(reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
         }
+        .padding(layout.pagePadding)
         .toolbar { toolbar(preset) }
         .confirmationDialog("Delete “\(preset.name)”?", isPresented: $confirmDelete) {
             Button("Delete", role: .destructive) { model.delete(id) }
@@ -50,7 +52,7 @@ struct EditorView: View {
     // MARK: Preview
 
     private func previewPane(_ preset: Preset) -> some View {
-        VStack(spacing: 20) {
+        VStack(spacing: layout.sectionGap) {
             Spacer(minLength: 0)
             ZStack {
                 StyleThumb(preset: preset)
@@ -63,8 +65,8 @@ struct EditorView: View {
             }
             .aspectRatio(screenAspect, contentMode: .fit)
             .background(Color.black)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(.white.opacity(0.12)))
+            .clipShape(RoundedRectangle(cornerRadius: Radius.l, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Radius.l, style: .continuous).strokeBorder(.white.opacity(0.12)))
             // Layered shadow: a tight contact shadow plus a wide, soft lift.
             .shadow(color: .black.opacity(0.18), radius: 3, y: 2)
             .shadow(color: .black.opacity(0.30), radius: 34, y: 18)
@@ -77,8 +79,6 @@ struct EditorView: View {
             DestinationBar(id: id)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 36)
-        .padding(.vertical, 24)
     }
 
     private var screenAspect: CGFloat {
@@ -89,32 +89,50 @@ struct EditorView: View {
     // MARK: Inspector
 
     @ViewBuilder
-    private func inspector(_ binding: Binding<Preset>) -> some View {
+    private func inspector(_ binding: Binding<Preset>, name: String) -> some View {
         let isScene = binding.wrappedValue.isScene
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
-                TextField("Name", text: binding.name)
+            VStack(alignment: .leading, spacing: layout.itemGap) {
+                // A long name wraps (up to 3 lines) instead of running off the card.
+                TextField("Name", text: binding.name, axis: .vertical)
                     .textFieldStyle(.plain)
-                    .font(.title3.weight(.semibold))
-                if isScene {
-                    Text("Scenes draw themselves — the shared source isn't used.")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    Picker("Section", selection: $tab.animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion))) {
-                        ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
+                    .textRole(.inspectorTitle)
+                    .lineLimit(1...3)
+                    .help(name)
+                // Scenes have no Source tab. Their note takes the tab bar's slot, which
+                // keeps the tabs' height, so the list below starts at the same y for every
+                // style. The note is one line (full text in the tooltip): a wrapped note
+                // would outgrow the slot at large text sizes and push a scene's list down.
+                ZStack(alignment: .leading) {
+                    SegmentedChoice(title: "Section",
+                                    selection: $tab.animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion)),
+                                    options: Tab.allCases.map { ($0.rawValue, $0) })
+                    .opacity(isScene ? 0 : 1)
+                    .disabled(isScene)
+                    .accessibilityHidden(isScene)
+                    if isScene {
+                        Text("Scenes don't use the shared source.")
+                            .textRole(.caption).foregroundStyle(.secondary)
+                            .truncating("Scenes draw themselves — the shared source isn't used.")
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
                 }
             }
-            .padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 12)
+            .padding([.horizontal, .top], layout.cardPadding)
+            .padding(.bottom, layout.itemGap)
             Divider().opacity(0.6)
+                .padding(.horizontal, layout.cardPadding)
 
             ZStack {
                 if tab == .source && !isScene {
+                    // Same edges as the Effects list: content on edge A, and its first line
+                    // as far below the divider as the list's first row, so switching tabs
+                    // doesn't shift anything. The inspector's own metrics (not a new root),
+                    // so both tabs share one set of gaps.
                     ScrollView {
-                        SourceEditor(source: model.sourceBinding, model: model)
-                            .padding(16)
+                        SourceEditor(source: model.sourceBinding, model: model, isLayoutRoot: false)
+                            .padding(.horizontal, layout.cardPadding)
+                            .padding(.top, EffectStackView.listTopInset + layout.labelGap)
+                            .padding(.bottom, layout.cardPadding)
                     }
                     .transition(.opacity)
                 } else {
@@ -123,7 +141,7 @@ struct EditorView: View {
                 }
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
     }
 
     // MARK: Toolbar
@@ -169,51 +187,85 @@ struct EditorView: View {
     }
 }
 
-/// Under the editor preview: where this style plays, as glass buttons.
+extension TextRole {
+    /// The style's name at the top of the inspector (macOS .title3, 15 pt semibold).
+    /// Layout.swift has no title3 role; this one is local to the editor.
+    static let inspectorTitle = TextRole(style: .title3, weight: .semibold)
+}
+
+/// Under the editor preview: where this style plays, as glass buttons. They wrap onto a
+/// second centred line when the preview column is too narrow, instead of truncating.
+/// Every title is role-sized (`ScaledControlLabel`), so the editor's main actions grow with
+/// the text like everything around them; `.adaptiveControlSize` steps the bezels.
 private struct DestinationBar: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var wallpaper = WallpaperSlot.shared
+    @Environment(\.layout) private var layout
     let id: UUID
 
     var body: some View {
         let lineup = model.screensaverLineup
         let only = lineup.playlist == [id]
         let inPlaylist = lineup.playlist.contains(id)
-        GlassGroup(spacing: 10) {
-            HStack(spacing: 10) {
+        let playlistLabel = inPlaylist ? "In Playlist" : "Add to Screensaver"
+        let wallpaperLabel = wallpaper.styleID == id ? "Stop Wallpaper" : "Set as Wallpaper"
+        GlassGroup(spacing: layout.controlGap) {
+            FlowLayout(spacing: layout.controlGap, lineSpacing: layout.controlGap, alignment: .center) {
                 if only {
-                    Label("Your Screensaver", systemImage: "checkmark.circle.fill")
-                        .font(.callout.weight(.medium))
-                        .padding(.horizontal, 14).frame(height: 30)
-                        .glassSurface(.regular, in: Capsule())
+                    DestinationPill(title: "Your Screensaver", systemImage: "checkmark.circle.fill")
                 } else {
                     Button { Motion.run { model.playAsScreensaver(id) } } label: {
-                        Label("Play as Screensaver", systemImage: "play.fill")
+                        ScaledControlLabel(title: "Play as Screensaver", systemImage: "play.fill")
                     }
                     .glassButton(.prominent)
+                    .help("Play as Screensaver — make this the only style your screensaver shows")
                     Button { Motion.run { model.togglePlaylist(id) } } label: {
-                        Label(inPlaylist ? "In Playlist" : "Add to Screensaver",
-                              systemImage: inPlaylist ? "checkmark" : "plus")
+                        ScaledControlLabel(title: playlistLabel, systemImage: inPlaylist ? "checkmark" : "plus")
                     }
                     .glassButton()
-                    .help(inPlaylist ? "Remove from the screensaver playlist" : "Rotate this with the other styles in the playlist")
+                    .help(inPlaylist ? "In Playlist — click to remove it from the screensaver playlist"
+                                     : "Add to Screensaver — rotate this with the other styles in the playlist")
                 }
                 if lineup.night == id {
-                    Label("At Night", systemImage: "moon.fill")
-                        .font(.callout.weight(.medium))
-                        .padding(.horizontal, 14).frame(height: 30)
-                        .glassSurface(.regular, in: Capsule())
+                    DestinationPill(title: "At Night", systemImage: "moon.fill")
                 }
                 if wallpaper.isAvailable {
                     Button { Motion.run { wallpaper.toggle(id) } } label: {
-                        Label(wallpaper.styleID == id ? "Stop Wallpaper" : "Set as Wallpaper",
-                              systemImage: "photo.artframe")
+                        ScaledControlLabel(title: wallpaperLabel, systemImage: "photo.artframe")
                     }
                     .glassButton()
+                    .help(wallpaperLabel)
                 }
             }
-            .controlSize(.large)
+            .adaptiveControlSize(.large)
         }
         .motion(Motion.smooth, value: lineup)
+    }
+}
+
+/// A status capsule among the destination buttons ("Your Screensaver", "At Night"). It is
+/// sized by an invisible glass button with the same label, so at every control size and
+/// text size a pill is exactly as tall, padded and round as the buttons beside it; the
+/// visible capsule is plain (non-interactive) glass with a medium-weight title.
+private struct DestinationPill: View {
+    let title: String
+    let systemImage: String
+
+    var body: some View {
+        Button {} label: { label }
+            .glassButton()
+            .hidden()
+            .overlay {
+                label
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .glassSurface(.regular, in: Capsule())
+            }
+            .help(title)
+            .accessibilityElement(children: .combine)
+    }
+
+    private var label: some View {
+        ScaledControlLabel(title: title, systemImage: systemImage, role: .bodyEmphasis)
+            .lineLimit(1)
     }
 }
