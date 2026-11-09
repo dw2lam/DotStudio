@@ -212,9 +212,9 @@ final class DotSaverView: ScreenSaverView {
         if isPreview {
             fps = min(fps, 10)                       // Settings thumbnail
         } else if ProcessInfo.processInfo.isLowPowerModeEnabled {
-            fps = min(fps, 10)
-        } else if DotSaverView.onBattery() {
             fps = min(fps, 15)
+        } else if DotSaverView.onBattery() {
+            fps = min(fps, 30)                       // 15 read as laggy; 30 stays smooth
         }
         return 1.0 / Double(fps)
     }
