@@ -242,12 +242,22 @@ static inline float studio1_cloud(float2 q, float t, float speed, float clouds) 
 // Inline (not out of line like Ocean Horizon's live path): inside fx_fragment the compiler sees
 // that everything derived from `u` is uniform, which measured 18% faster here (10.2 → 8.3 ms at
 // 5120×2880 at the time), with Liquid Chrome, Black Hole and Golden Hour unchanged.
-static inline float4 studio1_shallows(float2 uv, float2 res, float2 px, float t, constant FXUniforms& u) {
+static inline float4 studio1_shallows(float2 uv, float2 res, float2 px, float t, constant FXUniforms& u,
+                                      const bool wx = false) {
     float speed = clamp(u.p0.x, 0.0, 2.0);
     float dScale = exp2((clamp(u.p0.y, 0.0, 1.0) - 0.5) * 1.6);
     float sea = clamp(u.p0.z, 0.0, 1.0);
     float clar = clamp(u.p0.w, 0.0, 1.0);
     float clouds = clamp(u.p1.w, 0.0, 1.0);
+    // Weather (the fx_wx_shallows copy, Shared/Weather): the wind sets the sea, cloud cover the
+    // shadows passing over — a full deck puts the whole floor in soft shade (no sharp net), rain
+    // rings the surface, a storm flashes. See Shared/Weather/Weather_funcs.h.
+    WxState W = wx ? wx_state(u) : WxState{};
+    if (wx) {
+        sea = wx_seaState(sea, W.wind);
+        float cv = W.cover;
+        clouds = cv < 0.25 ? clouds * mix(0.3, 1.0, cv * 4.0) : mix(clouds, 1.0, smoothstep(0.25, 0.9, cv));
+    }
     bool live = u.p1.y > 0.5 && u.sky.y > 0.5;
 
     // ---- Key light (the sun; live, the arch of twilight once it has set, then the moon) and sky.
@@ -296,6 +306,12 @@ static inline float4 studio1_shallows(float2 uv, float2 res, float2 px, float t,
         skyZ = float3(0.10, 0.20, 0.42) * day;
         skyH = mix(float3(0.40, 0.48, 0.58), float3(0.40, 0.48, 0.58) * tint * 1.3, 0.6 * warm) * day;
     }
+    if (wx) {
+        // Under a deck the sky is a soft grey dome (its luminance from the light it lets through).
+        float3 g = float3(luma(skyH) * 1.5 + luma(Ek) * 0.10) * float3(0.97, 1.0, 1.04);
+        skyZ = mix(skyZ, g, W.deck);
+        skyH = mix(skyH, g * 0.92, W.deck);
+    }
     float2 sh = float2(sin(psi), cos(psi));                   // toward the key light, on the frame
     float elg = max(el, 0.05);                                 // (geometry: never quite grazing)
     float3 Ls = float3(sh * cos(elg), sin(elg));
@@ -335,13 +351,23 @@ static inline float4 studio1_shallows(float2 uv, float2 res, float2 px, float t,
               - 6.2831853 * fract(t * round(float3(1026.0, 1195.0, 1364.0) * speed) * (1.0 / 3600.0));
     float amp = 0.5 + 2.4 * sea;
     float2 g1 = studio1_grad<0, 5>(P, ta, tb, amp);
+    float splash = 0.0;
+    if (wx && W.rain > 0.01) {
+        // Rain: rings running out over the surface (they refract the floor and mirror the sky),
+        // and the splash where each lands. (Drawn at 1/3 scale, two cells' worth of drops a
+        // second: up close, these are the small drops'.)
+        float4 rg = wx_rings(P * 3.0, t * speed, fpS * 3.0, saturate(W.rain * 1.5));
+        g1 += rg.xy * 1.8;
+        splash = rg.w * W.rain;
+    }
     float2 q = P + D * (Tv + Mv * g1);                         // (1) apparent floor point
 
     float cover = clouds > 0.001 ? studio1_cloud(q, t, speed, clouds) : 0.0;
+    if (wx) cover = max(cover, W.deck);
     // Under a cloud the direct light (and with it the caustics) drops to 30%, the cloud's own
     // glow lifts the skylight, and the exposure adapts most of the rest of the way: under full
     // cover the frame as a whole dims by under 10% while the net softens to a third.
-    float sunDim = 1.0 - 0.7 * cover;
+    float sunDim = 1.0 - (wx ? 0.7 + 0.27 * W.deck : 0.7) * cover;
     float3 EambC = Eamb + Ek * (0.22 * cover) * float3(0.94, 0.98, 1.04);
 
     // Exposure: like an eye, opens up as the light goes (low sun, twilight, moonlight, cloud), not
@@ -411,6 +437,7 @@ static inline float4 studio1_shallows(float2 uv, float2 res, float2 px, float t,
     float blur = D * 0.0012 / (cosTt * cosTt) + fpF * 0.75;
     float bs = 0.03 + 0.45 * (1.0 - clar);                     // scattering, /m
     float sig = 0.03 + length(gdet) * blur + keyMoon * 0.45 + keyTw * 0.4 + bs * D * 0.06;
+    if (wx) sig += 1.5 * W.deck + 0.3 * W.fog;               // (a broad, dim source: no sharp net)
     float3 sc = float3(0.99329, 1.0, 1.00898);                 // n = 1.331, 1.334, 1.338
     float3 det = 1.0 + sc * trA + sc * sc * dtA;
     float3 Ec = sqrt(1.0 + sig * sig) * rsqrt(det * det + sig * sig);
@@ -465,6 +492,13 @@ static inline float4 studio1_shallows(float2 uv, float2 res, float2 px, float t,
     float3 Lsc = (luma(Ek) * Ts * sunDim * 0.6 + luma(EambC) * 1.1) * (bs * 0.5 + 0.20 * (1.0 + 0.6 * warmK) * smoothstep(0.2, 1.0, D))
                * (1.0 - exp(-cext * (D / ctv))) / cext * wcol;
     float3 col = (Lf + Lsc) * (1.0 - Fv) + surf;
+    if (wx) {
+        col += (skyZ * 0.5 + skyH * 0.5) * (splash * 0.8);
+        // Lightning: the whole shallow lit for a moment — gentle, and after the eye's exposure.
+        float4 ev;
+        float fl = (W.storm > 0.0 && u.weather3.y > 0.5) ? wx_lightning(t, W.storm, ev) : 0.0;
+        if (fl > 0.0) col += (sand * 0.85 + float3(0.02, 0.06, 0.08)) * float3(0.8, 0.84, 1.0) * (fl * 0.18 / max(expo, 1e-3));
+    }
 
     // Night: the eye loses colour and shifts blue (as a moonlit scene reads), gently.
     col = mix(col, luma(col) * float3(0.62, 0.84, 1.18), 0.55 * night);

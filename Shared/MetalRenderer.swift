@@ -95,6 +95,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     // Thumbnail/export slideshows (no eviction), keyed by decode size class.
     private var thumbCollections: [Int: CollectionSource] = [:]
     private let store: SharedStore
+    private lazy var weatherLink = WeatherLink(baseDir: store.baseDir)   // Shared/Weather
     var location: (lat: Double, lon: Double)?      // resolved device location (Universe marker, live sky)
     /// Renders as if the wall clock read this instead of now (offscreen gallery only).
     var clockOverride: Date?
@@ -755,6 +756,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                     u.p2 = simd_float4(a.userLon, a.userLat, a.hasLoc ? 1 : 0, orbits)
                 }
                 MetalRenderer.fillLiveSky(&u, inst: inst!, now: wall, time: time, location: location)
+                weatherLink.fill(&u, inst: inst!, time: time, wall: wall, encoder: enc, format: rpd.colorAttachments[0].texture?.pixelFormat)
                 if inst!.kind == .nowPlaying {
                     fillMusic(&u, options: MusicSceneOptions(inst!), size: size, now: CACurrentMediaTime(), wall: wall)
                 }
