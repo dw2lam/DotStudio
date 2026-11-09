@@ -66,14 +66,15 @@ enum DefaultPresets {
     static func looks() -> [Preset] {
         [
             Preset(name: "Film",
-                   effects: [fx(.grainWash, ["soft": 0.0, "grain": 0.09, "tint": 0.22],
+                   effects: [fx(.grainWash, ["soft": 0.0, "grain": 0.09, "tint": 0.22, "halation": 0.55],
                                 a: RGBA(0.06, 0.10, 0.16), b: RGBA(1.0, 0.90, 0.76)),
                              fx(.vignette, ["amount": 0.45, "radius": 0.95])]),
             Preset(name: "Riso Duotone",
                    effects: [fx(.risograph, ["screen": 0, "cell": 2, "misreg": 5, "paper": 0.5],
                                 a: risoPink, b: risoBlue)]),
             Preset(name: "Cyanotype",
-                   effects: [fx(.grainWash, ["soft": 0.12, "grain": 0.12, "tint": 1],
+                   // A print: static paper texture rather than film grain boiling at 24 fps.
+                   effects: [fx(.grainWash, ["soft": 0.12, "grain": 0.04, "tint": 1, "paper": 0.8],
                                 a: prussian, b: cream)]),
             Preset(name: "Floyd–Steinberg",
                    effects: [fx(.dither, ["algo": 4, "cell": 2, "mono": 1], a: .ink, b: .paper)]),
