@@ -165,7 +165,7 @@ enum DefaultPresets {
                    effects: [fx(.liquidChrome, ["speed": 0.5, "scale": 1.0, "iris": 0.6, "film": 0.3],
                                 a: RGBA(0.10, 0.10, 0.14), b: RGBA(0.96, 0.96, 1.0))]),
             Preset(name: "Quicksilver",
-                   effects: [fx(.liquidChrome, ["speed": 0.45, "scale": 1.0, "iris": 0, "ripple": 0.6,
+                   effects: [fx(.liquidChrome, ["speed": 0.45, "scale": 1.0, "iris": 0, "ripple": 0.45,
                                                 "rough": 0, "aniso": 0],
                                 a: RGBA(0.01, 0.01, 0.012), b: RGBA(0.94, 0.96, 1.0))]),
             Preset(name: "Brushed Gold",

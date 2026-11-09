@@ -154,14 +154,6 @@ static inline float gfbm(float2 p, int oct) {
     for (int i = 0; i < oct; ++i) { s += a * gnoise(p); p = R * p * 2.03; a *= 0.5; }
     return s;
 }
-// Liquid Chrome height field: a few domain-warped sines (cheap, smooth, glossy).
-static inline float chromeHeight(float2 p, float ts) {
-    float2 q = p + 0.65 * float2(sin(p.y * 0.83 + ts), cos(p.x * 0.71 - ts * 0.8));
-    q += 0.35 * float2(sin(q.y * 1.7 - ts * 0.6), cos(q.x * 1.5 + ts * 0.7));
-    return sin(q.x * 1.15 + ts * 0.6) * 0.5
-         + sin(q.y * 1.45 - ts * 0.5) * 0.4
-         + sin((q.x + q.y) * 0.9 + ts * 0.9) * 0.3;
-}
 
 // Ordered dither matrices, normalized to [-0.5, 0.5].
 constant float bayer2[4] = {
@@ -473,27 +465,42 @@ static inline float3 chrome_surface(float2 p, float ts, float ripple) {
     return float3(h, g2.x + b1 * g2.y, a1 * g2.x + g2.y);
 }
 
-// A rounded-rectangle studio light seen from the origin. c is its centre direction,
-// R/U its axes; gnomonic-projected so its edges stay straight like a real softbox.
-// blur = (x, y) prefilter width from roughness/brushing; edges are AA'd by fwidth.
+// Reflected view ray off the height field with gradient g (camera looks slightly down).
+static inline float3 chrome_reflect(float2 g) {
+    float3 n = normalize(float3(-g.x * 0.8, g.y * 0.8, 1.0));
+    return reflect(normalize(float3(0.0, 0.28, -1.0)), n);
+}
+
+// A softbox seen from the origin: c is its centre direction, R/U its axes, hsz its
+// half-size (gnomonic, so it keeps a softbox's straight-ish frame). Emission is a hot
+// diffusion-cloth core falling smoothly to a soft rounded frame (never a flat fill),
+// and roughness/brushing widen that frame. Glints whose on-screen area is tiny (a small
+// bump catching the light in a dark field) fade out instead of showing as specks.
+// resY = render height, so the area test is resolution independent.
 static inline float chrome_softbox(float3 r, float3 c, float3 R, float3 U, float2 hsz,
-                                   float rad, float soft, float2 blur) {
+                                   float2 blur, float resY) {
     float facing = dot(r, c);
     float2 l = float2(dot(r, R), dot(r, U)) / max(facing, 0.08);
-    float2 q = abs(l) - hsz + rad;
-    float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - rad;
-    float2 fw = fwidth(l) * 0.6;
-    float w = length(fw + blur) + soft;
-    float body = smoothstep(w, -w, d);
-    float2 ln = l / hsz;
-    float falloff = 1.0 - 0.3 * dot(ln, ln);              // brighter centre, like diffusion cloth
-    return body * falloff * smoothstep(0.0, 0.25, facing);
+    float2 ln = l / hsz;                                     // -1..1 across the box
+    float2 dx = dfdx(l), dy = dfdy(l);
+    float pxw = (length(dx) + length(dy)) * 0.5 / min(hsz.x, hsz.y);   // box units per pixel
+    float2 a = abs(ln);
+    float e = pow(a.x * a.x * a.x * a.x + a.y * a.y * a.y * a.y + 1e-8, 0.25);  // rounded frame
+    float edge = 0.22 + length(blur / hsz) + pxw;
+    float body = 1.0 - smoothstep(1.0 - edge, 1.0 + edge * 0.35, e);
+    float core = exp(-2.4 * dot(ln, ln));
+    // on-screen area of the glint, in (screen height)^2
+    float det = abs(dx.x * dy.y - dx.y * dy.x) * resY * resY;
+    float area = 4.0 * hsz.x * hsz.y / max(det, 1e-7);
+    float vis = smoothstep(0.0012, 0.004, area);
+    return body * (0.28 + 0.72 * core) * vis * smoothstep(0.0, 0.25, facing);
 }
 
 // Procedural photo studio, in linear light (HDR). r = reflected direction (y up,
 // +z = behind the camera). Bands in r.y read as horizon / strip light / black flag:
 // the crisp light-and-dark contour lines that make chrome look like chrome.
-static inline float3 chrome_env(float3 r, float3 B, float rough, float aniso) {
+static inline float3 chrome_env(float3 r, float3 B, float rough, float aniso, float resY,
+                                 float gys) {
     float y = r.y;
     // Prefilter widths: pixel footprint (AA) combined with surface roughness; brushing
     // smears reflections along y (grain runs horizontally).
@@ -503,7 +510,13 @@ static inline float3 chrome_env(float3 r, float3 B, float rough, float aniso) {
     float wy = sqrt(aay * aay + by * by) + 0.0015;
     float2 blur = float2(bx, by);
 
-    float sky = smoothstep(-wy, wy, y);
+    // Near-stationary reflection (gys small: saddles, or a small ripple crest just
+    // peeking over a threshold). The horizon there lifts and goes soft, so a crest that
+    // barely clears it stays a faint swell instead of an isolated speck; the contour
+    // lines (below) use a tighter test so they stay crisp everywhere but true saddles.
+    float stillH = 1.0 - smoothstep(0.6, 2.6, gys);
+    float sad = 1.0 - smoothstep(0.1, 0.8, gys);
+    float sky = smoothstep(-wy + 0.02 * stillH, wy + 0.06 * stillH, y);
     float yu = max(y, 0.0), yd = max(-y, 0.0);
     // cyclorama: a hot horizon rolling off into a dim ceiling
     float3 up = B * (0.20 + 0.45 * exp(-yu * 1.8) + 0.9 * exp(-yu * 9.0))
@@ -512,18 +525,24 @@ static inline float3 chrome_env(float3 r, float3 B, float rough, float aniso) {
     // dark faces still model their form
     float3 dn = B * (0.003 + 0.05 * exp(-yd * 3.5) + 0.07 * exp(-yd * 14.0));
     float3 c = mix(dn, up, sky);
+    // Contour lines. A line is a band in r.y, so where the surface flattens toward a
+    // saddle its on-screen width balloons and the level set crosses itself: a fat
+    // X/Y junction. Capping the band at a screen width (half-width in r.y <= k * gys)
+    // keeps the calligraphic thick-thin of the lines but no flaring, so at a saddle the
+    // two branches stay slender smooth curves that kiss and fade at the crossing point.
     // strip light (the signature white contour)
-    float sw = 0.010;
-    c += B * 5.0 * smoothstep(sw + wy, sw - wy, abs(y - 0.30));
+    float sw = min(0.010, 0.0035 * gys);
+    c += B * 5.0 * (1.0 - 0.6 * sad) * smoothstep(sw + wy, sw - wy, abs(y - 0.30));
     c += B * 0.16 * exp(-abs(y - 0.30) * 22.0);
-    // black flag (the signature dark contour): blocks everything behind it
-    float fw = 0.019;
-    c *= 1.0 - 0.96 * smoothstep(fw + wy, fw - wy, abs(y - 0.56));
+    // black flag (the signature dark contour)
+    float fw = min(0.019, 0.0065 * gys);
+    float flag = smoothstep(fw + wy, fw - wy, abs(y - 0.56));
+    c *= 1.0 - 0.96 * (1.0 - 0.6 * sad) * flag;
 
-    // key softbox, upper left: big, diffused, the broad glints on the crests
+    // key softbox, upper left: the broad glints on the crests
     float3 kc = normalize(float3(-0.55, 0.45, 0.70));
     float3 kR = normalize(cross(float3(0, 1, 0), kc)), kU = cross(kc, kR);
-    c += B * 2.2 * chrome_softbox(r, kc, kR, kU, float2(0.30, 0.17), 0.12, 0.003, blur);
+    c += B * 1.7 * chrome_softbox(r, kc, kR, kU, float2(0.34, 0.20), blur, resY);
     return c;
 }
 
@@ -536,7 +555,8 @@ static inline float3 chrome_reflectance(float cosI, float thicknessNm, float iri
     const float F0 = 0.66;
     float fr = pow(1.0 - cosI, 5.0);
     float3 metal = float3(F0 + (1.0 - F0) * fr);
-    float amt = pow(max(iris, 0.0), 0.4);           // perceptual: low settings still read as a sheen
+    // perceptual: the shipped 0.12 already reads as a broad pearly wash
+    float amt = pow(max(iris, 0.0), 0.3);
     if (amt <= 0.001) return metal;
     const float nf = 1.9, r1 = 0.50, r2 = 0.85;
     float sinT = sqrt(max(1.0 - cosI * cosI, 0.0)) / nf;
@@ -555,6 +575,8 @@ static inline float3 chrome_reflectance(float cosI, float thicknessNm, float iri
     }
     film = max(film, 0.0);
     // keep chrome's brightness, take the film's hue; grazing angles still go white
+    float fl = dot(film, float3(0.2126, 0.7152, 0.0722));
+    film = max(fl + (film - fl) * 1.3, 0.0);                // pastel to saturated pearl
     film *= F0 / max(dot(film, float3(0.2126, 0.7152, 0.0722)), 0.05);
     film = film + (1.0 - film) * fr;
     return mix(metal, film, amt);
@@ -1501,25 +1523,33 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
 
     case 45: { // LIQUID CHROME (scene) — a rippling mirror surface reflecting a studio
                // environment (hard horizon + softboxes), optional thin-film iridescence.
-               // p0 = (speed, scale, iridescence); colorA shadow, colorB highlight.
-        // p0 = (speed, scale, iridescence, fine ripples); p1 = (roughness, brushed, film tone).
+               // p0 = (speed, scale, iridescence, fine ripples); p1 = (roughness, brushed,
+               // film tone); colorA shadow (black point), colorB highlight.
         float speed = u.p0.x, sc = max(u.p0.y, 0.2), iris = u.p0.z;
         float ripple = u.p0.w, rough = u.p1.x, aniso = u.p1.y, film = u.p1.z;
         float ts = t * speed * 0.2;
         float aspect = res.x / res.y;
         float2 p = (uv - 0.5) * float2(aspect, 1.0) * sc * 3.0;
+        // Surface at the pixel and two neighbours a few px away: a smooth screen gradient
+        // of the reflection (dfdx would quantise it to 2x2 quads), which tells the studio
+        // where the reflection is near-stationary: saddles and small crests.
+        const float e = 0.012;
         float3 hs = chrome_surface(p, ts, ripple);
-        float3 n = normalize(float3(-hs.y * 0.8, hs.z * 0.8, 1.0));
+        float3 hx = chrome_surface(p + float2(e, 0.0), ts, ripple);
+        float3 hy = chrome_surface(p + float2(0.0, e), ts, ripple);
+        float3 r = chrome_reflect(hs.yz);
+        float2 dry = float2(chrome_reflect(hx.yz).y, chrome_reflect(hy.yz).y) - r.y;
+        float gys = length(dry) / e * sc * 3.0;            // change in r.y per screen height
         // Camera looks slightly down, so flat metal mirrors the cyclorama above the horizon;
         // every tilt sweeps the reflection across horizon, strip lights, flags and floor.
+        float3 n = normalize(float3(-hs.y * 0.8, hs.z * 0.8, 1.0));
         float3 v = normalize(float3(0.0, 0.28, -1.0));
-        float3 r = reflect(v, n);
 
         float3 Bl = srgbToLinear(u.colorB.rgb);
-        float3 c = chrome_env(r, Bl, rough, aniso);
+        float3 c = chrome_env(r, Bl, rough, aniso, res.y, gys);
         // film thickness drifts slowly over the forms (nm): 1st–3rd interference orders
         // and follows the forms, so the colour bands run with the contours like a real film
-        float thick = mix(180.0, 520.0, film) + 90.0 * sin(hs.x * 1.1 + n.x * 0.9 + p.x * 0.3 - p.y * 0.2 + ts * 0.3);
+        float thick = mix(180.0, 520.0, film) + 100.0 * sin(hs.x * 1.1 + n.x * 0.9 + p.x * 0.3 - p.y * 0.2 + ts * 0.3);
         c *= chrome_reflectance(saturate(dot(n, -v)), thick, iris);
         // poured-metal depth: troughs sit slightly in their own shadow
         c *= mix(0.8, 1.0, smoothstep(-1.1, 0.5, hs.x));
