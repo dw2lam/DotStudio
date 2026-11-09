@@ -88,6 +88,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     // Cap frames-in-flight so drawables/IOSurfaces are recycled rather than queued up.
     private let inFlight = DispatchSemaphore(value: 2)
+    /// Zen Garden's planned cart paths and data textures, per configuration on screen (SandGarden in Studio2.swift).
+    let sandGardens = SandGarden.Cache()
 
     // Render description
     private(set) var preset: Preset?
@@ -965,6 +967,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             (u.clock, u.date) = MetalRenderer.wallClock(wall)
             u.srcSize = simd_float2(Float(fragInput.width), Float(fragInput.height))
             u.fillMode = Int32(source.fillMode)
+            var sceneData: MTLTexture?           // a scene's own data in slot 6 (Zen Garden's track and stones)
 
             if i == 0 {
                 if useGradient {
@@ -998,6 +1001,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                     u.p2 = simd_float4(a.userLon, a.userLat, a.hasLoc ? 1 : 0, orbits)
                 }
                 MetalRenderer.fillLiveSky(&u, inst: inst!, now: wall, time: time, location: location)
+                if inst!.kind == .sandGarden { sceneData = sandGardens.prepare(&u, device: device) }
                 if inst!.kind == .nowPlaying {
                     fillMusic(&u, options: MusicSceneOptions(inst!), size: size, now: CACurrentMediaTime(), wall: wall)
                 }
@@ -1012,7 +1016,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             enc.setFragmentTexture(planets.planets, index: 4)
             // fadePrev: real only during a preset crossfade, or the slideshow's incoming photo.
             enc.setFragmentTexture((i == 0 ? slides?.texB : nil) ?? dummy, index: 5)
-            enc.setFragmentTexture(TextAtlas.texture(device, uniforms: u) ?? dummy, index: 6)
+            enc.setFragmentTexture(sceneData ?? TextAtlas.texture(device, uniforms: u) ?? dummy, index: 6)
             // musicArt / musicArtPrev: real only for the Now Playing pass.
             let music = u.effect == EffectKind.nowPlaying.shaderID
             enc.setFragmentTexture((music ? musicArtTex : nil) ?? dummy, index: 7)
@@ -1066,16 +1070,14 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         return asin(max(-1, min(1, s)))
     }
 
-    // MARK: Live sky ("Follow the Sun": Ocean Horizon, Shallows, Pleats, Dichroic, Sand Garden; Window Light)
+    // MARK: Live sky ("Follow the Sun": Ocean Horizon, Shallows, Pleats, Dichroic, Zen Garden; Window Light)
 
     /// Fills u.sun / u.moon / u.sky for a scene following the real sun (Ocean Horizon, Shallows,
-    /// Pleats, Dichroic, Sand Garden in "Follow the Sun", Window Light following the sun); leaves
+    /// Pleats, Dichroic, Zen Garden in "Follow the Sun", Window Light following the sun); leaves
     /// them zero for anything else. Time Lapse (minutes per simulated day, 0 = real time) runs the
-    /// clock forward from `now` by the scene's own time. Also fills a Sand Garden's per-frame
-    /// sweeps (u.scene), from u.time / u.clock / u.date already set.
+    /// clock forward from `now` by the scene's own time.
     static func fillLiveSky(_ u: inout FXUniforms, inst: EffectInstance, now: Date, time: Float,
                             location: (lat: Double, lon: Double)?) {
-        if inst.kind == .sandGarden { SandGarden.fill(&u) }
         let live = ([.oceanHorizon, .shallows, .pleats, .dichroic, .sandGarden].contains(inst.kind) && (inst.params["live"] ?? 0) > 0.5)
             || (inst.kind == .windowLight && (inst.params["follow"] ?? 1) > 0.5)
         guard live else { return }
