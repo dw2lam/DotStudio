@@ -12,6 +12,11 @@
 //  Wall clock (clock scenes, Ocean Horizon's Follow the Sun): --clock 06:40[,07:00,…] renders
 //  each preset at each local time on --date 2026-06-21 (default today), in --tz America/Toronto
 //  (default the Mac's), at --loc 43.7,-79.4 (default San Francisco; "none" = the no-location fallback).
+//  Music: DOTSTUDIO_MUSIC_FAKE=<fixture.json> feeds the Now Playing scene; --overlay composites the
+//  native-resolution foreground (MusicOverlayLayer, via layer.render(in:)) onto Now Playing presets;
+//  --card bottomLeft|bottomRight|topLeft|topRight|all composites the corner card onto every other
+//  preset; --scale 2 sets the overlay's pixels per point (default 2 from 2400 px wide, else 1);
+//  --tag name appends "@name" to the file names.
 
 import AppKit
 import Metal
@@ -34,6 +39,11 @@ var clocks: [String] = []
 var dateArg: String?
 var tzArg: String?
 var loc: (lat: Double, lon: Double)? = (37.77, -122.42)
+var overlay = false
+var cardCorners: [MusicSpec.Corner] = []
+var overlayScale: CGFloat?
+var tag: String?
+var musicFadeBench = false
 while !args.isEmpty {
     let a = args.removeFirst()
     switch a {
@@ -63,6 +73,13 @@ while !args.isEmpty {
         let v = args.removeFirst()
         let p = v.split(separator: ",").compactMap { Double($0) }
         loc = p.count == 2 ? (p[0], p[1]) : nil
+    case "--overlay": overlay = true
+    case "--musicfade": musicFadeBench = true
+    case "--card":
+        let v = args.removeFirst()
+        cardCorners = v == "all" ? MusicSpec.Corner.allCases : [MusicSpec.Corner(rawValue: v) ?? .bottomLeft]
+    case "--scale": overlayScale = CGFloat(Double(args.removeFirst()) ?? 2)
+    case "--tag": tag = args.removeFirst()
     case "--size":
         let p = args.removeFirst().split(separator: "x").compactMap { Int($0) }
         if p.count == 2 { W = p[0]; H = p[1] }
@@ -73,6 +90,36 @@ while !args.isEmpty {
 let store = SharedStore(role: .app)
 guard let renderer = MetalRenderer(pixelFormat: .bgra8Unorm, store: store) else { print("no renderer"); exit(1) }
 renderer.location = loc
+let musicFeed = MusicFeed(baseDir: store.baseDir)
+musicFeed.poll()
+renderer.setMusic(musicFeed.snapshot)
+
+/// The music foreground composited over a Metal frame, the way the saver stacks its layers.
+func compositeMusic(_ cg: CGImage, preset: Preset, corner: MusicSpec.Corner?, now: Date) -> CGImage {
+    let mode: MusicOverlayLayer.Mode
+    if let inst = preset.musicScene {
+        mode = .full(MusicSceneOptions(inst))
+    } else if let corner {
+        mode = .card(corner)
+    } else {
+        return cg
+    }
+    let scale = overlayScale ?? (W >= 2400 ? 2 : 1)
+    let layer = MusicOverlayLayer()
+    layer.contentsScale = scale
+    layer.frame = CGRect(x: 0, y: 0, width: CGFloat(W) / scale, height: CGFloat(H) / scale)
+    layer.reduceMotion = true
+    layer.update(mode: mode, music: musicFeed.snapshot, settings: MusicSpec(), now: now, animated: false)
+    guard let ctx = CGContext(data: nil, width: W, height: H, bitsPerComponent: 8, bytesPerRow: 0,
+                              space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                              bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+    else { return cg }
+    ctx.draw(cg, in: CGRect(x: 0, y: 0, width: W, height: H))
+    ctx.scaleBy(x: scale, y: scale)
+    layer.render(in: ctx)
+    return ctx.makeImage() ?? cg
+}
+
 if let tzArg, let tz = TimeZone(identifier: tzArg) { NSTimeZone.default = tz }
 /// Local wall time HH:MM on --date (or today) in the --tz zone.
 func wallDate(_ hhmm: String) -> Date? {
@@ -135,6 +182,26 @@ if gpuBench {
     td.usage = [.renderTarget, .shaderRead]; td.storageMode = .private
     let target = dev.makeTexture(descriptor: td)!, input = dev.makeTexture(descriptor: td)!
     let astro = MetalRenderer.astro(location: renderer.location)
+    // Now Playing samples slots 7/8: bench with the fixture's artwork, mipmapped as the renderer binds it.
+    var artTex: MTLTexture = input
+    if let art = musicFeed.artwork {
+        let w = art.width, h = art.height
+        var bytes = [UInt8](repeating: 0, count: w * h * 4)
+        bytes.withUnsafeMutableBytes { buf in
+            let ctx = CGContext(data: buf.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+            ctx?.draw(art, in: CGRect(x: 0, y: 0, width: w, height: h))
+        }
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: w, height: h, mipmapped: true)
+        d.usage = .shaderRead
+        let t = dev.makeTexture(descriptor: d)!
+        t.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0, withBytes: bytes, bytesPerRow: w * 4)
+        let cb = queue.makeCommandBuffer()!, bl = cb.makeBlitCommandEncoder()!
+        bl.generateMipmaps(for: t); bl.endEncoding(); cb.commit(); cb.waitUntilCompleted()
+        artTex = t
+    }
+    let pal = musicFeed.snapshot.palette
     for p in presets {
         guard let inst = p.effects.first(where: { $0.enabled }) else { continue }
         var u = FXUniforms()
@@ -147,6 +214,19 @@ if gpuBench {
         let wall = clocks.first.flatMap(wallDate) ?? Date()
         (u.clock, u.date) = MetalRenderer.wallClock(wall)
         MetalRenderer.fillLiveSky(&u, inst: inst, now: wall, time: 0, location: renderer.location)
+        if inst.kind == .nowPlaying {
+            // Steady playback; --musicfade benches the 1.6 s track-change cross-fade instead
+            // (both backgrounds rendered).
+            let has: Float = musicFeed.artwork != nil ? 1 : 0
+            u.music = musicFadeBench ? simd_float4(has * 3, 0.4, 1, 0.8) : simd_float4(has, 0.4, 1, 1000)
+            func c(_ i: Int) -> simd_float4 {
+                i < pal.count ? simd_float4(Float(pal[i].r), Float(pal[i].g), Float(pal[i].b), 1) : .zero
+            }
+            u.musicPal0 = c(0); u.musicPal1 = c(1); u.musicPal2 = c(2)
+            let r = MusicGeometry.artUV(MusicLayoutKind(rawValue: Int(u.p0.x.rounded())) ?? .album,
+                                        size: CGSize(width: W, height: H))
+            u.musicRect = simd_float4(r.x, r.y, r.w, r.h)
+        }
         var samples: [Double] = []
         for rep in 0..<14 {
             let cmd = queue.makeCommandBuffer()!
@@ -165,6 +245,9 @@ if gpuBench {
                 enc.setFragmentTexture(tex.earthNight, index: 3)
                 enc.setFragmentTexture(tex.planets, index: 4)
                 enc.setFragmentTexture(input, index: 5)
+                enc.setFragmentTexture(input, index: 6)
+                enc.setFragmentTexture(artTex, index: 7)
+                enc.setFragmentTexture(artTex, index: 8)
                 enc.setFragmentSamplerState(samp, index: 0)
                 enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
                 enc.endEncoding()
@@ -207,17 +290,24 @@ for p in presets {
     renderer.clockOverride = clk.flatMap(wallDate)
     for t in times {
         let t0 = CFAbsoluteTimeGetCurrent()
-        guard let cg = renderer.renderThumbnail(preset: p, source: source, width: W, height: H, time: t,
-                                                sourceTexOverride: photoTex) else { continue }
+        guard let frame = renderer.renderThumbnail(preset: p, source: source, width: W, height: H, time: t,
+                                                   sourceTexOverride: photoTex) else { continue }
         let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        let corners: [MusicSpec.Corner?] = p.isMusicScene || cardCorners.isEmpty ? [nil] : cardCorners
+        for corner in corners {
+        let cg = (overlay || corner != nil)
+            ? compositeMusic(frame, preset: p, corner: corner, now: renderer.clockOverride ?? Date()) : frame
         let rep = NSBitmapImageRep(cgImage: cg)
         guard let data = rep.representation(using: .png, properties: [:]) else { continue }
         let name = p.name.replacingOccurrences(of: " ", with: "-").replacingOccurrences(of: "/", with: "-")
         let tl = t == t.rounded() ? "\(Int(t))" : String(format: "%.3f", t)
         var suffix = times.count > 1 ? "@" + tl : ""
         if let clk { suffix += "@" + clk.replacingOccurrences(of: ":", with: "") }
+        if let corner { suffix += "@card-" + corner.rawValue }
+        if let tag { suffix += "@" + tag }
         try? data.write(to: URL(fileURLWithPath: outDir).appendingPathComponent("\(name)\(suffix).png"))
         print(String(format: "%@%@ %@  %.0f ms", p.isScene ? "[scene] " : "[look]  ", p.name, suffix, ms))
+        }
     }
     }
 }
