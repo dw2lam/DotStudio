@@ -1,5 +1,6 @@
-//  main.swift — entry for tools/music-selftest/run.sh: MusicSelfTest (App/Music) as a CLI.
-//  No real player is involved; see App/Music/MusicSelfTest.swift.
+//  main.swift — entry for tools/music-selftest/run.sh: MusicSelfTest + App/Music as a CLI.
+//  No real player is involved; see MusicSelfTest.swift (next to this file — it is NOT part
+//  of the app target, so the release app never carries the test harness).
 
 import Foundation
 

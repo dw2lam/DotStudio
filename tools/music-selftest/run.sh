@@ -11,5 +11,5 @@ OUT="${1:-${TMPDIR:-/tmp}/dotstudio-music-selftest}"
 mkdir -p "$BIN"
 xcrun -sdk macosx swiftc -O -import-objc-header "$ROOT/Shared/Bridging.h" -I "$ROOT/Shared" \
   "$ROOT"/Shared/*.swift "$ROOT"/Shared/Scenes/*.swift "$ROOT"/Shared/Music/*.swift \
-  "$ROOT"/App/Music/*.swift "$ROOT/tools/music-selftest/main.swift" -o "$BIN/music-selftest"
+  "$ROOT"/App/Music/*.swift "$ROOT"/tools/music-selftest/*.swift -o "$BIN/music-selftest"
 "$BIN/music-selftest" "$OUT"

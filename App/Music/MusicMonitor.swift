@@ -15,9 +15,11 @@
 //  Lifecycle (for the UI stage):
 //      MusicMonitor.shared.start(store:)          // no-op unless library.musicSettings.needsMonitoring
 //      MusicMonitor.shared.apply(settings:)       // on every library change (starts/stops, source pin)
-//      MusicMonitor.shared.stop()                 // clears music.json
+//      MusicMonitor.shared.stop()                 // clears music.json (also on app quit)
 //  Controls: playPause() / next() / previous() / skip(seconds:) — optimistic, with a 1.5 s
-//  window in which a stale player report can't flip the play state back.
+//  window in which a stale echo can't flip the play state back. A new track always wins,
+//  and when the window closes without the player agreeing, its last word (or an exact
+//  Apple Events read) is applied — the click never outvotes the player for long.
 //
 //  Test hooks (environment):
 //      DOTSTUDIO_MUSIC_MONITOR_LOG=1      log transitions to <store>/debug.log (and stderr)
@@ -57,8 +59,13 @@ final class MusicMonitor: ObservableObject {
         var autoRequestsAutomation = true
         /// Tests: pretend these players run with this pid (Apple Events must be dry-run).
         var pidOverride: [MusicSource: pid_t]?
-        /// Longest a new track's write waits for its cover before going out without it.
+        /// Longest a new track's write waits for its cover before going out without it —
+        /// restarted for each new track in a skip burst, up to `artWaitCap` overall.
         var artWait: TimeInterval = 1.2
+        /// Longest any burst of changes waits for a cover, from the first unsent change.
+        var artWaitCap: TimeInterval = 2.5
+        /// A cover lookup that failed transiently (offline) is retried after these delays.
+        var artRetryDelays: [TimeInterval] = [20, 60, 180]
         /// Optimistic play/pause window.
         var pendingWindow: TimeInterval = 1.5
         /// Artwork cache; nil = ~/Library/Caches/com.davidlam.DotStudio/MusicArt
@@ -84,7 +91,9 @@ final class MusicMonitor: ObservableObject {
 
     /// Exactly what renderers see in music.json (`hasTrack == false` ⇒ nothing playing).
     @Published private(set) var state = MusicState()
-    /// The current cover (≤ 512 px) for in-app UI; nil = placeholder.
+    /// The cover `state.artwork` names (≤ 512 px) for in-app UI; nil = placeholder. Always
+    /// published together with `state`, so the pair never shows one track's title with
+    /// another's (or no) cover while a new cover is being looked up.
     @Published private(set) var artwork: CGImage?
     @Published private(set) var spotify = MusicPlayerStatus(source: .spotify)
     @Published private(set) var music = MusicPlayerStatus(source: .music)
@@ -148,7 +157,14 @@ final class MusicMonitor: ObservableObject {
         var lastPlayingAt: Double = 0
         var art: MusicArtResult?
         var artKey: String?
+        /// Transient cover-lookup failures for this track (drives the retry backoff).
+        var artRetries = 0
         var pending: (playing: Bool, until: Date)?
+        /// The player's last report that the pending window overruled (and when it came) —
+        /// applied when the window closes unless the player agreed (or was read) meanwhile.
+        var overruled: (report: MusicReport, at: Double)?
+        /// Bumped on every ingested report (a replay must not overwrite a newer one).
+        var reports = 0
         var automation: MusicAutomationStatus = .unknown
         var automationCheckedAt: Date?
         var askedAutomation = false
@@ -179,8 +195,15 @@ final class MusicMonitor: ObservableObject {
     private var artTasks: [MusicSource: Task<Void, Never>] = [:]
     private var artGeneration: [MusicSource: Int] = [:]
     private var lastWritten: MusicState?
-    private var artWaitDeadline: Date?
+    /// Art wait: the track being waited for, and when the first unsent change happened.
+    private var artWaitKey: String?
+    private var artWaitStarted: Date?
+    /// A track already published without its cover: never held back again (a later pause
+    /// report shouldn't sit out another wait just because the lookup is still running).
+    private var artWaitGaveUp: String?
     private var artWaitItem: DispatchWorkItem?
+    private var artRetryItems: [MusicSource: DispatchWorkItem] = [:]
+    private var pendingItems: [MusicSource: DispatchWorkItem] = [:]
     private var positionClients = 0
     private var pollTimer: Timer?
     private var pollInFlight = false
@@ -228,6 +251,7 @@ final class MusicMonitor: ObservableObject {
         }
         records = [.spotify: Record(source: .spotify), .music: Record(source: .music)]
         lastWritten = nil
+        installed.removeAll()
         isMonitoring = true
         observe()
         log.write("monitor: start (source \(settings.sourcePreference.rawValue), AE \(options.appleEvents.enabled ? (options.appleEvents.dryRun ? "dry-run" : "on") : "off"), prefix '\(options.notificationPrefix)')")
@@ -240,7 +264,7 @@ final class MusicMonitor: ObservableObject {
                 records[source]?.pid = app.processIdentifier; records[source]?.running = true
             }
             if records[source]?.running == true {
-                refreshAutomation(source) { [weak self] in self?.readSnapshot(source, reason: "start") }
+                refreshAutomation(source, snapshot: "start")
             }
         }
         publishStatuses()
@@ -254,7 +278,9 @@ final class MusicMonitor: ObservableObject {
         unobserve()
         for t in artTasks.values { t.cancel() }
         artTasks.removeAll()
-        artWaitItem?.cancel(); artWaitItem = nil; artWaitDeadline = nil
+        artWaitItem?.cancel(); artWaitItem = nil; artWaitKey = nil; artWaitStarted = nil
+        for item in Array(artRetryItems.values) + Array(pendingItems.values) { item.cancel() }
+        artRetryItems.removeAll(); pendingItems.removeAll()
         pollTimer?.invalidate(); pollTimer = nil
         records = [.spotify: Record(source: .spotify), .music: Record(source: .music)]
         activeSource = nil
@@ -319,11 +345,30 @@ final class MusicMonitor: ObservableObject {
             }
             observerTokens += [(wnc, launch), (wnc, quit)]
         }
-        // Coming back from System Settings → re-check Automation (the grant has no event).
+        // Coming back from System Settings → re-check Automation (the grant has no event), and
+        // whether the players are installed (one may have been installed since).
         let active = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshAutomationForRunning(force: true) }
+            MainActor.assumeIsolated {
+                self?.installed.removeAll()
+                self?.publishStatuses()
+                self?.refreshAutomationForRunning(force: true)
+            }
         }
-        observerTokens.append((NotificationCenter.default, active))
+        // Quitting (⌘Q, menu bar Quit, Sparkle relaunch): clear music.json synchronously, so
+        // the saver goes idle instead of showing a stale "playing" card (a stream without a
+        // duration would never go stale on its own). Posted on the main thread inside
+        // -terminate:, before the process exits; queue nil = run right there, in-line.
+        let quit = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { [weak self] _ in
+            let clear = { MainActor.assumeIsolated { self?.appWillTerminate() } }
+            if Thread.isMainThread { clear() } else { DispatchQueue.main.sync(execute: clear) }
+        }
+        observerTokens += [(NotificationCenter.default, active), (NotificationCenter.default, quit)]
+    }
+
+    private func appWillTerminate() {
+        guard isMonitoring else { return }
+        logger.write("monitor: app terminating → clear")
+        stop()   // writes the empty state and waits for it to reach disk
     }
 
     private func unobserve() {
@@ -364,12 +409,13 @@ final class MusicMonitor: ObservableObject {
         records[source]?.pid = app.processIdentifier
         records[source]?.running = true
         records[source]?.automationCheckedAt = nil
+        installed[source] = true      // it runs, so it's installed (maybe since we last looked)
         logger.write("workspace: \(source.rawValue) launched (pid \(app.processIdentifier))")
         publishStatuses()
         // Give the player a moment to finish launching before the first event.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             MainActor.assumeIsolated {
-                self?.refreshAutomation(source) { self?.readSnapshot(source, reason: "launch") }
+                self?.refreshAutomation(source, snapshot: "launch")
             }
         }
     }
@@ -409,10 +455,13 @@ final class MusicMonitor: ObservableObject {
 
     private func clearTrack(_ source: MusicSource) {
         artTasks[source]?.cancel(); artTasks[source] = nil
+        artRetryItems.removeValue(forKey: source)?.cancel()
+        pendingItems.removeValue(forKey: source)?.cancel()
         artGeneration[source, default: 0] += 1
         guard var r = records[source] else { return }
-        r.track = nil; r.art = nil; r.artKey = nil
-        r.isPlaying = false; r.pausedAt = nil; r.pending = nil
+        r.track = nil; r.art = nil; r.artKey = nil; r.artRetries = 0
+        r.isPlaying = false; r.pausedAt = nil; r.pending = nil; r.overruled = nil
+        r.reports += 1
         r.position = 0; r.positionAt = 0; r.approximate = false
         records[source] = r
     }
@@ -435,6 +484,9 @@ final class MusicMonitor: ObservableObject {
             logger.write("\(source.rawValue): ignored payload (no recognisable state or title)")
             return
         }
+        // Newer information than any report the pending window held back (see pendingExpired).
+        records[source]?.reports += 1
+        r.reports += 1
         if report.state != nil && report.hasTrackFields && report.isEmptyTrack {
             if r.track != nil { logger.write("\(source.rawValue): empty track → nothing playing") }
             clearTrack(source)
@@ -451,7 +503,8 @@ final class MusicMonitor: ObservableObject {
                 r.position = report.position.map { min($0, incoming.duration ?? $0) } ?? 0
                 r.positionAt = now
                 r.approximate = report.position == nil
-                r.art = nil; r.artKey = nil
+                r.art = nil; r.artKey = nil; r.artRetries = 0
+                artRetryItems.removeValue(forKey: source)?.cancel()
                 trackChanged = true
             } else {
                 r.track?.merge(incoming)
@@ -463,14 +516,24 @@ final class MusicMonitor: ObservableObject {
             return
         }
 
-        // Play state, honouring an optimistic play/pause click.
+        // Play state, honouring an optimistic play/pause click: inside the window a report
+        // that contradicts the click is held back (a stale echo would flicker the button) —
+        // but a NEW track always wins (an echo names the track that was playing), and an
+        // overruled report is applied when the window closes (pendingExpired).
         let wasPlaying = r.isPlaying
         var playing = report.state.map { $0 == .playing } ?? wasPlaying
-        if let p = r.pending {
-            if Date() < p.until, playing != p.playing {
+        if trackChanged, r.pending != nil {
+            r.pending = nil; r.overruled = nil
+            pendingItems.removeValue(forKey: source)?.cancel()
+        }
+        if let p = r.pending, let said = report.state {
+            if Date() < p.until, (said == .playing) != p.playing {
                 playing = wasPlaying
+                r.overruled = (report, now)
+                logger.write("\(source.rawValue): '\(said.rawValue)' held back (play/pause click pending)")
             } else {
-                r.pending = nil
+                r.pending = nil; r.overruled = nil
+                pendingItems.removeValue(forKey: source)?.cancel()
             }
         }
 
@@ -511,16 +574,26 @@ final class MusicMonitor: ObservableObject {
         if trackChanged {
             logger.write("\(source.rawValue): track → \(r.track?.title ?? "") — \(r.track?.artist ?? "") [\(r.track?.trackID ?? "no id")]\(r.track?.isPodcast == true ? " (podcast)" : "")")
             startArt(source)
-        } else if wasPlaying != playing {
-            logger.write("\(source.rawValue): \(playing ? "playing" : "paused") at \(String(format: "%.1f", r.position))s")
+        } else {
+            if wasPlaying != playing {
+                logger.write("\(source.rawValue): \(playing ? "playing" : "paused") at \(String(format: "%.1f", r.position))s")
+            }
+            // Resumed with a cover that failed to load (offline): try again now rather than
+            // at the next backoff step — the network is likelier back.
+            if playing, !wasPlaying, r.art == nil, artRetryItems[source] != nil, artTasks[source] == nil {
+                artRetryItems.removeValue(forKey: source)?.cancel()
+                startArt(source)
+            }
         }
         afterChange()
     }
 
-    private func afterChange() {
+    /// `userAction`: a control click — show its effect now, even while a new track's cover is
+    /// still being looked up (feedback beats avoiding one placeholder frame).
+    private func afterChange(userAction: Bool = false) {
         updateActive()
         publishStatuses()
-        commit(force: false)
+        commit(force: userAction)
         updatePollTimer()
     }
 
@@ -544,21 +617,18 @@ final class MusicMonitor: ObservableObject {
             logger.write("active source → \(chosen?.rawValue ?? "none")")
             activeSource = chosen
         }
-        let image = chosen.flatMap { s -> CGImage? in
-            guard let r = records[s], r.artKey == r.track?.key else { return nil }
-            return r.art?.image
-        }
-        if image !== artwork { artwork = image }
+        // `artwork` is published by commit(), together with the state that names it.
     }
 
     private func publishStatuses() {
         for source in [MusicSource.spotify, .music] {
             let r = records[source] ?? Record(source: source)
             var s = status(for: source)
+            // Cached; reset on start() and whenever DotStudio becomes active, and set by a launch.
             if installed[source] == nil {
                 installed[source] = NSWorkspace.shared.urlForApplication(withBundleIdentifier: adapters[source]!.bundleID) != nil
             }
-            s.isInstalled = installed[source] ?? false
+            s.isInstalled = (installed[source] ?? false) || r.running
             s.isRunning = r.running && isMonitoring
             s.isPlaying = r.isPlaying && r.track != nil
             s.hasTrack = r.track != nil
@@ -569,8 +639,8 @@ final class MusicMonitor: ObservableObject {
 
     // MARK: - Commit (publish + write)
 
-    private func compose() -> (MusicState, URL?) {
-        guard let src = activeSource, let r = records[src], let t = r.track else { return (MusicState(), nil) }
+    private func compose() -> (MusicState, URL?, CGImage?) {
+        guard let src = activeSource, let r = records[src], let t = r.track else { return (MusicState(), nil, nil) }
         var s = MusicState()
         s.source = src
         s.title = t.title
@@ -585,43 +655,55 @@ final class MusicMonitor: ObservableObject {
         s.trackID = t.trackID
         s.isPodcast = t.isPodcast
         var artURL: URL?
+        var image: CGImage?
         if r.artKey == t.key, let art = r.art {
             s.artwork = art.fileName
             s.palette = art.palette
             artURL = art.fileURL
+            image = art.image
         }
-        return (s, artURL)
+        return (s, artURL, image)
     }
 
-    /// The active track is new and its cover is still being looked up.
-    private var waitingForArt: Bool {
-        guard let src = activeSource, let r = records[src], let t = r.track else { return false }
-        return r.artKey != t.key && artTasks[src] != nil
+    /// The active track's key while it is new and its cover is still being looked up.
+    private var awaitedArtKey: String? {
+        guard let src = activeSource, let r = records[src], let t = r.track,
+              r.artKey != t.key, artTasks[src] != nil else { return nil }
+        return t.key
     }
 
-    /// Publishes + writes the composed state if it changed. A brand-new track waits up to
-    /// `artWait` for its cover (so the card doesn't flash a placeholder), measured from the
-    /// FIRST unsent change — rapid skips coalesce into one write.
+    /// Publishes (`state` + `artwork` together) and writes the composed state if it changed.
+    /// A brand-new track waits up to `artWait` for its cover so neither the card nor the
+    /// in-app UI flashes a placeholder. Each new track in a skip burst restarts that wait
+    /// (the track the player lands on gets its full wait), capped at `artWaitCap` from the
+    /// first unsent change so a never-ending burst still goes out — and coalesces to one write.
     private func commit(force: Bool) {
-        if !force, waitingForArt {
-            let deadline = artWaitDeadline ?? Date().addingTimeInterval(options.artWait)
-            if artWaitDeadline == nil {
-                artWaitDeadline = deadline
+        if !force, let key = awaitedArtKey, key != artWaitGaveUp {
+            let now = Date()
+            let started = artWaitStarted ?? now
+            artWaitStarted = started
+            if key != artWaitKey {
+                artWaitKey = key
+                let deadline = min(now.addingTimeInterval(options.artWait), started.addingTimeInterval(options.artWaitCap))
+                artWaitItem?.cancel()
                 let item = DispatchWorkItem { [weak self] in
                     MainActor.assumeIsolated {
-                        self?.artWaitItem = nil
-                        self?.artWaitDeadline = nil
-                        self?.commit(force: true)
+                        guard let self else { return }
+                        self.artWaitItem = nil
+                        self.logger.write("art wait over — publishing without the cover")
+                        self.commit(force: true)
                     }
                 }
                 artWaitItem = item
-                DispatchQueue.main.asyncAfter(deadline: .now() + max(0, deadline.timeIntervalSinceNow), execute: item)
+                DispatchQueue.main.asyncAfter(deadline: .now() + max(0, deadline.timeIntervalSince(now)), execute: item)
             }
             return
         }
-        artWaitItem?.cancel(); artWaitItem = nil; artWaitDeadline = nil
-        var (s, artURL) = compose()
+        artWaitItem?.cancel(); artWaitItem = nil; artWaitKey = nil; artWaitStarted = nil
+        var (s, artURL, image) = compose()
         if s != state { state = s }
+        if image !== artwork { artwork = image }
+        artWaitGaveUp = awaitedArtKey
         guard force || s != lastWritten else { return }
         lastWritten = s
         s.updatedAt = (Date().timeIntervalSince1970 * 1000).rounded() / 1000
@@ -633,6 +715,7 @@ final class MusicMonitor: ObservableObject {
     private func startArt(_ source: MusicSource) {
         artTasks[source]?.cancel()
         artTasks[source] = nil
+        artRetryItems.removeValue(forKey: source)?.cancel()
         guard let resolver, let r = records[source], let t = r.track else { return }
         var req = MusicArtRequest(source: source, trackKey: t.key)
         req.trackID = t.trackID; req.title = t.title; req.artist = t.artist; req.album = t.album
@@ -644,21 +727,47 @@ final class MusicMonitor: ObservableObject {
         artGeneration[source] = gen
         let key = t.key
         artTasks[source] = Task { [weak self] in
-            let result = await resolver.resolve(req)
+            let outcome = await resolver.resolve(req)
             guard let self, !Task.isCancelled, self.artGeneration[source] == gen else { return }
             self.artTasks[source] = nil
-            self.artResolved(result, source: source, key: key)
+            self.artResolved(outcome, source: source, key: key)
         }
     }
 
-    private func artResolved(_ result: MusicArtResult?, source: MusicSource, key: String) {
+    private func artResolved(_ outcome: MusicArtOutcome, source: MusicSource, key: String) {
         guard var r = records[source], r.track?.key == key else { return }
-        r.art = result
+        let result = outcome.result
+        // A retry that failed again keeps whatever the track already had.
+        if result != nil || r.artKey != key { r.art = result }
         r.artKey = key
         records[source] = r
-        logger.write("\(source.rawValue): art \(result.map { "\($0.origin) \($0.fileName), \($0.palette.count) colours" } ?? "none (placeholder)")")
+        logger.write("\(source.rawValue): art \(result.map { "\($0.origin) \($0.fileName), \($0.palette.count) colours" } ?? (outcome.isFailure ? "lookup failed — placeholder for now" : "none (placeholder)"))")
+        if outcome.isFailure, r.art == nil { scheduleArtRetry(source, key: key) }
         updateActive()
         commit(force: false)
+    }
+
+    /// Offline (Wi-Fi still reconnecting after wake/login): retry with backoff while the same
+    /// track stays current — and at once if it's resumed meanwhile (see ingest).
+    private func scheduleArtRetry(_ source: MusicSource, key: String) {
+        guard let r = records[source], r.artRetries < options.artRetryDelays.count else {
+            logger.write("\(source.rawValue): cover lookups keep failing — placeholder for this track")
+            return
+        }
+        let delay = options.artRetryDelays[r.artRetries]
+        records[source]?.artRetries += 1
+        artRetryItems[source]?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.isMonitoring else { return }
+                self.artRetryItems[source] = nil
+                guard let r = self.records[source], r.track?.key == key, r.art == nil, self.artTasks[source] == nil else { return }
+                self.logger.write("\(source.rawValue): retrying the cover lookup")
+                self.startArt(source)
+            }
+        }
+        artRetryItems[source] = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
     // MARK: - Apple Events reads
@@ -681,9 +790,10 @@ final class MusicMonitor: ObservableObject {
         }
     }
 
-    private func readPosition(_ source: MusicSource, completion: (@MainActor () -> Void)? = nil) {
+    /// One exact read of play state + position. `completion(true)` when it produced a state.
+    private func readPosition(_ source: MusicSource, completion: (@MainActor (Bool) -> Void)? = nil) {
         guard isMonitoring, canUseAppleEvents(source), let pid = pid(for: source), let adapter = adapters[source] else {
-            completion?(); return
+            completion?(false); return
         }
         let ae = appleEvents
         ae.queue.async { [weak self] in
@@ -694,13 +804,15 @@ final class MusicMonitor: ObservableObject {
             }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    defer { completion?() }
+                    var got = false
+                    defer { completion?(got) }
                     guard let self, self.isMonitoring else { return }
                     self.noteAppleEventError(err, source: source)
                     guard let (state, position) = read, let state else { return }
                     var report = MusicReport(source: source, origin: .appleEvents)
                     report.state = state
                     report.position = position
+                    got = true
                     self.ingest(report)
                 }
             }
@@ -735,9 +847,16 @@ final class MusicMonitor: ObservableObject {
         }
     }
 
-    private func refreshAutomation(_ source: MusicSource, force: Bool = false, then: (@MainActor () -> Void)? = nil) {
-        guard isMonitoring, options.appleEvents.enabled, let pid = pid(for: source) else { then?(); return }
-        if !force, let at = records[source]?.automationCheckedAt, Date().timeIntervalSince(at) < 20 { then?(); return }
+    /// `snapshot`: the caller wants the player's full state read afterwards (start, launch) —
+    /// read exactly once here, instead of also via automationChanged's "newly allowed" read.
+    private func refreshAutomation(_ source: MusicSource, force: Bool = false, snapshot reason: String? = nil,
+                                   then: (@MainActor () -> Void)? = nil) {
+        let finish: @MainActor () -> Void = { [weak self] in
+            if let reason { self?.readSnapshot(source, reason: reason) }
+            then?()
+        }
+        guard isMonitoring, options.appleEvents.enabled, let pid = pid(for: source) else { finish(); return }
+        if !force, let at = records[source]?.automationCheckedAt, Date().timeIntervalSince(at) < 20 { finish(); return }
         records[source]?.automationCheckedAt = Date()
         let ae = appleEvents
         ae.queue.async { [weak self] in
@@ -745,8 +864,8 @@ final class MusicMonitor: ObservableObject {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self, self.isMonitoring else { return }
-                    self.automationChanged(source, to: status)
-                    then?()
+                    self.automationChanged(source, to: status, snapshot: reason == nil)
+                    finish()
                 }
             }
         }
@@ -779,7 +898,7 @@ final class MusicMonitor: ObservableObject {
         }
     }
 
-    private func automationChanged(_ source: MusicSource, to status: MusicAutomationStatus) {
+    private func automationChanged(_ source: MusicSource, to status: MusicAutomationStatus, snapshot: Bool = true) {
         guard var r = records[source] else { return }
         let old = r.automation
         r.automation = status
@@ -789,8 +908,9 @@ final class MusicMonitor: ObservableObject {
         publishStatuses()
         updatePollTimer()
         if status == .allowed {
-            // Newly allowed: exact state now, and upgrade a missing cover.
-            readSnapshot(source, reason: "allowed")
+            // Newly allowed: exact state now (unless the caller reads it anyway), and upgrade
+            // a missing cover.
+            if snapshot { readSnapshot(source, reason: "allowed") }
             if r.track != nil, r.art == nil, artTasks[source] == nil { startArt(source) }
         }
     }
@@ -840,7 +960,7 @@ final class MusicMonitor: ObservableObject {
         guard !pollInFlight, let source = activeSource else { return }
         pollInFlight = true
         pollTicks += 1
-        readPosition(source) { [weak self] in self?.pollInFlight = false }
+        readPosition(source) { [weak self] _ in self?.pollInFlight = false }
     }
 
     // MARK: - Controls
@@ -859,11 +979,46 @@ final class MusicMonitor: ObservableObject {
         if target { r.pausedAt = nil; r.playStartedAt = now; r.lastPlayingAt = now }
         else { r.pausedAt = now; r.lastPlayingAt = now }
         r.pending = (target, Date().addingTimeInterval(options.pendingWindow))
+        r.overruled = nil
         records[src] = r
+        schedulePendingExpiry(src)
         logger.write("control \(src.rawValue): playPause → \(target ? "playing" : "paused") (optimistic)")
-        afterChange()
+        afterChange(userAction: true)
         send(.playPause, to: src)
         return true
+    }
+
+    private func schedulePendingExpiry(_ source: MusicSource) {
+        pendingItems[source]?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.pendingExpired(source) }
+        }
+        pendingItems[source] = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + options.pendingWindow + 0.05, execute: item)
+    }
+
+    /// The optimistic window closed and the player never agreed (an agreeing report clears
+    /// `pending`). Re-sync: an exact Apple Events read when possible (controls need them
+    /// anyway); failing that, apply the player's last overruled report.
+    private func pendingExpired(_ source: MusicSource) {
+        pendingItems[source] = nil
+        guard isMonitoring, var r = records[source], let p = r.pending else { return }
+        if Date() < p.until { schedulePendingExpiry(source); return }
+        let overruled = r.overruled
+        let seen = r.reports
+        r.pending = nil; r.overruled = nil
+        records[source] = r
+        logger.write("\(source.rawValue): play/pause window closed without the player agreeing — re-syncing")
+        readPosition(source) { [weak self] gotState in
+            guard let self, !gotState, self.isMonitoring, let (report, at) = overruled,
+                  let r = self.records[source], r.reports == seen else { return }
+            var replay = report
+            if replay.state == .playing, let pos = replay.position {
+                replay.position = pos + max(0, Date().timeIntervalSince1970 - at)   // measured `at`
+            }
+            self.logger.write("\(source.rawValue): applying the player's last report ('\(replay.state?.rawValue ?? "?")')")
+            self.ingest(replay)
+        }
     }
 
     @discardableResult
@@ -881,7 +1036,7 @@ final class MusicMonitor: ObservableObject {
         let target = max(0, min(r.elapsed(at: now) + seconds, (r.track?.duration ?? .infinity) - 1))
         r.position = target; r.positionAt = now
         records[src] = r
-        afterChange()
+        afterChange(userAction: true)
         let ae = appleEvents
         ae.queue.async { _ = ae.performOnQueue(src, pid: pid, timeout: ae.config.commandTimeout) { adapter.seek(to: target, in: $0) } }
         return true
@@ -890,6 +1045,9 @@ final class MusicMonitor: ObservableObject {
     private func command(_ cmd: MusicCommand, _ source: MusicSource?) -> Bool {
         guard let src = source ?? activeSource, records[src]?.track != nil, sendable(src) else { return false }
         logger.write("control \(src.rawValue): \(cmd.rawValue)")
+        // Whatever the player reports next is about the new track: no click to honour.
+        records[src]?.pending = nil; records[src]?.overruled = nil
+        pendingItems.removeValue(forKey: src)?.cancel()
         send(cmd, to: src)
         return true
     }
@@ -936,7 +1094,8 @@ final class MusicMonitor: ObservableObject {
     private func revertOptimistic(_ source: MusicSource) {
         guard var r = records[source], r.pending != nil else { return }
         let now = Date().timeIntervalSince1970
-        r.pending = nil
+        r.pending = nil; r.overruled = nil
+        pendingItems.removeValue(forKey: source)?.cancel()
         r.position = r.elapsed(at: now); r.positionAt = now
         r.isPlaying.toggle()
         if r.isPlaying { r.pausedAt = nil } else { r.pausedAt = now }
