@@ -755,7 +755,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             enc.setFragmentTexture(planets.planets, index: 4)
             // fadePrev: real only during a preset crossfade, or the slideshow's incoming photo.
             enc.setFragmentTexture((i == 0 ? slides?.texB : nil) ?? dummy, index: 5)
-            enc.setFragmentTexture(TextAtlas.texture(device, effect: u.effect) ?? dummy, index: 6)
+            enc.setFragmentTexture(TextAtlas.texture(device, uniforms: u) ?? dummy, index: 6)
             // musicArt / musicArtPrev: real only for the Now Playing pass.
             let music = u.effect == EffectKind.nowPlaying.shaderID
             enc.setFragmentTexture((music ? musicArtTex : nil) ?? dummy, index: 7)
@@ -816,7 +816,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// runs the clock forward from `now` by the scene's own time.
     static func fillLiveSky(_ u: inout FXUniforms, inst: EffectInstance, now: Date, time: Float,
                             location: (lat: Double, lon: Double)?) {
-        guard inst.kind == .oceanHorizon, (inst.params["live"] ?? 0) > 0.5 else { return }
+        // Ocean Horizon in "Follow the Sun", and Window Light following the sun (its patch rides the real sun and moon).
+        let live = (inst.kind == .oceanHorizon && (inst.params["live"] ?? 0) > 0.5)
+            || (inst.kind == .windowLight && (inst.params["follow"] ?? 1) > 0.5)
+        guard live else { return }
         let lapse = inst.params["lapse"] ?? 0
         let rate = lapse > 0.05 ? 1440.0 / lapse : 1.0           // simulated s per real s
         let date = now.addingTimeInterval(Double(time) * (rate - 1))
