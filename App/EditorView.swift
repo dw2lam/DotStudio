@@ -100,21 +100,20 @@ struct EditorView: View {
                     .lineLimit(1...3)
                     .help(name)
                 // Scenes have no Source tab. Their note takes the tab bar's slot, which
-                // keeps its height, so the list below starts at the same y for every style.
+                // keeps the tabs' height, so the list below starts at the same y for every
+                // style. The note is one line (full text in the tooltip): a wrapped note
+                // would outgrow the slot at large text sizes and push a scene's list down.
                 ZStack(alignment: .leading) {
-                    SegmentedChoice {
-                        Picker("Section", selection: $tab.animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion))) {
-                            ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
-                        }
-                        .labelsHidden()
-                    }
+                    SegmentedChoice(title: "Section",
+                                    selection: $tab.animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion)),
+                                    options: Tab.allCases.map { ($0.rawValue, $0) })
                     .opacity(isScene ? 0 : 1)
                     .disabled(isScene)
                     .accessibilityHidden(isScene)
                     if isScene {
-                        Text("Scenes draw themselves — the shared source isn't used.")
+                        Text("Scenes don't use the shared source.")
                             .textRole(.caption).foregroundStyle(.secondary)
-                            .wrapping()
+                            .truncating("Scenes draw themselves — the shared source isn't used.")
                     }
                 }
             }
@@ -125,9 +124,15 @@ struct EditorView: View {
 
             ZStack {
                 if tab == .source && !isScene {
+                    // Same edges as the Effects list: content on edge A, and its first line
+                    // as far below the divider as the list's first row, so switching tabs
+                    // doesn't shift anything. The inspector's own metrics (not a new root),
+                    // so both tabs share one set of gaps.
                     ScrollView {
-                        SourceEditor(source: model.sourceBinding, model: model)
-                            .padding(layout.cardPadding)
+                        SourceEditor(source: model.sourceBinding, model: model, isLayoutRoot: false)
+                            .padding(.horizontal, layout.cardPadding)
+                            .padding(.top, EffectStackView.listTopInset + layout.labelGap)
+                            .padding(.bottom, layout.cardPadding)
                     }
                     .transition(.opacity)
                 } else {
@@ -190,6 +195,8 @@ extension TextRole {
 
 /// Under the editor preview: where this style plays, as glass buttons. They wrap onto a
 /// second centred line when the preview column is too narrow, instead of truncating.
+/// Every title is role-sized (`ScaledControlLabel`), so the editor's main actions grow with
+/// the text like everything around them; `.adaptiveControlSize` steps the bezels.
 private struct DestinationBar: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var wallpaper = WallpaperSlot.shared
@@ -208,12 +215,12 @@ private struct DestinationBar: View {
                     DestinationPill(title: "Your Screensaver", systemImage: "checkmark.circle.fill")
                 } else {
                     Button { Motion.run { model.playAsScreensaver(id) } } label: {
-                        Label("Play as Screensaver", systemImage: "play.fill")
+                        ScaledControlLabel(title: "Play as Screensaver", systemImage: "play.fill")
                     }
                     .glassButton(.prominent)
                     .help("Play as Screensaver — make this the only style your screensaver shows")
                     Button { Motion.run { model.togglePlaylist(id) } } label: {
-                        Label(playlistLabel, systemImage: inPlaylist ? "checkmark" : "plus")
+                        ScaledControlLabel(title: playlistLabel, systemImage: inPlaylist ? "checkmark" : "plus")
                     }
                     .glassButton()
                     .help(inPlaylist ? "In Playlist — click to remove it from the screensaver playlist"
@@ -224,7 +231,7 @@ private struct DestinationBar: View {
                 }
                 if wallpaper.isAvailable {
                     Button { Motion.run { wallpaper.toggle(id) } } label: {
-                        Label(wallpaperLabel, systemImage: "photo.artframe")
+                        ScaledControlLabel(title: wallpaperLabel, systemImage: "photo.artframe")
                     }
                     .glassButton()
                     .help(wallpaperLabel)
@@ -236,36 +243,29 @@ private struct DestinationBar: View {
     }
 }
 
-/// A status capsule among the destination buttons ("Your Screensaver", "At Night"). It
-/// copies a stock glass button's metrics at the current control size (measured on the
-/// macOS 26 SDK: small 20 pt tall with an 11 pt label and 9 pt sides, regular 24 · 13 · 12,
-/// large 28 · 13 · 14, extra large 36 · 13 · 18), so pills and buttons stay one row of
-/// equal capsules. Stock control labels don't follow the text size; the control size
-/// steps instead (`.adaptiveControlSize` on the bar).
+/// A status capsule among the destination buttons ("Your Screensaver", "At Night"). It is
+/// sized by an invisible glass button with the same label, so at every control size and
+/// text size a pill is exactly as tall, padded and round as the buttons beside it; the
+/// visible capsule is plain (non-interactive) glass with a medium-weight title.
 private struct DestinationPill: View {
-    @Environment(\.controlSize) private var controlSize
     let title: String
     let systemImage: String
 
     var body: some View {
-        let m = metrics
-        Label(title, systemImage: systemImage)
-            .font(m.font.weight(.medium))
-            .lineLimit(1)
-            .padding(.horizontal, m.sides)
-            .frame(minHeight: m.height)
-            .glassSurface(.regular, in: Capsule())
+        Button {} label: { label }
+            .glassButton()
+            .hidden()
+            .overlay {
+                label
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .glassSurface(.regular, in: Capsule())
+            }
             .help(title)
             .accessibilityElement(children: .combine)
     }
 
-    private var metrics: (font: Font, sides: CGFloat, height: CGFloat) {
-        switch controlSize {
-        case .mini, .small: return (.subheadline, 9, 20)
-        case .regular: return (.body, 12, 24)
-        case .large: return (.body, 14, 28)
-        case .extraLarge: return (.body, 18, 36)
-        @unknown default: return (.body, 12, 24)
-        }
+    private var label: some View {
+        ScaledControlLabel(title: title, systemImage: systemImage, role: .bodyEmphasis)
+            .lineLimit(1)
     }
 }
