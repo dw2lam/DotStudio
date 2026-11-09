@@ -93,7 +93,7 @@ struct StyleTile: View {
         .help("\(preset.name) — double-click to edit")
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .accessibilityLabel(Text("\(preset.name), \(summary)"))
+        .accessibilityLabel(Text("\(preset.name), \(summary ?? (preset.isScene ? "Scene" : "Look"))"))
         .confirmationDialog("Delete “\(preset.name)”?", isPresented: $confirmDelete) {
             Button("Delete", role: .destructive) { Motion.run { model.delete(preset.id) } }
         } message: {
@@ -139,24 +139,28 @@ struct StyleTile: View {
         .padding(Space.xs)
     }
 
-    private var summary: String {
+    /// The line under the name, only when it says something the name and picture don't: a
+    /// Look's effect stack, or what's layered on a scene ("Bloom"). A bare scene has none —
+    /// the gallery's sections already say it's a scene.
+    private var summary: String? {
         let names = preset.effects.filter(\.enabled).map(\.kind.displayName)
-        if preset.isScene { return names.count > 1 ? "Scene · " + names.dropFirst().joined(separator: " · ") : "Scene" }
+        if preset.isScene { return names.count > 1 ? names.dropFirst().joined(separator: " · ") : nil }
         return names.isEmpty ? "Source only" : names.joined(separator: " · ")
     }
 }
 
 // MARK: - Label
 
-/// A tile's name and one-line summary under its thumbnail. Shared by the style tiles and
-/// the New Look / New Scene tiles, so every label in the grid starts on the thumbnail's
-/// leading edge (the section header's edge too) and uses the same type.
+/// A tile's name and, when it adds something, a one-line summary under its thumbnail.
+/// Shared by the style tiles and the New Look / New Scene tiles, so every label in the grid
+/// starts on the thumbnail's leading edge (the section header's edge too) and uses the
+/// same type. Tiles in a row are top-aligned, so thumbnails and names line up whether or
+/// not a neighbour has a summary.
 struct TileLabel: View {
     /// Thumbnail → label.
     static let gapAbove = Space.xs
     @Environment(\.layout) private var layout
     let title: String
-    /// nil keeps an empty summary line, so a New tile is as tall as its neighbours.
     let summary: String?
     var dimmed = false
 
@@ -172,8 +176,6 @@ struct TileLabel: View {
                     .textRole(.caption)
                     .foregroundStyle(.secondary)
                     .truncating(summary)
-            } else {
-                Text(" ").textRole(.caption).accessibilityHidden(true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

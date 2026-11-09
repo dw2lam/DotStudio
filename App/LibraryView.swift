@@ -6,9 +6,12 @@
 //    • Looks  — effect stacks that restyle the shared source (slideshow/photo/video/gradient).
 //
 //  Layout (all from Layout.swift): one page column — `pagePadding` from the window edges,
-//  capped at `contentMaxWidth` and centred — shared by the cards, the filter bar's content
-//  and the grid. Blocks are `sectionGap` apart; a section header sits `itemGap` above its
-//  tiles. The filter bar's frost spans the whole window.
+//  capped at `contentMaxWidth` and centred — shared by the cards, the filter bar and the
+//  grid, so the cards' glass edges, the search field, the section titles and the tiles all
+//  start (and end) on the same two lines. Blocks are `sectionGap` apart; a section header
+//  sits `itemGap` above its tiles. The filter bar's frost spans the whole window. The page
+//  scales with the window (`windowScaledType`): a big window gets bigger type, cards and
+//  tiles rather than wider margins.
 
 import SwiftUI
 import UniformTypeIdentifiers
@@ -16,8 +19,6 @@ import UniformTypeIdentifiers
 struct LibraryView: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var wallpaper = WallpaperSlot.shared
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.layout) private var layout
     @State private var filter: GalleryFilter = DemoHooks.filter ?? .all
     @State private var query = DemoHooks.search ?? ""
     @FocusState private var searchFocused: Bool
@@ -26,8 +27,10 @@ struct LibraryView: View {
         // Re-read once a minute so "playing now" follows the rotation and the sun. (Music never
         // changes what plays: it's presented over the style.)
         TimelineView(.everyMinute) { _ in
-            gallery(GalleryState(model: model, wallpaperID: wallpaper.styleID))
+            GalleryPage(state: GalleryState(model: model, wallpaperID: wallpaper.styleID),
+                        filter: $filter, query: $query, searchFocused: $searchFocused)
         }
+        .windowScaledType()
         .toolbar {
             if model.editingID == nil {
                 ToolbarItemGroup(placement: .primaryAction) {
@@ -60,6 +63,39 @@ struct LibraryView: View {
         }
     }
 
+    // MARK: Toolbar
+
+    private var newMenu: some View {
+        Menu {
+            Button("New Look") { model.addPreset() }
+            Menu("New Scene") {
+                ForEach(EffectKind.allCases.filter { $0.isScene && !$0.isRetired }, id: \.self) { kind in
+                    Button(kind.displayName) { model.addScene(kind) }
+                }
+            }
+            Divider()
+            Button("Add Built-in Styles") { model.addDemoPack() }
+            Button("Import Style…") { model.importPresetsViaPanel() }
+        } label: {
+            Label("New", systemImage: "plus")
+        }
+        .help("New Look or Scene, or import a style")
+    }
+}
+
+/// The scrolling page: destination cards, the pinned filter bar, the grid. Reads the
+/// window-scaled `\.layout` (LibraryView applies `windowScaledType`).
+private struct GalleryPage: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.layout) private var layout
+    let state: GalleryState
+    @Binding var filter: GalleryFilter
+    @Binding var query: String
+    var searchFocused: FocusState<Bool>.Binding
+
+    var body: some View { gallery(state) }
+
     /// Space above the cards, under the toolbar.
     private var topInset: CGFloat { layout.widthClass.pick(Space.m, Space.m, Space.l) }
 
@@ -80,7 +116,7 @@ struct LibraryView: View {
                         .padding(.top, layout.sectionGap - FilterBar.verticalInset)
                         .padding(.bottom, Space.xxl)
                 } header: {
-                    FilterBar(filter: $filter, query: $query, searchFocused: $searchFocused,
+                    FilterBar(filter: $filter, query: $query, searchFocused: searchFocused,
                               counts: counts(state))
                 }
             }
@@ -173,25 +209,6 @@ struct LibraryView: View {
             }
         }
     }
-
-    // MARK: Toolbar
-
-    private var newMenu: some View {
-        Menu {
-            Button("New Look") { model.addPreset() }
-            Menu("New Scene") {
-                ForEach(EffectKind.allCases.filter { $0.isScene && !$0.isRetired }, id: \.self) { kind in
-                    Button(kind.displayName) { model.addScene(kind) }
-                }
-            }
-            Divider()
-            Button("Add Built-in Styles") { model.addDemoPack() }
-            Button("Import Style…") { model.importPresetsViaPanel() }
-        } label: {
-            Label("New", systemImage: "plus")
-        }
-        .help("New Look or Scene, or import a style")
-    }
 }
 
 private extension View {
@@ -211,7 +228,7 @@ private struct SectionHeader: View {
     @Environment(\.layout) private var layout
     @ScaledLength(relativeTo: .body) private var swatchWidth: CGFloat = 32
     @ScaledLength(relativeTo: .body) private var swatchHeight: CGFloat = 20
-    let section: LibraryView.GallerySection
+    let section: GalleryPage.GallerySection
     @State private var showSource = false
 
     var body: some View {
@@ -290,8 +307,10 @@ private struct SourcePopover: View {
 
 // MARK: - Filter bar
 
-/// Pinned under the toolbar: search + glass chips that wrap onto more lines when the window
-/// is narrow or the text is large. Tiles scroll beneath it.
+/// Pinned under the toolbar: search + glass chips on ONE line. When the chips don't fit
+/// beside the search field they scroll sideways, fading out at the edge that has more —
+/// never wrapping onto a second, ragged row. At accessibility sizes the search field sits
+/// over the chips. Tiles scroll beneath it.
 private struct FilterBar: View {
     /// Coordinate space of the gallery's scroll viewport.
     static let space = "galleryScroll"
@@ -305,28 +324,50 @@ private struct FilterBar: View {
     @Namespace private var chipNS
 
     /// Narrower in compact windows, wider in wide ones; grows with the text.
-    private var searchWidth: CGFloat { layout.scaled(layout.widthClass.pick(224, 240, 288)) }
+    private var searchWidth: CGFloat { layout.scaled(layout.widthClass.pick(208, 240, 288)) }
 
-    var body: some View {
-        AdaptiveStack(rowAlignment: .top, columnAlignment: .leading, spacing: layout.itemGap) {
-            SearchField(text: $query, prompt: "Search styles, effects, packs", focus: searchFocused)
-                // Over the chips (large text), it can be as wide as a comfortable line.
-                .frame(width: layout.prefersStacking ? layout.readableWidth : searchWidth)
-                .onExitCommand { query = ""; searchFocused.wrappedValue = false }
-            GlassGroup(spacing: layout.controlGap) {
-                FlowLayout(spacing: layout.controlGap, lineSpacing: layout.controlGap) {
-                    ForEach(GalleryFilter.chips) { f in
-                        let n = counts[f] ?? 0
-                        if f.alwaysShown || n > 0 || filter == f {
-                            FilterChip(filter: f, count: f == .all ? nil : n,
-                                       selected: filter == f, ns: chipNS) {
-                                Motion.run { filter = f }
-                            }
+    private var chips: some View {
+        GlassGroup(spacing: layout.controlGap) {
+            HStack(spacing: layout.controlGap) {
+                ForEach(GalleryFilter.chips) { f in
+                    let n = counts[f] ?? 0
+                    if f.alwaysShown || n > 0 || filter == f {
+                        FilterChip(filter: f, count: f == .all ? nil : n,
+                                   selected: filter == f, ns: chipNS) {
+                            Motion.run { filter = f }
                         }
                     }
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    var body: some View {
+        AdaptiveStack(rowAlignment: .top, columnAlignment: .leading, spacing: layout.itemGap) {
+            // The full prompt where it fits; a compact field says less rather than clip it.
+            SearchField(text: $query, prompt: layout.isCompact && !layout.prefersStacking
+                            ? "Search styles" : "Search styles, effects, packs",
+                        focus: searchFocused)
+                // Over the chips (large text), it can be as wide as a comfortable line.
+                .frame(width: layout.prefersStacking ? layout.readableWidth : searchWidth)
+                .onExitCommand { query = ""; searchFocused.wrappedValue = false }
+            ViewThatFits(in: .horizontal) {
+                chips
+                    .fixedSize()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    chips
+                        .fixedSize()
+                        .padding(.vertical, Self.verticalInset)   // room for the hover lift
+                        .padding(.trailing, Space.l)               // the last chip clears the fade
+                }
+                .padding(.vertical, -Self.verticalInset)
+                .noScrollEdgeEffects()
+                .mask(LinearGradient(stops: [.init(color: .black, location: 0),
+                                             .init(color: .black, location: 0.9),
+                                             .init(color: .clear, location: 1)],
+                                     startPoint: .leading, endPoint: .trailing))
+            }
         }
         .pageColumn(layout)
         .padding(.vertical, Self.verticalInset)
@@ -365,8 +406,12 @@ private struct FilterChip: View {
         Button(action: action) {
             HStack(spacing: layout.labelGap) {
                 if let s = filter.symbol {
+                    // Monochrome and an explicit colour: some symbols (leaf, camera.filters,
+                    // scribble) otherwise draw their layers faintly over glass.
                     Image(systemName: s)
+                        .symbolRenderingMode(.monochrome)
                         .scaledFont { .scaled(points: 10.5, $0, weight: .semibold) }
+                        .foregroundStyle(selected ? Color.white : Color.primary.opacity(0.8))
                 }
                 Text(filter.title)
                 if let count {

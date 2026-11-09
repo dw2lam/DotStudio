@@ -9,7 +9,7 @@
 //    VStack(spacing: layout.itemGap) { … }                 // rows inside a card
 //    .padding(layout.cardPadding).glassCard(cornerRadius: Radius.card)
 //    LazyVGrid(columns: layout.tileColumns, spacing: layout.gridRowGap)
-//    .frame(width: layout.sideCardWidth)                   // flexible range, never a fixed text width
+//    .frame(width: layout.popoverWidth)                    // flexible range, never a fixed text width
 //    Text(title).textRole(.sectionTitle)                   // scales with text size
 //    Text(name).textRole(.itemTitle).truncating(name)      // 1 line, "…", full name as tooltip
 //    Text(blurb).textRole(.callout).wrapping()             // every line shown, grows downward
@@ -17,6 +17,7 @@
 //    AdaptiveStack { hero; details }                       // side by side unless compact / huge text
 //    FlowLayout { chips }                                  // wraps onto as many lines as needed
 //    @ScaledLength(relativeTo: .body) private var column: CGFloat = 92   // macOS-safe @ScaledMetric
+//    page.windowScaledType()                                // type grows with a big window (gallery)
 //
 //  The three axes
 //  ──────────────
@@ -157,8 +158,9 @@ struct LayoutMetrics: Equatable {
     var pagePadding: CGFloat { widthClass.pick(Space.grid(5), Space.xl, Space.xxl) }          // 20 · 32 · 48
     /// Between major blocks of a page (destination cards ↔ filter bar ↔ grid sections).
     var sectionGap: CGFloat { widthClass.pick(Space.l, Space.xl, Space.grid(10)) }            // 24 · 32 · 40
-    /// Widest a page's content gets before it centres with growing side margins.
-    var contentMaxWidth: CGFloat { widthClass.pick(.infinity, 1400, 1760) }
+    /// Widest a page's content gets before it centres with growing side margins. Generous:
+    /// a big window should fill with bigger content (see `windowScaledType`), not margins.
+    var contentMaxWidth: CGFloat { widthClass.pick(.infinity, 1600, 2400) }
     /// Widest a paragraph should run (comfortable line length), grown with the text.
     var readableWidth: CGFloat { scaled(widthClass.pick(520, 600, 640)) }
 
@@ -182,16 +184,14 @@ struct LayoutMetrics: Equatable {
     /// Vertical gap between grid rows: a step more than the columns, since each tile
     /// already carries its label under the thumbnail.
     var gridRowGap: CGFloat { gridColumnGap + Space.xxs }
-    /// Tile width range for the style gallery (thumbnail + name). Grows with the text so a
-    /// name keeps roughly the same number of characters per line.
-    var tileWidth: ClosedRange<CGFloat> {
-        let r: ClosedRange<CGFloat> = widthClass.pick(200...280, 224...320, 264...360)
-        return scaled(r.lowerBound)...scaled(r.upperBound)
-    }
-    /// The gallery grid's columns.
+    /// The narrowest a gallery tile (thumbnail + name) gets; columns are added as the page
+    /// widens. Grows with the text so a name keeps roughly the same characters per line.
+    var tileMinWidth: CGFloat { scaled(widthClass.pick(200, 224, 320)) }
+    /// The gallery grid's columns. No maximum: the tiles always fill the content column, so
+    /// the grid's right edge is the page's right edge (section headers' trailing controls
+    /// line up with it).
     var tileColumns: [GridItem] {
-        [GridItem(.adaptive(minimum: tileWidth.lowerBound, maximum: tileWidth.upperBound),
-                  spacing: gridColumnGap, alignment: .top)]
+        [GridItem(.adaptive(minimum: tileMinWidth), spacing: gridColumnGap, alignment: .top)]
     }
     /// Adaptive columns for smaller grids (picker cells, playlist editor). `minimum` is
     /// at the default text size and grows with it — instead of a fixed column count.
@@ -203,18 +203,15 @@ struct LayoutMetrics: Equatable {
 
     // MARK: Cards and panels — flexible ranges, never fixed widths for text containers
 
-    /// A secondary card beside a primary one (the Wallpaper card next to the Screensaver card).
-    var sideCardWidth: ClosedRange<CGFloat> {
-        let r: ClosedRange<CGFloat> = widthClass.pick(248...288, 280...320, 300...360)
-        return scaled(r.lowerBound)...scaled(r.upperBound)
-    }
     /// The editor's inspector panel.
     var inspectorWidth: ClosedRange<CGFloat> {
         let r: ClosedRange<CGFloat> = widthClass.pick(296...320, 320...360, 344...400)
         return scaled(r.lowerBound)...scaled(r.upperBound)
     }
-    /// A live preview inside a card (the Screensaver card's hero), 16:10.
-    var heroWidth: ClosedRange<CGFloat> { widthClass.pick(CGFloat(200)...248, 240...300, 280...360) }
+    /// A destination card's preview (16:10): the smallest it may get beside its text, and
+    /// the largest it grows to in a roomy card. It never grows with the text (the text
+    /// column needs the room), only with the window.
+    var cardPreviewWidth: ClosedRange<CGFloat> { widthClass.pick(CGFloat(112)...200, 144...320, 176...520) }
     /// Leading label column in parameter rows (slider label · slider · value).
     var formLabelWidth: CGFloat { scaled(92) }
     /// Popover content width for small editors (Source, playlist).
@@ -238,6 +235,42 @@ extension View {
     /// to everything inside. Apply once per window, sheet or popover root. Only a change of
     /// width CLASS re-renders readers — not every pixel of a live resize.
     func adaptiveLayout() -> some View { modifier(AdaptiveLayoutRoot()) }
+}
+
+extension View {
+    /// A page whose type grows with a big window: past `WindowScale.steps` widths the text
+    /// size steps up (.large → .xLarge → .xxLarge → .xxxLarge), and with it every text role, scaled
+    /// length and component gap — so a full-screen 2560-pt window reads like the app, not
+    /// like a small app floating in a big window. Re-publishes `\.layout` for the new size.
+    /// Never steps a standard size into the accessibility sizes. Use on a page root (the
+    /// gallery), not on popovers or sheets.
+    func windowScaledType() -> some View { modifier(WindowScaledType()) }
+}
+
+/// Widths at which `windowScaledType()` steps the text size up, one step each.
+enum WindowScale {
+    static let steps: [CGFloat] = [1700, 2100, 2500]
+
+    static func steps(width: CGFloat) -> Int { steps.filter { width >= $0 }.count }
+
+    static func typeSize(_ base: DynamicTypeSize, steps n: Int) -> DynamicTypeSize {
+        guard n > 0, let i = DynamicTypeSize.allCases.firstIndex(of: base) else { return base }
+        let all = DynamicTypeSize.allCases
+        let ceiling = base.isAccessibilitySize ? all.count - 1 : (all.firstIndex(of: .xxxLarge) ?? i)
+        return all[max(i, min(i + n, ceiling))]
+    }
+}
+
+private struct WindowScaledType: ViewModifier {
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var steps = 0
+
+    func body(content: Content) -> some View {
+        content
+            .adaptiveLayout()
+            .environment(\.dynamicTypeSize, WindowScale.typeSize(typeSize, steps: steps))
+            .onGeometryChange(for: Int.self) { WindowScale.steps(width: $0.size.width) } action: { steps = $0 }
+    }
 }
 
 private struct AdaptiveLayoutRoot: ViewModifier {
