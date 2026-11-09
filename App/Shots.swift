@@ -247,7 +247,7 @@ enum UIShots {
         for (mode, tag) in [(MusicSpec.Display.fullScreen, "full"), (.corner, "corner")] {
             s.append(Screen(name: "dest-music-menu-\(tag)", frame: .fit(width: 240), prepare: { st in
                 var m = st.model.library.musicSettings; m.setDisplay(mode)
-                if mode == .fullScreen { m.fullLayout = MusicSpec.FullLayout.allCases.last }
+                if mode == .fullScreen { m.fullLayout = .stage }
                 st.model.library.music = m
             }, view: { _ in AnyView(MenuPreview { MusicDisplayMenuItems() }) }))
         }

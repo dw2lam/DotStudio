@@ -518,9 +518,12 @@ struct MusicDisplayMenuItems: View {
                     choice(l.label, l == spec.layout) { model.updateMusic { $0.fullLayout = l } }
                 }
             }
-            Section("Behind the Music") {
-                ForEach(MusicSpec.Backdrop.allCases) { b in
-                    choice(b.label, b == spec.backdrop) { model.updateMusic { $0.fullBackdrop = b } }
+            // Cover's artwork is the whole screen: nothing is behind it (as in Settings).
+            if spec.layout.usesBackdrop {
+                Section("Behind the Music") {
+                    ForEach(MusicSpec.Backdrop.allCases) { b in
+                        choice(b.label, b == spec.backdrop) { model.updateMusic { $0.fullBackdrop = b } }
+                    }
                 }
             }
         case .corner:
