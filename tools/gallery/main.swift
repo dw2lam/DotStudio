@@ -539,10 +539,10 @@ if gpuBench {
                 rpd.colorAttachments[0].loadAction = .dontCare
                 rpd.colorAttachments[0].storeAction = .store
                 let enc = cmd.makeRenderCommandEncoder(descriptor: rpd)!
-                // (Weather: the scene's own weather pipeline, as WeatherLink binds it in the renderer.)
-                enc.setRenderPipelineState(u.weather2.w > 0.5
-                    ? (WeatherLink.pipeline(for: inst.kind, device: dev, format: .bgra8Unorm,
-                                            cumulus: WeatherLink.cumulus(u)) ?? pso) : pso)
+                // (Ocean Horizon, Shallows: the scene's own pipeline — clear or weather, fixed or
+                // live — as WeatherLink binds it in the renderer.)
+                enc.setRenderPipelineState(WeatherLink.pipeline(for: inst.kind, uniforms: u, device: dev,
+                                                                format: .bgra8Unorm) ?? pso)
                 enc.setFragmentBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
                 enc.setFragmentTexture(input, index: 0)
                 enc.setFragmentTexture(input, index: 1)
