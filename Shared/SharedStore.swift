@@ -166,8 +166,12 @@ final class SharedStore {
 
     // MARK: Debug
 
+    /// Callers on several threads (the live wallpaper's render thread) append whole lines.
+    private static let debugLock = NSLock()
+
     func debug(_ message: String) {
         guard debugEnabled else { return }
+        SharedStore.debugLock.lock(); defer { SharedStore.debugLock.unlock() }
         let url = writableDir.appendingPathComponent("debug.log")
         let line = message + "\n"
         if let h = try? FileHandle(forWritingTo: url) {

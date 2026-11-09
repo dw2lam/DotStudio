@@ -14,6 +14,10 @@
 //    • Stilling — a hot Mac (and battery, if opted in) holds the last frame; a clock
 //                 still turns over once a minute so it never lies. On battery it plays
 //                 at 30 fps.
+//    • Threads  — every frame is built off the main thread, on a render thread at
+//                 user-initiated QoS while animating, utility for clock ticks and idle
+//                 (see WallpaperRenderLoop), on the GPU that
+//                 drives each display, with coalescable clock-timer wake-ups.
 
 import AppKit
 import IOKit.ps
