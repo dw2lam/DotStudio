@@ -114,5 +114,30 @@ write("bright", ["source": "music", "title": "Daylight", "artist": "Harbour Ligh
 write("noart", ["source": "music", "title": "Clair de Lune", "artist": "Claude Debussy", "album": "Suite bergamasque",
                 "duration": 302.0, "position": 150.0, "positionAt": now, "isPlaying": true,
                 "palette": pal([[0.55, 0.68, 0.92], [0.30, 0.38, 0.60], [0.08, 0.10, 0.20]]), "trackID": "music:fixture-noart"])
+// Song text that must never be cut off (the corner and Full Screen wrap, shrink or scroll it).
+write("longtitle", ["source": "spotify", "title": "The Less I Know the Better (Extended Edition) – Remastered 2015",
+                    "artist": "Tame Impala", "album": "Currents (Deluxe Edition)", "duration": 216.0, "position": 64.0,
+                    "positionAt": now, "isPlaying": true, "artwork": "art-wadirum.jpg",
+                    "trackID": "spotify:track:fixture-longtitle"])
+write("longartist", ["source": "spotify", "title": "Let It Happen",
+                     "artist": "Tame Impala & The Wonderful Orchestra of Somewhere Far",
+                     "album": "Currents (B-Sides, Remixes & Live Recordings from the Somewhere Far Tour)",
+                     "duration": 467.0, "position": 201.0, "positionAt": now, "isPlaying": true,
+                     "artwork": "art-synth.jpg", "trackID": "spotify:track:fixture-longartist"])
+write("cjklong", ["source": "music", "title": "千と千尋の神隠し サウンドトラック〜あの夏へ〜（オーケストラ・ヴァージョン）2024年リマスター",
+                  "artist": "久石譲 & 新日本フィルハーモニー交響楽団", "album": "千と千尋の神隠し サウンドトラック（完全版）",
+                  "duration": 389.0, "position": 120.0, "positionAt": now, "isPlaying": true, "artwork": "art-fern.jpg",
+                  "trackID": "music:fixture-cjklong"])
+write("emojilong", ["source": "spotify", "title": "🌊🌙 Midnight Waves Over the Silent Ocean ✨ (feat. Ñandú, Zoë & Friends) 🎧",
+                    "artist": "Ólafur Arnalds ✨ & 🎻 The Strings of Reykjavík", "album": "Some Kind of Peace (Piano Reworks) 🌿",
+                    "duration": 301.0, "position": 45.0, "positionAt": now, "isPlaying": true, "artwork": "art-bright.jpg",
+                    "trackID": "spotify:track:fixture-emojilong"])
+write("unbreakable", ["source": "music",
+                      "title": "Taumatawhakatangihangakoauauotamateaturipukakapikimaungahoronukupokaiwhenuakitanatahu",
+                      "artist": "Hinewehi Mohi", "album": "Oceania", "duration": 245.0, "position": 30.0, "positionAt": now,
+                      "isPlaying": true, "artwork": "art-budapest.jpg", "trackID": "music:fixture-unbreakable"])
+write("short", ["source": "spotify", "title": "Ivy", "artist": "Frank Ocean", "album": "Blonde", "duration": 249.0,
+                "position": 100.0, "positionAt": now, "isPlaying": true, "artwork": "art-fern.jpg",
+                "trackID": "spotify:track:fixture-short"])
 write("idle", [:])
 print("fixtures written to \(out.path)")

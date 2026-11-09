@@ -2,6 +2,7 @@
 # Writes Now Playing fixtures (MusicState JSON + artwork) for offscreen renders — no real
 # player involved. Point DOTSTUDIO_MUSIC_FAKE at one of the JSON files:
 #   playing · long · cjk · emoji · podcast · paused · bright · noart · idle
+#   never-cut-off text: longtitle · longartist · cjklong · emojilong · unbreakable · short
 #
 #   tools/music-fixtures/make.sh /tmp/ds-fixtures
 #   DOTSTUDIO_MUSIC_FAKE=/tmp/ds-fixtures/playing.json DOTSTUDIO_STORE_DIR=$(mktemp -d) \

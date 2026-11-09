@@ -167,6 +167,10 @@ enum MusicGeometry {
         static let artist: CGFloat = 0.19     // artist size, × the artwork side
         static let bar: CGFloat = 0.022       // bar thickness, × the artwork side
         static let margin: CGFloat = 0.058    // from the screen's edges, in units
+        /// A long title or artist widens the block up to `grow` × its nominal width (Medium on
+        /// 16:10: 40 % of the width), and never past `maxShare` of the screen's width.
+        static let grow: CGFloat = 1.6
+        static let maxShare: CGFloat = 0.48
     }
     /// Stage layout (Spotify TV): the type scale and gaps of the block the artwork heads, in
     /// units — the overlay draws with these, and `stageBlock` sums them, so the reserved

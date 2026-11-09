@@ -170,6 +170,7 @@ final class DotSaverView: ScreenSaverView {
         musicFeed = nil
         MusicArtwork.purge()           // process-wide scaled-cover cache (the host outlives us)
         MusicScrim.purge()             // …and the corner's scrim bitmaps
+        MusicText.purge()              // …and the song text's typesetters
         shownPreset = nil
         activeID = nil
         lastModified = nil
