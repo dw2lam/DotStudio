@@ -425,7 +425,7 @@ final class WallpaperController: ObservableObject {
         guard settings.enabled, !hosts.isEmpty, let lib = model?.library else { return false }
         let m = lib.musicSettings
         return (currentPreset?.isMusicScene ?? false)
-            || (m.isCardEnabled && m.showsCardOnWallpaper)
+            || m.drawsCardOnWallpaper
             || (settings.followsScreensaver && m.takesOver)
     }
 
@@ -469,7 +469,7 @@ final class WallpaperController: ObservableObject {
         let mode: MusicOverlayLayer.Mode
         if settings.enabled, let inst = currentPreset?.musicScene {
             mode = .full(MusicSceneOptions(inst))
-        } else if ms.isCardEnabled && ms.showsCardOnWallpaper {
+        } else if ms.drawsCardOnWallpaper {
             mode = .card(ms.corner)
         } else {
             mode = .hidden

@@ -3,7 +3,8 @@
 //
 //  ┌ MUSIC SLOT: menu bar ─────────────────────────────────────────────────────────────────┐
 //  │ MenuBarMusicSlot — the TOP of the DotStudio menu-bar menu (MenuBarMenu.swift,          │
-//  │ DotStudioMenu): the current track as a disabled line ("Song — Artist", one line),     │
+//  │ DotStudioMenu): the current track as a disabled line with its cover ("Song — Artist", │
+//  │ one line, each part shortened on its own — menuTrackLine),                            │
 //  │ Play/Pause (Space), Previous, Next, and — when the player refused Automation — the     │
 //  │ controls disabled plus "Allow DotStudio to Control <app>…"; then a Divider. While      │
 //  │ nothing is playing (or lingering paused) it renders nothing, not even the divider.    │
@@ -27,7 +28,15 @@ struct MenuBarMusicSlot: View {
 
     var body: some View {
         if now.isVisible(model.library.musicSettings) {
-            Text(menuName(now.trackLine))
+            Label {
+                Text(menuTrackLine(title: now.title, artist: now.artist))
+            } icon: {
+                if let art = MenuArt.image(now.artwork, palette: now.state.palette ?? []) {
+                    Image(nsImage: art)
+                } else {
+                    Image(systemName: "music.note")
+                }
+            }
             Button(now.isPlaying ? "Pause" : "Play") { now.playPause() }
                 .keyboardShortcut(.space, modifiers: [])
                 .disabled(!now.canControl)
@@ -43,6 +52,54 @@ struct MenuBarMusicSlot: View {
     }
 }
 
+/// "Song — Artist" short enough for one menu line (real menu items never wrap). Each part is
+/// shortened on its own, from its end, so the separator and the start of the artist's name
+/// always survive (menuName's middle cut would run the song into the artist's last word).
+func menuTrackLine(title: String, artist: String, limit: Int = 40) -> String {
+    func clip(_ s: String, _ n: Int) -> String {
+        guard s.count > n else { return s }
+        var head = String(s.prefix(max(n - 1, 1)))
+        // End on a whole word when one ends close enough, never on a dangling "&" or "(".
+        if let space = head.lastIndex(of: " "), head.distance(from: head.startIndex, to: space) >= n * 3 / 5 {
+            head = String(head[..<space])
+        }
+        let dangling = CharacterSet.whitespaces.union(.punctuationCharacters).union(.symbols)
+        while let last = head.unicodeScalars.last, dangling.contains(last), head.count > 1 { head.removeLast() }
+        return head + "\u{2026}"
+    }
+    guard !artist.isEmpty else { return clip(title, limit) }
+    let room = limit - 3                                    // " — "
+    guard title.count + artist.count > room else { return "\(title) \u{2014} \(artist)" }
+    // The artist keeps up to 16 characters (more beside a short title); the song gets the rest.
+    let a = clip(artist, max(16, room - title.count))
+    let t = clip(title, max(12, room - a.count))
+    return "\(t) \u{2014} \(a)"
+}
+
+/// The cover as a menu item's image: a small rounded square at the menu's icon size (menu
+/// items draw their image at its own size). Cached for the current cover.
+enum MenuArt {
+    static let side: CGFloat = 18
+    private static var last: (art: CGImage, image: NSImage)?
+
+    static func image(_ art: CGImage?, palette: [RGBA]) -> NSImage? {
+        guard let art else { return nil }
+        if let last, last.art === art { return last.image }
+        let img = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            let path = NSBezierPath(roundedRect: rect, xRadius: 3.5, yRadius: 3.5)
+            path.addClip()
+            NSGraphicsContext.current?.imageInterpolation = .high
+            NSImage(cgImage: art, size: .zero).draw(in: rect)
+            NSColor.black.withAlphaComponent(0.12).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+            return true
+        }
+        last = (art, img)
+        return img
+    }
+}
+
 // MARK: - Settings
 
 /// MUSIC SLOT (Settings): the Music section, after General.
@@ -53,23 +110,27 @@ struct MusicSettingsSlot: View {
 struct MusicSettingsSection: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var now = MusicNow.shared
+    @ObservedObject private var presence = AppPresence.shared
     @ScaledLength(relativeTo: .body) private var segmentWidth: CGFloat = SettingsMetrics.segmentWidth
 
     private var spec: MusicSpec { model.library.musicSettings }
 
     var body: some View {
         let spec = self.spec
+        let showsTrack = now.isVisible(spec)
         Section {
             if now.isMonitoring {
-                MusicPlayerRow(status: now.spotify, now: now)
-                MusicPlayerRow(status: now.music, now: now)
+                // The song itself is on the row below while it shows; the player rows say only
+                // what each player is doing.
+                MusicPlayerRow(status: now.spotify, now: now, showsTrack: !showsTrack)
+                MusicPlayerRow(status: now.music, now: now, showsTrack: !showsTrack)
             } else {
-                Text("DotStudio isn't watching Spotify or Music right now — turn on an option below.")
+                Text("DotStudio isn't watching Spotify or Apple Music right now — turn on an option below.")
                     .textRole(.caption)
                     .foregroundStyle(.secondary)
                     .wrapping()
             }
-            if now.isVisible(spec) {
+            if showsTrack {
                 MusicSettingsNowPlaying(now: now)
             }
             Toggle("Show what's playing on the screensaver", isOn: binding(\.isCardEnabled) { $0.cardEnabled = $1 })
@@ -84,7 +145,9 @@ struct MusicSettingsSection: View {
                                       options: MusicSpec.CardSize.allCases.map { ($0.label, $0) }, fills: true)
             }
             .disabled(!spec.isCardEnabled)
-            Toggle("Also on the live wallpaper", isOn: binding(\.showsCardOnWallpaper) { $0.cardOnWallpaper = $1 })
+            // Part of the card: reads off (and is off — MusicSpec.drawsCardOnWallpaper) while the
+            // card is; the stored choice comes back with the card.
+            Toggle("Also on the live wallpaper", isOn: binding(\.drawsCardOnWallpaper) { $0.cardOnWallpaper = $1 })
                 .formSwitchSize()
                 .disabled(!spec.isCardEnabled)
             Toggle("Switch to Now Playing while music plays", isOn: binding(\.takesOver) { $0.takeOver = $1 })
@@ -97,11 +160,19 @@ struct MusicSettingsSection: View {
                 ScaledSegmentedPicker(title: "Source", selection: binding(\.sourcePreference) { $0.source = $1 },
                                       options: MusicSpec.SourcePreference.allCases.map { ($0.label, $0) }, fills: true)
             }
+            // The same switch as General's: the screensaver only knows what's playing while
+            // DotStudio runs.
+            Toggle("Keep running in the menu bar", isOn: $presence.menuBarMode)
+                .formSwitchSize()
         } header: {
             SettingsHeader("Music")
         } footer: {
             VStack(alignment: .leading, spacing: Space.xs) {
-                SettingsNote("While a song plays in Spotify or Music, the screensaver shows it in a corner card, and the Now Playing style shows it full screen. DotStudio has to be running to know what's playing — closing its window keeps it in the menu bar.")
+                SettingsNote("While a song plays in Spotify or Apple Music, the screensaver shows it in a corner card, and the Now Playing style shows it full screen.")
+                // What closing the window does (AppPresence.windowClosed), as General says.
+                SettingsNote(presence.menuBarMode
+                    ? "DotStudio has to be running to know what's playing — closing its window keeps it in the menu bar."
+                    : "DotStudio has to be running to know what's playing. With Keep running in the menu bar off, closing its window quits DotStudio — unless a live wallpaper is playing — and the screensaver stops showing what's playing.")
                 SettingsNote("Song details come from the players on this Mac. When a player doesn't hand over the cover, DotStudio looks it up in Spotify's or Apple's public catalog — only the song's ID, or its artist and album, is sent.")
             }
         }
@@ -140,6 +211,8 @@ struct MusicPlayerRow: View {
     @Environment(\.layout) private var layout
     let status: MusicPlayerStatus
     @ObservedObject var now: MusicNow
+    /// Name the song in the status — off while Settings shows it on its own row.
+    var showsTrack = true
 
     var body: some View {
         ReflowStack(rowAlignment: .center, columnAlignment: .trailing, spacing: layout.itemGap) {
@@ -163,7 +236,7 @@ struct MusicPlayerRow: View {
     private var detail: String {
         if !status.isInstalled { return "Not installed" }
         if !status.isRunning { return "Not open" }
-        let isShown = now.source == status.source && now.state.hasTrack
+        let isShown = showsTrack && now.source == status.source && now.state.hasTrack
         if status.isPlaying {
             return isShown ? "Playing \u{201C}\(now.title)\u{201D}" + (now.artist.isEmpty ? "" : " \u{2014} \(now.artist)") : "Playing"
         }
@@ -191,7 +264,7 @@ struct MusicPlayerRow: View {
                         .lineLimit(1)
                         .fixedSize()
                     Button(scaled: "Allow\u{2026}") { now.allowControl(status.source) }
-                        .help("Opens System Settings › Privacy & Security › Automation — turn on \(status.source.displayName) under DotStudio.")
+                        .help("Opens System Settings › Privacy & Security › Automation — turn on \(status.source.automationName) under DotStudio.")
                 }
             case .notDetermined:
                 Button(scaled: "Allow\u{2026}") { now.allowControl(status.source) }

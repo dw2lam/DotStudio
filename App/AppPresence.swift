@@ -99,8 +99,9 @@ final class AppPresence: NSObject, ObservableObject {
         }
     }
 
-    /// The DotStudio menu-bar item is shown: menu-bar mode, a live wallpaper to control, or
-    /// music being watched (play / pause from the menu).
+    /// The DotStudio menu-bar item is shown: menu-bar mode, or a live wallpaper to control.
+    /// (Music adds its track and controls to the item while it's shown — it never puts the
+    /// item up by itself: with menu-bar mode off, closing the window quits, as planned.)
     @Published private(set) var showsMenuBarItem: Bool
 
     /// This launch came from the login item and started in the menu bar.
@@ -456,10 +457,8 @@ final class AppPresence: NSObject, ObservableObject {
         NSApp.terminate(nil)
     }
 
-    /// Menu-bar mode, a live wallpaper, or music being watched (its controls live in the
-    /// menu — MusicLifecycle calls this when that changes).
-    func refreshMenuBarItem() {
-        let shows = menuBarMode || WallpaperController.shared.isActive || MusicLifecycle.shared.isNeeded
+    private func refreshMenuBarItem() {
+        let shows = menuBarMode || WallpaperController.shared.isActive
         if shows != showsMenuBarItem { showsMenuBarItem = shows }
     }
 
@@ -632,6 +631,7 @@ extension AppPresence {
                 if item.isSeparatorItem { return [String(repeating: "  ", count: depth) + "───"] }
                 let mark = item.state == .on ? "✓ " : ""
                 let flags = (item.isSectionHeader ? " [header]" : "") + (item.isEnabled ? "" : " [disabled]")
+                    + (item.image.map { " [image \(Int($0.size.width))x\(Int($0.size.height))]" } ?? "")
                 var out = [String(repeating: "  ", count: depth) + mark + item.title + flags]
                 if let sub = item.submenu { sub.update(); out += lines(sub, depth + 1) }
                 return out

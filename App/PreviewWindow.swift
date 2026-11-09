@@ -12,8 +12,12 @@ private final class PreviewNSWindow: NSWindow {
     override var canBecomeMain: Bool { true }
 }
 
-final class ScreensaverPreviewController {
+final class ScreensaverPreviewController: ObservableObject {
     static let shared = ScreensaverPreviewController()
+
+    /// A Now Playing style is up full screen: MusicLifecycle keeps the players watched for it
+    /// (like a Now Playing style in the editor), whatever the card settings say.
+    @Published private(set) var musicScene = false
 
     private var window: NSWindow?
     private var renderer: MetalRenderer?
@@ -72,6 +76,7 @@ final class ScreensaverPreviewController {
         window = win
 
         NSCursor.hide()
+        if preset.isMusicScene { musicScene = true }
 
         // Ignore the click/movement that opened the preview for a brief moment.
         armed = false
@@ -99,5 +104,6 @@ final class ScreensaverPreviewController {
         window = nil
         renderer = nil
         armed = false
+        if musicScene { musicScene = false }
     }
 }

@@ -1,8 +1,9 @@
 //  MusicUI.swift — the music feature in the app's own chrome (the renderers have theirs in
 //  Shared/Music):
 //    • MusicLifecycle — when the monitor (App/Music) runs: from launch while the library's
-//      music settings, or a Now Playing style in use, need it; stopped at quit. It also keeps
-//      the DotStudio menu-bar item up while it runs (AppPresence.refreshMenuBarItem).
+//      music settings, or a Now Playing style in use (lineup, wallpaper, editor, full-screen
+//      Preview), need it; stopped at quit. It never keeps the app or its menu-bar item up:
+//      that's menu-bar mode's job (AppPresence).
 //    • MusicNow — what the UI shows: MusicMonitor's published state, or — under UI shots and
 //      DOTSTUDIO_DEMO_MUSIC — a fixture (MusicDemo), so every screen renders without a player.
 //    • the small views Settings › Music, the Screensaver card, the menu and the editor share.
@@ -19,20 +20,18 @@ final class MusicLifecycle {
     private weak var model: AppModel?
     private var subs: [AnyCancellable] = []
     private var started = false
-    /// Something needs the players watched (a music option, or a Now Playing style in use) —
-    /// the menu-bar item stays up for it.
-    private(set) var isNeeded = false
 
-    /// App.init, before AppPresence.attach (which reads `isNeeded`).
+    /// App.init.
     func attach(model: AppModel) {
         guard self.model == nil else { return }
         self.model = model
-        isNeeded = model.library.musicSettings.needsMonitoring || Self.stylesNeedMusic(model)
         // $library / objectWillChange fire before the change: read it on the next turn.
         subs = [
             model.$library.receive(on: DispatchQueue.main).sink { [weak self] _ in self?.reevaluate() },
             model.$editingID.receive(on: DispatchQueue.main).sink { [weak self] _ in self?.reevaluate() },
             WallpaperController.shared.objectWillChange.receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in self?.reevaluate() },
+            ScreensaverPreviewController.shared.$musicScene.receive(on: DispatchQueue.main)
                 .sink { [weak self] _ in self?.reevaluate() },
         ]
     }
@@ -54,10 +53,6 @@ final class MusicLifecycle {
         let spec = model.library.musicSettings
         let styles = Self.stylesNeedMusic(model)
         let needed = spec.needsMonitoring || styles
-        if needed != isNeeded {
-            isNeeded = needed
-            AppPresence.shared.refreshMenuBarItem()
-        }
         MainActor.assumeIsolated {
             MusicNow.shared.lingerMinutes = spec.linger
             // A demo (DOTSTUDIO_DEMO_MUSIC) stands in for the players: never watch the real ones.
@@ -72,8 +67,9 @@ final class MusicLifecycle {
         }
     }
 
-    /// A Now Playing style plays on the screensaver (playlist or night), on the wallpaper, or
-    /// is open in the editor — it shows what's playing whatever the card settings say.
+    /// A Now Playing style plays on the screensaver (playlist or night), on the wallpaper, is
+    /// open in the editor, or fills the screen in a Preview (a gallery tile's, the editor's) —
+    /// it shows what's playing whatever the card settings say.
     static func stylesNeedMusic(_ model: AppModel) -> Bool {
         let lineup = model.screensaverLineup
         let ids = Set(lineup.playlist + [lineup.night].compactMap { $0 })
@@ -81,6 +77,7 @@ final class MusicLifecycle {
         let wallpaper = WallpaperController.shared
         if wallpaper.isActive, wallpaper.currentPreset?.isMusicScene == true { return true }
         if let id = model.editingID, model.preset(id)?.isMusicScene == true { return true }
+        if ScreensaverPreviewController.shared.musicScene { return true }
         return false
     }
 }
@@ -150,7 +147,7 @@ final class MusicNow: ObservableObject {
         return s.source == .music ? .music : .spotify
     }
     var player: MusicPlayerStatus? { source.map(status(for:)) }
-    /// "Spotify" / "Music" — the app's own name (as System Settings › Automation lists it).
+    /// "Spotify" / "Apple Music" — the player's name in DotStudio's UI.
     var sourceName: String { source?.displayName ?? "Music" }
 
     /// Playing, or paused within the linger — exactly when the screensaver shows it.

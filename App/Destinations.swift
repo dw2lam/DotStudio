@@ -40,9 +40,21 @@ extension AppModel {
         return ScreensaverLineup(playlist: day, night: night)
     }
 
-    /// What the screensaver would show this very moment (same answer as the saver).
-    var nowPlayingID: UUID? {
-        library.presets.isEmpty ? nil : Playback.effectivePreset(in: library, now: Date()).id
+    /// What the screensaver would show this very moment (same answer as the saver, music
+    /// take-over included: with "Switch to Now Playing" on, a song showing puts the Now Playing
+    /// style up, exactly as DotSaverView and a matching wallpaper do).
+    var nowPlayingID: UUID? { nowPlayingID(musicActive: musicShowsNow) }
+
+    func nowPlayingID(musicActive: Bool) -> UUID? {
+        library.presets.isEmpty ? nil
+            : Playback.effectivePreset(in: library, now: Date(), musicActive: musicActive).id
+    }
+
+    /// A song shows on the screensaver right now (playing, or paused within the linger) — the
+    /// take-over input. Views that read `nowPlayingID` re-read it when this flips
+    /// (LibraryView, the menu observe MusicNow).
+    var musicShowsNow: Bool {
+        MainActor.assumeIsolated { MusicNow.shared.isVisible(library.musicSettings) }
     }
 
     var isNightNow: Bool { Playback.isNight(library) }

@@ -106,7 +106,8 @@ struct StyleTile: View {
             StyleThumb(preset: preset)
             if live && model.editingID == nil {
                 MetalPreview(preset: preset, source: model.library.source,
-                             location: model.locationTuple, store: model.store)
+                             location: model.locationTuple, store: model.store,
+                             music: model.library.musicSettings)
                     .allowsHitTesting(false)
                     .transition(.opacity.animation(.easeIn(duration: 0.25)))
             }

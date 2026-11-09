@@ -445,6 +445,14 @@ enum MusicSelfTest {
         check(current?.hasTrack == false, "no observers after stop()")
         var off = MusicSpec(); off.cardEnabled = false
         check(m.start(store: store, settings: off) == false && !m.isMonitoring, "start() is a no-op when nothing needs monitoring")
+        // "Also on the live wallpaper" is part of the card: with the card off it shows nothing,
+        // so it must not keep the watcher (or the Automation prompt) alive on its own.
+        var wallOnly = MusicSpec(); wallOnly.cardEnabled = false; wallOnly.cardOnWallpaper = true
+        check(!wallOnly.needsMonitoring && !wallOnly.drawsCardOnWallpaper
+              && m.start(store: store, settings: wallOnly) == false && !m.isMonitoring,
+              "card off + wallpaper card on ⇒ nothing to show, no monitoring")
+        var wallCard = MusicSpec(); wallCard.cardOnWallpaper = true
+        check(wallCard.needsMonitoring && wallCard.drawsCardOnWallpaper, "card on + wallpaper card on ⇒ monitoring")
 
         // ── Phase B: Spotify "running" (fake pid), dry-run Apple Events ──
         say("\n[14] Fake-running Spotify (dry-run AE): gating, optimistic controls, position poll")

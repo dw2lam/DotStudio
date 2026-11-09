@@ -43,6 +43,10 @@ final class MusicOverlayLayer: CALayer {
     /// ticks. Both keep WindowServer compositing every refresh, so the live wallpaper turns
     /// them off (bars hold still, progress steps once a second); the screensaver keeps them.
     var ambientMotion = true
+    /// A miniature of a real screen (the app's Screensaver hero, its still): the card keeps
+    /// its true share of the screen instead of the legibility floor a small preview of the
+    /// saver itself gets (System Settings' thumbnail). Set before the first update.
+    var trueScale = false { didSet { if trueScale != oldValue { groupKey = nil; setNeedsLayout() } } }
 
     /// Continuous decoration never needs the panel's full rate: at most 30 Hz, so a ProMotion
     /// display doesn't recomposite the overlay at 120 Hz over a 30 fps Metal background.
@@ -119,7 +123,8 @@ final class MusicOverlayLayer: CALayer {
         }
         if let d = display, let key {
             let g = MusicOverlayGroup(d, bounds: bounds, insets: safeInsets, scale: contentsScale,
-                                      reduceMotion: reduceMotion, ambient: ambientMotion, cardSize: cardSize)
+                                      reduceMotion: reduceMotion, ambient: ambientMotion, cardSize: cardSize,
+                                      trueScale: trueScale)
             g.tick(d, now: now, animated: false)
             addSublayer(g)
             group = g
@@ -247,7 +252,7 @@ private final class MusicOverlayGroup: CALayer {
     private let display: MusicDisplay
 
     init(_ d: MusicDisplay, bounds: CGRect, insets: MusicOverlayLayer.Insets, scale: CGFloat, reduceMotion: Bool,
-         ambient: Bool, cardSize: MusicSpec.CardSize = .medium) {
+         ambient: Bool, cardSize: MusicSpec.CardSize = .medium, trueScale: Bool = false) {
         self.ambient = ambient
         W = bounds.width; H = bounds.height
         u = MusicGeometry.unit(bounds.size)
@@ -267,7 +272,7 @@ private final class MusicOverlayGroup: CALayer {
             case .cover: buildCover(d, o, insets)
             }
         case .card(let corner):
-            buildCard(d, corner, insets, size: cardSize)
+            buildCard(d, corner, insets, size: cardSize, trueScale: trueScale)
         case .hidden:
             break
         }
@@ -377,6 +382,12 @@ private final class MusicOverlayGroup: CALayer {
     // MARK: Caption (source) + equalizer glyph
 
     private func captionText(_ d: MusicDisplay, playing: Bool) -> String {
+        if case .card = mode {
+            // The card's caption shares its line with the remaining time: one word or name
+            // ("Spotify", "Apple Music", "Podcast", "Paused") — never truncated mid-name.
+            if !playing { return "Paused" }
+            return d.state?.isPodcast == true ? "Podcast" : d.sourceName
+        }
         if d.state?.isPodcast == true { return playing ? "\(d.sourceName) · Podcast" : "Paused · \(d.sourceName)" }
         return playing ? d.sourceName : "Paused · \(d.sourceName)"
     }
@@ -616,7 +627,9 @@ private final class MusicOverlayGroup: CALayer {
 
     /// Idle copy (nothing playing).
     private static let idleTitle = "Not Playing"
-    private static let idleSubtitle = "Play something in Spotify or Music"
+    /// No-break spaces keep "or Apple Music" together: a narrow column (a gallery tile) wraps
+    /// before it rather than leaving one word alone on the last line.
+    private static let idleSubtitle = "Play something in Spotify or\u{00A0}Apple\u{00A0}Music"
 
     /// Apple Music full screen: artwork left, type right, the group centred on the art.
     private func buildAlbum(_ d: MusicDisplay, _ o: MusicSceneOptions) {
@@ -752,12 +765,14 @@ private final class MusicOverlayGroup: CALayer {
 
     /// The corner card: dark glass, artwork, caption + remaining time, title, artist, bar.
     /// It follows the screen's height (MusicGeometry.Card, per Card Size) with no upper cap —
-    /// a bigger display is read from further away — and never drops below a legible minimum
-    /// in a small preview.
+    /// a bigger display is read from further away — and in a small preview of the saver never
+    /// drops below a legible minimum, itself in step with the Card Size so Small / Medium /
+    /// Large still differ there. `trueScale` (the app's miniatures) skips the minimum.
     private func buildCard(_ d: MusicDisplay, _ corner: MusicSpec.Corner, _ insets: MusicOverlayLayer.Insets,
-                           size: MusicSpec.CardSize) {
+                           size: MusicSpec.CardSize, trueScale: Bool) {
         let f = MusicGeometry.Card.size(size)
-        let hc = max(f.height * u, min(60, 0.2 * u))
+        let floor = trueScale ? 0 : min(60, 0.2 * u) * f.height / MusicGeometry.Card.size(.medium).height
+        let hc = max(f.height * u, floor)
         let wc = min(hc * f.width / f.height, W * 0.46)
         let m = max(0.040 * u, min(18, 0.06 * u))
         let x: CGFloat, y: CGFloat
@@ -803,15 +818,25 @@ private final class MusicOverlayGroup: CALayer {
         let tx = x + p + side + hc * 0.14
         let tw = max(wc - (tx - x) - p * 1.1, 20)
         // The type is a larger share of the card than a desktop widget's: it's read from afar.
-        let cap = MusicTextStyle(size: hc * 0.092, weight: .semibold, color: Self.white(0.58), tracking: 0.08,
+        // At Medium on a 16:10 screen the title is 2.3 % of the screen's height and the artist
+        // 2.2 % (above tvOS's smallest text style, 2.1 %); caption and time 1.5 %.
+        let cap = MusicTextStyle(size: hc * 0.106, weight: .semibold, color: Self.white(0.58), tracking: 0.07,
                                  uppercase: true)
         let title = MusicTextStyle(size: hc * 0.165, weight: .semibold, color: Self.white(0.97), tracking: -0.008)
-        let artist = MusicTextStyle(size: hc * 0.135, weight: .regular, color: Self.white(0.70))
+        let artist = MusicTextStyle(size: hc * 0.155, weight: .regular, color: Self.white(0.72))
         let showBar = d.hasDuration
         // Caption row (glyph + source, remaining time on the right), then title, artist; the
         // bar lines up with the artwork's bottom edge.
         let capTop = y + p + hc * 0.010
-        _ = addCaption(d, cap, x: tx, top: capTop, width: tw * (showBar ? 0.72 : 1))
+        let timeSize = hc * 0.106
+        var capW = tw
+        if showBar {
+            // Up to the remaining time (its longest form: the whole duration), not a guess.
+            let ts = MusicTextStyle(size: timeSize, weight: .medium, color: Self.white(0.5), monospacedDigits: true)
+            let longest = "−" + MusicState.timeString(d.state?.duration ?? 0)
+            capW = max(tw - ceil(measure(longest, ts, width: tw).width) - hc * 0.08, tw * 0.5)
+        }
+        _ = addCaption(d, cap, x: tx, top: capTop, width: capW)
         var ty = capTop + cap.size * 1.2 + hc * 0.055
         ty += addText(d.title, title, x: tx, top: ty, width: tw)
         addText(d.artist, artist, x: tx, top: ty + hc * 0.022, width: tw)
@@ -819,7 +844,7 @@ private final class MusicOverlayGroup: CALayer {
             let barH = max(hc * 0.028, 2)
             let by = y + p + side - barH
             addProgress(d, bar: CGRect(x: tx, y: by, width: tw, height: barH), timesTop: capTop,
-                        timeSize: hc * 0.092, trackAlpha: 0.20)
+                        timeSize: timeSize, trackAlpha: 0.20)
             timeStyle?.color = Self.white(0.50)
             cardRemaining = true
         }

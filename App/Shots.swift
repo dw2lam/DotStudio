@@ -234,10 +234,19 @@ enum UIShots {
         }, view: main))
         s.append(Screen(name: "dest-music-denied", frame: .window,
                         prepare: { _ in MusicDemo.apply(.denied) }, view: main))
+        // Take-over on and a song showing: the hero (and the menu's line) show Now Playing,
+        // as the saver does — no corner card over it.
+        s.append(Screen(name: "dest-music-takeover", frame: .window, prepare: { st in
+            MusicDemo.apply(.playing)
+            var m = st.model.library.musicSettings; m.takeOver = true
+            st.model.library.music = m
+        }, view: main))
+        // The Wallpaper card while matching shows what follow mode would: the screensaver's
+        // style right now (WallpaperController.currentPreset), not a style of its own.
         s.append(Screen(name: "dest-wallpaper-match", frame: .window, prepare: { st in
             st.lineup(st.playlist)
             WallpaperController.shared.update { $0.enabled = true; $0.followsScreensaver = true }
-            WallpaperSlot.shared.set(st.hero)
+            WallpaperSlot.shared.set(st.model.nowPlayingID(musicActive: false) ?? st.hero)
         }, view: main))
         s.append(Screen(name: "library-music", frame: .window, prepare: { _ in
             MusicDemo.apply(.playing)
@@ -321,6 +330,11 @@ enum UIShots {
                 }
             }, view: { _ in AnyView(SettingsSectionPreview { MusicSettingsSlot() }) }))
         }
+        // …with menu-bar mode off: closing the window quits, and the note says so
+        s.append(Screen(name: "settings-music-menubar-off", frame: .fit(width: 460, minHeight: 300), prepare: { _ in
+            MusicDemo.apply(.playing)
+            AppPresence.shared.menuBarMode = false
+        }, view: { _ in AnyView(SettingsSectionPreview { MusicSettingsSlot() }) }))
         // Settings › Live Wallpaper matching the screensaver (no style picker)
         s.append(Screen(name: "settings-wallpaper-match", frame: .fit(width: 460, minHeight: 300), prepare: { _ in
             WallpaperController.shared.update { $0.enabled = true; $0.followsScreensaver = true }
