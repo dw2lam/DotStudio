@@ -58,6 +58,15 @@ enum TextAtlas {
     private static var failed: Set<UInt64> = []
     private static var building: Set<UInt64> = []
 
+    /// Frees every atlas (the screensaver's teardown: its host process outlives the views, and
+    /// a plane is ~6 MB). A build in progress still lands; the next use builds afresh.
+    static func purge() {
+        cond.lock()
+        cached = [:]
+        failed = []
+        cond.unlock()
+    }
+
     /// The atlas for the scene in `u` (built on first use, then shared), else nil.
     static func texture(_ device: MTLDevice, uniforms u: FXUniforms) -> MTLTexture? {
         guard users.contains(u.effect) else { return nil }
