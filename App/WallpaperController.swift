@@ -241,6 +241,7 @@ final class WallpaperController: ObservableObject {
                 if let model {
                     h.renderer.location = model.locationTuple
                     h.renderer.measuresGPUTime = model.store.debugEnabled
+                    h.measuresPacing = model.store.debugEnabled
                 }
             }
         }
@@ -376,7 +377,7 @@ final class WallpaperController: ObservableObject {
     /// One display link frame.
     private func linkFired(_ h: WallpaperHost) {
         guard isVisible(h), hardPauseReason == nil else { h.pauseLink(); return }
-        h.draw()
+        h.draw(fromLink: true)
         noteFrames(1)
         // A clock only animates around a change; hand back to the 1 Hz timer after.
         if case .clock = profile {
@@ -481,8 +482,8 @@ final class WallpaperHost {
 
     private var link: CADisplayLink?
     private var linkRate: Double = 0
-    private var lastFrameAt: CFTimeInterval = 0
-    private var intervals: [Double] = []
+    private let pacing = WallpaperPacingStats()
+    var measuresPacing = false
 
     init?(screen: NSScreen, displayID: CGDirectDisplayID, store: SharedStore, quality: WallpaperSettings.Quality) {
         guard let r = MetalRenderer(pixelFormat: .bgra8Unorm, store: store) else { return nil }
@@ -570,36 +571,29 @@ final class WallpaperHost {
             link.preferredFrameRateRange = CAFrameRateRange(minimum: r, maximum: r, preferred: r)
             linkRate = fps
         }
-        if link?.isPaused == true { lastFrameAt = 0 }
+        if link?.isPaused == true { pacing.reset() }
         link?.isPaused = false
     }
 
     func pauseLink() {
         guard let link, !link.isPaused else { return }
         link.isPaused = true
-        lastFrameAt = 0
+        pacing.reset()
     }
 
     fileprivate func linkFired() {
-        let now = CACurrentMediaTime()
-        if lastFrameAt > 0, intervals.count < 4000 { intervals.append(now - lastFrameAt) }
-        lastFrameAt = now
+        if measuresPacing { pacing.tick() }
         onFrame?()
     }
 
-    /// "mean/max ms" of display-link frame intervals since the last call (debug stats).
+    /// Display-link pacing since the last call (debug stats).
     func takeIntervalStats() -> String {
-        defer { intervals.removeAll(keepingCapacity: true) }
-        guard !intervals.isEmpty else { return "-" }
-        let mean = intervals.reduce(0, +) / Double(intervals.count)
-        // "late" = frames held for longer than one frame slot (a visible stutter).
-        let slot = linkRate > 0 ? 1 / linkRate : mean
-        let late = intervals.filter { $0 > slot * 1.5 }.count
-        return String(format: "mean %.1fms max %.1fms late %d/%d @%.0fHz", mean * 1000,
-                      (intervals.max() ?? 0) * 1000, late, intervals.count, refreshRate)
+        pacing.take(slot: linkRate > 0 ? 1 / linkRate : 0, refresh: refreshRate)
     }
 
-    func draw() {
+    func draw(fromLink: Bool = false) {
+        let p = pacing
+        renderer.onPresented = (measuresPacing && fromLink) ? { p.presented($0) } : nil
         view.draw()
         guard !hasDrawn else { return }
         hasDrawn = true
