@@ -25,14 +25,14 @@ const PACKS: Pack[] = [
   {
     name: "Clocks",
     line: "The time, set beautifully, and always right.",
-    scenes: ["Glass & Plaster Clock", "3D Flip Clock", "Word Clock", "Window Light"],
+    scenes: ["Sunray", "Flip Clock", "Word Clock", "Window Light"],
     media: (
       <div className="grid h-full grid-cols-2 grid-rows-2 gap-1.5">
         <div className="col-span-2 min-h-0 overflow-hidden rounded-lg">
           <Still wide name="flip-clock" alt="Flip Clock: split-flap digits that really fall" />
         </div>
         <div className="min-h-0 overflow-hidden rounded-lg">
-          <Still name="glass-clock" alt="Glass Clock: the time set huge in glass type" />
+          <Still name="sunray" alt="Sunray: a watch dial with a sunray finish and a sweeping seconds hand" />
         </div>
         <div className="min-h-0 overflow-hidden rounded-lg">
           <Still name="window-light" alt="Window Light: sun through a window drifting across a wall" />
@@ -51,12 +51,12 @@ const PACKS: Pack[] = [
     ),
   },
   {
-    name: "Nature",
-    line: "Real skies and water, tuned to tonight.",
-    scenes: ["Golden Hour", "Night Sky", "First Snow", "Aurora"],
+    name: "Water & Sky",
+    line: "Real skies and water, tuned to the hour.",
+    scenes: ["Shallows", "Golden Hour", "Night Sky", "Aurora", "First Snow"],
     media: (
       <div className="h-full overflow-hidden rounded-lg">
-        <Still name="night-sky" alt="Night Sky: the Milky Way over a ridge, with tonight's moon phase" />
+        <Still name="shallows" alt="Shallows: clear knee-deep water over rippled sand, netted with sunlight" />
       </div>
     ),
   },
@@ -66,22 +66,17 @@ const PACKS: Pack[] = [
     scenes: ["Neon Horizon", "Pipeworks", "Light Tunnel", "Light Ribbons"],
     media: (
       <div className="h-full overflow-hidden rounded-lg">
-        <Still name="pipeworks" alt="Pipeworks: glossy ray-traced pipes growing through a dark room" />
+        <LoopVideo name="neon" alt="Neon Horizon, rendered live by DotStudio" className="h-full w-full object-cover" />
       </div>
     ),
   },
 ];
 
-const NOTES: Record<string, string> = {
-  "Night Sky": "with the real moon phase",
-  Aurora: "rebuilt",
-};
-
 export function Packs() {
   return (
     <section id="packs" className="relative bg-black px-4 py-20 sm:py-28 md:py-32">
       <div className="mx-auto max-w-7xl">
-        <SectionHeader eyebrow="New scene packs" title="Four new packs." aside="All in the default library." />
+        <SectionHeader eyebrow="Scene packs" title="More to play." aside="All in the default library." />
 
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {PACKS.map((p, i) => (
@@ -100,7 +95,6 @@ export function Packs() {
                     {p.scenes.map((s) => (
                       <li key={s}>
                         <span className="text-gray-300">{s}</span>
-                        {NOTES[s] && <span className="text-gray-500">, {NOTES[s]}</span>}
                       </li>
                     ))}
                   </ul>

@@ -45,9 +45,9 @@ export function Hero() {
                 className="max-w-md text-xs leading-[1.2] text-primary/70 sm:text-sm md:text-base [text-shadow:0_1px_14px_rgba(0,0,0,0.9)]"
               >
                 Living screensavers for your Mac:{" "}
-                <span style={{ color: CREAM }}>generative scenes, real clocks</span> and looks that
-                restyle your own photos. Pick from the gallery or build your own in a live editor.
-                Native, local, free.
+                <span style={{ color: CREAM }}>generative scenes, real clocks, live skies</span>, and
+                the song you're playing on top. Pick from the gallery or build your own in a live
+                editor. Native, local, free.
               </motion.p>
 
               <motion.a

@@ -16,7 +16,7 @@ export function Download() {
               Get DotStudio
             </h2>
             <p className="mx-auto mt-4 max-w-md text-xs text-gray-400 sm:text-sm md:text-base">
-              Twenty-eight styles to start, a live editor to make more, and updates that
+              Thirty-one styles to start, a live editor to make more, and updates that
               arrive on their own. Native, local, free.
             </p>
 

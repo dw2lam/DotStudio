@@ -1,5 +1,6 @@
 import { Hero } from "./sections/Hero";
 import { Showcase } from "./sections/Showcase";
+import { NowPlaying } from "./sections/NowPlaying";
 import { Studio } from "./sections/Studio";
 import { Packs } from "./sections/Packs";
 import { Looks } from "./sections/Looks";
@@ -11,6 +12,7 @@ export default function App() {
     <div className="min-h-screen bg-black">
       <Hero />
       <Showcase />
+      <NowPlaying />
       <Studio />
       <Packs />
       <Looks />
