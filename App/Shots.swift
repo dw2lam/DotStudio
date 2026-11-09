@@ -80,6 +80,7 @@ enum UIShots {
                  AddEffectPicker(source: model.library.source, thumbnailer: model.thumbnailer) { _ in })
             snap("source", CGSize(width: 340, height: 300), dark: dark,
                  SourceEditor(source: .constant(model.library.source), model: model).padding(16))
+            snap("settings", CGSize(width: 460, height: 1250), dark: dark, SettingsView())
 
             // Welcome sheet, one PNG per step (and per setup state on "Turn It On").
             // Rendered standalone — ContentView never presents it under UI shots.

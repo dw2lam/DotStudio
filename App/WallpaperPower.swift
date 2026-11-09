@@ -39,7 +39,7 @@ struct WallpaperSettings: Codable, Equatable {
     }
 
     enum Quality: String, Codable, CaseIterable, Identifiable {
-        case efficient, balanced, full
+        case full, balanced, efficient          // same order as the screensaver's Quality picker
         var id: String { rawValue }
         var title: String { rawValue.capitalized }
         /// Rendered pixels per point, capped at the display's own density. Efficient is
