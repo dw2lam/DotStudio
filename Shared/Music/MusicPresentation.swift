@@ -68,7 +68,10 @@ struct MusicPresentation: Equatable {
             return MusicPresentation(overlay: .card(settings.corner), backdrop: .none)
         case .fullScreen:
             let o = settings.fullOptions
-            let b: MusicBackdrop = settings.backdrop == .albumArt ? .albumArt(o.layout) : .veil
+            // Cover is the artwork filling the screen: always its living art, whatever
+            // "Behind the music" says (that choice is kept for Album and Stage).
+            let b: MusicBackdrop = settings.backdrop == .albumArt || !settings.layout.usesBackdrop
+                ? .albumArt(o.layout) : .veil
             return MusicPresentation(overlay: .full(o), backdrop: b)
         }
     }

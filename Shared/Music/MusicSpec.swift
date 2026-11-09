@@ -104,18 +104,28 @@ struct MusicSpec: Codable, Equatable {
         }
     }
 
-    /// Full Screen's arrangement (Cover stays with the legacy Now Playing styles: it needs the
-    /// artwork itself as the background).
+    /// Full Screen's arrangement. Cover (add-only: a build that predates it decodes it as
+    /// Album) is the artwork itself filling the screen, type bottom-left — so it is its own
+    /// background and ignores "Behind the music" (`usesBackdrop`).
     enum FullLayout: String, Codable, CaseIterable, Identifiable {
-        case album, stage
+        case album, stage, cover
         var id: String { rawValue }
         var label: String {
             switch self {
             case .album: return "Album"
             case .stage: return "Stage"
+            case .cover: return "Cover"
             }
         }
-        var kind: MusicLayoutKind { self == .stage ? .stage : .album }
+        var kind: MusicLayoutKind {
+            switch self {
+            case .album: return .album
+            case .stage: return .stage
+            case .cover: return .cover
+            }
+        }
+        /// Whether "Behind the music" applies (Cover's artwork is the whole screen).
+        var usesBackdrop: Bool { self != .cover }
         init(from decoder: Decoder) throws {
             let raw = try decoder.singleValueContainer().decode(String.self)
             self = FullLayout(rawValue: raw) ?? .album
