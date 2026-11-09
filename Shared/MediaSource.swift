@@ -64,6 +64,10 @@ final class VideoSource: MediaSource {
         player.play()
     }
 
+    func setPaused(_ paused: Bool) {
+        if paused { player.pause() } else { player.play() }
+    }
+
     func currentTexture() -> MTLTexture? {
         guard let cache = cache else { return nil }
         let host = CACurrentMediaTime()

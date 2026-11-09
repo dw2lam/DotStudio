@@ -12,7 +12,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private let sampler: MTLSamplerState
     private let glyphs: MTLTexture?
     private let dummy: MTLTexture
-    private let planetTex: PlanetTextures
+    /// Universe's planet maps load on first use; every other effect binds placeholders.
+    private lazy var planetTex = PlanetTextures(device: device, queue: queue)
+    private lazy var planetPlaceholder = PlanetTextures(placeholderFor: device)
+    private func planetTextures(for effect: Int32) -> PlanetTextures {
+        effect == EffectKind.universe.shaderID ? planetTex : planetPlaceholder
+    }
 
     private var texA: MTLTexture?
     private var texB: MTLTexture?
@@ -95,7 +100,6 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         sampler = device.makeSamplerState(descriptor: sd)!
 
         glyphs = GlyphAtlas.make(device: device)
-        planetTex = PlanetTextures(device: device, queue: queue)
 
         let dd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: pixelFormat, width: 1, height: 1, mipmapped: false)
         dd.usage = [.shaderRead, .renderTarget]
@@ -121,6 +125,17 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             startTime = CACurrentMediaTime()
             loadMedia(for: source)
         }
+    }
+
+    /// Opt-in GPU accounting (live wallpaper power stats): total GPU execution time of
+    /// drawn frames, in seconds, accumulated on the main thread.
+    var measuresGPUTime = false
+    var gpuSeconds: Double = 0
+
+    /// Pause/resume a video source's decoder while the host draws nothing (the live
+    /// wallpaper's pause must stop the decoder too, not just the draws).
+    func setMediaPaused(_ paused: Bool) {
+        (media as? VideoSource)?.setPaused(paused)
     }
 
     /// Switch presets with a GPU crossfade. Falls back to a hard cut when there's
@@ -218,6 +233,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             inFlight.wait()
             guard let cmd = queue.makeCommandBuffer() else { inFlight.signal(); return }
             cmd.addCompletedHandler { [inFlight] _ in inFlight.signal() }
+            if measuresGPUTime {
+                cmd.addCompletedHandler { [weak self] cb in
+                    let dt = max(cb.gpuEndTime - cb.gpuStartTime, 0)
+                    DispatchQueue.main.async { self?.gpuSeconds += dt }
+                }
+            }
 
             let now = CACurrentMediaTime()
             let t = Float(now - startTime)
@@ -304,9 +325,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         enc.setFragmentBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
         enc.setFragmentTexture(newTex, index: 0)
         enc.setFragmentTexture(glyphs ?? dummy, index: 1)
-        enc.setFragmentTexture(planetTex.earthDay, index: 2)
-        enc.setFragmentTexture(planetTex.earthNight, index: 3)
-        enc.setFragmentTexture(planetTex.planets, index: 4)
+        let planets = planetTextures(for: u.effect)
+        enc.setFragmentTexture(planets.earthDay, index: 2)
+        enc.setFragmentTexture(planets.earthNight, index: 3)
+        enc.setFragmentTexture(planets.planets, index: 4)
         enc.setFragmentTexture(oldTex, index: 5)
         enc.setFragmentSamplerState(sampler, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
@@ -399,9 +421,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             enc.setFragmentBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
             enc.setFragmentTexture(fragInput, index: 0)
             enc.setFragmentTexture(glyphs ?? dummy, index: 1)
-            enc.setFragmentTexture(planetTex.earthDay, index: 2)
-            enc.setFragmentTexture(planetTex.earthNight, index: 3)
-            enc.setFragmentTexture(planetTex.planets, index: 4)
+            let planets = planetTextures(for: u.effect)
+            enc.setFragmentTexture(planets.earthDay, index: 2)
+            enc.setFragmentTexture(planets.earthNight, index: 3)
+            enc.setFragmentTexture(planets.planets, index: 4)
             // fadePrev: real only during a preset crossfade, or the slideshow's incoming photo.
             enc.setFragmentTexture((i == 0 ? slides?.texB : nil) ?? dummy, index: 5)
             enc.setFragmentTexture(TextAtlas.texture(device, effect: u.effect) ?? dummy, index: 6)
