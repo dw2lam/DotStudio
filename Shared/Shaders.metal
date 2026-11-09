@@ -1302,7 +1302,9 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
             }
         }
         float3 A = srgbToLinear(u.colorA.rgb), B = srgbToLinear(u.colorB.rgb);
-        float3 col = A + B * (1.0 - exp(-acc * 1.8 * thumb));
+        // Exposure follows the shutter: long streaks spread each star's light thin, so warp
+        // opens up (as a camera would) to keep light-speed bright.
+        float3 col = A + B * (1.0 - exp(-acc * 1.8 * thumb * (1.0 + 2.6 * w2 * w2)));
         return float4(linearToSrgb(col) + bandDither(px), 1.0);
     }
 
