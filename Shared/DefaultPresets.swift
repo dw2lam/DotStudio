@@ -135,15 +135,30 @@ enum DefaultPresets {
     private static var allBuiltIns: [Preset] { scenes() + looks() }
 
     static func makeLibrary() -> Library {
-        let all = allBuiltIns
-        let sc = featured.compactMap { n in all.first { $0.name == n } }
+        let sc = featuredPresets()
         var lib = Library()
         // The built-in photo slideshow: real subjects, texture and a full tonal range for
         // every Look to chew on (a flat gradient made most of them read as noise).
         lib.source = .builtInPhotos
         lib.presets = sc
         lib.activeID = sc.first(where: { $0.name == "Liquid Chrome" })?.id ?? sc.first?.id
+        // A new library has been offered everything shipping today (the rest is in Add
+        // Built-in Styles), so only built-ins added in later versions arrive (AppModel.migrate).
+        lib.seenBuiltIns = offeredBuiltIns().map(\.name)
         return lib
+    }
+
+    /// The featured built-ins — the default library — in gallery order.
+    static func featuredPresets() -> [Preset] {
+        let all = allBuiltIns
+        return featured.compactMap { n in all.first { $0.name == n } }
+    }
+
+    /// Every built-in a library is offered, one per name: the featured ones, then the pack.
+    /// (`unlisted` styles are never offered, so they arrive as new once they're fixed.)
+    static func offeredBuiltIns() -> [Preset] {
+        var names = Set<String>()
+        return (featuredPresets() + coolPack()).filter { names.insert($0.name).inserted }
     }
 
     /// Extra screensavers: the classic effects and a few more variations. Appendable

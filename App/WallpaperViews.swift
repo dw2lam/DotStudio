@@ -1,43 +1,43 @@
-//  WallpaperViews.swift — the live wallpaper's UI: the menu bar item (shown only
-//  while a wallpaper is on, since the wallpaper lives as long as the app does) and
-//  the Settings section.
+//  WallpaperViews.swift — the live wallpaper's UI: its items in the DotStudio menu-bar menu
+//  (MenuBarMenu.swift) and the Settings section.
 
 import SwiftUI
-import ServiceManagement
 
 // MARK: - Menu bar
 
+/// The live wallpaper's items in the DotStudio menu: what's on the desktop, switch style,
+/// pause / resume, stop — or, while it's off, "Use as Wallpaper" and a style to start with.
 struct WallpaperMenu: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var wallpaper = WallpaperController.shared
 
-    private var scenes: [Preset] { model.library.presets.filter(\.isScene) }
-    private var looks: [Preset] { model.library.presets.filter { !$0.isScene } }
-
     var body: some View {
-        Text("Wallpaper: \(menuName(wallpaper.currentPreset?.name ?? "—"))")
-        if let status = wallpaper.statusText {
-            Text(status)
-        }
-        Divider()
-        styleMenu("Scenes", scenes)
-        if !looks.isEmpty { styleMenu("Looks", looks) }
-        Button(wallpaper.userPaused ? "Resume" : "Pause") { wallpaper.togglePause() }
-        Divider()
-        Button("Open DotStudio") { wallpaper.openMainWindow() }
-        Button("Stop Wallpaper") { wallpaper.stop() }
-        Divider()
-        Button("Quit DotStudio") { NSApp.terminate(nil) }
-            .keyboardShortcut("q")
-    }
-
-    private func styleMenu(_ title: String, _ presets: [Preset]) -> some View {
-        Menu(title) {
-            ForEach(presets) { p in
-                Toggle(menuName(p.name), isOn: Binding(get: { wallpaper.settings.presetID == p.id },
-                                             set: { if $0 { wallpaper.use(p.id) } }))
+        if wallpaper.isActive {
+            Text("Wallpaper: \(menuName(wallpaper.currentPreset?.name ?? "—"))")
+            if let status = wallpaper.statusText {
+                Text(status)
+            }
+            MenuBarStylePicker(title: "Change Wallpaper", presets: model.library.presets,
+                               isChosen: { wallpaper.settings.presetID == $0 },
+                               choose: { wallpaper.use($0) })
+            Button(wallpaper.userPaused ? "Resume Wallpaper" : "Pause Wallpaper") { wallpaper.togglePause() }
+            Button("Stop Wallpaper") { wallpaper.stop() }
+        } else {
+            Text("Wallpaper: Off")
+            if let first = startStyle {
+                Button("Use \u{201C}\(menuName(first.name, limit: 24))\u{201D} as Wallpaper") { wallpaper.use(first.id) }
+                MenuBarStylePicker(title: "Choose Wallpaper", presets: model.library.presets,
+                                   isChosen: { _ in false },
+                                   choose: { wallpaper.use($0) })
             }
         }
+    }
+
+    /// What "Use as Wallpaper" starts: the style it played last, else what the screensaver plays.
+    private var startStyle: Preset? {
+        wallpaper.settings.presetID.flatMap(model.preset)
+            ?? model.library.activeID.flatMap(model.preset)
+            ?? model.library.presets.first
     }
 }
 
@@ -45,25 +45,12 @@ struct WallpaperMenu: View {
 /// name would make the whole menu (or pop-up) as wide as the name. Keeps the start and the
 /// end, which is where names differ ("… Remaster", "… 2026"). 32 characters keeps
 /// "Wallpaper: <name>" on one line at the menu's own width.
-private func menuName(_ name: String, limit: Int = 32) -> String {
+func menuName(_ name: String, limit: Int = 32) -> String {
     guard name.count > limit else { return name }
     let headCount = limit * 5 / 8                 // 20 of 32: most of the name's start
     let head = name.prefix(headCount).trimmingCharacters(in: .whitespaces)
     let tail = name.suffix(limit - headCount - 1).trimmingCharacters(in: .whitespaces)
     return "\(head)…\(tail)"
-}
-
-/// Menu bar icon. Also hands the controller SwiftUI's openWindow, so "Open DotStudio"
-/// works after the main window was closed.
-struct WallpaperMenuLabel: View {
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        Image(systemName: "circle.grid.3x3.fill")
-            .onAppear {
-                WallpaperController.shared.registerOpenMainWindow { openWindow(id: DotStudioApp.mainWindowID) }
-            }
-    }
 }
 
 // MARK: - Settings
@@ -74,8 +61,6 @@ struct WallpaperSettingsSection: View {
     @ScaledLength(relativeTo: .body) private var segmentWidth: CGFloat = SettingsMetrics.segmentWidth
     @ScaledLength(relativeTo: .body) private var popUpMaxWidth: CGFloat = SettingsMetrics.popUpMaxWidth
     @Environment(\.dynamicTypeSize) private var typeSize
-    @State private var loginStatus = SMAppService.mainApp.status
-    @State private var loginError: String?
 
     var body: some View {
         Section {
@@ -107,16 +92,6 @@ struct WallpaperSettingsSection: View {
                 get: { wallpaper.settings.freezeOnBattery },
                 set: { v in wallpaper.update { $0.freezeOnBattery = v } }))
                 .formSwitchSize()
-            Toggle("Open DotStudio at login", isOn: Binding(
-                get: { loginStatus == .enabled || loginStatus == .requiresApproval },
-                set: setOpenAtLogin))
-                .formSwitchSize()
-            if loginStatus == .requiresApproval {
-                Text("Allow DotStudio in System Settings › General › Login Items.")
-                    .textRole(.caption).foregroundStyle(.orange).wrapping()
-            } else if let loginError {
-                Text(loginError).textRole(.caption).foregroundStyle(.orange).wrapping()
-            }
         } header: {
             SettingsHeader("Live Wallpaper")
         } footer: {
@@ -126,7 +101,6 @@ struct WallpaperSettingsSection: View {
                 SettingsNote("It pauses whenever windows cover the desktop, the screen locks or sleeps, the screensaver starts, or Low Power Mode is on, and holds still when your Mac runs hot. Balanced quality renders at three-quarter resolution on Retina displays.")
             }
         }
-        .onAppear { loginStatus = SMAppService.mainApp.status }
     }
 
     private var styleSelection: Binding<UUID?> {
@@ -162,15 +136,5 @@ struct WallpaperSettingsSection: View {
             .menuStyle(.button)
             .fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    private func setOpenAtLogin(_ on: Bool) {
-        loginError = nil
-        do {
-            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
-        } catch {
-            loginError = "Couldn't change the login item: \(error.localizedDescription)"
-        }
-        loginStatus = SMAppService.mainApp.status
     }
 }

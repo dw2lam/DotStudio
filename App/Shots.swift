@@ -14,14 +14,16 @@ enum Shots {
         try? fm.createDirectory(atPath: outDir, withIntermediateDirectories: true)
 
         for preset in lib.presets {
-            guard let cg = renderer.renderThumbnail(preset: preset, source: lib.source,
-                                                    width: 1600, height: 1000, time: 1.6) else { continue }
-            let rep = NSBitmapImageRep(cgImage: cg)
-            guard let data = rep.representation(using: .png, properties: [:]) else { continue }
-            let name = preset.name.replacingOccurrences(of: " ", with: "-")
-            let url = URL(fileURLWithPath: outDir).appendingPathComponent("\(name).png")
-            try? data.write(to: url)
-            FileHandle.standardOutput.write(Data("rendered \(preset.name)\n".utf8))
+            autoreleasepool {   // no event loop drains the pool here (see UIShots' render)
+                guard let cg = renderer.renderThumbnail(preset: preset, source: lib.source,
+                                                        width: 1600, height: 1000, time: 1.6) else { return }
+                let rep = NSBitmapImageRep(cgImage: cg)
+                guard let data = rep.representation(using: .png, properties: [:]) else { return }
+                let name = preset.name.replacingOccurrences(of: " ", with: "-")
+                let url = URL(fileURLWithPath: outDir).appendingPathComponent("\(name).png")
+                try? data.write(to: url)
+                FileHandle.standardOutput.write(Data("rendered \(preset.name)\n".utf8))
+            }
         }
         exit(0)
     }
@@ -76,6 +78,7 @@ enum UIShots {
     static func run(outDir: String) {
         let app = NSApplication.shared
         app.setActivationPolicy(.prohibited)
+        AppPrefs.shared.ephemeral()   // renders flip menu-bar mode; never persist it
         let out = URL(fileURLWithPath: outDir)
         try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
 
@@ -270,16 +273,35 @@ enum UIShots {
             AnyView(OnboardingView(initialStep: .done, livePreview: false, statusOverride: .notInstalled))
         }))
 
-        // Settings: every section (Screensaver, Live Wallpaper, Transitions, Performance, Updates)
+        // Settings: every section (General, Screensaver, Live Wallpaper, Transitions, Performance, Updates)
         s.append(Screen(name: "settings", frame: .fit(width: 460, minHeight: 600),
                         prepare: { st in WallpaperController.shared.update { $0.presetID = st.wallpaper } },
                         view: { _ in AnyView(SettingsView()) }))
+        // Settings › General on its own, in both menu-bar modes (the footer changes with it)
+        s.append(Screen(name: "settings-general", frame: .fit(width: 460, minHeight: 160),
+                        view: { _ in AnyView(SettingsSectionPreview { GeneralSettingsSection() }) }))
+        s.append(Screen(name: "settings-general-off", frame: .fit(width: 460, minHeight: 160),
+                        prepare: { _ in AppPresence.shared.menuBarMode = false },
+                        view: { _ in AnyView(SettingsSectionPreview { GeneralSettingsSection() }) }))
 
-        // The menu bar item's menu, laid out as a plain column (menus can't render offscreen)
+        // The DotStudio menu-bar menu, laid out as a plain column (menus can't render offscreen):
+        // wallpaper off, playing, paused, and a rotating screensaver playlist
         s.append(Screen(name: "menu-off", frame: .fit(width: 320), view: { _ in AnyView(MenuPreview()) }))
         s.append(Screen(name: "menu-on", frame: .fit(width: 320), prepare: { st in
             WallpaperController.shared.update { $0.enabled = true; $0.presetID = st.wallpaper }
         }, view: { _ in AnyView(MenuPreview()) }))
+        s.append(Screen(name: "menu-paused", frame: .fit(width: 320), prepare: { st in
+            WallpaperController.shared.update { $0.enabled = true; $0.presetID = st.wallpaper }
+            WallpaperController.shared.togglePause()
+        }, view: { _ in AnyView(MenuPreview()) }))
+        s.append(Screen(name: "menu-playlist", frame: .fit(width: 320),
+                        prepare: { $0.lineup($0.playlist, night: $0.night) },
+                        view: { _ in AnyView(MenuPreview()) }))
+        // The one-time "still running" popover (menu-bar mode off, wallpaper playing)
+        s.append(Screen(name: "menu-notice", frame: .fit(width: 288, minHeight: 80), view: { _ in
+            AnyView(MenuBarStayNotice(quit: {}, keepRunning: {}, turnOnMenuBarMode: {})
+                .background(.regularMaterial))
+        }))
         return s
     }
 
@@ -352,6 +374,8 @@ enum UIShots {
             setup(.ready)
             WallpaperSlot.shared.stop()
             WallpaperController.shared.update { $0.enabled = false }
+            if WallpaperController.shared.userPaused { WallpaperController.shared.togglePause() }
+            AppPresence.shared.menuBarMode = true   // the default (prefs are in-memory here)
             lineup([hero])
         }
 
@@ -456,32 +480,45 @@ enum UIShots {
             case .window: return windowSize
             case .fixed(let s): return s
             case .fit(let width, let minHeight):
-                let probe = NSHostingView(rootView: root(view, width: width, height: nil, typeSize: typeSize)
-                    .fixedSize(horizontal: false, vertical: true))
-                let h = probe.fittingSize.height
-                return CGSize(width: width, height: min(max(h.rounded(.up), minHeight), 4000))
+                // Its own pool: the probe's view graph goes as soon as it has been measured.
+                return autoreleasepool {
+                    let probe = NSHostingView(rootView: root(view, width: width, height: nil, typeSize: typeSize)
+                        .fixedSize(horizontal: false, vertical: true))
+                    let h = probe.fittingSize.height
+                    return CGSize(width: width, height: min(max(h.rounded(.up), minHeight), 4000))
+                }
             }
         }
 
+        /// One render per autorelease pool, its window closed and its hosting view detached
+        /// before the pool drains. This loop runs from App.init, outside NSApplication's event
+        /// loop (which is what normally drains autoreleased objects): without this, renders'
+        /// windows, hosting views and SwiftUI graphs piled up until AttributeGraph aborted in
+        /// grow_region after ~580 renders.
         func render(_ view: AnyView, size: CGSize, typeSize: DynamicTypeSize, dark: Bool, to url: URL) -> Bool {
-            let host = NSHostingView(rootView: root(view, width: size.width, height: size.height, typeSize: typeSize))
-            host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-            let win = NSWindow(contentRect: CGRect(origin: CGPoint(x: -30000, y: -30000), size: size),
-                               styleMask: [.borderless], backing: .buffered, defer: false)
-            win.isReleasedWhenClosed = false
-            win.appearance = host.appearance
-            win.contentView = host
-            host.frame = CGRect(origin: .zero, size: size)
-            let passes = 3
-            for _ in 0..<passes {
-                host.layoutSubtreeIfNeeded()
-                RunLoop.main.run(until: Date().addingTimeInterval(settle / Double(passes)))
+            autoreleasepool {
+                let host = NSHostingView(rootView: root(view, width: size.width, height: size.height, typeSize: typeSize))
+                host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                let win = NSWindow(contentRect: CGRect(origin: CGPoint(x: -30000, y: -30000), size: size),
+                                   styleMask: [.borderless], backing: .buffered, defer: false)
+                win.isReleasedWhenClosed = false
+                win.appearance = host.appearance
+                win.contentView = host
+                host.frame = CGRect(origin: .zero, size: size)
+                defer {
+                    win.contentView = nil
+                    win.close()   // never ordered in; closing drops it from NSApp.windows
+                }
+                let passes = 3
+                for _ in 0..<passes {
+                    host.layoutSubtreeIfNeeded()
+                    RunLoop.main.run(until: Date().addingTimeInterval(settle / Double(passes)))
+                }
+                guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return false }
+                host.cacheDisplay(in: host.bounds, to: rep)
+                guard let png = rep.representation(using: .png, properties: [:]) else { return false }
+                return (try? png.write(to: url)) != nil
             }
-            defer { win.contentView = nil }
-            guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return false }
-            host.cacheDisplay(in: host.bounds, to: rep)
-            guard let png = rep.representation(using: .png, properties: [:]) else { return false }
-            return (try? png.write(to: url)) != nil
         }
     }
 
@@ -543,18 +580,32 @@ enum UIShots {
     }
 }
 
-/// WallpaperMenu's items laid out as a plain column, standing in for the menu bar menu
-/// (real menus can't be drawn offscreen). Shows what each item says, at the current
-/// text size — not the system menu's own metrics.
+/// The DotStudio menu-bar menu's items laid out as a plain column, standing in for the real
+/// menu (menus can't be drawn offscreen). Shows what each item says — submenus as pull-down
+/// buttons — at the current text size, not the system menu's own metrics.
 private struct MenuPreview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
-            WallpaperMenu()
+            DotStudioMenu()
         }
+        .textRole(.body)
         .menuStyle(.button)
         .buttonStyle(.borderless)
         .padding(Space.s)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.regularMaterial)
+    }
+}
+
+/// One Settings section in the grouped Form Settings uses, at the Settings window's width.
+private struct SettingsSectionPreview<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        Form { content() }
+            .formStyle(.grouped)
+            .textRole(.body)
+            .formControlSize()
+            .scrollDisabled(true)
     }
 }

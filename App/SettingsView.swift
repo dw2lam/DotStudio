@@ -1,8 +1,10 @@
 //  SettingsView.swift — rarely-touched, library-wide settings (⌘,).
 //  What plays (playlist, night style, wallpaper) lives in the main window's
-//  destination cards; this is only setup, transitions, performance, and updates.
+//  destination cards; this is how the app runs (General), setup, transitions,
+//  performance, and updates.
 
 import SwiftUI
+import ServiceManagement
 
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
@@ -21,6 +23,8 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            GeneralSettingsSection()
+            MusicSettingsSlot()        // MUSIC SLOT (MusicSlots.swift) — the Music section goes here
             setupSection
             WallpaperSettingsSection()
             transitionsSection
@@ -31,7 +35,7 @@ struct SettingsView: View {
         .textRole(.body)          // row labels follow the text size (macOS never scales them itself)
         .formControlSize()        // stock sizes at standard text; a step up per text bump after
         .frame(minWidth: SettingsMetrics.width, idealWidth: formWidth, maxWidth: formWidth)
-        // All five sections run ~1100 pt — taller than a 13" display. Open shorter and let the
+        // All six sections run ~1250 pt — taller than a 13" display. Open shorter and let the
         // Form scroll; the window can still be dragged taller.
         .frame(minHeight: SettingsMetrics.minHeight,
                idealHeight: Self.isRenderingShots ? nil : SettingsMetrics.openHeight,
@@ -210,6 +214,55 @@ struct SettingsView: View {
     private var qualityBinding: Binding<Double> {
         Binding(get: { model.library.renderScale ?? 1.0 },
                 set: { model.library.renderScale = $0 >= 1.0 ? nil : $0; model.save() })
+    }
+}
+
+// MARK: - General
+
+/// How DotStudio runs: in the menu bar when its window is closed (menu-bar mode, on by
+/// default — AppPresence), and whether it opens at login (where it starts in the menu bar).
+struct GeneralSettingsSection: View {
+    @ObservedObject private var presence = AppPresence.shared
+    @State private var loginStatus = SMAppService.mainApp.status
+    @State private var loginError: String?
+
+    private var opensAtLogin: Bool { loginStatus == .enabled || loginStatus == .requiresApproval }
+
+    var body: some View {
+        Section {
+            Toggle("Keep running in the menu bar", isOn: $presence.menuBarMode)
+                .formSwitchSize()
+            Toggle("Open DotStudio at login", isOn: Binding(get: { opensAtLogin }, set: setOpenAtLogin))
+                .formSwitchSize()
+            if loginStatus == .requiresApproval {
+                Text("Allow DotStudio in System Settings › General › Login Items.")
+                    .textRole(.caption).foregroundStyle(.orange).wrapping()
+            } else if let loginError {
+                Text(loginError).textRole(.caption).foregroundStyle(.orange).wrapping()
+            }
+        } header: {
+            SettingsHeader("General")
+        } footer: {
+            VStack(alignment: .leading, spacing: Space.xs) {
+                SettingsNote(presence.menuBarMode
+                    ? "Closing the window takes DotStudio out of the Dock; it keeps running in the menu bar, so your live wallpaper keeps playing. Open or quit it from there."
+                    : "Closing the window quits DotStudio — unless a live wallpaper is playing; then it stays in the menu bar until you stop it.")
+                if opensAtLogin && presence.menuBarMode {
+                    SettingsNote("At login it starts quietly in the menu bar, without opening its window.")
+                }
+            }
+        }
+        .onAppear { loginStatus = SMAppService.mainApp.status }
+    }
+
+    private func setOpenAtLogin(_ on: Bool) {
+        loginError = nil
+        do {
+            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+        } catch {
+            loginError = "Couldn't change the login item: \(error.localizedDescription)"
+        }
+        loginStatus = SMAppService.mainApp.status
     }
 }
 
