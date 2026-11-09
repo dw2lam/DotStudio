@@ -2441,6 +2441,57 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
     }
 }
 
+// ---------------------------------------------------------------- music veil (internal pass 73)
+//
+// Behind Full Screen music (MetalRenderer.encodeVeil), never set by an EffectInstance. Its own
+// small fragment functions rather than a case of fx_fragment: the über-shader's register
+// footprint made even a two-tap pass cost ~1 ms at 5K; these run at full occupancy.
+// Same bindings as fx_fragment (slots 0, 5, 8), so the renderer only swaps pipelines.
+
+// Kawase dual-filter downsample: the target is half the source; the taps sit one source texel
+// off-centre, each a bilinear 2×2 — a 4×4 tent, so moving scenes don't alias into the blur.
+fragment float4 fx_veil_down(VOut in [[stage_in]],
+                             constant FXUniforms& u [[buffer(0)]],
+                             texture2d<float> src [[texture(0)]],
+                             sampler samp [[sampler(0)]])
+{
+    float2 uv = in.uv;
+    float2 hp = 1.0 / max(u.srcSize, float2(1.0));
+    float3 s = src.sample(samp, uv).rgb * 4.0;
+    s += src.sample(samp, uv - hp).rgb;
+    s += src.sample(samp, uv + hp).rgb;
+    s += src.sample(samp, uv + float2(hp.x, -hp.y)).rgb;
+    s += src.sample(samp, uv - float2(hp.x, -hp.y)).rgb;
+    return float4(s * 0.125, 1.0);
+}
+
+// Composite. src = blur level ⌊b⌋ (p1.x = 1: the sharp frame), next = level ⌊b⌋ + 1;
+// p0 = (amount, blend toward the next level, Album Art present, —); art = the Album Art.
+fragment float4 fx_veil(VOut in [[stage_in]],
+                        constant FXUniforms& u [[buffer(0)]],
+                        texture2d<float> src  [[texture(0)]],
+                        texture2d<float> next [[texture(5)]],
+                        texture2d<float> art  [[texture(8)]],
+                        sampler samp [[sampler(0)]])
+{
+    float2 uv = in.uv;
+    float2 res = u.resolution;
+    float a = u.p0.x;
+    float3 c = (u.p1.x > 0.5) ? src.sample(samp, uv).rgb : musicBicubic(src, samp, uv, 0u);
+    if (u.p0.y > 0.0) c = mix(c, musicBicubic(next, samp, uv, 0u), u.p0.y);
+    // Dim in (≈) linear light with a soft highlight compression: a dark scene keeps ~55 % of
+    // its light, a white one lands near L 0.15, so white type keeps ≥ 5:1 over any style.
+    float3 lin = c * c;                                       // gamma 2: cheap at 5K
+    float Y = dot(lin, float3(0.2126, 0.7152, 0.0722));
+    float k = mix(1.0, 0.55 / (1.0 + 2.6 * Y), a);
+    // A gentle vignette holds the eye in the middle.
+    float2 q = (uv - 0.5) * float2(res.x / res.y, 1.0);
+    k *= 1.0 - a * 0.34 * smoothstep(0.30, 1.25, length(q * float2(0.85, 1.0)));
+    float3 col = c * sqrt(k);                                 // = sqrt(lin · k)
+    if (u.p0.z > 0.5) col = mix(col, art.sample(samp, uv).rgb, a);
+    return float4(col + bandDither(in.pos.xy), 1.0);
+}
+
 // ---------------------------------------------------------------- error-diffusion dither (compute)
 //
 // Error diffusion (Floyd–Steinberg, Atkinson, Jarvis… and Riemersma) on a grid of whole-pixel

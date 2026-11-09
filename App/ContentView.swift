@@ -100,7 +100,7 @@ struct ContentView: View {
 ///   DOTSTUDIO_DEMO_ONBOARDING=create      open the welcome sheet on its "Create Your Own" tab
 ///   DOTSTUDIO_DEMO_WINDOW=1440x900        size the main window's content
 ///   DOTSTUDIO_DEMO_APPEARANCE=dark|light  force the app's appearance
-///   DOTSTUDIO_DEMO_FILTER=<chip>          start the gallery on a filter chip (all, playing, scenes, looks, clocks, nature, flowing, retro, space, abstract, music)
+///   DOTSTUDIO_DEMO_FILTER=<chip>          start the gallery on a filter chip (all, playing, scenes, looks, clocks, nature, flowing, retro, space, abstract)
 ///   DOTSTUDIO_DEMO_MUSIC=<state>          the app's music UI shows idle|playing|paused|denied|ask|off (MusicDemo,
 ///                                         MusicUI.swift) — the track from DOTSTUDIO_MUSIC_FAKE=<fixture.json>
 ///                                         (tools/music-fixtures/make.sh), else a built-in sample; no player involved

@@ -29,8 +29,9 @@ extension SceneCatalog {
             colorALabel: "Idle Background", colorBLabel: "Idle Glow"),
     ]
 
-    /// Styles this pack adds to the default library. "Now Playing" (Album) is featured;
-    /// Stage and Cover are one click away in Add Built-in Styles.
+    /// The legacy Now Playing styles (1.3). Retired (DefaultPresets.retired): music is now a
+    /// presentation over any style (MusicPresentation), and shader 66 lives on as its Album
+    /// Art backdrop. They're never offered; a library that has one keeps it working.
     static var musicPresets: [Preset] {
         func np(_ name: String, layout: MusicLayoutKind, background: MusicBackground) -> Preset {
             var e = EffectInstance(.nowPlaying)
