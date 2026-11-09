@@ -266,6 +266,27 @@ enum UIShots {
             WallpaperSlot.shared.set(st.model.nowPlayingID ?? st.hero)
         }, view: main))
 
+        // The SYNC key (dual-zone climate panel): split, the morph frozen at 25 / 50 / 75 %
+        // (SyncMorphHook — the wallpaper playing a style of its own, the screensaver a
+        // rotating playlist), and merged (synced). The cards' playlist and night keys show.
+        let syncSetup: (Stage) -> Void = { st in
+            st.lineup(st.playlist, night: st.night)
+            WallpaperController.shared.update { $0.presetID = st.wallpaper }
+            WallpaperSlot.shared.set(st.wallpaper)
+        }
+        s.append(Screen(name: "dest-sync-off", frame: .window, prepare: syncSetup, view: main))
+        for pct in [25, 50, 75] {
+            s.append(Screen(name: "dest-sync-\(pct)", frame: .window, prepare: { st in
+                syncSetup(st)
+                SyncMorphHook.progress = CGFloat(pct) / 100
+            }, view: main))
+        }
+        s.append(Screen(name: "dest-sync-on", frame: .window, prepare: { st in
+            st.lineup(st.playlist, night: st.night)
+            WallpaperController.shared.update { $0.enabled = true; $0.followsScreensaver = true; $0.presetID = st.wallpaper }
+            WallpaperSlot.shared.set(st.model.nowPlayingID ?? st.hero)
+        }, view: main))
+
         // Editor (preview + destination bar + inspector with every effect expanded)
         s.append(Screen(name: "editor-scene", frame: .window, prepare: { st in
             st.lineup([st.scene])
@@ -447,6 +468,7 @@ enum UIShots {
             DemoHooks.search = nil
             DemoHooks.hoverName = nil
             DemoHooks.expandAllEffects = false
+            SyncMorphHook.progress = nil
             setup(.ready)
             WallpaperSlot.shared.stop()
             WallpaperController.shared.update { $0.enabled = false; $0.followsScreensaver = false }

@@ -40,6 +40,13 @@ extension View {
         glassSurface(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous), tint: tint)
     }
 
+    /// A glass panel that carries text and controls (the destination cards): the glass, with
+    /// a wash of the window color inside it, so text on it stays legible over a bright or
+    /// busy backdrop. `shape` may be animatable (the dual-zone panel's morph).
+    func panelSurface<S: Shape>(in shape: S) -> some View {
+        modifier(PanelSurface(shape: shape))
+    }
+
     /// Ties sibling glass shapes together so they blend and morph (macOS 26).
     @ViewBuilder
     func glassID<ID: Hashable>(_ id: ID, in ns: Namespace.ID) -> some View {
@@ -60,6 +67,28 @@ private extension Shape {
     func strokeBorderCompat(_ color: Color) -> some View {
         self.stroke(color, lineWidth: 0.75)
     }
+}
+
+private struct PanelSurface<S: Shape>: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+    let shape: S
+
+    func body(content: Content) -> some View {
+        content
+            .background(shape.fill(Color(nsColor: .windowBackgroundColor).opacity(scheme == .dark ? 0.32 : 0.5)))
+            .glassSurface(.regular, in: shape)
+    }
+}
+
+/// Ink for text and glyphs on glass panels: stronger than the system's `.secondary` (which
+/// washes out on light glass over a bright backdrop), in light and dark.
+enum PanelInk {
+    /// Subtitles, values, eyebrows, icons.
+    static let secondary = Color.primary.opacity(0.68)
+    /// Chevrons and other quiet marks.
+    static let tertiary = Color.primary.opacity(0.45)
+    /// The indicator lights' "on" color (the SYNC key, the panel keys).
+    static let led = Color.green
 }
 
 /// Groups glass shapes so they render together and morph into each other (macOS 26).
@@ -146,6 +175,8 @@ enum Motion {
     static let smooth = Animation.spring(response: 0.42 * slow, dampingFraction: 0.86)
     /// Big moves: gallery ↔ editor.
     static let hero = Animation.spring(response: 0.5 * slow, dampingFraction: 0.86)
+    /// The dual-zone panel's SYNC morph: one smooth spring, no overshoot (~0.5 s).
+    static let sync = Animation.spring(duration: 0.5 * slow, bounce: 0)
     /// What everything collapses to under Reduce Motion: a short cross-fade.
     static let reduced = Animation.easeInOut(duration: 0.18)
 
