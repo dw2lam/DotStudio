@@ -13,13 +13,23 @@
 //    · hemispherical sky fill, occluded down in the V of each fold;
 //    · one bounce from the facing facet (albedo × its irradiance × view factor ≈ 0.3) —
 //      the warm, deeper valley colour that sells real material;
-//    · translucency (light through the crest of paper; a lantern lit from behind);
+//    · translucency: light through the crest of paper; a paper lantern lit from inside by a
+//      lamp close behind the sheet (inverse-square hot spot, the facets whose backs face the
+//      lamp glowing, the doubled creases dark);
 //    · anisotropic GGX: a burnished hairline on paper creases, a sheen line + soft lobe on satin.
-//  Anti-aliasing: taps across the pixel's footprint in φ, widened by the depth-of-field blur,
-//  each pre-filtered over its own share (crease radius, NDF width and penumbra grow with it);
-//  four where the footprint holds a crease or a shadow edge, one on open facet (exact there);
-//  fading to the φ-independent period average beyond about half a pleat. The φ gradient is
-//  analytic. Microtexture lives in material coordinates (φ, along) and fades by footprint.
+//  Anti-aliasing: every tap is a box over an interval of the profile — the screen interval
+//  mapped through the parallax exactly — and a tap reaching into a crease is split into its arc
+//  part (the normal's swing across it box-filters the terminator) and the flat parts beside it.
+//  One tap covers the footprint where it is small or on open facet, four where it holds a
+//  crease and a shadow edge, and the profile's four quarters give the period average below
+//  ~4 px a pleat. Taps are tone-mapped one by one and averaged in display light (averaging
+//  radiance first washes fine pleats out bright). The creases' sheen lines — far thinner than
+//  a pixel at gallery-card size, where a box filter makes a thin line step as it crosses the
+//  footprint's edge (beading, beat bands) — are not tapped at all: each is placed analytically
+//  (exact energy over the arc's normals, position and height through the parallax) and drawn
+//  as a band-limited bump, a smooth function of where it falls. The footprint is at least
+//  1.6 px, widened by depth of field. Microtexture lives in material coordinates (φ, along)
+//  and fades by footprint.
 
 constant float STUDIO3_PI = 3.14159265;
 
@@ -28,6 +38,10 @@ static inline float studio3_s01(float x) { x = saturate(x); return x * x * (3.0 
 static inline float3 studio3_lin(float3 c) {
     c = saturate(c);
     return c * (c * (c * 0.305306011 + 0.682171111) + 0.012522878);
+}
+// max(x, 0) box-filtered over [x − w, x + w]: a C¹ ramp, so a terminator never snaps.
+static inline float studio3_ramp(float x, float w) {
+    return x >= w ? x : (x <= -w ? 0.0 : (x + w) * (x + w) / (4.0 * w));
 }
 
 // Integer lattice hashes (no sin, no fract precision games), values in [−1, 1].
@@ -70,12 +84,13 @@ static inline float2 studio3_n1d(float x) {
 // y along the folds, z out of the sheet. Lengths in pleat widths. Fields below the line
 // depend on the tap width and are filled by studio3_prep.
 struct Studio3P {
-    float R0;           // crease radius (material)
+    float R, R2, iR, Rs; // crease radius (material), its square, inverse, and half-chord (R sin β)
+    float zv0, zr0;     // crease arc centres' heights (valley, ridge)
     float sb, cb, tb;   // facet slope β
     float H, iH;        // ridge height above the valley (= tanβ / 2)
     float se, ce;       // key elevation e in the cross-section
     float ell;          // |key| projected into the cross-section
-    float xb;           // along-fold microtilt × along key, in sin(e − ν) units
+    float xb;           // along-fold microtilt × along key, in sin(e − ν) units (bounded)
     float sdn, cdn;     // across microtilt (sin, cos)
     float sigL;         // key angular radius
     float kE;           // 1 when the ridge casts a shadow (e < β), fading as e → β
@@ -83,18 +98,17 @@ struct Studio3P {
     float Easc, Edesc;  // irradiance (× key) on the lit and the turned-away facet (bounce)
     float3 L, h;        // key, half vector (pleat frame)
     float sH, cH;       // the half vector's angle in the cross-section (sin, cos)
-    float sc2;          // sheen core width² (rad²)
-    float sg, cg;       // Lantern: back-light tilt γ
+    float sc, isc;      // sheen core width (rad) and its inverse
+    float lbx, lbz;     // Lantern: toward the lamp behind the sheet, in the cross-section
     int mat;            // 0 paper, 1 satin, 2 linen, 3 lantern
+    float Tx, xsh;      // the ridge's terminator (tangent point); the cast-shadow line on the lit facet
+    float kH, iD, iA;   // parallax: screen phase u = x + k·z(x) → profile x (see studio3_par)
+    float isb, te, iteb, penK; // per-pixel constants for studio3_prep
     // ---- per tap width
     float subw;
-    float R, R2, iR, Rs, zv0, zr0;
-    float Tx, igate;    // the ridge's terminator (tangent point) and its soft gate
-    float xsh, ipen;    // cast-shadow line on the lit facet, 1 / penumbra
+    float igate, ipen;  // the terminator's soft gate, 1 / cast-shadow penumbra
     float iwa;          // bounce side blend across the valley
-    float rw0, irw;     // ridge band (paper burnish, lantern crease)
-    float kH, iD, iA;   // parallax: screen phase u = x + k·z(x) → profile x (see studio3_par)
-    float isb, icb, te, iteb, penK; // per-pixel constants for studio3_prep
+    float rw0, irw;     // crease band (paper burnish, lantern's doubled creases)
     float iglow;        // paper: crest-glow ramp
 };
 
@@ -108,18 +122,6 @@ static inline float studio3_par(float f, thread const Studio3P& P) {
 
 static inline void studio3_prep(thread Studio3P& P, float subw) {
     P.subw = subw;
-    // A crease never resolves finer than the tap's own interval: blur widens it.
-    float R = clamp(max(P.R0, 0.45 * subw * P.isb), 1e-4, 0.24 * P.isb);
-    P.R = R; P.R2 = R * R; P.iR = 1.0 / R; P.Rs = R * P.sb;
-    P.zv0 = R * P.icb; P.zr0 = P.H - P.zv0;
-    // Tangent point of the shadow line on the ridge arc (normal at min(e, β)), then where the
-    // line (slope −tan e) meets the lit facet z = tan β·(x − ½); its penumbra is the light's
-    // angular size × the ridge's distance, across the facet (penK = 2σ·cos β / sin(e + β) / cos e).
-    bool eLow = P.kE > 0.0;
-    float sec = eLow ? P.se : P.sb, cec = eLow ? P.ce : P.cb;
-    P.Tx = R * sec;
-    float Ty = P.zr0 + R * cec;
-    P.xsh = (Ty + P.te * P.Tx + 0.5 * P.tb) * P.iteb;
     P.ipen = 1.0 / (P.penK * max(P.xsh - P.Tx, 0.0) + 1.4 * subw + 0.004);
     P.igate = 1.0 / (0.024 + subw);
     P.iwa = 1.0 / (2.0 * P.Rs + 0.06);
@@ -129,9 +131,9 @@ static inline void studio3_prep(thread Studio3P& P, float subw) {
 
 struct Studio3Tap { float key, sky, bounce, spec, trans; };
 
-// Shading that depends only on the normal (sin ν, cos ν) and how fast it turns across the tap
-// (dnu): Lambert key (box-filtered over the light's size and the tap — a C¹ ramp, so the
-// terminator never snaps), the specular lobe, and the lantern's back-light.
+// Shading that depends only on the normal (sin ν, cos ν) and how far it swings across the tap
+// (dnu): Lambert key and the lantern's back-light (box-filtered over the light's size and the
+// swing), and — on the flat facets only (dnu = 0) — the sheen lobe.
 struct Studio3N { float lam, spr, eb, cnT; };
 static inline Studio3N studio3_shadeN(float sn, float cn, float dnu, thread const Studio3P& P, bool wantSpec) {
     Studio3N o;
@@ -140,62 +142,103 @@ static inline Studio3N studio3_shadeN(float sn, float cn, float dnu, thread cons
     float w = P.sigL + 0.5 * dnu;
     float x = P.se * cn - P.ce * sn;           // sin(e − ν)
     // Microtexture shades what the key lights, relative to it (its tilt moves sin(e − ν) by
-    // −cos(e − ν)·δν): texture rakes across lit paper but never flips shadow into speckle.
+    // −cos(e − ν)·δν): texture rakes across lit paper but never flips shadow into speckle, and
+    // its gain is bounded, so the tooth stays fine when the key runs along the folds.
     float dx = P.xb - (P.ce * cn + P.se * sn) * P.sdn;
-    float mk = 1.0 + clamp(dx / max(x, 0.25), -0.6, 0.6);
-    o.lam = (x >= w ? x : (x <= -w ? 0.0 : (x + w) * (x + w) / (4.0 * w))) * P.ell * mk;
+    float mk = 1.0 + clamp(dx / max(x, 0.3), -0.45, 0.45);
+    o.lam = studio3_ramp(x, w) * P.ell * mk;
     o.spr = 0.0; o.eb = 0.0;
     if (wantSpec) {
         // Sheen in the cross-section: a lobe in (ν − ν_H), where ν_H is the half vector's
         // angle across the fold; along the fold it is broad (fibres scatter into a cone; the
-        // along falloff is per pixel). GGX-shaped, its core widened — energy kept — by the
-        // normal swing across the tap, so a thin line never aliases.
+        // along falloff is per pixel). GGX-shaped, 1 / (1 + x²/s²)². (On the crease arcs the
+        // same lobe is a thin line, drawn analytically: studio3_bump.)
         float x = snT * P.cH - o.cnT * P.sH;   // sin(ν − ν_H)
         float nl = saturate(snT * P.L.x + o.cnT * P.L.z);
-        float sc2 = P.sc2 + 0.25 * dnu * dnu;
-        float u2 = 1.0 + x * x / sc2;
-        float lobe = sqrt(P.sc2 / sc2) / (u2 * u2);
+        float u2 = 1.0 + x * x * P.isc * P.isc;
+        float lobe = 1.0 / (u2 * u2);
         if (P.mat == 1) {                      // satin: + a soft, wide lobe
             float b2 = 1.0 + x * x * 6.25;     // σ ≈ 0.4
             lobe += 0.20 / (b2 * b2);
         }
         o.spr = lobe * nl;
     }
-    if (P.mat == 3) {                          // lantern: back-light through the sheet
-        float xb = o.cnT * P.cg + snT * P.sg, wb = 0.06 + 0.5 * dnu;
-        o.eb = xb >= wb ? xb : (xb <= -wb ? 0.0 : (xb + wb) * (xb + wb) / (4.0 * wb));
+    if (P.mat == 3) {                          // lantern: the lamp through the sheet, seen on
+        // the facet's back: −n · (toward the lamp)
+        // (plus a floor: light scattered round the inside reaches every facet's back)
+        float xb = -(snT * P.lbx + o.cnT * P.lbz);
+        o.eb = 0.16 + 0.84 * studio3_ramp(xb, 0.06 + 0.5 * dnu);
     }
     return o;
 }
 
-// One tap of the cross-section at f ∈ [0, 1) (0 = ridge, 0.5 = valley; light from −f).
-// Facets reuse the per-pixel shading of their two flat sides (fA lit-facing, fD turned away).
-static inline Studio3Tap studio3_tap(float f, thread const Studio3P& P,
+// G(t) = ∫ 1/(1 + t²)² dt: the sheen lobe's antiderivative.
+static inline float studio3_G(float t) { return 0.5 * (t / (1.0 + t * t) + atan(t)); }
+
+// Visibility of the key at profile point f (cast shadow, past the ridge's terminator).
+static inline float studio3_vis(float f, thread const Studio3P& P) {
+    float vs = studio3_s01((f - P.xsh) * P.ipen + 0.5);
+    vs = max(vs, 1.0 - studio3_s01((f - P.Tx) * P.igate + 0.5));
+    return 1.0 - P.kE * (1.0 - vs);
+}
+
+// A crease's sheen line, band-limited: energy E (exact over the arc's normals) at signed
+// screen-phase distance d ∈ [−½, ½) from the pixel. Its own GGX shape (variance w²) convolved
+// with the pixel's filter (variance vk) is approximated by a bump of the summed variance, shaped
+// like the line where the line resolves and like a compact smooth kernel where it doesn't (so
+// an unresolved line neither steps nor bleeds its tails into the dark facet beside it); it and
+// the next line over, settling to the period average E as it widens past a pleat. A smooth
+// function of where the line falls, however much thinner than a pixel it is.
+static inline float studio3_bump(float d, float E, float w, float vk) {
+    float s2 = w * w + vk, is2 = 1.0 / s2, al = w * w * is2;
+    float ir2 = is2 * 0.14285714;                                  // quartic: r² = 7 s²
+    float d1 = d - copysign(1.0, d);
+    float t0 = d * d * is2, t1 = d1 * d1 * is2;
+    float c = 1.0 / ((1.0 + t0) * (1.0 + t0)) + 1.0 / ((1.0 + t1) * (1.0 + t1));
+    float q0 = max(1.0 - d * d * ir2, 0.0), q1 = max(1.0 - d1 * d1 * ir2, 0.0);
+    float qn = 0.35435 * sqrt(is2);                                // 15 / (16 r)
+    float v = mix((q0 * q0 + q1 * q1) * qn, c * 0.63661977 * sqrt(is2), al) * E;
+    return mix(v, E, smoothstep(0.05, 0.2, s2));                   // s ≈ 0.22 … 0.45 of a pleat
+}
+
+// One tap of the cross-section: the box [f − h, f + h] of the profile (f ∈ [0, 1); 0 = ridge,
+// 0.5 = valley; light from −f). Facets reuse the per-pixel shading of their two flat sides
+// (fA lit-facing, fD turned away); a tap reaching into a crease is split into the arc part —
+// shaded at its mid-normal with the normal's swing across it — and the flat parts either side.
+static inline Studio3Tap studio3_tap(float f, float h, thread const Studio3P& P,
                                      thread const Studio3N& fA, thread const Studio3N& fD) {
     Studio3Tap o;
     float s = f - 0.5;                         // from the valley: < 0 faces away, > 0 faces the key
     float as = abs(s);
     Studio3N n;
     float z;
-    float h = 0.5 * P.subw;
     if (as < P.Rs + h || as > 0.5 - P.Rs - h) {   // a crease (or a tap reaching into one)
         bool valley = as < 0.25;
-        float r = valley ? s : s - copysign(0.5, s);
-        float rc = clamp(r, -P.Rs, P.Rs);      // beyond the arc: the facet's own normal
-        float c = sqrt(max(P.R2 - rc * rc, 1e-9));
-        z = abs(r) <= P.Rs ? (valley ? P.zv0 - c : P.zr0 + c) : P.tb * as;
-        // How far the normal swings across the tap: continuous, so it fades to nothing as
-        // the tap leaves the arc (sin ν moves 1/R per unit x on the arc, not at all beyond).
-        float dnu = (clamp(r + h, -P.Rs, P.Rs) - clamp(r - h, -P.Rs, P.Rs)) / c;
-        n = studio3_shadeN((valley ? -rc : rc) * P.iR, c * P.iR, dnu, P, P.mat != 2);
+        float r = valley ? s : s - copysign(0.5, s);   // across, from the crease centre
+        float lo = clamp(r - h, -P.Rs, P.Rs), hi = clamp(r + h, -P.Rs, P.Rs);
+        float i2h = 0.5 / h;
+        float wArc = (hi - lo) * i2h;
+        float wNeg = saturate((-P.Rs - (r - h)) * i2h);
+        float wPos = max(1.0 - wArc - wNeg, 0.0);
+        float rm = 0.5 * (lo + hi);
+        float c = sqrt(max(P.R2 - rm * rm, 1e-9));
+        // (no sheen on the arc part: the crease's sheen line is analytic, per pixel — see
+        // studio3_bump — so it never steps as it crosses a tap edge)
+        Studio3N a = studio3_shadeN((valley ? -rm : rm) * P.iR, c * P.iR, (hi - lo) / c, P, false);
+        // beyond the arc: x < −Rs is the lit-facing facet at a ridge, the turned-away one in a valley
+        Studio3N fN = valley ? fD : fA, fP = valley ? fA : fD;
+        n.lam = wArc * a.lam + wNeg * fN.lam + wPos * fP.lam;
+        n.spr = wArc * a.spr + wNeg * fN.spr + wPos * fP.spr;
+        n.eb  = wArc * a.eb  + wNeg * fN.eb  + wPos * fP.eb;
+        n.cnT = wArc * a.cnT + wNeg * fN.cnT + wPos * fP.cnT;
+        float rc = clamp(r, -P.Rs, P.Rs);
+        float cc = sqrt(max(P.R2 - rc * rc, 1e-9));
+        z = abs(r) <= P.Rs ? (valley ? P.zv0 - cc : P.zr0 + cc) : P.tb * as;
     } else {                                   // open facet
         n = s > 0.0 ? fA : fD;
         z = P.tb * as;
     }
-    // Cast shadow, downstream of the ridge's terminator.
-    float vs = studio3_s01((f - P.xsh) * P.ipen + 0.5);
-    vs = max(vs, 1.0 - studio3_s01((f - P.Tx) * P.igate + 0.5));
-    float vis = 1.0 - P.kE * (1.0 - vs);
+    float vis = studio3_vis(f, P);              // cast shadow, past the ridge's terminator
     o.key = n.lam * vis;
 
     // Sky: hemispherical, occluded down in the fold.
@@ -207,24 +250,20 @@ static inline Studio3Tap studio3_tap(float f, thread const Studio3P& P,
     o.bounce = P.sb * dz * dz * 1.6 * mix(P.Easc, P.Edesc, wa);
 
     float ridgeW = 1.0 - studio3_s01((min(f, 1.0 - f) - P.rw0) * P.irw);
-    // Paper: the hairline lives on the burnished ridge; satin shines everywhere.
-    o.spec = n.spr * vis * (P.mat == 1 ? 1.0 : 0.12 + 0.88 * ridgeW);
+    // Satin's open facets shine where the half vector lies beyond the crease's normals.
+    o.spec = n.spr * vis;
 
     // Translucency.
     o.trans = 0.0;
     if (P.mat == 0) {                          // light through the crest into the shadow side
         // (rising from nothing at the crest, so the two sides of a ridge meet without a step)
         o.trans = studio3_s01(f * P.iglow) * exp2(-f * 32.0) * (1.0 - wa) * P.Easc;
-    } else if (P.mat == 3) {                   // lantern: lit from behind; creases go dark
+    } else if (P.mat == 3) {                   // lantern: lit from behind; the doubled paper at
+        // every crease (ridge and valley alike) stays dark
         float valleyW = 1.0 - studio3_s01((as - P.rw0) * P.irw);
-        o.trans = n.eb * (1.0 - 0.85 * ridgeW) * (1.0 - 0.35 * valleyW);
+        o.trans = n.eb * (1.0 - 0.82 * max(ridgeW, valleyW));
     }
     return o;
-}
-
-static inline void studio3_acc(thread Studio3Tap& a, Studio3Tap b, float w) {
-    a.key += b.key * w; a.sky += b.sky * w; a.bounce += b.bounce * w;
-    a.spec += b.spec * w; a.trans += b.trans * w;
 }
 
 // Distance (in φ, periodic) from f to x.
@@ -259,7 +298,9 @@ static inline float3 studio3_pleats(float2 px, float2 res, float t, constant FXU
     float2 q = (px - 0.5 * res) / res.y;
     float yu = -q.y;
     float m = 1.0 / (1.0 - kap * yu);                             // the top of the sheet is farther
-    float2 Ps = float2(q.x, yu) * m;
+    // A slow camera drift over the sheet (a gentle ellipse, one per 600 s at speed 1: about
+    // a pixel a second at 1000 px tall), the light and the lantern's lamp travelling with it.
+    float2 Ps = float2(q.x, yu) * m + float2(0.10 * sD, 0.045 * (cD * 0.8 - sD * 0.6));
     float b = dot(Ps, B0);
     float sArg = 5.0265 * b + sPh;                                // one large S-bend
     float3 n1g = studio3_gnd(Ps * 1.9 + o1);                      // field noise: a gentle meander
@@ -276,7 +317,7 @@ static inline float3 studio3_pleats(float2 px, float2 res, float t, constant FXU
     // The compression wave rolls across the folds (and gives them a hair of lateral play).
     float wph = phB - 0.184800 * phi0 + 0.5 * sin(b * 2.4 + 0.7);  // 34 pleats per wave
     float wv = sin(wph);
-    float phi = phi0 + 0.12 * breathe * cos(wph);
+    float phi = phi0 + 0.16 * breathe * cos(wph);
 
     // Per-pleat irregularity: smooth 1-D noise along φ (never per-pleat hashes, which step),
     // wandering along each fold with the field noise.
@@ -288,12 +329,15 @@ static inline float3 studio3_pleats(float2 px, float2 res, float t, constant FXU
     float d0 = mix(0.10, 1.15, depth);
     float tb0 = d0 * (15.0 - d0 * d0) / (15.0 - 6.0 * d0 * d0);   // tan (Padé)
     float sb0 = tb0 * rsqrt(1.0 + tb0 * tb0);
-    float tb = tb0 * (1.0 + 0.5 * breathe * wv) * (1.0 + 0.06 * n1) * (1.0 + 0.14 * n1g.x);
+    float tb = tb0 * (1.0 + 0.6 * breathe * wv) * (1.0 + 0.06 * n1) * (1.0 + 0.14 * n1g.x);
     tb = max(tb, 0.02);
     float ib = rsqrt(1.0 + tb * tb);
     P.tb = tb; P.sb = tb * ib; P.cb = ib; P.H = 0.5 * tb; P.iH = 2.0 / tb;
+    P.isb = 1.0 / P.sb;
     float Rm = mat == 1 ? 0.12 : (mat == 2 ? 0.15 : (mat == 3 ? 0.07 : 0.11));   // linen folds softly
-    P.R0 = Rm * (1.0 + 0.2 * n3);
+    float R = clamp(Rm * (1.0 + 0.2 * n3), 1e-4, 0.24 * P.isb);
+    P.R = R; P.R2 = R * R; P.iR = 1.0 / R; P.Rs = R * P.sb;
+    P.zv0 = R / ib; P.zr0 = P.H - P.zv0;
     P.aoK = 0.75 * P.sb;
 
     // ---- light ----------------------------------------------------------------------
@@ -343,154 +387,264 @@ static inline float3 studio3_pleats(float2 px, float2 res, float t, constant FXU
     float ice = 1.0 / P.ce;
     float te = P.se * ice;
     P.te = te; P.iteb = 1.0 / (te + tb);
-    P.isb = 1.0 / P.sb; P.icb = 1.0 / ib;
     P.kE = saturate((tb - te) * 12.0);                            // the ridge casts a shadow
     float xs = tb * P.iteb;                                       // 2H/(tan e + tan β), sharp ridge
     float sEB = P.se * P.cb + P.ce * P.sb;
     P.penK = 2.0 * P.sigL * P.cb * ice / max(sEB, 0.2);
+    // Tangent point of the shadow line on the ridge arc (normal at min(e, β)), then where the
+    // line (slope −tan e) meets the lit facet z = tan β·(x − ½); its penumbra is the light's
+    // angular size × the ridge's distance, across the facet (penK = 2σ·cos β / sin(e + β) / cos e).
+    {
+        bool eLow = P.kE > 0.0;
+        float sec = eLow ? P.se : P.sb, cec = eLow ? P.ce : P.cb;
+        P.Tx = R * sec;
+        float Ty = P.zr0 + R * cec;
+        P.xsh = (Ty + te * P.Tx + 0.5 * tb) * P.iteb;
+    }
     float sEmB = P.se * P.cb - P.ce * P.sb;
     P.Easc = P.ell * max(sEB, 0.0) * saturate((1.0 - xs) * 2.0);
     P.Edesc = P.ell * (sEmB >= 0.03 ? sEmB : (sEmB <= -0.03 ? 0.0 : (sEmB + 0.03) * (sEmB + 0.03) * 8.333));
     float ihz = rsqrt(P.h.x * P.h.x + P.h.z * P.h.z);
     P.sH = P.h.x * ihz; P.cH = P.h.z * ihz;
-    P.sc2 = mat == 1 ? 0.0100 : 0.0064;                           // core σ: satin 0.10, paper 0.08
+    P.sc = mat == 1 ? 0.10 : 0.08; P.isc = 1.0 / P.sc;             // core σ: satin 0.10, paper 0.08
     float hbK = 1.0 / (1.0 + P.h.y * P.h.y * (mat == 1 ? 2.5 : 4.0));   // broad along the fold
-    P.sg = 0.6816; P.cg = 0.7317;                                 // γ = 0.75: the lamp sits behind, key side
+
+    // Lantern: the lamp hangs a short way behind the sheet, on the light angle's side of the
+    // frame. Inverse square from it (1 at the hot spot); the cos at each facet's back is per tap.
+    float lampE = 0.0;
+    P.lbx = 0.0; P.lbz = -1.0;
+    if (mat == 3) {
+        float thL = clamp(u.p1.y, -90.0, 90.0) * 0.0174533;   // the lamp stays put when Live
+        float sL = sin(thL);
+        float2 hot = float2(0.48 * sL, 0.04 - 0.10 * sL * sL);
+        const float DL = 0.38;
+        float2 dl = hot - Ps;
+        float d2 = dot(dl, dl) + DL * DL;
+        float il = rsqrt(d2);
+        P.lbx = dot(dl, A) * mir * il; P.lbz = -DL * il;
+        lampE = DL * DL / d2;
+    }
 
     // ---- depth of field + footprint ----------------------------------------------------
     float ramp = saturate((yu + 0.17) * 1.4925);
     float coc = focus * 0.032 * res.y * ramp * sqrt(ramp);        // px; the bottom third is sharp
-    float blurPx = sqrt(1.5625 + 0.75 * coc * coc);
+    float blurPx = sqrt(2.56 + 0.75 * coc * coc);                 // ≥ 1.6 px
     float fwF = fw * blurPx;                                      // filter width in pleats
 
     // ---- microtexture (material coordinates, fades by footprint) ------------------------
     float mu = phi, mv = b / W0;
-    float fuv = max(fw, m / (W0 * res.y)) * blurPx;               // texture units per pixel
+    float fuv = max(fw, m / (W0 * res.y)) * blurPx;               // texture units per filter
     float3 alb = studio3_lin(u.colorA.rgb);
     float albK = 1.0, dnu, dbt = 0.0, specK = 1.0, transK = 1.0;
     dnu = 0.04 * nd.y * n1g.z;                                    // gentle cockle along each fold
-    if (mat == 0 || mat == 3) {                                   // paper: formation + tooth
-        float tf = 1.0 - smoothstep(0.20, 0.42, fuv * 5.0);
-        float3 h1 = tf > 0.0 ? studio3_gnd(float2(mu * 4.8 + mv * 1.4, mv * 4.8 - mu * 1.4) + 3.7) : float3(0.0);
-        float2 tilt = 0.009 * 5.0 * h1.yz * tf;
-        dnu -= tilt.x; dbt = -tilt.y;
-        albK = 1.0 + 0.04 * h1.x * tf + 0.03 * n1g.x;
+    if (mat == 0 || mat == 3) {
+        // Paper. Formation: soft fibre clouds a few to the pleat, in the albedo and — much
+        // stronger — seen through. Tooth: fine relief, ~26 to the pleat, raking across the lit
+        // facets where the screen resolves it.
+        float3 hF = studio3_gnd(float2(mu * 4.6 + mv * 1.3, mv * 4.6 - mu * 1.3) + 3.7);
+        float tf = 1.0 - smoothstep(0.25, 0.5, fuv * 26.0);
+        if (tf > 0.0) {
+            float2 tilt = 0.032 * tf * studio3_gnd(float2(mu * 26.0 + mv * 7.0, mv * 26.0 - mu * 7.0) + 5.3).yz;
+            dnu -= tilt.x; dbt = -tilt.y;
+        }
+        albK = 1.0 + 0.035 * hF.x + 0.03 * n1g.x;
         // seen through, paper shows its formation: fibre clouds, much stronger than in reflection
-        transK = 1.0 + (0.32 * h1.x + 0.10 * nd.x) * (0.4 + 0.6 * tf) + 0.12 * n1g.x;
-    } else if (mat == 2) {                                        // linen: plain weave with slubs
-        float wf = 1.0 - smoothstep(0.20, 0.42, fuv * 7.0);
-        if (wf > 0.0) {
-            float2 c = float2(mu, mv) * 7.0;
-            float2 fl = floor(c);
+        transK = 1.0 + 0.20 * hF.x + 0.08 * nd.x;
+    } else if (mat == 2) {
+        // Linen: ~40 threads to the pleat. Slubs — thicker runs of yarn a few threads wide and
+        // tens long, in the warp (along the folds) and the weft (across) — lift and catch the
+        // rake: the cue that reads as linen from across the room. Where the screen resolves the
+        // threads, the plain weave's over-under bumps, then the grooves between threads.
+        const float NT = 40.0;
+        float sk = NT / 3.5, sl = NT / 45.0;                      // slub cells: 3.5 threads × 45
+        float slf = 1.0 - smoothstep(0.35, 0.75, fuv * sk);
+        float2 tilt = float2(0.0);
+        float slub = 0.0;
+        if (slf > 0.0) {
+            // thick-thin yarn: slubs swell (lighter, raised), thin runs sink (darker)
+            float3 nw = studio3_gnd(float2(mu * sk, mv * sl) + float2(2.3, 8.1));
+            float3 nf = studio3_gnd(float2(mu * sl, mv * sk) + float2(6.7, 1.4));
+            float xw = saturate((nw.x - 0.04) * 3.0), yw = saturate((-nw.x - 0.22) * 3.0);
+            float xf = saturate((nf.x - 0.08) * 3.0), yf = saturate((-nf.x - 0.26) * 3.0);
+            float hw = xw * xw * (3.0 - 2.0 * xw) - 0.6 * yw * yw * (3.0 - 2.0 * yw);
+            float hf = xf * xf * (3.0 - 2.0 * xf) - 0.6 * yf * yf * (3.0 - 2.0 * yf);
+            float dw = 18.0 * (xw * (1.0 - xw) + 0.6 * yw * (1.0 - yw));   // d h / d noise
+            float df = 18.0 * (xf * (1.0 - xf) + 0.6 * yf * (1.0 - yf));
+            tilt += 0.0020 * slf * (dw * nw.yz * float2(sk, sl) + df * nf.yz * float2(sl, sk));
+            slub = slf * (hw + hf);
+        }
+        float2 c = float2(mu, mv) * NT;
+        float fa = 1.0 - smoothstep(0.30, 0.55, fuv * NT * 0.71);
+        float wvA = 0.0;
+        if (fa > 0.0) {
             float sx = sin(STUDIO3_PI * c.x), cx = cos(STUDIO3_PI * c.x);
             float sy = sin(STUDIO3_PI * c.y), cy = cos(STUDIO3_PI * c.y);
-            float pU = fmod(abs(fl.x), 2.0) < 0.5 ? 1.0 : -1.0;   // (−1)^floor
-            float pV = fmod(abs(fl.y), 2.0) < 0.5 ? 1.0 : -1.0;
-            float slU = 0.85 + 0.6 * studio3_n1d(c.y * 0.23 + fl.x * 7.13).x;   // slubs along warp
-            float slV = 0.85 + 0.6 * studio3_n1d(c.x * 0.23 + fl.y * 5.71 + 3.0).x;
-            // Thread cross-sections sin² (flat at the gaps, so height and slope stay continuous
-            // where a thread ends and its neighbour's slub begins); warp and weft trade places
-            // under a soft max, never a hard switch.
-            float wx = sx * sx * slU, wy = sy * sy * slV;
-            float ow = pU * sy, of = -pV * sx;                    // over / under
-            float hw = wx * (0.62 + 0.38 * ow), hf = wy * (0.62 + 0.38 * of);
-            float2 gw = float2(STUDIO3_PI * 2.0 * sx * cx * slU * (0.62 + 0.38 * ow),
-                               wx * 0.38 * pU * STUDIO3_PI * cy);
-            float2 gf = float2(wy * 0.38 * -pV * STUDIO3_PI * cx,
-                               STUDIO3_PI * 2.0 * sy * cy * slV * (0.62 + 0.38 * of));
-            float tw = studio3_s01((hw - hf) * 3.0 + 0.5);
-            float hC = mix(hf, hw, tw);
-            float2 gh = mix(gf, gw, tw) * 7.0;                    // per pleat width
-            albK = 1.0 + wf * (0.08 * (hC - 0.45) + 0.05 * mix(slV, slU, tw) - 0.042);
-            dnu -= 0.008 * wf * gh.x; dbt = -0.008 * wf * gh.y;
+            // over-under: warp and weft swap at every crossing (a checker of bumps)
+            tilt += 0.030 * fa * STUDIO3_PI * float2(cx * sy, sx * cy);
+            float fb = 1.0 - smoothstep(0.30, 0.55, fuv * NT);
+            // the grooves between threads, both ways
+            tilt += 0.022 * fb * STUDIO3_PI * float2(2.0 * sx * cx, 2.0 * sy * cy);
+            wvA = fa * (0.5 * sx * sy * sx * sy - 0.125 + 0.5 * fb * (sx * sx + sy * sy - 1.0));   // zero-mean
         }
-        albK += 0.03 * n1g.x;
+        dnu -= tilt.x; dbt = -tilt.y;
+        albK = 0.97 + 0.09 * (slub - 0.2 * slf) + 0.05 * wvA + 0.03 * n1g.x + 0.025 * nd.x;
     } else {                                                      // satin: fine streaks in the sheen
         float sf = 1.0 - smoothstep(0.15, 0.40, fuv * 23.0);
-        float s1 = studio3_n1d(mu * 23.0 + 0.9 * sin(mv * 0.11)).x * 1.6 * sf;
-        float sS = studio3_n1d(mu * 0.37 + mv * 0.045 + 9.0).x * 1.6;   // slow watering of the sheen
-        specK = 1.0 + 0.25 * s1 + 0.18 * sS;
+        float s1 = sf > 0.0 ? studio3_n1d(mu * 23.0 + 2.2 * n1g.x).x * 1.6 * sf : 0.0;
+        // a slow watering of the sheen, wandering with the field, faded where the blur spans it
+        float wf = 1.0 - smoothstep(0.25, 0.9, fuv * 0.4);
+        float sS = studio3_n1d(mu * 0.34 + mv * 0.05 + 1.6 * n1g.x + 9.0).x * 2.0 * wf;
+        specK = 1.0 + 0.25 * s1 + 0.12 * sS;
         dnu += 0.03 * s1;
-        albK = 1.0 + 0.04 * sS;
+        albK = 1.0 + 0.03 * sS;
     }
     dnu *= mir;
     P.sdn = dnu; P.cdn = 1.0 - 0.5 * dnu * dnu;                   // small angles
-    P.xb = Lb * dbt * iell;
+    // along-fold tilt over the key's share in the cross-section — bounded, or a key running
+    // along the folds (ell → small) would blow the tooth up into a coarse relief
+    P.xb = clamp(Lb * dbt * iell, -0.12, 0.12);
 
-    // ---- filter ------------------------------------------------------------------------
-    Studio3Tap acc = {0.0, 0.0, 0.0, 0.0, 0.0};
-    float fm = mir * phi;
-    float wAvg = smoothstep(0.45, 0.65, fwF);
     // The two flat facets (paper's hairline is negligible this far from its crease — under
     // 0.001 — so only satin shines on open facet).
     Studio3N fA = studio3_shadeN(-P.sb, P.cb, 0.0, P, mat == 1);
     Studio3N fD = studio3_shadeN(P.sb, P.cb, 0.0, P, mat == 1);
+
+    // ---- the creases' sheen lines (paper's burnished hairline, satin's sheen) -------------
+    // On a crease arc the normal sweeps [−β, β]; the lobe peaks where it meets the half vector
+    // (less the microtilt), on the ridge and in the valley. Energy over the arc in closed form;
+    // position and height on the arc through the parallax to screen phase; the cast shadow at
+    // the line; then a band-limited bump at the pixel (studio3_bump), added to every tap.
+    float lineSpec = 0.0;
+    float fwT = min(fwF, 0.75);
+    float fm = mir * phi;
+    if (mat <= 1) {
+        // the half vector's angle across the fold, less the microtilt, as (sin, cos) — then its
+        // spot on the arc (clamped to the arc's normals ±β) and the lobe's argument
+        // sin(±β − ν_H) at the arc's two ends: no trig but the antiderivative's atan
+        float sh = P.sH * P.cdn - P.cH * P.sdn, ch = P.cH * P.cdn + P.sH * P.sdn;
+        float sC = clamp(sh, -P.sb, P.sb), cC = sqrt(1.0 - sC * sC);
+        float xHi = P.sb * ch - P.cb * sh, xLo = -P.sb * ch - P.cb * sh;
+        float nl = saturate(P.sH * P.L.x + P.cH * P.L.z);
+        float k0 = nl * R * cC;
+        float E = k0 * P.sc * (studio3_G(xHi * P.isc) - studio3_G(xLo * P.isc));
+        float sk = 0.0833 * fwF * fwF;                            // the footprint's variance (box)
+        float rr = R * sC, hh = R * cC;
+        // the ridge (f = 0 ≡ 1) and the valley (f = ½): position, height → screen phase
+        float fR = rr - floor(rr), fV = 0.5 - rr;
+        float uR = fR + kp * (P.zr0 + hh), uV = fV + kp * (P.zv0 - hh);
+        float wC = P.sc * R * cC;
+        float dR = fm - uR;
+        dR -= floor(dR + 0.5);
+        // the cast shadow at the lines (only its footprint-wide softening is needed here)
+        P.ipen = 1.0 / (P.penK * max(P.xsh - P.Tx, 0.0) + 1.4 * fwT + 0.004);
+        P.igate = 1.0 / (0.024 + fwT);
+        float vR = studio3_vis(fR, P);
+        lineSpec = vR * studio3_bump(dR, E, wC, sk);
+        if (mat == 1) {
+            // satin: the soft, wide lobe too, and the valley's line (paper's valley is matte)
+            float E2 = k0 * 0.08 * (studio3_G(xHi * 2.5) - studio3_G(xLo * 2.5));
+            float wW = 0.4 * R * cC;
+            float dV = fm - uV;
+            dV -= floor(dV + 0.5);
+            lineSpec += vR * studio3_bump(dR, E2, wW, sk);
+            float vV = studio3_vis(fV, P);                        // (the valley is often in shadow)
+            if (vV > 0.002) lineSpec += vV * (studio3_bump(dV, E, wC, sk) + studio3_bump(dV, E2, wW, sk));
+        }
+    }
+
+    // ---- light it: each tap's colour is linear in its five terms ------------------------
+    // (taps are tone-mapped one by one and averaged in display light — what the eye averages
+    // over stripes too fine to see; averaging radiance first would wash fine pleats out bright)
+    float3 albT = alb * albK;
+    float3 skyCol = float3(0.62, 0.74, 1.0) * 0.16 * skyI;
+    const float keyAmt = 1.6, bounceK = 0.38;
+    float lens = (1.0 - 0.16 * dot(q, q)) * expo;                // a touch of lens falloff
+    float3 cKey, cBounce, cSky, cSpec, cTrans;
+    if (mat == 3) {                                               // lantern at dusk: dim front, lit inside
+        // Dusk outside: a faint cool key and the blue-hour sky on the front. The lamp inside is
+        // the light: it reaches the eye through the paper, tinted warm by the fibres (alb²) —
+        // brightest round the hot spot, on the facets whose backs face the lamp; the creases,
+        // where the paper doubles, stay dark.
+        float3 front = mix(keyCol, float3(0.70, 0.80, 1.0), 0.7) * (keyI * pool * 0.03 * keyAmt);
+        cKey = albT * front; cBounce = cKey * bounceK * albT; cSky = albT * skyCol * 0.32;
+        cSpec = float3(0.0);
+        float3 tint = alb * alb / max(dot(alb * alb, float3(0.2126, 0.7152, 0.0722)), 0.02);
+        float3 lamp = studio3_lin(u.colorB.rgb);                  // its own lamp, whatever the sky does
+        lamp /= max(dot(lamp, float3(0.2126, 0.7152, 0.0722)), 0.08);
+        // the glow inside the lantern: the lamp's inverse square, steepened by the sheet curving
+        // away from it, plus a little light scattered round the inside
+        float glow = 3.0 * lampE * lampE * sqrt(lampE) + 0.006;
+        cTrans = mix(float3(1.0), tint, 0.75) * lamp * (glow * transK);
+    } else {
+        float3 E = keyCol * (keyI * pool * keyAmt);
+        cKey = albT * E; cBounce = cKey * bounceK * albT;
+        // satin's floats mirror a little of the sky
+        cSky = albT * skyCol + (mat == 1 ? skyCol * 0.12 : float3(0.0));
+        float x5 = 1.0 - saturate(dot(Vp, P.h));
+        float F = 1.0 + 6.0 * x5 * x5 * x5 * x5 * x5;               // Fresnel rise at grazing
+        // Satin's floats make a bright fibre sheen; paper's burnished crease a faint hairline.
+        float specAmt = (mat == 1 ? 0.85 : (mat == 0 ? 0.07 : 0.0)) * hbK;
+        float3 specCol = mat == 1 ? mix(float3(1.0), alb / max(max(alb.r, max(alb.g, alb.b)), 1e-3), 0.25)
+                                  : float3(1.0);
+        cSpec = E * specCol * (specAmt * F * specK);
+        cTrans = mat == 0 ? E * alb * sqrt(alb) * (0.12 * transK) : float3(0.0);
+    }
+    cKey *= lens; cBounce *= lens; cSky *= lens; cSpec *= lens; cTrans *= lens;
+
+    // ---- filter ------------------------------------------------------------------------
+    float3 acc = float3(0.0);
+    float wAvg = smoothstep(0.40, 0.65, fwF);
     // Three estimates of the box-filtered profile, blended by footprint (never switched, so a
     // pixel can't pop between them as the folds breathe):
-    //  0 · fine — a crease spans several footprints (high resolution, in focus): one tap
-    //      pre-filtered over the whole footprint is already a box filter (the terminator, the
-    //      sheen width and the penumbra widen by what the footprint sweeps);
-    //  1 · four taps across the footprint, each pre-filtered over its quarter — or one on open
-    //      facet, where nothing inside the footprint bends;
-    //  2 · beyond about half a pleat per footprint, the φ-independent period average.
-    float fwT = min(fwF, 0.75);
+    //  0 · fine — the footprint is small beside a crease: one tap over all of it;
+    //  1 · four taps across the footprint — or one on open facet, where nothing in it bends;
+    //  2 · below ~4 px a pleat, the φ-independent period average: the profile's four quarters.
     float thr = 0.42 * Rm * sb0;                                  // static, so the blend never flickers
     float wF = (1.0 - wAvg) * smoothstep(1.2 * thr, 0.8 * thr, fwT);
     float wQ = (1.0 - wAvg) - wF;
-    for (int pass = 0; pass < 3; ++pass) {
-        float pw = pass == 0 ? wF : (pass == 1 ? wQ : wAvg);
+    for (int pass = 0; pass < 2; ++pass) {
+        float pw = pass == 0 ? wF : wQ;
         if (pw <= 0.0) continue;
-        studio3_prep(P, pass == 0 ? fwT : (pass == 1 ? 0.25 * fwT : 0.1667));
         int nT = 1;
-        float fs = fm, stp = 0.0;
+        float du = fwT;
         if (pass == 1) {
+            studio3_prep(P, 0.25 * fwT);
             float f0 = studio3_par(fm, P);
             float hw = (0.5 * fwT + 0.006) * max(P.iD, P.iA);     // footprint in profile units
             bool open = studio3_pd(f0, 0.0) > P.Rs + 0.025 + hw
                      && studio3_pd(f0, 0.5) > P.Rs + 0.035 + hw
                      && (P.kE <= 0.0 || abs(f0 - P.xsh) > 0.5 / P.ipen + hw);
-            if (!open) { nT = 4; stp = 0.25 * fwT; fs = fm - 0.375 * fwT; }
-        } else if (pass == 2) {
-            nT = 6; stp = 0.1667; fs = 0.0833;
+            if (!open) { nT = 4; du = 0.25 * fwT; }
+            else studio3_prep(P, fwT);
+        } else {
+            studio3_prep(P, fwT);
         }
         float wt = pw / float(nT);
+        // Each tap: the screen interval [u, u + du] mapped through the parallax to the profile.
+        float u0 = fm - 0.5 * fwT;
+        float xl = studio3_par(u0, P);
         for (int k = 0; k < nT; ++k) {
-            studio3_acc(acc, studio3_tap(studio3_par(fs + stp * float(k), P), P, fA, fD), wt);
+            float xr = studio3_par(u0 + du * float(k + 1), P);
+            float xe = xr < xl ? xr + 1.0 : xr;                   // the interval crosses the ridge
+            float xc = 0.5 * (xl + xe);
+            Studio3Tap tp = studio3_tap(xc - floor(xc), max(0.5 * (xe - xl), 1e-5), P, fA, fD);
+            float3 c = cKey * tp.key + cBounce * tp.bounce + cSky * tp.sky + cSpec * (tp.spec + lineSpec)
+                     + cTrans * tp.trans;
+            acc += aces(c) * wt;
+            xl = xr;
         }
     }
-
-    // ---- light it ------------------------------------------------------------------------
-    float3 albT = alb * albK;
-    float3 skyCol = float3(0.62, 0.74, 1.0) * 0.16 * skyI;
-    const float keyAmt = 1.6, bounceK = 0.38;
-    float3 col;
-    if (mat == 3) {                                               // lantern at dusk: dim front, lit behind
-        // Dusk outside: a faint cool key and blue-hour sky on the front. The lamp inside is the
-        // light: it reaches the eye through the paper, tinted warm by the fibres (alb²) — the
-        // facets turned toward it glow, the others and the doubled creases stay dim.
-        float3 front = mix(keyCol, float3(0.80, 0.86, 1.0), 0.6) * (keyI * pool * 0.05 * keyAmt);
-        col = albT * (front * (acc.key + bounceK * albT * acc.bounce) + skyCol * 0.45 * acc.sky);
-        col += front * 0.04 * acc.spec;
-        float3 tint = alb * alb / max(dot(alb * alb, float3(0.2126, 0.7152, 0.0722)), 0.02);
-        float3 lamp = studio3_lin(u.colorB.rgb);                  // its own lamp, whatever the sky does
-        lamp /= max(dot(lamp, float3(0.2126, 0.7152, 0.0722)), 0.08);
-        float3 trans = mix(float3(1.0), tint, 0.7) * lamp * (0.14 + 0.36 * pool);
-        col += trans * (acc.trans * transK);
-    } else {
-        float3 E = keyCol * (keyI * pool * keyAmt);
-        col = albT * (E * (acc.key + bounceK * albT * acc.bounce) + skyCol * acc.sky);
-        float x5 = 1.0 - saturate(dot(Vp, P.h));
-        float F = 1.0 + 6.0 * x5 * x5 * x5 * x5 * x5;               // Fresnel rise at grazing
-        // Satin's floats make a bright fibre sheen (and mirror a little of the sky); paper's
-        // burnished crease a faint hairline.
-        float specAmt = (mat == 1 ? 0.85 : 0.07) * hbK;
-        if (mat == 1) col += skyCol * (0.12 * acc.sky);
-        float3 specCol = mat == 1 ? mix(float3(1.0), alb / max(max(alb.r, max(alb.g, alb.b)), 1e-3), 0.25)
-                                  : float3(1.0);
-        col += E * specCol * (specAmt * F * acc.spec * specK);
-        if (mat == 0) col += E * alb * sqrt(alb) * (0.12 * acc.trans * transK);
+    if (wAvg > 0.0) {
+        // The period average: four quarters of the profile, ridge to valley to ridge, each
+        // weighted by the screen width it covers (the facets turned to the camera look wider).
+        studio3_prep(P, 0.25);
+        for (int k = 0; k < 4; ++k) {
+            float wk = 0.25 * (k < 2 ? 1.0 / P.iD : 1.0 / P.iA);
+            Studio3Tap tp = studio3_tap(0.125 + 0.25 * float(k), 0.125, P, fA, fD);
+            float3 c = cKey * tp.key + cBounce * tp.bounce + cSky * tp.sky + cSpec * (tp.spec + lineSpec)
+                     + cTrans * tp.trans;
+            acc += aces(c) * (wAvg * wk);
+        }
     }
-    // A touch of lens falloff.
-    col *= (1.0 - 0.16 * dot(q, q)) * expo;
-    return linearToSrgb(aces(col)) + bandDither(px) * 1.5;
+    return linearToSrgb(acc) + bandDither(px) * 1.5;
 }
