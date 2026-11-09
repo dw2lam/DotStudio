@@ -90,6 +90,24 @@ enum EffectKind: String, Codable, CaseIterable {
 
     case nowPlaying                                           // Music    66
 
+    // — new-scene slot 1 (shader id 67); rename the case freely on this line —
+    case studio1
+
+    // — new-scene slot 2 (shader id 68); rename the case freely on this line —
+    case studio2
+
+    // — new-scene slot 3 (shader id 69); rename the case freely on this line —
+    case studio3
+
+    // — new-scene slot 4 (shader id 70); rename the case freely on this line —
+    case studio4
+
+    // — new-scene slot 5 (shader id 71); rename the case freely on this line —
+    case studio5
+
+    // — new-scene slot 6 (shader id 72); rename the case freely on this line —
+    case studio6
+
     var displayName: String {
         switch self {
         case .dither: return "Dithering"

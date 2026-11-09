@@ -411,6 +411,12 @@ static inline float3 uniShade(int i, float3 c, float3 n0, float3 rd, float fp, f
 #include "Scenes/Nature_funcs.h"
 #include "Scenes/Retro_funcs.h"
 #include "Scenes/Music_funcs.h"
+#include "Scenes/Studio1_funcs.h"
+#include "Scenes/Studio2_funcs.h"
+#include "Scenes/Studio3_funcs.h"
+#include "Scenes/Studio4_funcs.h"
+#include "Scenes/Studio5_funcs.h"
+#include "Scenes/Studio6_funcs.h"
 
 // ---------------------------------------------------------------- slideshow source
 
@@ -1789,6 +1795,12 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
 #include "Scenes/Nature_cases.h"
 #include "Scenes/Retro_cases.h"
 #include "Scenes/Music_cases.h"
+#include "Scenes/Studio1_cases.h"
+#include "Scenes/Studio2_cases.h"
+#include "Scenes/Studio3_cases.h"
+#include "Scenes/Studio4_cases.h"
+#include "Scenes/Studio5_cases.h"
+#include "Scenes/Studio6_cases.h"
 
     case 41: { // INTERNAL crossfade — set by the renderer during preset rotation,
                // never by an EffectInstance. src = incoming frame, fadePrev = outgoing.
