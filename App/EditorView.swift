@@ -59,7 +59,8 @@ struct EditorView: View {
                     .heroGeometry(id, in: hero)
                 if live && !DemoHooks.stillPreviews {
                     MetalPreview(preset: preset, source: model.library.source,
-                                 location: model.locationTuple, store: model.store)
+                                 location: model.locationTuple, store: model.store,
+                                 music: model.library.musicSettings)
                         .transition(.opacity)
                 }
             }
@@ -251,7 +252,7 @@ private struct MusicEditorStatus: View {
         .accessibilityLabel("What's playing")
     }
 
-    /// "Spotify · Playing" / "Music · Paused" / "Spotify · Needs permission".
+    /// "Spotify · Playing" / "Apple Music · Paused" / "Spotify · Needs permission".
     private var statusLine: String {
         let what = now.needsAutomationFix ? "Needs permission" : now.isPlaying ? "Playing" : "Paused"
         return "\(now.sourceName) \u{00B7} \(what)"
@@ -262,7 +263,7 @@ private struct MusicEditorStatus: View {
             return "Allow DotStudio to control \(denied.source.displayName) so this style can show exactly what's playing."
         }
         if !now.isMonitoring { return "Turn on an option in Settings › Music to show what's playing." }
-        return "Nothing playing — start a song in Spotify or Music and it appears here."
+        return "Nothing playing — start a song in Spotify or Apple Music and it appears here."
     }
 
     private func allowButton(_ source: MusicSource) -> some View {
@@ -270,7 +271,7 @@ private struct MusicEditorStatus: View {
             .glassButton()
             .adaptiveControlSize(.small)
             .fixedSize()
-            .help("Opens System Settings › Privacy & Security › Automation — turn on \(source.displayName) under DotStudio.")
+            .help("Opens System Settings › Privacy & Security › Automation — turn on \(source.automationName) under DotStudio.")
     }
 }
 

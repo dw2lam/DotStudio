@@ -51,14 +51,20 @@ enum MusicText {
         ])
     }
 
+    private static let noBreak: Set<Character> = ["\u{00A0}", "\u{202F}", "\u{2007}"]
+
     /// Wrap `text` into at most `style.maxLines` lines of `width`; the last line ends in "…"
-    /// when the text doesn't fit. Whitespace and newlines collapse to single spaces.
+    /// when the text doesn't fit. Whitespace and newlines collapse to single spaces (no-break
+    /// spaces stay).
     static func layout(_ text: String, _ s: MusicTextStyle, width: CGFloat) -> MusicTextBlock {
         let font = font(s)
         let ascent = CTFontGetAscent(font), descent = CTFontGetDescent(font)
         var block = MusicTextBlock(lines: [], lineWidths: [], ascent: ascent, descent: descent,
                                    lineStep: s.size * s.leading, style: s)
-        let clean = text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
+        // No-break spaces survive (Swift counts them as whitespace): they're how copy keeps
+        // words together on a line.
+        let clean = text.split(whereSeparator: { ($0.isWhitespace || $0.isNewline) && !Self.noBreak.contains($0) })
+            .joined(separator: " ")
         guard !clean.isEmpty, width > 1 else { return block }
         let str = attributed(clean, s, font: font)
         let ts = CTTypesetterCreateWithAttributedString(str)

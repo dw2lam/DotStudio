@@ -23,11 +23,22 @@ enum MusicSource: String, Codable, Equatable {
         self = MusicSource(rawValue: raw) ?? .unknown
     }
 
+    /// The player's name in DotStudio's own UI ("Apple Music" — under a "Music" section, the
+    /// bare app name would read as the generic word).
     var displayName: String {
         switch self {
         case .spotify: return "Spotify"
-        case .music: return "Music"
+        case .music: return "Apple Music"
         case .unknown: return "Music"
+        }
+    }
+
+    /// The name macOS lists the player under in System Settings › Privacy & Security ›
+    /// Automation — only for lines that send the owner there.
+    var automationName: String {
+        switch self {
+        case .spotify: return "Spotify"
+        case .music, .unknown: return "Music"
         }
     }
 

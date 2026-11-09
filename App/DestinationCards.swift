@@ -10,9 +10,11 @@ struct GalleryState {
     let nowPlaying: UUID?
     let wallpaperID: UUID?
 
-    init(model: AppModel, wallpaperID: UUID?) {
+    /// - musicShows: a song shows right now (the caller observes `model.musicShowsNow`), for
+    ///   the music take-over.
+    init(model: AppModel, wallpaperID: UUID?, musicShows: Bool) {
         lineup = model.screensaverLineup
-        nowPlaying = model.nowPlayingID
+        nowPlaying = model.nowPlayingID(musicActive: musicShows)
         self.wallpaperID = wallpaperID
     }
 
@@ -54,7 +56,7 @@ struct TileBadges: Equatable {
 ///     on top, as tall as the hero, its top level with the hero's).
 ///   • mirror  — both cards lay out preview beside text, with the same preview size; the
 ///     text columns split evenly once both are roomy, and the Wallpaper actions line up
-///     with the Screensaver night row.
+///     with the Screensaver options (night, music).
 ///   • single  — no live wallpaper on this Mac: the Screensaver card alone.
 ///
 /// Both previews are always 16:10 and the same size, in every arrangement.
@@ -79,7 +81,7 @@ struct DestinationGeometry: Equatable {
         let lo = range.lowerBound
         // No tokens for these text-column widths; they're on the grid and grow with the text.
         let textMin = layout.scaled(300)    // Screensaver: header + Preview, deck, rotation, night
-        let textCap = layout.scaled(440)    // room for the night row on one line
+        let textCap = layout.scaled(440)    // room for the options (night + music) on one line
         let wallpaperTextMin = layout.scaled(200)
         let wallpaperTextComfort = layout.scaled(240)
         let largeText = layout.typeSize >= .xxLarge
@@ -180,11 +182,6 @@ struct ScreensaverCard: View {
 
     private var lineup: ScreensaverLineup { state.lineup }
     private var playing: Preset? { state.nowPlaying.flatMap(model.preset) }
-    /// The music card's settings while it's on (the hero shows it, as the screensaver would).
-    private var musicCard: MusicSpec? {
-        let m = model.library.musicSettings
-        return m.isCardEnabled ? m : nil
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -221,13 +218,10 @@ struct ScreensaverCard: View {
                         .transition(.reveal(reduceMotion: reduceMotion))
                 }
             }
-            // The option rows end level with the hero's foot (or an even step below the
-            // rest, when the text runs longer than the hero).
+            // The options end level with the hero's foot (or an even step below the rest,
+            // when the text runs longer than the hero).
             Spacer(minLength: layout.itemGap)
-            VStack(alignment: .leading, spacing: layout.itemGap) {
-                nightRow
-                musicRow
-            }
+            optionsRow
         }
     }
 
@@ -239,12 +233,15 @@ struct ScreensaverCard: View {
                 if let p = playing {
                     // Live while the gallery is up front; a still otherwise (no GPU in the background).
                     if model.editingID == nil && activeState != .inactive && !DemoHooks.stillPreviews {
+                        // The corner card while it's on, as the screensaver would show it (a
+                        // Now Playing style — take-over included — draws its own foreground).
                         MetalPreview(preset: p, source: model.library.source,
                                      location: model.locationTuple, store: model.store, maxFPS: 30,
-                                     musicCard: musicCard)
+                                     music: model.library.musicSettings,
+                                     showsMusicCard: model.library.musicSettings.isCardEnabled)
                             .allowsHitTesting(false)
                     } else {
-                        StyleThumb(preset: p, musicCard: musicCard)
+                        StyleThumb(preset: p, showsMusicCard: model.library.musicSettings.isCardEnabled)
                     }
                 } else {
                     Color.black
@@ -382,12 +379,17 @@ struct ScreensaverCard: View {
         return m == 1 ? "minute" : "\(Int(m)) min"
     }
 
-    // MARK: Night
+    // MARK: Options (night, music)
 
-    private var nightRow: some View {
-        // The picker and its caption move to a second line together in a narrow card; the
-        // picker takes the whole line before a long name truncates (full name in its tooltip).
-        FlowLayout(spacing: layout.controlGap, lineSpacing: layout.controlGap) {
+    /// The card's options in one flow under a hairline: "Different style at night" (its
+    /// picker beside it), "Show what's playing", and — while the corner card shows a song —
+    /// what it is with Play/Pause and Next. Items share a line while they fit and wrap only
+    /// when the card is narrow, so the options take a single line in the common case.
+    private var optionsRow: some View {
+        let spec = model.library.musicSettings
+        // The song only under its own switch: off, the card shows nothing, so neither does this.
+        let showsSong = spec.isCardEnabled && now.isVisible(spec)
+        return FlowLayout(spacing: layout.itemGap, lineSpacing: layout.controlGap) {
             Toggle(isOn: Binding(get: { lineup.night != nil },
                                  set: { on in Motion.run { model.setNightEnabled(on) } })) {
                 Label("Different style at night", systemImage: "moon.stars")
@@ -397,6 +399,9 @@ struct ScreensaverCard: View {
             .toggleStyle(.switch)
             .fixedSize()
 
+            // The picker and its caption move to a line of their own together in a narrow
+            // card; the picker takes the whole line before a long name truncates (full name
+            // in its tooltip).
             if let nightID = lineup.night, let night = model.preset(nightID) {
                 HStack(spacing: layout.controlGap) {
                     StylePickerMenu(current: night, title: night.name, maxWidth: .infinity) { model.setNight($0) }
@@ -408,23 +413,7 @@ struct ScreensaverCard: View {
                 }
                 .transition(.lift(reduceMotion: reduceMotion))
             }
-        }
-        .adaptiveControlSize(.small)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, layout.itemGap)
-        .overlay(alignment: .top) {
-            Rectangle().fill(.primary.opacity(0.08)).frame(height: 1)
-        }
-    }
 
-    // MARK: Music
-
-    /// "Show what's playing" (the corner card, Settings › Music has the rest) and, while a
-    /// song shows, what it is with Play/Pause and Next — the same row style as the night row.
-    private var musicRow: some View {
-        let spec = model.library.musicSettings
-        let visible = now.isVisible(spec)
-        return FlowLayout(spacing: layout.controlGap, lineSpacing: layout.controlGap) {
             Toggle(isOn: Binding(get: { spec.isCardEnabled },
                                  set: { on in Motion.run { model.setMusicCard(on) } })) {
                 Label("Show what's playing", systemImage: "music.note")
@@ -433,9 +422,9 @@ struct ScreensaverCard: View {
             }
             .toggleStyle(.switch)
             .fixedSize()
-            .help("A card with the song, artist and progress in a corner of the screensaver while Spotify or Music plays")
+            .help("A card with the song, artist and progress in a corner of the screensaver while Spotify or Apple Music plays")
 
-            if visible {
+            if showsSong {
                 nowPlayingLine
                     .transition(.lift(reduceMotion: reduceMotion))
             }
@@ -446,10 +435,12 @@ struct ScreensaverCard: View {
         .overlay(alignment: .top) {
             Rectangle().fill(.primary.opacity(0.08)).frame(height: 1)
         }
-        .motion(Motion.smooth, value: visible)
+        .motion(Motion.smooth, value: showsSong)
     }
 
-    /// Cover · "Song — Artist" · Play/Pause · Next. The song truncates before the controls do.
+    /// Cover · "Song — Artist" · Play/Pause · Next — or, when the player refused Automation,
+    /// the same "Allow…" fix-it as Settings, the editor and the menu. The song truncates
+    /// before the controls do.
     private var nowPlayingLine: some View {
         HStack(spacing: layout.controlGap) {
             MusicArtThumb(image: now.artwork, palette: now.state.palette ?? [], side: musicArt)
@@ -459,8 +450,15 @@ struct ScreensaverCard: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .help(now.trackLine)
-            MusicTransport(now: now, showsPrevious: false)
-                .fixedSize()
+            if now.needsAutomationFix, let source = now.source {
+                Button { now.allowControl(source) } label: { Text("Allow\u{2026}").textRole(.callout) }
+                    .glassButton()
+                    .fixedSize()
+                    .help("Allow DotStudio to control \(source.displayName) — opens System Settings › Privacy & Security › Automation (turn on \(source.automationName) under DotStudio)")
+            } else {
+                MusicTransport(now: now, showsPrevious: false)
+                    .fixedSize()
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Now playing: \(now.trackLine)")
@@ -961,9 +959,9 @@ struct WallpaperCard: View {
     let state: GalleryState
     let geometry: DestinationGeometry
     /// Side by side in the mirror arrangement: the Screensaver card's block height, so this
-    /// card's actions end level with its night row.
+    /// card's actions end level with its options.
     var alignHeight: CGFloat = 0
-    /// "Match Screensaver" lives on the controller (wallpaper.json); the slot only knows styles.
+    /// "Match the screensaver" lives on the controller (wallpaper.json); the slot only knows styles.
     @ObservedObject private var controller = WallpaperController.shared
 
     private var style: Preset? { slot.styleID.flatMap(model.preset) }
@@ -982,10 +980,7 @@ struct WallpaperCard: View {
                     VStack(alignment: .leading, spacing: 0) {
                         header
                         Spacer(minLength: layout.itemGap)
-                        VStack(alignment: .leading, spacing: layout.itemGap) {
-                            actions
-                            matchRow
-                        }
+                        actions
                     }
                     .frame(maxWidth: .infinity, minHeight: max(geometry.previewHeight, alignHeight),
                            alignment: .topLeading)
@@ -999,7 +994,6 @@ struct WallpaperCard: View {
                         .frame(height: geometry.previewHeight)
                     header
                     actions
-                    matchRow
                 }
             }
         }
@@ -1033,20 +1027,12 @@ struct WallpaperCard: View {
         .overlay(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous).strokeBorder(.primary.opacity(0.08)))
     }
 
+    /// Change / Stop, then "Match the screensaver" on the same line while it fits. Picking a
+    /// style while matching plays that style instead (WallpaperController.use ends matching).
     private var actions: some View {
         FlowLayout(spacing: layout.controlGap, lineSpacing: layout.controlGap) {
-            if matching {
-                // No style of its own to pick while it follows the screensaver.
-                Label("Matches your screensaver", systemImage: "play.rectangle.on.rectangle")
-                    .textRole(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .fixedSize()
-                    .transition(.opacity)
-            } else {
-                StylePickerMenu(current: style, title: style == nil ? "Choose Style" : "Change",
-                                size: DestinationAction.size) { slot.set($0) }
-            }
+            StylePickerMenu(current: matching ? nil : style, title: style == nil ? "Choose Style" : "Change",
+                            size: DestinationAction.size) { slot.set($0) }
             if style != nil {
                 Button { Motion.run { slot.stop() } } label: { Text("Stop").textRole(.body) }
                     .glassButton()
@@ -1054,29 +1040,24 @@ struct WallpaperCard: View {
                     .fixedSize()
                     .transition(.lift(reduceMotion: reduceMotion))
             }
+            matchToggle
         }
     }
 
-    /// "Match Screensaver": the desktop plays what the screensaver would, in step (same
+    /// "Match the screensaver": the desktop plays what the screensaver would, in step (same
     /// playlist slot, night style and music take-over, on a shared clock), so the screensaver
-    /// starts exactly where the desktop was. Turning it on starts the wallpaper. Same row
-    /// style as the Screensaver card's options.
-    private var matchRow: some View {
+    /// starts exactly where the desktop was. Turning it on starts the wallpaper.
+    private var matchToggle: some View {
         Toggle(isOn: Binding(get: { matching },
                              set: { on in Motion.run { controller.setFollowsScreensaver(on) } })) {
-            Label("Match Screensaver", systemImage: "link")
+            Label("Match the screensaver", systemImage: "link")
                 .textRole(.callout)
                 .lineLimit(1)
         }
         .toggleStyle(.switch)
-        .fixedSize()
-        .help("Play whatever the screensaver shows — same playlist, night style and music — so the screensaver picks up right where your desktop was")
         .adaptiveControlSize(.small)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, layout.itemGap)
-        .overlay(alignment: .top) {
-            Rectangle().fill(.primary.opacity(0.08)).frame(height: 1)
-        }
+        .fixedSize()
+        .help("Play whatever the screensaver shows — same playlist, night style and music — so the screensaver picks up right where your desktop was. Picking a style turns this off.")
     }
 }
 
@@ -1104,16 +1085,17 @@ private struct DesktopGlyph: View {
 struct StyleThumb: View {
     @EnvironmentObject var model: AppModel
     let preset: Preset
-    /// The music card's settings: drawn on the still while a song shows (the Screensaver
-    /// card's hero when it can't be live). nil = the plain thumbnail.
-    var musicCard: MusicSpec? = nil
+    /// The music corner card drawn on the still while a song shows (the Screensaver card's
+    /// hero when it can't be live); off = the plain thumbnail.
+    var showsMusicCard = false
 
     var body: some View {
         // Takes exactly the size it's offered; the image fills it and is clipped, so a
         // thumbnail never pushes its container's layout around.
         Color.black
             .overlay {
-                if let img = model.thumbnailer.image(for: preset, source: model.library.source, musicCard: musicCard) {
+                if let img = model.thumbnailer.image(for: preset, source: model.library.source,
+                                                     music: model.library.musicSettings, showsCard: showsMusicCard) {
                     Image(nsImage: img).resizable().scaledToFill()
                 }
             }
@@ -1200,7 +1182,7 @@ struct AmbientBackdrop: View {
         ZStack {
             Color(nsColor: .windowBackgroundColor)
             if let p = presetID.flatMap(model.preset),
-               let img = model.thumbnailer.image(for: p, source: model.library.source) {
+               let img = model.thumbnailer.image(for: p, source: model.library.source, music: model.library.musicSettings) {
                 Image(nsImage: img)
                     .resizable()
                     .scaledToFill()

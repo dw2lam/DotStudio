@@ -1,8 +1,10 @@
 //  MetalPreview.swift — live Metal preview of a preset inside SwiftUI.
 //
 //  A Now Playing style also shows its foreground (MusicOverlayView above the Metal view),
-//  fed by the app's shared MusicFeedHub; pass `musicCard` to show the corner card over any
-//  other style too (as the screensaver would).
+//  fed by the app's shared MusicFeedHub; `showsMusicCard` shows the corner card over any
+//  other style too (as the screensaver would). `music` is the library's music settings —
+//  the paused linger, the card's corner and size — so a preview keeps a paused song exactly
+//  as long as the screensaver (and the editor's status row) does.
 
 import SwiftUI
 import MetalKit
@@ -14,9 +16,11 @@ struct MetalPreview: NSViewRepresentable {
     let store: SharedStore
     /// Caps the frame rate below the style's own (small, always-on previews).
     var maxFPS: Int? = nil
-    /// Music settings for the corner card over non-music styles; nil = no card (gallery
-    /// tiles, the editor). Now Playing styles always show their own foreground.
-    var musicCard: MusicSpec? = nil
+    /// The library's music settings (Library.musicSettings): linger, card corner and size.
+    var music = MusicSpec()
+    /// The corner card over a non-music style (the Screensaver hero, while the card is on);
+    /// off for gallery tiles and the editor. Now Playing styles always show their foreground.
+    var showsMusicCard = false
 
     private var fps: Int { min(preset.fps, maxFPS ?? preset.fps) }
 
@@ -40,7 +44,7 @@ struct MetalPreview: NSViewRepresentable {
         }
         view.preferredFramesPerSecond = fps
         context.coordinator.container = container
-        context.coordinator.update(preset: preset, card: musicCard)
+        context.coordinator.update(preset: preset, music: music, card: showsMusicCard)
         return container
     }
 
@@ -48,7 +52,7 @@ struct MetalPreview: NSViewRepresentable {
         context.coordinator.renderer?.location = location
         context.coordinator.renderer?.apply(preset, source: source)
         container.metal.preferredFramesPerSecond = fps
-        context.coordinator.update(preset: preset, card: musicCard)
+        context.coordinator.update(preset: preset, music: music, card: showsMusicCard)
     }
 
     static func dismantleNSView(_ container: PreviewContainer, coordinator: Coordinator) {
@@ -73,6 +77,7 @@ struct MetalPreview: NSViewRepresentable {
         func setOverlay(_ on: Bool) -> MusicOverlayView? {
             if on, overlay == nil {
                 let ov = MusicOverlayView(frame: bounds)
+                ov.overlay.trueScale = true   // a miniature of the screen: the card at its true size
                 addSubview(ov, positioned: .above, relativeTo: metal)
                 overlay = ov
             } else if !on, let ov = overlay {
@@ -89,15 +94,17 @@ struct MetalPreview: NSViewRepresentable {
         private let store: SharedStore
         private var token: MusicFeedHub.Token?
         private var preset: Preset?
-        private var card: MusicSpec?
+        private var music = MusicSpec()
+        private var card = false
 
         init(store: SharedStore) { self.store = store }
 
         /// Subscribe to the hub only while this preview shows music.
-        func update(preset: Preset, card: MusicSpec?) {
+        func update(preset: Preset, music: MusicSpec, card: Bool) {
             self.preset = preset
+            self.music = music
             self.card = card
-            let wants = preset.isMusicScene || (card?.isCardEnabled ?? false)
+            let wants = preset.isMusicScene || card
             if wants, token == nil {
                 token = MusicFeedHub.shared.subscribe(store: store) { [weak self] snap, changed in
                     self?.tick(snap, changed: changed, animated: true)
@@ -117,18 +124,17 @@ struct MetalPreview: NSViewRepresentable {
         private func tick(_ snap: MusicSnapshot, changed: Bool, animated: Bool) {
             guard let preset else { return }
             if changed { renderer?.setMusic(snap) }
-            let settings = card ?? MusicSpec()
-            renderer?.musicLingerMinutes = settings.linger
+            renderer?.musicLingerMinutes = music.linger
             let mode: MusicOverlayLayer.Mode
             if let inst = preset.musicScene {
                 mode = .full(MusicSceneOptions(inst))
-            } else if let card, card.isCardEnabled {
-                mode = .card(card.corner)
+            } else if card {
+                mode = .card(music.corner)
             } else {
                 mode = .hidden
             }
             guard let ov = container?.setOverlay(mode != .hidden) else { return }
-            ov.overlay.update(mode: mode, music: snap, settings: settings, animated: animated)
+            ov.overlay.update(mode: mode, music: snap, settings: music, animated: animated)
         }
     }
 }

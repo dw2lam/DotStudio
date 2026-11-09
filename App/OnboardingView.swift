@@ -258,7 +258,8 @@ private struct ThumbCard: View {
 
     var body: some View {
         Group {
-            if let img = model.thumbnailer.image(for: preset, source: model.library.source) {
+            if let img = model.thumbnailer.image(for: preset, source: model.library.source,
+                                                 music: model.library.musicSettings) {
                 Image(nsImage: img).resizable().scaledToFill()
             } else {
                 Color.black
@@ -354,7 +355,8 @@ private struct WelcomePage: View {
             ThumbCard(preset: preset, cornerRadius: Radius.m)
                 .overlay {
                     MetalPreview(preset: preset, source: model.library.source,
-                                 location: model.locationTuple, store: model.store)
+                                 location: model.locationTuple, store: model.store,
+                                 music: model.library.musicSettings)
                         .clipShape(RoundedRectangle(cornerRadius: Radius.m, style: .continuous))
                         .allowsHitTesting(false)
                 }
@@ -558,7 +560,8 @@ private struct CreatePanel: View {
             .overlay {
                 if livePreview {
                     MetalPreview(preset: draft, source: model.library.source,
-                                 location: model.locationTuple, store: model.store)
+                                 location: model.locationTuple, store: model.store,
+                                 music: model.library.musicSettings)
                         .clipShape(RoundedRectangle(cornerRadius: Radius.m, style: .continuous))
                         .allowsHitTesting(false)
                 }
@@ -868,7 +871,7 @@ private struct DonePage: View {
                             detail: "Double-click any tile to change its effects, colors and motion.")
                         Tip(symbol: "music.note", tint: .pink, iconColumn: iconColumn,
                             title: "Show what's playing",
-                            detail: "Play a song in Spotify or Music and the screensaver shows it in a corner — or pick Now Playing for the full screen.")
+                            detail: "Play a song in Spotify or Apple Music and the screensaver shows it in a corner — or pick Now Playing for the full screen.")
                     }
                     .padding(.horizontal, layout.cardPadding)
                 }

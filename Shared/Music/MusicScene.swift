@@ -164,12 +164,14 @@ enum MusicGeometry {
     }
     /// Stage layout (Spotify TV): the type scale and gaps of the block the artwork heads, in
     /// units — the overlay draws with these, and `stageBlock` sums them, so the reserved
-    /// block is measured, not guessed.
+    /// block is measured, not guessed. Read from across a room like Album: the title's cap
+    /// height ≈ 4 % of a 16:10 screen's height (Album's 4.5 % has a column to itself; here
+    /// the type shares the height with the artwork, which gives a little for it).
     enum Stage {
-        static let art: CGFloat = 0.44
-        static let artGap: CGFloat = 0.055               // artwork → title
-        static let title: CGFloat = 0.046, titleLeading: CGFloat = 1.08, titleLines = 2
-        static let artist: CGFloat = 0.030, artistGap: CGFloat = 0.012
+        static let art: CGFloat = 0.42
+        static let artGap: CGFloat = 0.052               // artwork → title
+        static let title: CGFloat = 0.058, titleLeading: CGFloat = 1.08, titleLines = 2
+        static let artist: CGFloat = 0.036, artistGap: CGFloat = 0.013
         static let album: CGFloat = 0.023, albumGap: CGFloat = 0.008
         static let barGap: CGFloat = 0.042, bar: CGFloat = 0.0058
         static let times: CGFloat = 0.0158, timesGap: CGFloat = 0.014

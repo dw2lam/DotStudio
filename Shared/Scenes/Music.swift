@@ -16,7 +16,7 @@ extension SceneCatalog {
     static let music: [EffectKind: SceneSpec] = [
         .nowPlaying: SceneSpec(
             name: "Now Playing",
-            blurb: "What's playing in Spotify or Music: big album art over its own colours, slowly moving.",
+            blurb: "What's playing in Spotify or Apple Music: big album art over its own colours, slowly moving.",
             shaderID: 66,
             // Packed in order: p0 = (layout, background, motion, album), p1.x = progress.
             params: [ParamSpec(menu: "layout", "Layout", MusicLayoutKind.allCases.map(\.label), def: 0),

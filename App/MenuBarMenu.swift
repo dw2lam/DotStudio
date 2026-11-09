@@ -51,6 +51,8 @@ struct DotStudioMenu: View {
 /// leads to the main window's setup strip instead (picking a style there would seem to do nothing).
 struct ScreensaverMenu: View {
     @EnvironmentObject var model: AppModel
+    /// "Screensaver: Now Playing" while music takes over (model.nowPlayingID reads it).
+    @ObservedObject private var now = MusicNow.shared
 
     var body: some View {
         switch model.setupStatus {

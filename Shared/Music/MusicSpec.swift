@@ -78,8 +78,15 @@ struct MusicSpec: Codable, Equatable {
     var linger: Double { lingerMinutes ?? 5 }
     var cardSizePreference: CardSize { cardSize ?? .medium }
 
+    /// The card is drawn on the live wallpaper: "also on the live wallpaper" is part of the
+    /// card, so it counts only while the card itself is on (the stored flag is kept for when
+    /// the card comes back).
+    var drawsCardOnWallpaper: Bool { isCardEnabled && showsCardOnWallpaper }
+
     /// True when any feature needs the app to watch players (and therefore keep running).
-    var needsMonitoring: Bool { isCardEnabled || takesOver || showsCardOnWallpaper }
+    /// Exactly what can show the result: the card (on the screensaver, and on the wallpaper
+    /// only with it) or take-over — a stored wallpaper flag under a card that's off never does.
+    var needsMonitoring: Bool { isCardEnabled || takesOver }
 }
 
 extension Library {
