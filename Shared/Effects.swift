@@ -375,7 +375,11 @@ enum EffectKind: String, Codable, CaseIterable {
                                   ParamSpec("fill", "Relief Shading", 0, 1, def: 0.5)]
         case .liquidChrome: return [ParamSpec("speed", "Speed", 0, 2, def: 0.6),
                                     ParamSpec("scale", "Ripple Scale", 0.5, 3, def: 1.2),
-                                    ParamSpec("iris", "Iridescence", 0, 1, def: 0.12)]
+                                    ParamSpec("iris", "Iridescence", 0, 1, def: 0.12),
+                                    ParamSpec("ripple", "Fine Ripples", 0, 1, def: 0.35),
+                                    ParamSpec("rough", "Roughness", 0, 1, def: 0.06),
+                                    ParamSpec("aniso", "Brushed", 0, 1, def: 0),
+                                    ParamSpec("film", "Film Tone", 0, 1, def: 0.5)]
         case .silk:      return [ParamSpec("speed", "Speed", 0, 2, def: 0.6),
                                  ParamSpec("scale", "Swirl Size", 0.4, 2.5, def: 1),
                                  ParamSpec("sheen", "Sheen", 0, 1, def: 0.4)]
@@ -552,7 +556,8 @@ extension EffectInstance {
         case .aurora:    u.p0 = .init(g("speed"), g("intensity"), g("height"), g("stars"))
                          u.p1 = .init(g("lake"), g("activity"), 0, 0)
         case .topography: u.p0 = .init(g("lines"), g("scale"), g("speed"), g("fill"))
-        case .liquidChrome: u.p0 = .init(g("speed"), g("scale"), g("iris"), 0)
+        case .liquidChrome: u.p0 = .init(g("speed"), g("scale"), g("iris"), g("ripple"))
+                            u.p1 = .init(g("rough"), g("aniso"), g("film"), 0)
         case .silk:      u.p0 = .init(g("speed"), g("scale"), g("sheen"), 0)
         case .risograph: u.p0 = .init(g("screen"), g("cell"), g("misreg"), g("paper"))
         case .grainWash: u.p0 = .init(g("soft"), g("grain"), g("tint"), 0)
