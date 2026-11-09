@@ -105,6 +105,59 @@ static inline float3 musicCoverArt(texture2d<float> art, sampler s, float2 uv, f
     return musicBicubic(art, s, musicMirror(q), lod);
 }
 
+// The Cover scrim at screen point `uv`: a band along the bottom and a deeper pool in the
+// bottom-left corner, gone by mid-screen. Returns (band, pool).
+static inline float2 musicCoverScrim(float2 uv, float asp) {
+    float up = 1.0 - uv.y;                                   // 0 at the bottom
+    float band = 1.0 - smoothstep(0.0, 0.66, up);
+    float pool = 1.0 - smoothstep(0.0, 1.05, length(float2(uv.x * asp * 0.7, up * 1.1)));
+    return float2(band, pool);
+}
+// Its fixed darkening (linear multiplier, 1 = none).
+static inline float musicCoverScrimGain(float2 bp) {
+    return (1.0 - 0.64 * bp.x) * (1.0 - 0.82 * bp.y) * 0.92;
+}
+
+// Where the Cover type sits, as a 0…1 reach: the overlay's block (MusicOverlayLayer
+// buildCover — 0.072u margins, a column up to 1.05u wide, up to ~0.58u tall with a two-line
+// title, more over a Dock) in design units u = MusicGeometry.unit, from the bottom-left.
+static inline float2 musicCoverTypePoint(float2 uv, float2 res) {
+    float unit = max(min(res.y, res.x / 1.6), 1.0);
+    return float2(uv.x * res.x, (1.0 - uv.y) * res.y) / unit;
+}
+static inline float musicCoverTypeReach(float2 q) {
+    // A rounded-rectangle (superellipse) falloff around the block: full over the type, gone
+    // well before the top right, with no straight edge to read as a slab.
+    float2 r = q / float2(1.25, 0.76);
+    float2 r2 = r * r;
+    float d = sqrt(sqrt(r2.x * r2.x + r2.y * r2.y));
+    return 1.0 - smoothstep(0.85, 1.40, d);
+}
+
+// How bright the Cover artwork is where the type sits: linear luminance of a coarse mip at
+// 6 points of the type block through the same cover mapping, between their mean and their
+// brightest — so white lettering under the title counts, not just the average. The same
+// value for every pixel; only computed where the type reaches.
+static inline float musicCoverTypeLum(texture2d<float> art, sampler s, float2 res, float zoom, float2 pan, int bg) {
+    float asp = res.x / res.y;
+    float unit = max(min(res.y, res.x / 1.6), 1.0);
+    float2 sz = float2(max(art.get_width(0), 1u), max(art.get_height(0), 1u));
+    float srcA = sz.x / sz.y;
+    float2 sc = (srcA > asp) ? float2(asp / srcA, 1.0) : float2(1.0, srcA / asp);
+    float lv = float(musicLod(art, 10.0));
+    float sum = 0.0, top = 0.0;
+    for (int i = 0; i < 6; ++i) {
+        float2 q = float2(0.15 + 0.32 * float(i % 3), 0.18 + 0.28 * float(i / 3));   // units
+        float2 p = float2(q.x * unit / res.x, 1.0 - q.y * unit / res.y);
+        float3 c = art.sample(s, musicMirror((p - 0.5) * sc / zoom + 0.5 + pan), level(lv)).rgb;
+        if (bg == 2) c *= 0.48;
+        float y = dot(srgbToLinear(c), float3(0.2126, 0.7152, 0.0722));
+        sum += y; top = max(top, y);
+    }
+    float L = mix(sum / 6.0, top, 0.5);
+    return bg == 1 ? min(L, 0.17) : L;                       // the Blur grade caps lightness
+}
+
 // Nothing playing (or no artwork): two calm, slowly drifting glows over a deep ground.
 static inline float3 musicIdle(float2 uv, float asp, float tm, float3 deep, float3 c1, float3 c2) {
     float2 p = (uv - 0.5) * float2(asp, 1.0);
@@ -135,21 +188,28 @@ static inline float3 musicBackground(texture2d<float> art, bool has, sampler s, 
         float2 pan = float2(sin(tm * 0.013), cos(tm * 0.011)) * 0.012;
         float sharp = log2(float(max(art.get_width(0), art.get_height(0))) / max(res.x, res.y));
         uint lod = uint(clamp(round(sharp + (bg == 1 ? 4.0 : 1.0)), 0.0, float(art.get_num_mip_levels()) - 1.0));
-        // Scrim for the type at the bottom left: a band along the bottom plus a deeper pool in
-        // the corner (white type keeps ≈ 4.5:1 over bright sand or sky), gone by mid-screen.
-        float up = 1.0 - uv.y;                                   // 0 at the bottom
-        float band = 1.0 - smoothstep(0.0, 0.66, up);
-        float pool = 1.0 - smoothstep(0.0, 1.05, length(float2(uv.x * asp * 0.7, up * 1.1)));
+        // Scrim for the type at the bottom left (musicCoverScrim), adaptive: where the type
+        // sits it darkens as far as this cover needs for the art there to land near L 0.06
+        // (white ≥ 7:1, the ~70% secondary lines ≥ 4.5:1) — a dark cover keeps the light fixed
+        // scrim, a white or yellow one gets a deep one, fading out toward the top right.
+        float2 bp = musicCoverScrim(uv, asp);
         col = musicCoverArt(art, s, uv, asp, zoom, pan, lod);
         // Progressive blur under the type, so lettering in the artwork never fights the title.
-        float soft = smoothstep(0.10, 0.75, max(pool, band * 0.85));
+        float soft = smoothstep(0.10, 0.75, max(bp.y, bp.x * 0.85));
         if (soft > 0.01) {
             uint lodSoft = min(lod + 3u, art.get_num_mip_levels() - 1u);
             col = mix(col, musicCoverArt(art, s, uv, asp, zoom, pan, lodSoft), soft);
         }
         if (bg == 1) col = musicGrade(col, 1.15, 0.16, 0.55, vivid, 0.0);
         if (bg == 2) col *= 0.48;
-        float3 lin = srgbToLinear(col) * (1.0 - 0.64 * band) * (1.0 - 0.82 * pool) * 0.92;
+        float fixedGain = musicCoverScrimGain(bp);
+        float3 lin = srgbToLinear(col) * fixedGain;
+        float reach = musicCoverTypeReach(musicCoverTypePoint(uv, res));
+        if (reach > 0.0) {
+            float L = musicCoverTypeLum(art, s, res, zoom, pan, bg);
+            float extra = clamp(0.06 / max(L * fixedGain, 1e-4), 0.12, 1.0);
+            lin *= pow(extra, reach);            // geometric: the falloff reads as even to the eye
+        }
         return linearToSrgb(lin);
     }
     float2 p = (uv - 0.5) * float2(asp, 1.0);

@@ -169,6 +169,7 @@ final class DotSaverView: ScreenSaverView {
         musicOverlay?.removeFromSuperview()
         musicOverlay = nil
         musicFeed = nil
+        MusicArtwork.purge()           // process-wide scaled-cover cache (the host outlives us)
         musicActive = false
         shownPreset = nil
         activeID = nil

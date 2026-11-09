@@ -231,6 +231,9 @@ enum WallpaperPacing {
         case none                          // hold the last frame; no wake-ups
         case continuous(fps: Double)       // display-link paced
         case after(TimeInterval)           // one frame after this delay (clock ticks)
+
+        /// Frames follow each other continuously (a crossfade can play out).
+        var isContinuous: Bool { if case .continuous = self { return true } else { return false } }
     }
 
     static func profile(for preset: Preset, source: SourceSpec) -> Profile {

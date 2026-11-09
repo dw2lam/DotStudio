@@ -17,6 +17,8 @@
 //  --card bottomLeft|bottomRight|topLeft|topRight|all composites the corner card onto every other
 //  preset; --scale 2 sets the overlay's pixels per point (default 2 from 2400 px wide, else 1);
 //  --tag name appends "@name" to the file names.
+//  --checks runs the live-renderer checks (wall-clock time base, synced slideshow, held-frame
+//  track change, rapid skips) through MetalRenderer.renderFrame and exits non-zero on a failure.
 
 import AppKit
 import Metal
@@ -44,6 +46,7 @@ var cardCorners: [MusicSpec.Corner] = []
 var overlayScale: CGFloat?
 var tag: String?
 var musicFadeBench = false
+var runChecks = false
 while !args.isEmpty {
     let a = args.removeFirst()
     switch a {
@@ -75,6 +78,7 @@ while !args.isEmpty {
         loc = p.count == 2 ? (p[0], p[1]) : nil
     case "--overlay": overlay = true
     case "--musicfade": musicFadeBench = true
+    case "--checks": runChecks = true
     case "--card":
         let v = args.removeFirst()
         cardCorners = v == "all" ? MusicSpec.Corner.allCases : [MusicSpec.Corner(rawValue: v) ?? .bottomLeft]
@@ -119,6 +123,116 @@ func compositeMusic(_ cg: CGImage, preset: Preset, corner: MusicSpec.Corner?, no
     layer.render(in: ctx)
     return ctx.makeImage() ?? cg
 }
+
+/// Live-path checks: what two renderers, a held wallpaper frame and a skipping listener see.
+func liveChecks() -> Bool {
+    var ok = true
+    func check(_ pass: Bool, _ what: String) {
+        print("\(pass ? "PASS" : "FAIL")  \(what)")
+        if !pass { ok = false }
+    }
+    func meanDiff(_ a: CGImage?, _ b: CGImage?) -> Double {
+        guard let a, let b, a.width == b.width, a.height == b.height else { return .infinity }
+        func px(_ i: CGImage) -> [UInt8] {
+            var buf = [UInt8](repeating: 0, count: i.width * i.height * 4)
+            buf.withUnsafeMutableBytes { p in
+                let c = CGContext(data: p.baseAddress, width: i.width, height: i.height, bitsPerComponent: 8,
+                                  bytesPerRow: i.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                c.draw(i, in: CGRect(x: 0, y: 0, width: i.width, height: i.height))
+            }
+            return buf
+        }
+        let pa = px(a), pb = px(b)
+        return Double(zip(pa, pb).reduce(0) { $0 + abs(Int($1.0) - Int($1.1)) }) / Double(pa.count)
+    }
+    let w = 320, h = 200
+
+    // 1. Wall-clock time stays small: Float frame steps at 120 Hz near the end of the period.
+    let top = Float(MetalRenderer.wallClockPeriod - 0.001)
+    check(top.ulp <= 0.00025, String(format: "wall-clock t < %.0f s: Float resolution %.3f ms at the top (seconds since midnight: %.1f ms)",
+                                     MetalRenderer.wallClockPeriod, Double(top.ulp) * 1000, Double(Float(86_399).ulp) * 1000))
+    check(abs(MetalRenderer.wallPhase(3600 * 491_234 + 12.5) - 12.5) < 1e-6, "wall phase = seconds into the hour")
+
+    // 2. Match Screensaver on a slideshow Look: two wall-clock renderers draw the same photo and framing.
+    let look = Preset(name: "Look", effects: [EffectInstance(.halftone)])
+    func slideRenderer(_ base: MetalRenderer.TimeBase) -> MetalRenderer {
+        let r = MetalRenderer(pixelFormat: .bgra8Unorm, store: store)!
+        r.timeBase = base
+        r.apply(look, source: .builtInPhotos)
+        return r
+    }
+    let wallFrames = (0..<4).map { _ in slideRenderer(.wallClock).renderFrame(width: w, height: h) }
+    let worst = (1..<wallFrames.count).map { meanDiff(wallFrames[0], wallFrames[$0]) }.max() ?? .infinity
+    check(worst < 1.5, String(format: "4 wall-clock slideshow renderers agree (worst mean |Δ| %.2f)", worst))
+    let instance = (0..<4).map { _ in slideRenderer(.instance).renderFrame(width: w, height: h) }
+    let spread = (1..<instance.count).map { meanDiff(instance[0], instance[$0]) }.max() ?? 0
+    print(String(format: "info  per-instance slideshow renderers differ by up to %.2f (random first photo)", spread))
+
+    // 3. A held wallpaper frame after a track change shows the NEW cover (settled draw).
+    func cover(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> CGImage {
+        let c = CGContext(data: nil, width: 64, height: 64, bitsPerComponent: 8, bytesPerRow: 0,
+                          space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        c.setFillColor(CGColor(srgbRed: r, green: g, blue: b, alpha: 1)); c.fill(CGRect(x: 0, y: 0, width: 64, height: 64))
+        c.setFillColor(CGColor(srgbRed: 1 - r, green: 1 - g, blue: 1 - b, alpha: 1)); c.fill(CGRect(x: 8, y: 8, width: 24, height: 40))
+        return c.makeImage()!
+    }
+    func song(_ id: String, _ art: CGImage?, rev: Int) -> MusicSnapshot {
+        var st = MusicState()
+        st.title = "Song \(id)"; st.artist = "Artist"; st.trackID = id; st.isPlaying = true
+        st.duration = 200; st.position = 20; st.positionAt = Date().timeIntervalSince1970
+        return MusicSnapshot(state: st, artwork: art, revision: rev)
+    }
+    let A = song("a", cover(0.95, 0.85, 0.2), rev: 1), B = song("b", cover(0.1, 0.3, 0.9), rev: 2)
+    let C = song("c", cover(0.9, 0.2, 0.3), rev: 3)
+    let np = SceneCatalog.musicPresets.first { $0.name.contains("Cover") } ?? SceneCatalog.musicPresets[0]
+    func musicRenderer(_ snap: MusicSnapshot) -> MetalRenderer {
+        let r = MetalRenderer(pixelFormat: .bgra8Unorm, store: store)!
+        r.timeBase = .wallClock          // same t for every renderer, so frames compare
+        r.setMusic(snap)
+        r.apply(np, source: SourceSpec())
+        return r
+    }
+    let held = musicRenderer(A)
+    _ = held.renderFrame(width: w, height: h)
+    held.setMusic(B)
+    let heldB = held.renderFrame(width: w, height: h, settled: true)
+    let freshB = musicRenderer(B).renderFrame(width: w, height: h)
+    let freshA = musicRenderer(A).renderFrame(width: w, height: h)
+    let dB = meanDiff(heldB, freshB), dA = meanDiff(heldB, freshA)
+    check(dB < 1.0 && dA > 10, String(format: "held frame after a cover change shows the new cover (Δ new %.2f, Δ old %.2f)", dB, dA))
+    let running = musicRenderer(A)
+    _ = running.renderFrame(width: w, height: h)
+    running.setMusic(B)
+    let firstFade = running.renderFrame(width: w, height: h)
+    print(String(format: "info  a continuous host's first frame after the change is still the old cover (Δ old %.2f) — it fades over %.1f s",
+                 meanDiff(firstFade, freshA), MetalRenderer.musicFadeSeconds))
+
+    // 4. Skipping again mid-fade never cuts from the half-faded mix.
+    let skip = musicRenderer(A)
+    _ = skip.renderFrame(width: w, height: h)
+    skip.setMusic(B)
+    _ = skip.renderFrame(width: w, height: h)
+    Thread.sleep(forTimeInterval: 0.6)
+    let mid = skip.renderFrame(width: w, height: h)
+    skip.setMusic(C)
+    let after = skip.renderFrame(width: w, height: h)
+    let jump = meanDiff(mid, after), span = meanDiff(freshA, freshB)
+    check(jump < span * 0.1, String(format: "a skip 0.6 s into a fade doesn't pop (Δ %.2f vs A→B %.2f)", jump, span))
+
+    // 5. Wall clock → instance keeps the motion where it was (no jump to t = 0).
+    let lc = MetalRenderer(pixelFormat: .bgra8Unorm, store: store)!
+    lc.timeBase = .wallClock
+    lc.apply(Preset(name: "LC", effects: [EffectInstance(.liquidChrome)]), source: SourceSpec())
+    _ = lc.renderFrame(width: w, height: h)
+    let before = lc.animationTime()
+    lc.timeBase = .instance
+    let afterSwitch = lc.animationTime()
+    check(abs(afterSwitch - before) < 0.05, String(format: "wall clock → instance continues t (%.2f s → %.2f s)", before, afterSwitch))
+    return ok
+}
+if runChecks { exit(liveChecks() ? 0 : 1) }
 
 if let tzArg, let tz = TimeZone(identifier: tzArg) { NSTimeZone.default = tz }
 /// Local wall time HH:MM on --date (or today) in the --tz zone.
@@ -224,7 +338,7 @@ if gpuBench {
             }
             u.musicPal0 = c(0); u.musicPal1 = c(1); u.musicPal2 = c(2)
             let r = MusicGeometry.artUV(MusicLayoutKind(rawValue: Int(u.p0.x.rounded())) ?? .album,
-                                        size: CGSize(width: W, height: H))
+                                        size: CGSize(width: W, height: H), options: MusicSceneOptions(inst))
             u.musicRect = simd_float4(r.x, r.y, r.w, r.h)
         }
         var samples: [Double] = []
