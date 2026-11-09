@@ -8,11 +8,11 @@ import QuartzCore
 final class MetalRenderer: NSObject, MTKViewDelegate {
     let device: MTLDevice
     private let queue: MTLCommandQueue
-    private let pipeline: MTLRenderPipelineState
+    /// fx_fragment, the music veil and the dither kernels, shared per GPU and format (FXPipelines.swift).
+    private let pipelines: FXPipelines
+    let pipelineMode: FXPipelines.Mode
     /// The format the live passes draw in (the view's / layer's).
     private let pixelFormat: MTLPixelFormat
-    private var veilDownPipeline: MTLRenderPipelineState?
-    private var veilPipeline: MTLRenderPipelineState?
     private let sampler: MTLSamplerState
     private let glyphs: MTLTexture?
     private let dummy: MTLTexture
@@ -27,12 +27,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private var texB: MTLTexture?
     private var drawableSize: CGSize = .zero
 
-    // Serial dither (error diffusion / Riemersma) compute resources.
-    private var ditherPrepPSO: MTLComputePipelineState?
-    private var ditherWavePSO: MTLComputePipelineState?
-    private var ditherRiemPSO: MTLComputePipelineState?
-    private var ditherRelaxPSO: MTLComputePipelineState?
-    private var ditherFinalPSO: MTLComputePipelineState?
+    // Serial dither (error diffusion / Riemersma) compute resources (its kernels: `pipelines`).
     private var gridTex: MTLTexture?
     private var errBuf: MTLBuffer?
     private var gridW = 0, gridH = 0, gridCell = 1
@@ -52,6 +47,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// current chain as `outgoing`, so per-chain state (weather cloud drift) stays with its chain.
     private var chainID = 0
     private var loggedFirstFrame = false
+    private let createdAt = CACurrentMediaTime()
 
     /// What the animation time `t` counts from.
     enum TimeBase: Equatable {
@@ -196,56 +192,53 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     /// - device: the GPU to render on (the live wallpaper uses the one driving its
     ///   display); nil = the system default.
-    init?(pixelFormat: MTLPixelFormat, store: SharedStore, device preferredDevice: MTLDevice? = nil) {
+    /// - pipelines: `.blocking` (default) builds the über-shader here, as it always did;
+    ///   `.fastStart` (the screensaver) never waits on a compile and uses the app's pipeline
+    ///   archive when it has one — frames are skipped until theirs are built (FXPipelines.swift).
+    init?(pixelFormat: MTLPixelFormat, store: SharedStore, device preferredDevice: MTLDevice? = nil,
+          pipelines mode: FXPipelines.Mode = .blocking) {
         guard let device = preferredDevice ?? MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue() else { return nil }
         self.device = device
         self.queue = queue
         self.store = store
+        let t0 = CFAbsoluteTimeGetCurrent()
 
         // Load the metallib from THIS class's bundle. In the app that's the app
         // bundle; in the screensaver it's the .saver bundle. Using the default
         // library would read Bundle.main — the host process — and fail in the saver.
         let bundle = Bundle(for: MetalRenderer.self)
-        var library = try? device.makeDefaultLibrary(bundle: bundle)
-        if library == nil {
-            store.debug("metallib from bundle FAILED at \(bundle.bundlePath); trying default")
-            library = device.makeDefaultLibrary()
-        }
-        guard let library,
-              let vfn = library.makeFunction(name: "fx_vertex"),
-              let ffn = library.makeFunction(name: "fx_fragment") else {
-            store.debug("FATAL shader library/functions missing (library=\(library == nil ? "nil" : "ok"))")
+        let shared = FXPipelines.shared(device: device, format: pixelFormat, makeLibrary: {
+            var library = try? device.makeDefaultLibrary(bundle: bundle)
+            if library == nil {
+                store.debug("metallib from bundle FAILED at \(bundle.bundlePath); trying default")
+                library = device.makeDefaultLibrary()
+            }
+            return library
+        }, loadArchive: { device in
+            // Only the saver: the archive is built from the installed saver's metallib.
+            guard mode == .fastStart else { return nil }
+            return PipelineArchive.load(baseDir: store.baseDir,
+                                        metallib: bundle.url(forResource: "default", withExtension: "metallib"),
+                                        device: device, format: pixelFormat, log: store.debug)
+        })
+        guard let shared, shared.library.makeFunction(name: "fx_vertex") != nil else {
+            store.debug("FATAL shader library/functions missing (library=\(shared == nil ? "nil" : "ok"))")
             return nil
         }
-        let desc = MTLRenderPipelineDescriptor()
-        desc.vertexFunction = vfn
-        desc.fragmentFunction = ffn
-        desc.colorAttachments[0].pixelFormat = pixelFormat
-        guard let pso = try? device.makeRenderPipelineState(descriptor: desc) else { return nil }
-        pipeline = pso
+        pipelines = shared
+        pipelineMode = mode
         self.pixelFormat = pixelFormat
-        WeatherLink.adopt(library, device: device)      // its pipelines use this metallib too
-        // The music veil's own small passes (Shaders.metal, "music veil").
-        func veilPSO(_ name: String) -> MTLRenderPipelineState? {
-            guard let f = library.makeFunction(name: name) else { return nil }
-            let d = MTLRenderPipelineDescriptor()
-            d.vertexFunction = vfn
-            d.fragmentFunction = f
-            d.colorAttachments[0].pixelFormat = pixelFormat
-            return try? device.makeRenderPipelineState(descriptor: d)
+        switch mode {
+        case .blocking:
+            guard shared.uber(wait: true) != nil else { return nil }
+        case .fastStart:
+            _ = shared.uber(wait: false)               // from the archive, or compiling in the background
         }
-        veilDownPipeline = veilPSO("fx_veil_down")
-        veilPipeline = veilPSO("fx_veil")
-
-        func compute(_ name: String) -> MTLComputePipelineState? {
-            library.makeFunction(name: name).flatMap { try? device.makeComputePipelineState(function: $0) }
-        }
-        ditherPrepPSO = compute("dither_prep")
-        ditherWavePSO = compute("dither_wave")
-        ditherRiemPSO = compute("dither_riem")
-        ditherRelaxPSO = compute("dither_relax")
-        ditherFinalPSO = compute("dither_final")
+        WeatherLink.adopt(shared.library, device: device, archive: shared.archive)   // its pipelines use this metallib too
+        store.debug(String(format: "renderer init %.1f ms (pipelines %@, über-shader %@)",
+                           (CFAbsoluteTimeGetCurrent() - t0) * 1000, "\(mode)",
+                           shared.uberState == .ready ? "ready" : "compiling"))
 
         let sd = MTLSamplerDescriptor()
         sd.minFilter = .linear; sd.magFilter = .linear
@@ -282,7 +275,64 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             loadMedia(for: source)
         }
         ditherHistoryKey = nil
+        _ = framePipelinesReady()                  // fastStart: start its compiles now, not at the first draw
     }
+
+    // MARK: Pipelines
+
+    /// The über-shader every fx pass draws with. Blocking hosts built it at init; a fastStart
+    /// renderer draws only once framePipelinesReady() says it's there (renderThumbnail, which
+    /// the saver never calls, would wait for it).
+    private var fxPipeline: MTLRenderPipelineState? { pipelines.uber(wait: true) }
+
+    /// The music veil's passes and the error-diffusion kernels: built on first use (a fastStart
+    /// renderer has them before it draws a frame that uses them: framePipelinesReady).
+    private func veilPipeline(down: Bool) -> MTLRenderPipelineState? {
+        pipelines.veil(down: down, wait: true)
+    }
+
+    private func ditherPipeline(_ name: String) -> MTLComputePipelineState? {
+        pipelines.compute(name, wait: true)
+    }
+
+    /// Whether the music veil can draw.
+    private var veilAvailable: Bool { veilPipeline(down: true) != nil && veilPipeline(down: false) != nil }
+
+    /// fastStart: whether every pipeline the next frame may draw with is built — the über-shader,
+    /// and as the frame needs them the dither kernels, the veil and the weather skies. What
+    /// isn't is requested (built in the background, unless the archive has it) and the frame is
+    /// skipped: the saver shows black rather than wait, or draw a frame missing a pass.
+    /// A blocking renderer builds on demand: always true.
+    func framePipelinesReady() -> Bool {
+        guard pipelineMode == .fastStart, let preset else { return true }
+        var ready = true
+        // No über-shader, no frame (if it failed to compile: black, as when init used to fail).
+        // The rest: a failure is as ready as it gets — those passes are left out, as before.
+        if pipelines.uber(wait: false) == nil { ready = false }
+        var presets = [preset]
+        if let o = outgoing { presets.append(o.preset) }
+        if let p = pendingTransition?.preset { presets.append(p) }
+        for b in [musicBackdropTarget, musicBackdropKind] {
+            if case .albumArt(let layout) = b { presets.append(MusicPresentation.albumArtPreset(layout)) }
+        }
+        if presets.contains(where: { $0.effects.contains { $0.enabled && isSerialDither($0) } }) {
+            for k in FXPipelines.ditherKernels where pipelines.compute(k, wait: false) == nil {
+                if pipelines.computeState(k) != .failed { ready = false }
+            }
+        }
+        if musicBackdropTarget != .none || musicBackdropKind != .none {
+            for down in [true, false] where pipelines.veil(down: down, wait: false) == nil {
+                if pipelines.veilState(down: down) != .failed { ready = false }
+            }
+        }
+        for p in presets where !WeatherLink.pipelinesReady(for: p, device: device, format: pixelFormat) {
+            ready = false
+        }
+        return ready
+    }
+
+    /// Whether this renderer has drawn a frame (the saver fades its view in from black on it).
+    var hasDrawnFrame: Bool { drewOnce }
 
     /// The animation time (seconds) a frame drawn at `now` would use, per the time base.
     /// With `.wallClock` every renderer on the Mac returns the same value at the same moment.
@@ -528,7 +578,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private func encodeVeilPass(_ cmd: MTLCommandBuffer, target: MTLRenderPassDescriptor, size: CGSize,
                                 u inU: FXUniforms, src: MTLTexture, next: MTLTexture?, art: MTLTexture?) {
         let down = inU.p0.w > 0.5
-        guard let pso = down ? veilDownPipeline : veilPipeline,
+        guard let pso = veilPipeline(down: down),
               let enc = cmd.makeRenderCommandEncoder(descriptor: target) else { return }
         var u = inU
         u.effect = 73
@@ -724,7 +774,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             if texA == nil || texB == nil || drawableSize != ds {
                 mtkView(view, drawableSizeWillChange: ds)
             }
-            guard preset != nil,
+            // fastStart: nothing until this frame's pipelines exist (the saver shows black).
+            guard preset != nil, framePipelinesReady(),
                   let final = view.currentRenderPassDescriptor,
                   let drawable = view.currentDrawable else { return }
             encodeFrame(final: final, drawable: drawable, size: ds, format: view.colorPixelFormat)
@@ -784,6 +835,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     @discardableResult
     private func encodeFrame(final: MTLRenderPassDescriptor, drawable: MTLDrawable?,
                              size ds: CGSize, format: MTLPixelFormat, settled: Bool = false) -> MTLCommandBuffer? {
+        guard framePipelinesReady() else { return nil }
         startPendingTransition(CACurrentMediaTime(), settled: settled)
         guard let preset = preset, let texA = texA, let texB = texB else { return nil }
 
@@ -881,12 +933,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let sTex = media?.currentTexture() ?? slides?.texA
         if !loggedFirstFrame {
             loggedFirstFrame = true
-            store.debug("first draw size=\(drawableSize) effects=\(preset.effects.count) srcTexNil=\(sTex == nil) sourceKind=\(source.kind.rawValue)")
+            store.debug(String(format: "first draw %.0f ms after init ", (CACurrentMediaTime() - createdAt) * 1000) + "size=\(drawableSize) effects=\(preset.effects.count) srcTexNil=\(sTex == nil) sourceKind=\(source.kind.rawValue)")
         }
 
         // Behind Full Screen music the style renders offscreen — into a ping-pong texture its
         // own last pass doesn't read — and the veil composites it into `final`.
-        let veiled = backdrop > 0 && veilPipeline != nil && veilDownPipeline != nil
+        let veiled = backdrop > 0 && veilAvailable
         // encodePasses: pass i < last writes pong[i % 2], the last (i = effects) reads pong[(i − 1) % 2].
         let chainOut = preset.effects.filter(\.enabled).count % 2 == 0 ? texA : texB
         var styleTex: MTLTexture = chainOut
@@ -962,8 +1014,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private func encodeBlend(_ cmd: MTLCommandBuffer, final: MTLRenderPassDescriptor,
                              newTex: MTLTexture, oldTex: MTLTexture,
                              progress: Float, size: CGSize) {
-        guard let enc = cmd.makeRenderCommandEncoder(descriptor: final) else { return }
-        enc.setRenderPipelineState(pipeline)
+        guard let pso = fxPipeline, let enc = cmd.makeRenderCommandEncoder(descriptor: final) else { return }
+        enc.setRenderPipelineState(pso)
         var u = FXUniforms()
         u.resolution = simd_float2(Float(size.width), Float(size.height))
         u.effect = 41
@@ -1006,7 +1058,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             // producing a coarse grid that the blit pass (effect 38) upscales.
             var fragInput = input
             var serialBlit = false
-            if let inst = inst, isSerialDither(inst), ditherWavePSO != nil {
+            if let inst = inst, isSerialDither(inst), ditherPipeline("dither_wave") != nil {
                 encodeSerialDither(cmd, inst: inst, input: input, size: size)
                 if let g = gridTex { fragInput = g; serialBlit = true }
             }
@@ -1021,8 +1073,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 rpd.colorAttachments[0].storeAction = .store
             }
 
-            guard let enc = cmd.makeRenderCommandEncoder(descriptor: rpd) else { continue }
-            enc.setRenderPipelineState(pipeline)
+            guard let pso = fxPipeline, let enc = cmd.makeRenderCommandEncoder(descriptor: rpd) else { continue }
+            enc.setRenderPipelineState(pso)
 
             // Start from the pre-packed uniforms (effect id, params, palette) when the
             // caller supplied them; thumbnails of arbitrary presets pack per pass below.
@@ -1241,8 +1293,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     }
 
     private func encodeSerialDither(_ cmd: MTLCommandBuffer, inst: EffectInstance, input: MTLTexture, size: CGSize) {
-        guard let prep = ditherPrepPSO, let wave = ditherWavePSO, let riem = ditherRiemPSO,
-              let relax = ditherRelaxPSO, let final = ditherFinalPSO else { return }
+        guard let prep = ditherPipeline("dither_prep"), let wave = ditherPipeline("dither_wave"),
+              let riem = ditherPipeline("dither_riem"), let relax = ditherPipeline("dither_relax"),
+              let final = ditherPipeline("dither_final") else { return }
         let cp = MetalRenderer.ditherCellPixels(cell: Double(inst.g("cell")), size: size)
         let gw = max(1, Int((size.width / CGFloat(cp)).rounded(.up)))
         let gh = max(1, Int((size.height / CGFloat(cp)).rounded(.up)))
@@ -1354,7 +1407,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
 
         let size = CGSize(width: width, height: height)
-        if amount > 0, artPreset != nil || musicBackdrop == .veil, veilPipeline != nil, veilDownPipeline != nil {
+        if amount > 0, artPreset != nil || musicBackdrop == .veil, veilAvailable {
             // The art first (it borrows the ping-pong textures), then the style, then the veil.
             var artTex: MTLTexture?
             if let art = artPreset {
