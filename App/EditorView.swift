@@ -99,6 +99,10 @@ struct EditorView: View {
                     .textRole(.inspectorTitle)
                     .lineLimit(1...3)
                     .help(name)
+                // A Now Playing style: what it's showing, and the controls.
+                if binding.wrappedValue.isMusicScene {
+                    MusicEditorStatus()
+                }
                 // Scenes have no Source tab. Their note takes the tab bar's slot, which
                 // keeps the tabs' height, so the list below starts at the same y for every
                 // style. The note is one line (full text in the tooltip): a wrapped note
@@ -184,6 +188,89 @@ struct EditorView: View {
             }
             .help("Duplicate, export, or delete this style")
         }
+    }
+}
+
+/// Under a Now Playing style's name: "Spotify · Playing" over "Song — Artist", with
+/// Previous / Play-Pause / Next — or a hint when nothing plays, or the fix-it when the player
+/// refused Automation. Asks the monitor for exact progress while shown (the preview's bar).
+private struct MusicEditorStatus: View {
+    @EnvironmentObject var model: AppModel
+    @ObservedObject private var now = MusicNow.shared
+    @Environment(\.layout) private var layout
+    @ScaledLength(relativeTo: .callout) private var art: CGFloat = 34
+
+    var body: some View {
+        let visible = now.isVisible(model.library.musicSettings)
+        Group {
+            if visible {
+                ReflowStack(rowAlignment: .center, columnAlignment: .trailing, spacing: layout.controlGap) {
+                    HStack(spacing: layout.iconGap) {
+                        MusicArtThumb(image: now.artwork, palette: now.state.palette ?? [], side: art)
+                        VStack(alignment: .leading, spacing: layout.labelGap) {
+                            Text(statusLine)
+                                .textRole(.captionEmphasis)
+                                .foregroundStyle(now.needsAutomationFix ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                                .lineLimit(1)
+                            Text(now.trackLine)
+                                .textRole(.callout)
+                                .truncating(now.trackLine)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    if now.needsAutomationFix, let source = now.source {
+                        allowButton(source)
+                    } else {
+                        MusicTransport(now: now)
+                            .adaptiveControlSize(.small)
+                            .fixedSize()
+                    }
+                }
+            } else {
+                ReflowStack(rowAlignment: .center, columnAlignment: .trailing, spacing: layout.controlGap) {
+                    HStack(alignment: .firstTextBaseline, spacing: layout.iconGap) {
+                        Image(systemName: "music.note")
+                            .foregroundStyle(.secondary)
+                        Text(hint)
+                            .textRole(.caption)
+                            .foregroundStyle(.secondary)
+                            .wrapping()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    if let denied = now.deniedPlayer {
+                        allowButton(denied.source)
+                    }
+                }
+            }
+        }
+        .padding(Space.xs)
+        .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(.primary.opacity(0.05)))
+        .onAppear { now.beginPositionUpdates() }
+        .onDisappear { now.endPositionUpdates() }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("What's playing")
+    }
+
+    /// "Spotify · Playing" / "Music · Paused" / "Spotify · Needs permission".
+    private var statusLine: String {
+        let what = now.needsAutomationFix ? "Needs permission" : now.isPlaying ? "Playing" : "Paused"
+        return "\(now.sourceName) \u{00B7} \(what)"
+    }
+
+    private var hint: String {
+        if let denied = now.deniedPlayer {
+            return "Allow DotStudio to control \(denied.source.displayName) so this style can show exactly what's playing."
+        }
+        if !now.isMonitoring { return "Turn on an option in Settings › Music to show what's playing." }
+        return "Nothing playing — start a song in Spotify or Music and it appears here."
+    }
+
+    private func allowButton(_ source: MusicSource) -> some View {
+        Button { now.allowControl(source) } label: { Text("Allow\u{2026}").textRole(.callout) }
+            .glassButton()
+            .adaptiveControlSize(.small)
+            .fixedSize()
+            .help("Opens System Settings › Privacy & Security › Automation — turn on \(source.displayName) under DotStudio.")
     }
 }
 

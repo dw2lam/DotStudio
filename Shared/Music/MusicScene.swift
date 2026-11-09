@@ -142,10 +142,26 @@ enum MusicGeometry {
     /// ultra-wide screen gets more margin rather than bigger type.
     static func unit(_ size: CGSize) -> CGFloat { max(min(size.height, size.width / 1.6), 1) }
 
-    /// Album layout: artwork square + gap + text column, centred as one composition.
-    static let albumArt: CGFloat = 0.50       // artwork side, in units
+    /// Album layout: artwork square + gap + text column, centred as one composition. The
+    /// type is sized to be read from across a room (title cap height ≈ 4.5 % of a 16:10
+    /// screen's height), so the column is wide enough for it and the art gives a little.
+    static let albumArt: CGFloat = 0.48       // artwork side, in units
     static let albumGap: CGFloat = 0.075      // artwork → text column
-    static let albumText: CGFloat = 0.56      // text column width
+    static let albumText: CGFloat = 0.64      // text column width
+
+    /// The corner card: height and width in units, per Card Size. On a 16:10 screen Medium is
+    /// a quarter of the width with a title ≈ 2.3 % of the height; the old desktop-widget card
+    /// (0.112 × 0.42) had a 1.7 % title — too small to read from the sofa. Its type is a
+    /// fixed share of the card's height (MusicOverlayLayer.buildCard).
+    enum Card {
+        static func size(_ s: MusicSpec.CardSize) -> (height: CGFloat, width: CGFloat) {
+            switch s {
+            case .small: return (0.118, 0.336)    // ≈ 21 % of a 16:10 width
+            case .medium: return (0.140, 0.400)   // ≈ 25 %
+            case .large: return (0.170, 0.486)    // ≈ 30 %
+            }
+        }
+    }
     /// Stage layout (Spotify TV): the type scale and gaps of the block the artwork heads, in
     /// units — the overlay draws with these, and `stageBlock` sums them, so the reserved
     /// block is measured, not guessed.

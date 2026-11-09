@@ -100,7 +100,10 @@ struct ContentView: View {
 ///   DOTSTUDIO_DEMO_ONBOARDING=create      open the welcome sheet on its "Create Your Own" tab
 ///   DOTSTUDIO_DEMO_WINDOW=1440x900        size the main window's content
 ///   DOTSTUDIO_DEMO_APPEARANCE=dark|light  force the app's appearance
-///   DOTSTUDIO_DEMO_FILTER=<chip>          start the gallery on a filter chip (all, playing, scenes, looks, clocks, nature, flowing, retro, space, abstract)
+///   DOTSTUDIO_DEMO_FILTER=<chip>          start the gallery on a filter chip (all, playing, scenes, looks, clocks, nature, flowing, retro, space, abstract, music)
+///   DOTSTUDIO_DEMO_MUSIC=<state>          the app's music UI shows idle|playing|paused|denied|ask|off (MusicDemo,
+///                                         MusicUI.swift) — the track from DOTSTUDIO_MUSIC_FAKE=<fixture.json>
+///                                         (tools/music-fixtures/make.sh), else a built-in sample; no player involved
 ///   DOTSTUDIO_DEMO_SEARCH=<text>          start the gallery with a search
 ///   DOTSTUDIO_DEMO_HOVER=<style name>     show that tile in its hover state
 ///   DOTSTUDIO_DEMO_PLAYLIST=<a>|<b>|…     set the screensaver playlist by name
@@ -158,12 +161,13 @@ enum DemoHooks {
     static let coverSeconds = env["DOTSTUDIO_DEMO_COVER_DESKTOP"].flatMap(Double.init)
     static let loginLaunch = env["DOTSTUDIO_DEMO_LOGIN_LAUNCH"] == "1"
     static let devCommands = env["DOTSTUDIO_DEV_COMMANDS"] == "1"
+    static let musicDemo = env["DOTSTUDIO_DEMO_MUSIC"]
     private static var cover: NSWindow?
 
     static var isActive: Bool {
         editName != nil || onboardingCreate || windowSize != nil || appearance != nil || filter != nil
             || search != nil || hoverName != nil || playlistNames != nil || nightName != nil
-            || setupOverride != nil || wallpaperName != nil
+            || setupOverride != nil || wallpaperName != nil || musicDemo != nil
             || liveWallpaperName != nil || closeWindow || coverSeconds != nil
     }
 

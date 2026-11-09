@@ -49,6 +49,9 @@ import SwiftUI
 ///          `.textRole` / `Font.scaled` / `@ScaledLength` responds — see Layout.swift.
 ///   stress very long style names, an 8+ style playlist, long effect stacks, long search
 ///          text and file names (the empty-library and zero-result screens render in both).
+///   music  every screen starts "watching, nothing playing"; the music screens (names with
+///          "music" or "nowplaying") play a fixture — DOTSTUDIO_MUSIC_FAKE=<dir>/playing.json from
+///          tools/music-fixtures/make.sh, else a built-in sample track (MusicDemo, MusicUI.swift).
 ///
 /// Narrowing (all optional; lists are comma-separated):
 ///   DOTSTUDIO_UI_ONLY=library,dest-       screens whose name contains any of these
@@ -221,6 +224,25 @@ enum UIShots {
             WallpaperSlot.shared.set(st.wallpaper)
             st.setup(.notChosen)
         }, view: main))
+        // Music on the Screensaver card (the card on the hero, the now-playing line) and the
+        // Wallpaper card matching the screensaver. Every music screen is fixture-driven
+        // (MusicDemo): DOTSTUDIO_MUSIC_FAKE=<tools/music-fixtures/make.sh dir>/playing.json,
+        // else a built-in sample track without artwork.
+        s.append(Screen(name: "dest-music", frame: .window, prepare: { st in
+            MusicDemo.apply(.playing)
+            WallpaperSlot.shared.set(st.wallpaper)
+        }, view: main))
+        s.append(Screen(name: "dest-music-denied", frame: .window,
+                        prepare: { _ in MusicDemo.apply(.denied) }, view: main))
+        s.append(Screen(name: "dest-wallpaper-match", frame: .window, prepare: { st in
+            st.lineup(st.playlist)
+            WallpaperController.shared.update { $0.enabled = true; $0.followsScreensaver = true }
+            WallpaperSlot.shared.set(st.hero)
+        }, view: main))
+        s.append(Screen(name: "library-music", frame: .window, prepare: { _ in
+            MusicDemo.apply(.playing)
+            DemoHooks.filter = .tag(.music)
+        }, view: main))
 
         // Editor (preview + destination bar + inspector with every effect expanded)
         s.append(Screen(name: "editor-scene", frame: .window, prepare: { st in
@@ -232,6 +254,13 @@ enum UIShots {
             st.lineup([st.hero], night: st.stress ? st.look : nil)
             st.edit(st.look)
         }, view: main))
+        // A Now Playing style: the status row under its name, playing / nothing / no permission
+        for (scenario, tag) in [(MusicDemo.Scenario.playing, ""), (.idle, "-idle"), (.denied, "-denied")] {
+            s.append(Screen(name: "editor-nowplaying\(tag)", frame: .window, prepare: { st in
+                MusicDemo.apply(scenario)
+                st.edit(st.nowPlaying)
+            }, view: main))
+        }
 
         // Popover contents
         s.append(Screen(name: "add-effect", frame: .fixed(CGSize(width: 430, height: 500)), view: { st in
@@ -283,6 +312,19 @@ enum UIShots {
         s.append(Screen(name: "settings-general-off", frame: .fit(width: 460, minHeight: 160),
                         prepare: { _ in AppPresence.shared.menuBarMode = false },
                         view: { _ in AnyView(SettingsSectionPreview { GeneralSettingsSection() }) }))
+        // Settings › Music: nothing playing, playing (controls), permission needed, not watching
+        for (scenario, tag) in [(MusicDemo.Scenario.idle, ""), (.playing, "-playing"), (.denied, "-denied"), (.off, "-off")] {
+            s.append(Screen(name: "settings-music\(tag)", frame: .fit(width: 460, minHeight: 300), prepare: { st in
+                MusicDemo.apply(scenario)
+                if scenario == .off {
+                    st.model.library.music = MusicSpec(cardEnabled: false)
+                }
+            }, view: { _ in AnyView(SettingsSectionPreview { MusicSettingsSlot() }) }))
+        }
+        // Settings › Live Wallpaper matching the screensaver (no style picker)
+        s.append(Screen(name: "settings-wallpaper-match", frame: .fit(width: 460, minHeight: 300), prepare: { _ in
+            WallpaperController.shared.update { $0.enabled = true; $0.followsScreensaver = true }
+        }, view: { _ in AnyView(SettingsSectionPreview { WallpaperSettingsSection() }) }))
 
         // The DotStudio menu-bar menu, laid out as a plain column (menus can't render offscreen):
         // wallpaper off, playing, paused, a rotating screensaver playlist, and not set up
@@ -300,6 +342,13 @@ enum UIShots {
         // The screensaver isn't set up: the line says so and leads to the setup strip
         s.append(Screen(name: "menu-setup", frame: .fit(width: 320),
                         prepare: { $0.setup(.notChosen) },
+                        view: { _ in AnyView(MenuPreview()) }))
+        // Music at the top of the menu: playing, and with the player's permission refused
+        s.append(Screen(name: "menu-music", frame: .fit(width: 320),
+                        prepare: { _ in MusicDemo.apply(.playing) },
+                        view: { _ in AnyView(MenuPreview()) }))
+        s.append(Screen(name: "menu-music-denied", frame: .fit(width: 320),
+                        prepare: { _ in MusicDemo.apply(.denied) },
                         view: { _ in AnyView(MenuPreview()) }))
         // The one-time "still running" popover (menu-bar mode off, wallpaper playing)
         s.append(Screen(name: "menu-notice", frame: .fit(width: 288, minHeight: 80), view: { _ in
@@ -331,6 +380,7 @@ enum UIShots {
         let wallpaper: UUID
         let scene: UUID         // opened in the editor
         let look: UUID          // opened in the editor
+        let nowPlaying: UUID    // a Now Playing style (the editor's music status row)
         let searchText: String
         let noMatchText: String
 
@@ -357,6 +407,7 @@ enum UIShots {
                 ?? scenes.max { $0.effects.count < $1.effects.count }?.id ?? first
             look = (stress ? named(UIShots.stackName) : nil)
                 ?? looks.max { $0.effects.count < $1.effects.count }?.id ?? first
+            nowPlaying = all.first(where: \.isMusicScene)?.id ?? scene
             let heroName = all.first { $0.id == hero }?.name ?? ""
             searchText = stress ? "golden hour over the pacific extended director's cut"
                                 : String(heroName.lowercased().split(separator: " ").first ?? "a")
@@ -377,7 +428,8 @@ enum UIShots {
             DemoHooks.expandAllEffects = false
             setup(.ready)
             WallpaperSlot.shared.stop()
-            WallpaperController.shared.update { $0.enabled = false }
+            WallpaperController.shared.update { $0.enabled = false; $0.followsScreensaver = false }
+            MusicDemo.apply(.idle)   // watching, nothing playing (music screens set their own)
             if WallpaperController.shared.userPaused { WallpaperController.shared.togglePause() }
             AppPresence.shared.menuBarMode = true   // the default (prefs are in-memory here)
             lineup([hero])

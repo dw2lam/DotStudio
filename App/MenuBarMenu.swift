@@ -21,7 +21,7 @@ struct DotStudioMenu: View {
     @EnvironmentObject var updates: UpdateController
 
     var body: some View {
-        MenuBarMusicSlot()      // MUSIC SLOT — renders nothing until the music stage fills it
+        MenuBarMusicSlot()      // the track + Play/Pause, Previous, Next while a song shows (MusicSlots.swift)
         ScreensaverMenu()
         Divider()
         WallpaperMenu()

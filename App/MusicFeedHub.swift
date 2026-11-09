@@ -24,11 +24,25 @@ final class MusicFeedHub {
     /// (snapshot, changed) — `changed` = music.json or the artwork changed since the last tick.
     private var listeners: [UUID: (MusicSnapshot, Bool) -> Void] = [:]
 
+    /// Offscreen UI shots only (MusicDemo): every listener sees this instead of music.json, so
+    /// one run can render "nothing playing" and "playing" screens side by side.
+    private(set) var demoSnapshot: MusicSnapshot?
+    private var demoRevision = 1_000_000
+
+    func setDemo(_ snap: MusicSnapshot?) {
+        guard var snap else { demoSnapshot = nil; return }
+        demoRevision += 1
+        snap.revision = demoRevision
+        demoSnapshot = snap
+    }
+
+    private var current: MusicSnapshot { demoSnapshot ?? feed?.snapshot ?? .empty }
+
     /// The latest snapshot (polls first if the last poll is older than a quarter second).
     func snapshot(store: SharedStore) -> MusicSnapshot {
         ensureFeed(store)
         poll()
-        return feed?.snapshot ?? .empty
+        return current
     }
 
     /// Call `handler` about once a second (and now) with the current snapshot. Main thread.
@@ -37,7 +51,7 @@ final class MusicFeedHub {
         let t = Token(self)
         listeners[t.id] = handler
         poll()
-        handler(feed?.snapshot ?? .empty, true)
+        handler(current, true)
         if timer == nil {
             let tm = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
             tm.tolerance = 0.15
@@ -69,7 +83,7 @@ final class MusicFeedHub {
 
     private func tick() {
         poll()
-        let snap = feed?.snapshot ?? .empty
+        let snap = current
         // Compare revisions rather than trusting this poll: a `snapshot(store:)` call between
         // ticks may have been the one that saw the change.
         let changed = snap.revision != deliveredRevision

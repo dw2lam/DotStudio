@@ -99,7 +99,9 @@ final class MusicOverlayLayer: CALayer {
     private func refresh(now: Date, animated: Bool) {
         guard bounds.width > 1, bounds.height > 1 else { return }
         let display = resolve(now: now)
-        let key = display.map { GroupKey($0, size: bounds.size, scale: contentsScale, insets: safeInsets) }
+        let cardSize = settings.cardSizePreference
+        let key = display.map { GroupKey($0, size: bounds.size, scale: contentsScale, insets: safeInsets,
+                                         cardSize: cardSize) }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
@@ -117,7 +119,7 @@ final class MusicOverlayLayer: CALayer {
         }
         if let d = display, let key {
             let g = MusicOverlayGroup(d, bounds: bounds, insets: safeInsets, scale: contentsScale,
-                                      reduceMotion: reduceMotion, ambient: ambientMotion)
+                                      reduceMotion: reduceMotion, ambient: ambientMotion, cardSize: cardSize)
             g.tick(d, now: now, animated: false)
             addSublayer(g)
             group = g
@@ -126,6 +128,7 @@ final class MusicOverlayLayer: CALayer {
         }
         guard let old else { return }
         let structural = oldKey?.size != key?.size || oldKey?.scale != key?.scale || oldKey?.insets != key?.insets
+            || oldKey?.cardSize != key?.cardSize
         if animated && !structural {
             old.disappear(trackChange: key.map { oldKey?.isTrackChange(to: $0) ?? false } ?? false,
                           reduceMotion: reduceMotion)
@@ -151,11 +154,14 @@ final class MusicOverlayLayer: CALayer {
         var size: CGSize
         var scale: CGFloat
         var insets: Insets
+        /// Card mode only (nil otherwise, so a size change never rebuilds a full layout).
+        var cardSize: MusicSpec.CardSize?
 
-        init(_ d: MusicDisplay, size: CGSize, scale: CGFloat, insets: Insets) {
+        init(_ d: MusicDisplay, size: CGSize, scale: CGFloat, insets: Insets, cardSize: MusicSpec.CardSize) {
             mode = d.mode; idle = d.idle; track = d.trackKey
             art = d.art.map { ObjectIdentifier($0) }
             self.size = size; self.scale = scale; self.insets = insets
+            if case .card = d.mode { self.cardSize = cardSize }
         }
 
         /// Same place, same mode, a different song (or new artwork for it).
@@ -241,7 +247,7 @@ private final class MusicOverlayGroup: CALayer {
     private let display: MusicDisplay
 
     init(_ d: MusicDisplay, bounds: CGRect, insets: MusicOverlayLayer.Insets, scale: CGFloat, reduceMotion: Bool,
-         ambient: Bool) {
+         ambient: Bool, cardSize: MusicSpec.CardSize = .medium) {
         self.ambient = ambient
         W = bounds.width; H = bounds.height
         u = MusicGeometry.unit(bounds.size)
@@ -261,7 +267,7 @@ private final class MusicOverlayGroup: CALayer {
             case .cover: buildCover(d, o, insets)
             }
         case .card(let corner):
-            buildCard(d, corner, insets)
+            buildCard(d, corner, insets, size: cardSize)
         case .hidden:
             break
         }
@@ -618,16 +624,19 @@ private final class MusicOverlayGroup: CALayer {
         addArt(d, art, radius: 0.028, shadow: 1)
         let x = art.maxX + MusicGeometry.albumGap * u
         let colW = max(min(MusicGeometry.albumText * u, W - x - 0.06 * u), 40)
-        let st = bodyStyles(title: 0.054 * u, artist: 0.034 * u, album: 0.026 * u, caption: 0.0148 * u,
+        // Sized for the far side of a room: the title's cap height is ≈ 4.5 % of a 16:10
+        // screen's height (0.064 u); every other line in step with it.
+        let st = bodyStyles(title: 0.064 * u, artist: 0.040 * u, album: 0.030 * u, caption: 0.0172 * u,
                             align: .left, titleLines: 2)
         if d.idle {
             let tb = measure(Self.idleTitle, st.title, width: colW)
             var sub = st.artist; sub.color = Self.white(0.5); sub.weight = .regular
+            sub.maxLines = 2   // the hint wraps rather than losing its last words
             let sb = measure(Self.idleSubtitle, sub, width: colW)
-            let h = tb.height + 0.014 * u + sb.height
+            let h = tb.height + 0.016 * u + sb.height
             var y = art.midY - h / 2
             addText(Self.idleTitle, st.title, x: x, top: y, width: colW)
-            y += tb.height + 0.014 * u
+            y += tb.height + 0.016 * u
             addText(Self.idleSubtitle, sub, x: x, top: y, width: colW)
             return
         }
@@ -636,25 +645,25 @@ private final class MusicOverlayGroup: CALayer {
         let ab = measure(d.artist, st.artist, width: colW)
         let lb = o.showAlbum ? measure(d.album, st.album, width: colW) : nil
         let capH = st.caption.size * 1.2
-        let barH = max(0.0062 * u, 3)
+        let barH = max(0.0068 * u, 3)
         let showBar = o.showProgress && d.hasDuration
-        let timeSize = 0.0168 * u
-        var h = capH + 0.022 * u + tb.height
-        if !ab.isEmpty { h += 0.014 * u + ab.height }
-        if let lb, !lb.isEmpty { h += 0.008 * u + lb.height }
-        if showBar { h += 0.052 * u + barH + 0.016 * u + timeSize * 1.2 }
+        let timeSize = 0.0195 * u
+        var h = capH + 0.024 * u + tb.height
+        if !ab.isEmpty { h += 0.016 * u + ab.height }
+        if let lb, !lb.isEmpty { h += 0.009 * u + lb.height }
+        if showBar { h += 0.054 * u + barH + 0.017 * u + timeSize * 1.2 }
         var y = max(art.midY - h / 2, art.minY)
         _ = addCaption(d, st.caption, x: x, top: y, width: colW)
-        y += capH + 0.022 * u
+        y += capH + 0.024 * u
         addText(d.title, st.title, x: x, top: y, width: colW)
         y += tb.height
-        if !ab.isEmpty { y += 0.014 * u; addText(d.artist, st.artist, x: x, top: y, width: colW); y += ab.height }
-        if let lb, !lb.isEmpty { y += 0.008 * u; addText(d.album, st.album, x: x, top: y, width: colW); y += lb.height }
+        if !ab.isEmpty { y += 0.016 * u; addText(d.artist, st.artist, x: x, top: y, width: colW); y += ab.height }
+        if let lb, !lb.isEmpty { y += 0.009 * u; addText(d.album, st.album, x: x, top: y, width: colW); y += lb.height }
         if showBar {
-            y += 0.052 * u
+            y += 0.054 * u
             let barW = min(colW, MusicGeometry.albumArt * u)
             addProgress(d, bar: CGRect(x: x, y: y, width: barW, height: barH),
-                        timesTop: y + barH + 0.016 * u, timeSize: timeSize)
+                        timesTop: y + barH + 0.017 * u, timeSize: timeSize)
         }
     }
 
@@ -742,9 +751,14 @@ private final class MusicOverlayGroup: CALayer {
     }
 
     /// The corner card: dark glass, artwork, caption + remaining time, title, artist, bar.
-    private func buildCard(_ d: MusicDisplay, _ corner: MusicSpec.Corner, _ insets: MusicOverlayLayer.Insets) {
-        let hc = min(max(0.112 * u, min(60, 0.2 * u)), 150)
-        let wc = min(hc * 3.75, W * 0.46)
+    /// It follows the screen's height (MusicGeometry.Card, per Card Size) with no upper cap —
+    /// a bigger display is read from further away — and never drops below a legible minimum
+    /// in a small preview.
+    private func buildCard(_ d: MusicDisplay, _ corner: MusicSpec.Corner, _ insets: MusicOverlayLayer.Insets,
+                           size: MusicSpec.CardSize) {
+        let f = MusicGeometry.Card.size(size)
+        let hc = max(f.height * u, min(60, 0.2 * u))
+        let wc = min(hc * f.width / f.height, W * 0.46)
         let m = max(0.040 * u, min(18, 0.06 * u))
         let x: CGFloat, y: CGFloat
         switch corner {
@@ -788,23 +802,24 @@ private final class MusicOverlayGroup: CALayer {
 
         let tx = x + p + side + hc * 0.14
         let tw = max(wc - (tx - x) - p * 1.1, 20)
-        let cap = MusicTextStyle(size: hc * 0.088, weight: .semibold, color: Self.white(0.56), tracking: 0.08,
+        // The type is a larger share of the card than a desktop widget's: it's read from afar.
+        let cap = MusicTextStyle(size: hc * 0.092, weight: .semibold, color: Self.white(0.58), tracking: 0.08,
                                  uppercase: true)
-        let title = MusicTextStyle(size: hc * 0.150, weight: .semibold, color: Self.white(0.97), tracking: -0.006)
-        let artist = MusicTextStyle(size: hc * 0.126, weight: .regular, color: Self.white(0.68))
+        let title = MusicTextStyle(size: hc * 0.165, weight: .semibold, color: Self.white(0.97), tracking: -0.008)
+        let artist = MusicTextStyle(size: hc * 0.135, weight: .regular, color: Self.white(0.70))
         let showBar = d.hasDuration
         // Caption row (glyph + source, remaining time on the right), then title, artist; the
         // bar lines up with the artwork's bottom edge.
         let capTop = y + p + hc * 0.010
         _ = addCaption(d, cap, x: tx, top: capTop, width: tw * (showBar ? 0.72 : 1))
-        var ty = capTop + cap.size * 1.2 + hc * 0.060
+        var ty = capTop + cap.size * 1.2 + hc * 0.055
         ty += addText(d.title, title, x: tx, top: ty, width: tw)
         addText(d.artist, artist, x: tx, top: ty + hc * 0.022, width: tw)
         if showBar {
             let barH = max(hc * 0.028, 2)
             let by = y + p + side - barH
             addProgress(d, bar: CGRect(x: tx, y: by, width: tw, height: barH), timesTop: capTop,
-                        timeSize: hc * 0.088, trackAlpha: 0.20)
+                        timeSize: hc * 0.092, trackAlpha: 0.20)
             timeStyle?.color = Self.white(0.50)
             cardRemaining = true
         }

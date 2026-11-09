@@ -24,7 +24,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             GeneralSettingsSection()
-            MusicSettingsSlot()        // MUSIC SLOT (MusicSlots.swift) — the Music section goes here
+            MusicSettingsSlot()        // the Music section (MusicSlots.swift)
             setupSection
             WallpaperSettingsSection()
             transitionsSection
