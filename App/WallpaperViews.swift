@@ -5,21 +5,25 @@ import SwiftUI
 
 // MARK: - Menu bar
 
-/// The live wallpaper's items in the DotStudio menu: what's on the desktop, switch style,
-/// pause / resume, stop — or, while it's off, "Set “X” as Wallpaper" and a style to start with.
-/// Same words as the rest of the app ("Set as Wallpaper"), in both states.
+/// The live wallpaper's items in the DotStudio menu: what's on the desktop, "Same as
+/// Screensaver" (checked while it follows the screensaver), switch style, pause / resume, stop —
+/// or, while it's off, "Set “X” as Wallpaper", "Same as Screensaver" (starts it in step with the
+/// screensaver) and a style to start with. Same words as the rest of the app ("Set as
+/// Wallpaper", "Same as Screensaver"), in both states.
 struct WallpaperMenu: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var wallpaper = WallpaperController.shared
 
     var body: some View {
+        let synced = wallpaper.isActive && wallpaper.followsScreensaver
         if wallpaper.isActive {
             Text("Wallpaper: \(menuName(wallpaper.currentPreset?.name ?? "—"))")
             if let status = wallpaper.statusText {
                 Text(status)
             }
+            sameAsScreensaver(synced)
             MenuBarStylePicker(title: "Set as Wallpaper", presets: model.library.presets,
-                               isChosen: { wallpaper.settings.presetID == $0 },
+                               isChosen: { !synced && wallpaper.settings.presetID == $0 },
                                choose: { wallpaper.use($0) })
             Button(wallpaper.userPaused ? "Resume Wallpaper" : "Pause Wallpaper") { wallpaper.togglePause() }
             Button("Stop Wallpaper") { wallpaper.stop() }
@@ -27,11 +31,19 @@ struct WallpaperMenu: View {
             Text("Wallpaper: Off")
             if let first = startStyle {
                 Button("Set \u{201C}\(menuName(first.name, limit: 24))\u{201D} as Wallpaper") { wallpaper.use(first.id) }
+                sameAsScreensaver(false)
                 MenuBarStylePicker(title: "Set as Wallpaper", presets: model.library.presets,
                                    isChosen: { _ in false },
                                    choose: { wallpaper.use($0) })
             }
         }
+    }
+
+    /// Checked while the desktop follows the screensaver. Choosing it while the wallpaper is
+    /// off starts it, in step; unchecking keeps the style on screen as the wallpaper's own.
+    private func sameAsScreensaver(_ on: Bool) -> some View {
+        Toggle("Same as Screensaver", isOn: Binding(get: { on },
+                                                    set: { wallpaper.setFollowsScreensaver($0) }))
     }
 
     /// What "Set “X” as Wallpaper" starts: the style it played last, else what the screensaver plays.
@@ -71,17 +83,20 @@ struct WallpaperSettingsSection: View {
                 .formSwitchSize()
             // The screensaver's lineup instead of a style of its own (turning it on starts the
             // wallpaper); persisted in wallpaper.json, with Library.syncTimeBase for the saver.
-            Toggle("Match the screensaver", isOn: Binding(
+            Toggle("Same as Screensaver", isOn: Binding(
                 get: { wallpaper.isActive && wallpaper.followsScreensaver },
                 set: { wallpaper.setFollowsScreensaver($0) }))
                 .formSwitchSize()
             LabeledContent("Style") {
                 if wallpaper.followsScreensaver && wallpaper.isActive {
-                    Text("Matches your screensaver")
+                    // What the desktop shows right now; it changes with the screensaver.
+                    let now = wallpaper.currentPreset?.name ?? "—"
+                    Text(menuName(now))
                         .textRole(.body)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .help(wallpaper.currentPreset.map { "Now: \($0.name)" } ?? "")
+                        .frame(maxWidth: popUpMaxWidth, alignment: .trailing)
+                        .help("Same as Screensaver — now \(now)")
                 } else {
                     stylePicker
                         .frame(maxWidth: popUpMaxWidth, alignment: .trailing)   // a long name truncates, never squeezes "Style"
@@ -113,7 +128,7 @@ struct WallpaperSettingsSection: View {
             // Under the card rather than a row in it; two short paragraphs, not one wall.
             VStack(alignment: .leading, spacing: Space.xs) {
                 SettingsNote("The wallpaper plays while DotStudio is open — closing the window keeps it running from the menu bar. On battery it plays at 30 fps, or holds a still frame if Freeze on battery is on.")
-                SettingsNote("Match the screensaver plays whatever the screensaver shows — same playlist and night style — in step, so the screensaver starts right where your desktop was.")
+                SettingsNote("Same as Screensaver plays whatever the screensaver shows — same playlist and night style — in step, so the screensaver starts right where your desktop was.")
                 SettingsNote("It pauses whenever windows cover the desktop, the screen locks or sleeps, the screensaver starts, or Low Power Mode is on, and holds still when your Mac runs hot. Balanced quality renders at three-quarter resolution on Retina displays.")
             }
         }

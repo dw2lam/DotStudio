@@ -23,10 +23,12 @@ struct EditorView: View {
     var body: some View {
         let binding = model.presetBinding(id)
         let preset = binding.wrappedValue
-        // One margin on every side and between the two panes (20 · 32 · 48 by width).
-        HStack(spacing: layout.pagePadding) {
+        // Two columns, one margin on every side and between them (20 · 32 · 48 by width): the
+        // preview takes all the room the inspector leaves and grows with the window; the
+        // inspector keeps its comfortable width range. Both start on the same top edge.
+        HStack(alignment: .top, spacing: layout.pagePadding) {
             previewPane(preset)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             inspector(binding, name: preset.name)
                 .frame(width: layout.inspectorWidth)
                 .frame(maxHeight: .infinity)
@@ -51,9 +53,10 @@ struct EditorView: View {
 
     // MARK: Preview
 
+    /// The preview on the inspector's top edge, as big as the column allows (by width, or by
+    /// the height left after the destination row), with the destination row right under it.
     private func previewPane(_ preset: Preset) -> some View {
-        VStack(spacing: layout.sectionGap) {
-            Spacer(minLength: 0)
+        VStack(spacing: layout.itemGap) {
             ZStack {
                 StyleThumb(preset: preset)
                     .heroGeometry(id, in: hero)
@@ -78,7 +81,7 @@ struct EditorView: View {
             .help("Double-click for a full-screen preview")
 
             DestinationBar(id: id)
-            Spacer(minLength: 0)
+                .layoutPriority(1)   // its full height first; the preview fits what's left
         }
     }
 
@@ -100,22 +103,12 @@ struct EditorView: View {
                     .textRole(.inspectorTitle)
                     .lineLimit(1...3)
                     .help(name)
-                // Scenes have no Source tab. Their note takes the tab bar's slot, which
-                // keeps the tabs' height, so the list below starts at the same y for every
-                // style. The note is one line (full text in the tooltip): a wrapped note
-                // would outgrow the slot at large text sizes and push a scene's list down.
-                ZStack(alignment: .leading) {
+                // Scenes draw themselves (no shared source), so they have no tabs: just the
+                // name, and the list starts right under it.
+                if !isScene {
                     SegmentedChoice(title: "Section",
                                     selection: $tab.animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion)),
                                     options: Tab.allCases.map { ($0.rawValue, $0) })
-                    .opacity(isScene ? 0 : 1)
-                    .disabled(isScene)
-                    .accessibilityHidden(isScene)
-                    if isScene {
-                        Text("Scenes don't use the shared source.")
-                            .textRole(.caption).foregroundStyle(.secondary)
-                            .truncating("Scenes draw themselves — the shared source isn't used.")
-                    }
                 }
             }
             .padding([.horizontal, .top], layout.cardPadding)
@@ -201,6 +194,8 @@ extension TextRole {
 private struct DestinationBar: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var wallpaper = WallpaperSlot.shared
+    /// "Same as Screensaver" lives on the controller (the slot only knows styles).
+    @ObservedObject private var controller = WallpaperController.shared
     @Environment(\.layout) private var layout
     let id: UUID
 
@@ -209,7 +204,6 @@ private struct DestinationBar: View {
         let only = lineup.playlist == [id]
         let inPlaylist = lineup.playlist.contains(id)
         let playlistLabel = inPlaylist ? "In Playlist" : "Add to Screensaver"
-        let wallpaperLabel = wallpaper.styleID == id ? "Stop Wallpaper" : "Set as Wallpaper"
         GlassGroup(spacing: layout.controlGap) {
             FlowLayout(spacing: layout.controlGap, lineSpacing: layout.controlGap, alignment: .center) {
                 if only {
@@ -231,16 +225,123 @@ private struct DestinationBar: View {
                     DestinationPill(title: "At Night", systemImage: "moon.fill")
                 }
                 if wallpaper.isAvailable {
-                    Button { Motion.run { wallpaper.toggle(id) } } label: {
-                        ScaledControlLabel(title: wallpaperLabel, systemImage: "photo.artframe")
-                    }
-                    .glassButton()
-                    .help(wallpaperLabel)
+                    wallpaperControl
                 }
             }
             .adaptiveControlSize(.large)
         }
         .motion(Motion.smooth, value: lineup)
+    }
+
+    /// The wallpaper's button. Not following the screensaver: a click sets this style as the
+    /// wallpaper (or stops it, when it is), and its menu offers "Same as Screensaver". While the
+    /// wallpaper is Same as Screensaver, the button says so and its menu sets this style
+    /// instead, turns sync off, or stops the wallpaper.
+    @ViewBuilder private var wallpaperControl: some View {
+        let synced = controller.isActive && controller.followsScreensaver
+        let isOurs = !synced && wallpaper.styleID == id
+        if synced {
+            GlassMenuPill(title: "Wallpaper: Same as Screensaver", systemImage: "link") {
+                wallpaperMenu(synced: true, isOurs: false)
+            }
+            .help("The wallpaper plays whatever the screensaver shows — set this style instead, or stop it")
+        } else {
+            let title = isOurs ? "Stop Wallpaper" : "Set as Wallpaper"
+            GlassMenuPill(title: title, systemImage: "photo.artframe",
+                          primary: { Motion.run { wallpaper.toggle(id) } }) {
+                wallpaperMenu(synced: false, isOurs: isOurs)
+            }
+            .help("\(title) — or, from the arrow, Same as Screensaver")
+        }
+    }
+
+    @ViewBuilder private func wallpaperMenu(synced: Bool, isOurs: Bool) -> some View {
+        Button(isOurs ? "Stop Wallpaper" : "Set as Wallpaper") {
+            Motion.run { if isOurs { wallpaper.stop() } else { wallpaper.set(id) } }
+        }
+        Toggle("Same as Screensaver", isOn: Binding(get: { synced },
+                                                    set: { on in Motion.run { controller.setFollowsScreensaver(on) } }))
+        if synced {
+            Divider()
+            Button("Stop Wallpaper") { Motion.run { wallpaper.stop() } }
+        }
+    }
+}
+
+/// A glass button with a menu, among the destination buttons. With `primary`, a split button:
+/// the title runs it and the chevron opens the menu; without, the whole capsule opens it.
+/// Sized like `DestinationPill` (an invisible glass button with the same label), and drawn
+/// plain over it, so the title is role-sized like its neighbours' — a stock pull-down's
+/// title is AppKit's and never follows the text size.
+private struct GlassMenuPill<Items: View>: View {
+    let title: String
+    let systemImage: String
+    var primary: (() -> Void)? = nil
+    @ViewBuilder var items: Items
+    @ScaledLength(relativeTo: .body) private var chevronWidth: CGFloat = Space.grid(7)   // 28
+
+    var body: some View {
+        Button {} label: {
+            HStack(spacing: 0) { label; Color.clear.frame(width: chevronWidth, height: 1) }
+        }
+        .glassButton()
+        .hidden()
+        .overlay {
+            visible
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .glassSurface(.regular, in: Capsule())
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var label: some View {
+        ScaledControlLabel(title: title, systemImage: systemImage).lineLimit(1)
+    }
+
+    private var chevron: some View {
+        Image(systemName: "chevron.down")
+            .textRole(.captionEmphasis)
+            .foregroundStyle(.secondary)
+            .frame(width: chevronWidth)
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+    }
+
+    @ViewBuilder private var visible: some View {
+        if let primary {
+            HStack(spacing: 0) {
+                Button(action: primary) {
+                    label.frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(title)
+                Rectangle()
+                    .fill(Color.primary.opacity(0.15))
+                    .frame(width: 1)
+                    .padding(.vertical, Space.xs)
+                    .accessibilityHidden(true)
+                menu { chevron }
+                    .accessibilityLabel("More wallpaper options")
+            }
+        } else {
+            menu {
+                HStack(spacing: 0) {
+                    label.frame(maxWidth: .infinity)
+                    chevron
+                }
+                .frame(maxHeight: .infinity)
+                .contentShape(Capsule())
+            }
+            .accessibilityLabel(title)
+        }
+    }
+
+    /// A plain-styled menu draws its own (role-sized) label.
+    private func menu<L: View>(@ViewBuilder label: () -> L) -> some View {
+        Menu { items } label: { label() }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
     }
 }
 
