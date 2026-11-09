@@ -20,7 +20,16 @@
 //  Controls: playPause() / next() / previous() / skip(seconds:) — optimistic, with a 1.5 s
 //  window in which a stale echo can't flip the play state back. A new track always wins,
 //  and when the window closes without the player agreeing, its last word (or an exact
-//  Apple Events read) is applied — the click never outvotes the player for long.
+//  Apple Events read) is applied — the click never outvotes the player for long. A click
+//  that never reaches the player (Automation denied, even after the window closed; an event
+//  error; dropped as too late) puts back the player's last reported state.
+//  The first click on a player DotStudio may not control yet asks macOS (on its own queue —
+//  the prompt never stalls reads, artwork or the other player); clicks made while the prompt
+//  is up are coalesced and sent once it's answered (or dropped if it's refused).
+//
+//  Sleep/wake: on wake the playing position is shifted past the sleep (players don't play
+//  while the Mac sleeps) and re-read when allowed. Streams (no duration) get a heartbeat
+//  rewrite of music.json so readers can tell a crashed app's leftover "playing" state.
 //
 //  Test hooks (environment):
 //      DOTSTUDIO_MUSIC_MONITOR_LOG=1      log transitions to <store>/debug.log (and stderr)
@@ -69,6 +78,13 @@ final class MusicMonitor: ObservableObject {
         var artRetryDelays: [TimeInterval] = [20, 60, 180]
         /// Optimistic play/pause window.
         var pendingWindow: TimeInterval = 1.5
+        /// Longest the window is held open while macOS's Automation prompt (asked by the click)
+        /// waits for an answer.
+        var pendingWindowWhileAsking: TimeInterval = 60
+        /// Seconds between keep-alive rewrites of music.json while a stream (no duration)
+        /// plays — written as `MusicState.heartbeat` (readers drop a playing stream whose
+        /// `updatedAt` is ~2 heartbeats old: the app died without clearing).
+        var heartbeatInterval: TimeInterval = 180
         /// Artwork cache; nil = ~/Library/Caches/com.davidlam.DotStudio/MusicArt
         /// (or <store>/music-cache when DOTSTUDIO_STORE_DIR redirects the store).
         var cacheDir: URL?
@@ -161,6 +177,11 @@ final class MusicMonitor: ObservableObject {
         /// Transient cover-lookup failures for this track (drives the retry backoff).
         var artRetries = 0
         var pending: (playing: Bool, until: Date)?
+        /// When the open play/pause window started (caps holding it open while asking).
+        var pendingClickAt: Date?
+        /// The player's own last word on play state (with the position it implied) — what a
+        /// click that never reaches the player is reverted to, window or not.
+        var reported: (playing: Bool, position: Double, positionAt: Double, pausedAt: Double?)?
         /// The player's last report that the pending window overruled (and when it came) —
         /// applied when the window closes unless the player agreed (or was read) meanwhile.
         var overruled: (report: MusicReport, at: Double)?
@@ -169,6 +190,12 @@ final class MusicMonitor: ObservableObject {
         var automation: MusicAutomationStatus = .unknown
         var automationCheckedAt: Date?
         var askedAutomation = false
+        /// macOS's Automation prompt for this player is up (one at a time).
+        var permissionAsking = false
+        /// Clicks made while the prompt is up, coalesced: the last Next/Previous, and whether
+        /// the play/pause clicks add up to a toggle.
+        var deferredSkip: MusicCommand?
+        var deferredToggle = false
 
         init(source: MusicSource) { self.source = source }
 
@@ -209,6 +236,10 @@ final class MusicMonitor: ObservableObject {
     private var pollTimer: Timer?
     private var pollInFlight = false
     private(set) var pollTicks = 0
+    private var heartbeatTimer: Timer?
+    private(set) var heartbeats = 0
+    /// When the Mac went to sleep (willSleep), until it wakes.
+    private var sleptAt: Date?
     private var logger = MusicLog(enabled: false, url: nil, stderr: false)
 
     init(options: Options = .fromEnvironment()) {
@@ -250,10 +281,11 @@ final class MusicMonitor: ObservableObject {
             guard let pid = req.pid, let adapter = adapters[req.source] else { return nil }
             return await withCheckedContinuation { cont in
                 ae.queue.async {
-                    let payload = ae.performOnQueue(req.source, pid: pid) { app in
+                    var err = 0
+                    let payload = ae.performOnQueue(req.source, pid: pid, errorCode: &err) { app in
                         adapter.readArtwork(app, expectedTrackID: req.trackID)
                     }
-                    cont.resume(returning: payload)
+                    cont.resume(returning: err == 0 ? payload : nil)   // a failed event: no art from here
                 }
             }
         }
@@ -290,6 +322,10 @@ final class MusicMonitor: ObservableObject {
         for item in Array(artRetryItems.values) + Array(pendingItems.values) { item.cancel() }
         artRetryItems.removeAll(); pendingItems.removeAll()
         pollTimer?.invalidate(); pollTimer = nil
+        heartbeatTimer?.invalidate(); heartbeatTimer = nil
+        sleptAt = nil
+        if let resolver { Task { await resolver.invalidate() } }   // release its URLSession
+        resolver = nil
         records = [.spotify: Record(source: .spotify), .music: Record(source: .music)]
         activeSource = nil
         artwork = nil
@@ -371,6 +407,45 @@ final class MusicMonitor: ObservableObject {
             if Thread.isMainThread { clear() } else { DispatchQueue.main.sync(execute: clear) }
         }
         observerTokens += [(NotificationCenter.default, active), (NotificationCenter.default, quit)]
+        // Sleep/wake: system-wide, so observed even without workspace launch/terminate.
+        let wnc = NSWorkspace.shared.notificationCenter
+        let sleep = wnc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.systemWillSleep() }
+        }
+        let wake = wnc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.systemDidWake() }
+        }
+        observerTokens += [(wnc, sleep), (wnc, wake)]
+    }
+
+    /// The Mac is going to sleep (also a test entry point).
+    func systemWillSleep(at now: Date = Date()) {
+        guard isMonitoring else { return }
+        sleptAt = now
+        logger.write("system: sleep")
+    }
+
+    /// Back from sleep: extrapolation must not count the sleep (no player plays through it —
+    /// the bar would sit at the end, and a track "long over" reads as stale and hides the
+    /// card). Shift each playing record's measuring point past the sleep, write that at once,
+    /// then read the exact state where Automation allows (the player may have paused).
+    func systemDidWake(at now: Date = Date()) {
+        guard isMonitoring else { return }
+        let slept = sleptAt.map { max(0, now.timeIntervalSince($0)) } ?? 0
+        sleptAt = nil
+        logger.write("system: wake after \(String(format: "%.0f", slept)) s")
+        if slept > 0 {
+            for source in [MusicSource.spotify, .music] {
+                guard var r = records[source], r.track != nil, r.isPlaying else { continue }
+                r.positionAt += slept
+                if let said = r.reported, said.playing { r.reported?.positionAt = said.positionAt + slept }
+                records[source] = r
+            }
+        }
+        afterChange(userAction: true)   // rewrite music.json now (fresh positionAt + updatedAt)
+        for source in [MusicSource.spotify, .music] where canUseAppleEvents(source) {
+            readSnapshot(source, reason: "wake")
+        }
     }
 
     private func appWillTerminate() {
@@ -469,6 +544,7 @@ final class MusicMonitor: ObservableObject {
         guard var r = records[source] else { return }
         r.track = nil; r.art = nil; r.artKey = nil; r.artRetries = 0
         r.isPlaying = false; r.pausedAt = nil; r.pending = nil; r.overruled = nil
+        r.pendingClickAt = nil; r.reported = nil
         r.reports += 1
         r.position = 0; r.positionAt = 0; r.approximate = false
         records[source] = r
@@ -530,20 +606,24 @@ final class MusicMonitor: ObservableObject {
         // overruled report is applied when the window closes (pendingExpired).
         let wasPlaying = r.isPlaying
         var playing = report.state.map { $0 == .playing } ?? wasPlaying
+        var heldBack = false
         if trackChanged, r.pending != nil {
-            r.pending = nil; r.overruled = nil
+            r.pending = nil; r.overruled = nil; r.pendingClickAt = nil
             pendingItems.removeValue(forKey: source)?.cancel()
         }
         if let p = r.pending, let said = report.state {
             if Date() < p.until, (said == .playing) != p.playing {
                 playing = wasPlaying
+                heldBack = true
                 r.overruled = (report, now)
                 logger.write("\(source.rawValue): '\(said.rawValue)' held back (play/pause click pending)")
             } else {
-                r.pending = nil; r.overruled = nil
+                r.pending = nil; r.overruled = nil; r.pendingClickAt = nil
                 pendingItems.removeValue(forKey: source)?.cancel()
             }
         }
+        // What the player itself says, for reverting a click that never reaches it.
+        let previouslyReported = r.reported
 
         // Position.
         if !trackChanged {
@@ -577,6 +657,16 @@ final class MusicMonitor: ObservableObject {
         }
         r.isPlaying = playing
         if report.state != nil { r.running = true }
+        if heldBack, let said = report.state {
+            let saidPlaying = said == .playing
+            let implied = report.position
+                ?? previouslyReported.map { $0.playing ? $0.position + max(0, now - $0.positionAt) : $0.position }
+                ?? r.position
+            let saidPausedAt = saidPlaying ? nil : (previouslyReported?.playing == false ? previouslyReported?.pausedAt : now)
+            r.reported = (saidPlaying, implied, now, saidPausedAt)
+        } else if report.state != nil || trackChanged {
+            r.reported = (r.isPlaying, r.position, r.positionAt, r.pausedAt)
+        }
         records[source] = r
 
         if trackChanged {
@@ -662,6 +752,7 @@ final class MusicMonitor: ObservableObject {
         s.pausedAt = r.isPlaying ? nil : r.pausedAt
         s.trackID = t.trackID
         s.isPodcast = t.isPodcast
+        s.heartbeat = options.heartbeatInterval
         var artURL: URL?
         var image: CGImage?
         if r.artKey == t.key, let art = r.art {
@@ -712,10 +803,38 @@ final class MusicMonitor: ObservableObject {
         if s != state { state = s }
         if image !== artwork { artwork = image }
         artWaitGaveUp = awaitedArtKey
+        updateHeartbeat()
         guard force || s != lastWritten else { return }
         lastWritten = s
         s.updatedAt = (Date().timeIntervalSince1970 * 1000).rounded() / 1000
         writer?.write(s, artSource: artURL)
+    }
+
+    // MARK: - Heartbeat
+
+    /// While a stream (no duration) plays, rewrite music.json every `heartbeatInterval` so
+    /// its `updatedAt` stays fresh: readers treat a playing stream ~2 heartbeats old as left
+    /// over from a crash (a track with a length goes stale by itself). Nothing else changes,
+    /// so it costs one small write every few minutes, only then.
+    private func updateHeartbeat() {
+        let want = isMonitoring && state.hasTrack && state.isPlaying == true && (state.duration ?? 0) <= 0
+        if want, heartbeatTimer == nil {
+            let t = Timer(timeInterval: options.heartbeatInterval, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.heartbeatTick() }
+            }
+            t.tolerance = min(30, options.heartbeatInterval * 0.1)
+            RunLoop.main.add(t, forMode: .common)
+            heartbeatTimer = t
+        } else if !want, let t = heartbeatTimer {
+            t.invalidate()
+            heartbeatTimer = nil
+        }
+    }
+
+    private func heartbeatTick() {
+        guard isMonitoring, sleptAt == nil, state.isPlaying == true else { return }
+        heartbeats += 1
+        commit(force: true)
     }
 
     // MARK: - Artwork
@@ -789,13 +908,23 @@ final class MusicMonitor: ObservableObject {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self, self.isMonitoring else { return }
-                    self.noteAppleEventError(err, source: source)
-                    guard let report else { return }
-                    self.logger.write("AE snapshot \(source.rawValue) (\(reason)): \(report.state?.rawValue ?? "?") \(report.title ?? "∅")")
-                    self.ingest(report)
+                    self.snapshotRead(report, errorCode: err, source: source, reason: reason)
                 }
             }
         }
+    }
+
+    /// A snapshot read came back (also a test entry point). Ingested only if every event in
+    /// it succeeded — see MusicReport.acceptingAppleEventsRead.
+    func snapshotRead(_ raw: MusicReport?, errorCode err: Int, source: MusicSource, reason: String) {
+        guard isMonitoring else { return }
+        noteAppleEventError(err, source: source)
+        guard let report = MusicReport.acceptingAppleEventsRead(raw, errorCode: err) else {
+            if raw != nil { logger.write("AE snapshot \(source.rawValue) (\(reason)) dropped: an event failed (\(err))") }
+            return
+        }
+        logger.write("AE snapshot \(source.rawValue) (\(reason)): \(report.state?.rawValue ?? "?") \(report.title ?? "∅")")
+        ingest(report)
     }
 
     /// One exact read of play state + position. `completion(true)` when it produced a state.
@@ -814,17 +943,32 @@ final class MusicMonitor: ObservableObject {
                 MainActor.assumeIsolated {
                     var got = false
                     defer { completion?(got) }
-                    guard let self, self.isMonitoring else { return }
-                    self.noteAppleEventError(err, source: source)
-                    guard let (state, position) = read, let state else { return }
-                    var report = MusicReport(source: source, origin: .appleEvents)
-                    report.state = state
-                    report.position = position
-                    got = true
-                    self.ingest(report)
+                    guard let self else { return }
+                    got = self.positionRead(read, errorCode: err, source: source)
                 }
             }
         }
+    }
+
+    /// A play state + position read came back (also a test entry point). Returns whether it
+    /// was ingested (dropped when any event in it failed).
+    @discardableResult
+    func positionRead(_ read: (MusicPlayState?, Double?)?, errorCode err: Int, source: MusicSource) -> Bool {
+        guard isMonitoring else { return false }
+        noteAppleEventError(err, source: source)
+        var raw: MusicReport?
+        if let (state, position) = read {
+            var r = MusicReport(source: source, origin: .appleEvents)
+            r.state = state
+            r.position = position
+            raw = r
+        }
+        guard let report = MusicReport.acceptingAppleEventsRead(raw, errorCode: err) else {
+            if raw != nil { logger.write("AE position \(source.rawValue) dropped: an event failed (\(err))") }
+            return false
+        }
+        ingest(report)
+        return true
     }
 
     private func noteAppleEventError(_ code: Int, source: MusicSource) {
@@ -889,20 +1033,48 @@ final class MusicMonitor: ObservableObject {
 
     /// Asks macOS for permission to control `source` — shows the system prompt if the user
     /// hasn't answered yet. Only for a running player; never launches it.
+    /// The prompt blocks its thread until answered, so it runs on `permissionQueue`: reads,
+    /// artwork and controls (both players) keep using `queue` meanwhile. One at a time per
+    /// player; controls clicked meanwhile wait, coalesced, for the answer (flushDeferred).
     func requestAutomation(for source: MusicSource) {
         guard isMonitoring, options.appleEvents.enabled, let pid = pid(for: source) else { return }
         records[source]?.askedAutomation = true
+        guard records[source]?.permissionAsking == false else { return }
+        records[source]?.permissionAsking = true
         logger.write("automation: asking for \(source.rawValue)")
         let ae = appleEvents
-        ae.queue.async { [weak self] in
+        ae.permissionQueue.async { [weak self] in
             let status = ae.requestPermissionOnQueue(source, pid: pid)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    guard let self, self.isMonitoring else { return }
+                    guard let self, self.isMonitoring, ae === self.appleEvents else { return }
+                    self.records[source]?.permissionAsking = false
                     self.records[source]?.automationCheckedAt = Date()
+                    self.logger.write("automation: \(source.rawValue) answered \(status.rawValue)")
                     self.automationChanged(source, to: status)
+                    self.flushDeferred(source, allowed: status == .allowed)
                 }
             }
+        }
+    }
+
+    /// True while macOS's Automation prompt for `source` waits for an answer.
+    func isAskingAutomation(_ source: MusicSource) -> Bool { records[source]?.permissionAsking ?? false }
+
+    /// The prompt was answered: send what was clicked meanwhile (coalesced), or — refused —
+    /// drop it and put back what the player last said.
+    private func flushDeferred(_ source: MusicSource, allowed: Bool) {
+        guard var r = records[source] else { return }
+        let skip = r.deferredSkip, toggle = r.deferredToggle
+        r.deferredSkip = nil; r.deferredToggle = false
+        records[source] = r
+        guard skip != nil || toggle else { return }
+        if allowed {
+            if let skip { enqueueCommand(skip, to: source) }
+            if toggle { enqueueCommand(.playPause, to: source) }
+        } else {
+            logger.write("control \(source.rawValue): dropped (Automation \(records[source]?.automation.rawValue ?? "?"))")
+            if toggle { revertOptimistic(source) }
         }
     }
 
@@ -987,6 +1159,7 @@ final class MusicMonitor: ObservableObject {
         if target { r.pausedAt = nil; r.playStartedAt = now; r.lastPlayingAt = now }
         else { r.pausedAt = now; r.lastPlayingAt = now }
         r.pending = (target, Date().addingTimeInterval(options.pendingWindow))
+        r.pendingClickAt = Date()
         r.overruled = nil
         records[src] = r
         schedulePendingExpiry(src)
@@ -1012,9 +1185,18 @@ final class MusicMonitor: ObservableObject {
         pendingItems[source] = nil
         guard isMonitoring, var r = records[source], let p = r.pending else { return }
         if Date() < p.until { schedulePendingExpiry(source); return }
+        // The click is waiting on macOS's Automation prompt: keep the window open until it's
+        // answered (capped) — the player can't have agreed yet, and its reports are stale.
+        if r.permissionAsking, r.deferredToggle,
+           Date().timeIntervalSince(r.pendingClickAt ?? .distantPast) < options.pendingWindowWhileAsking {
+            r.pending = (p.playing, Date().addingTimeInterval(options.pendingWindow))
+            records[source] = r
+            schedulePendingExpiry(source)
+            return
+        }
         let overruled = r.overruled
         let seen = r.reports
-        r.pending = nil; r.overruled = nil
+        r.pending = nil; r.overruled = nil; r.pendingClickAt = nil
         records[source] = r
         logger.write("\(source.rawValue): play/pause window closed without the player agreeing — re-syncing")
         readPosition(source) { [weak self] gotState in
@@ -1054,7 +1236,7 @@ final class MusicMonitor: ObservableObject {
         guard let src = source ?? activeSource, records[src]?.track != nil, sendable(src) else { return false }
         logger.write("control \(src.rawValue): \(cmd.rawValue)")
         // Whatever the player reports next is about the new track: no click to honour.
-        records[src]?.pending = nil; records[src]?.overruled = nil
+        records[src]?.pending = nil; records[src]?.overruled = nil; records[src]?.pendingClickAt = nil
         pendingItems.removeValue(forKey: src)?.cancel()
         send(cmd, to: src)
         return true
@@ -1065,28 +1247,49 @@ final class MusicMonitor: ObservableObject {
     }
 
     private func send(_ cmd: MusicCommand, to source: MusicSource) {
+        guard pid(for: source) != nil, var r = records[source] else { return }
+        guard r.automation == .allowed else {
+            // A click is consent to ask. The command waits for the answer — coalesced with any
+            // other clicks meanwhile — instead of sitting in the Apple Events queue behind it.
+            switch cmd {
+            case .playPause: r.deferredToggle.toggle()
+            case .next, .previous: r.deferredSkip = cmd
+            }
+            records[source] = r
+            logger.write("control \(source.rawValue): \(cmd.rawValue) waits for Automation")
+            requestAutomation(for: source)   // no-op while the prompt is already up
+            return
+        }
+        enqueueCommand(cmd, to: source)
+    }
+
+    /// Hands `cmd` to the Apple Events queue. One still queued `commandMaxQueueDelay` after
+    /// the click (a hung player held the queue) is dropped rather than fired late.
+    private func enqueueCommand(_ cmd: MusicCommand, to source: MusicSource) {
         guard let pid = pid(for: source), let adapter = adapters[source] else { return }
-        let ask = records[source]?.automation != .allowed
-        if ask { records[source]?.askedAutomation = true }
         let ae = appleEvents
+        let queuedAt = Date()
         ae.queue.async { [weak self] in
-            // A click is consent to ask: the prompt (if any) blocks only this queue.
-            var status: MusicAutomationStatus = .allowed
-            if ask, !ae.config.dryRun { status = ae.requestPermissionOnQueue(source, pid: pid) }
             var err = 0
-            if status == .allowed {
+            let late = Date().timeIntervalSince(queuedAt) > ae.config.commandMaxQueueDelay
+            if !late {
                 _ = ae.performOnQueue(source, pid: pid, timeout: ae.config.commandTimeout, errorCode: &err) { app -> Bool? in
                     adapter.send(cmd, to: app)
                     return true
                 }
+                if err == 0, ae.config.enabled { ae.noteCommand(cmd, to: source) }
             }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    guard let self, self.isMonitoring else { return }
-                    if ask { self.automationChanged(source, to: status) }
+                    guard let self, self.isMonitoring, ae === self.appleEvents else { return }
+                    if late {
+                        self.logger.write("control \(source.rawValue): \(cmd.rawValue) dropped — waited too long in the queue")
+                        if cmd == .playPause { self.revertOptimistic(source) }
+                        return
+                    }
                     self.noteAppleEventError(err, source: source)
-                    if status != .allowed || err != 0 {
-                        self.logger.write("control \(source.rawValue): \(cmd.rawValue) failed (\(status.rawValue), \(err))")
+                    if err != 0 {
+                        self.logger.write("control \(source.rawValue): \(cmd.rawValue) failed (\(err))")
                         if cmd == .playPause { self.revertOptimistic(source) }
                     } else if source == .music {
                         // Music's notifications carry no position: re-read it once things settle.
@@ -1099,15 +1302,37 @@ final class MusicMonitor: ObservableObject {
         }
     }
 
+    /// A play/pause click that never reached the player (Automation refused — possibly long
+    /// after the optimistic window closed —, an event error, dropped as too late): show what
+    /// the player itself last said, whether or not the window is still open.
     private func revertOptimistic(_ source: MusicSource) {
-        guard var r = records[source], r.pending != nil else { return }
-        let now = Date().timeIntervalSince1970
-        r.pending = nil; r.overruled = nil
+        guard var r = records[source], r.track != nil else { return }
+        let hadPending = r.pending != nil
+        r.pending = nil; r.overruled = nil; r.pendingClickAt = nil
         pendingItems.removeValue(forKey: source)?.cancel()
-        r.position = r.elapsed(at: now); r.positionAt = now
-        r.isPlaying.toggle()
-        if r.isPlaying { r.pausedAt = nil } else { r.pausedAt = now }
+        let now = Date().timeIntervalSince1970
+        if let said = r.reported {
+            guard said.playing != r.isPlaying else { records[source] = r; afterChange(); return }
+            r.isPlaying = said.playing
+            if said.playing {
+                var p = said.position + max(0, now - said.positionAt)
+                if let d = r.track?.duration, d > 0 { p = min(p, d) }
+                r.position = p; r.positionAt = now
+                r.pausedAt = nil; r.lastPlayingAt = now
+            } else {
+                r.position = said.position; r.positionAt = now
+                r.pausedAt = said.pausedAt ?? now
+            }
+        } else if hadPending {
+            r.position = r.elapsed(at: now); r.positionAt = now
+            r.isPlaying.toggle()
+            if r.isPlaying { r.pausedAt = nil } else { r.pausedAt = now }
+        } else {
+            records[source] = r
+            return
+        }
         records[source] = r
+        logger.write("\(source.rawValue): play/pause didn't reach the player — back to its last report (\(r.isPlaying ? "playing" : "paused"))")
         afterChange()
     }
 
