@@ -442,6 +442,8 @@ struct TextRole: Equatable {
     // Controls
     /// Chip and compact-control labels (12 pt medium).
     static let control = TextRole(style: .callout, weight: .medium)
+    /// The word on a climate-panel key ("SYNC"): small, bold, tracked caps.
+    static let keycap = TextRole(style: .caption, weight: .bold, tracking: 1.4, uppercase: true)
     /// Badges over imagery (tile state badges).
     static let badge = TextRole(style: .caption, weight: .semibold)
     /// Numeric readouts beside sliders.
