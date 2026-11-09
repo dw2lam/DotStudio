@@ -87,7 +87,7 @@ struct MusicSnapshot {
     /// The artwork palette: the writer's, else extracted from the artwork, else empty.
     var palette: [RGBA] {
         if let p = state?.palette, !p.isEmpty { return p }
-        return artwork.map(MusicPalette.extract) ?? []
+        return artwork.map(MusicFallbackPalette.extract) ?? []
     }
 }
 
@@ -97,7 +97,7 @@ extension MusicFeed {
 
 // MARK: - Palette fallback
 
-enum MusicPalette {
+enum MusicFallbackPalette {
     /// Three representative colours of an image (vivid, mean, deep), brightest first.
     /// A fallback for writers that don't supply `MusicState.palette`; ~0.1 ms.
     static func extract(_ image: CGImage) -> [RGBA] {
