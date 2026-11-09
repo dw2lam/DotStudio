@@ -36,6 +36,7 @@ struct ContentView: View {
                     .zIndex(1)
             }
         }
+        .adaptiveLayout()   // width class + text size → \.layout for every view inside (Layout.swift)
         .background {
             AmbientBackdrop(presetID: editing?.id ?? model.nowPlayingID)
                 .ignoresSafeArea()
@@ -55,6 +56,7 @@ struct ContentView: View {
             OnboardingView(initialStep: DemoHooks.onboardingCreate ? .pick : .welcome,
                            pickMode: DemoHooks.onboardingCreate ? .create : .presets)
                 .environmentObject(model)
+                .adaptiveLayout()   // the sheet is its own root: measure the sheet, not the window
         }
         .onAppear {
             // Lets the Dock icon / menu bar reopen this window after it was closed.
@@ -99,6 +101,7 @@ struct ContentView: View {
 ///   DOTSTUDIO_DEMO_SETUP=notInstalled|notChosen|ready   pin the setup state
 ///   DOTSTUDIO_DEMO_WALLPAPER_STUB=<name>  in-memory wallpaper slot playing that style
 ///   DOTSTUDIO_DEMO_STILL=1                stills instead of live previews (stable captures)
+///   DOTSTUDIO_DEMO_EXPAND=all             open every effect in the editor's inspector
 ///   DOTSTUDIO_DEMO_WALLPAPER=<name>       turn the LIVE wallpaper on with that style
 ///                                         (WallpaperController.applyDevOverrides; more knobs there)
 ///   DOTSTUDIO_DEMO_CLOSE_WINDOW=1         close the main window after launch (wallpaper-only,
@@ -107,6 +110,7 @@ struct ContentView: View {
 ///                                         click-through window ordered beneath every app window,
 ///                                         to verify the occlusion pause without touching others' windows
 /// While any is set the first-launch sheet never auto-presents. Pair with DOTSTUDIO_STORE_DIR.
+/// The `static var` hooks are also set per render by UIShots (Shots.swift).
 enum DemoHooks {
     private static let env = ProcessInfo.processInfo.environment
     static let editName = env["DOTSTUDIO_DEMO_EDIT"]
@@ -116,12 +120,12 @@ enum DemoHooks {
         return p.count == 2 ? CGSize(width: p[0], height: p[1]) : nil
     }
     static let appearance = env["DOTSTUDIO_DEMO_APPEARANCE"]
-    static let filter = env["DOTSTUDIO_DEMO_FILTER"].flatMap(GalleryFilter.init(demoName:))
-    static let search = env["DOTSTUDIO_DEMO_SEARCH"]
-    static let hoverName = env["DOTSTUDIO_DEMO_HOVER"]
+    static var filter = env["DOTSTUDIO_DEMO_FILTER"].flatMap(GalleryFilter.init(demoName:))
+    static var search = env["DOTSTUDIO_DEMO_SEARCH"]
+    static var hoverName = env["DOTSTUDIO_DEMO_HOVER"]
     static let playlistNames = env["DOTSTUDIO_DEMO_PLAYLIST"]?.split(separator: "|").map(String.init)
     static let nightName = env["DOTSTUDIO_DEMO_NIGHT"]
-    static let setupOverride: Installer.Status? = {
+    static var setupOverride: Installer.Status? = {
         switch env["DOTSTUDIO_DEMO_SETUP"] {
         case "notInstalled": return .notInstalled
         case "notChosen": return .notChosen
@@ -131,7 +135,8 @@ enum DemoHooks {
     }()
     static let wallpaperName = env["DOTSTUDIO_DEMO_WALLPAPER_STUB"]
     static let wallpaperStub: WallpaperSlot.Backend? = wallpaperName.map { _ in .memory(initial: nil) }
-    static let stillPreviews = env["DOTSTUDIO_DEMO_STILL"] != nil
+    static var stillPreviews = env["DOTSTUDIO_DEMO_STILL"] != nil
+    static var expandAllEffects = env["DOTSTUDIO_DEMO_EXPAND"] == "all"
     static let liveWallpaperName = env["DOTSTUDIO_DEMO_WALLPAPER"]
     static let closeWindow = env["DOTSTUDIO_DEMO_CLOSE_WINDOW"] == "1"
     static let coverSeconds = env["DOTSTUDIO_DEMO_COVER_DESKTOP"].flatMap(Double.init)

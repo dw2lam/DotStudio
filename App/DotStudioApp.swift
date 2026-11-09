@@ -111,6 +111,7 @@ struct DotStudioApp: App {
             SettingsView()
                 .environmentObject(model)
                 .environmentObject(updates)
+                .adaptiveLayout()   // Settings is its own window: its own width class (Layout.swift)
         }
 
         MenuBarExtra(isInserted: Binding(get: { wallpaper.isActive }, set: { _ in })) {
