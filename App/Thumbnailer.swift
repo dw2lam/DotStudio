@@ -153,6 +153,7 @@ final class Thumbnailer {
         let w = frame.width, h = frame.height
         let layer = MusicOverlayLayer()
         layer.trueScale = trueScale
+        layer.ambientMotion = false            // a still: a title too long to fit wraps, never scrolls
         layer.contentsScale = scale
         layer.frame = CGRect(x: 0, y: 0, width: CGFloat(w) / scale, height: CGFloat(h) / scale)
         layer.update(mode: mode, music: music, settings: settings, animated: false)
