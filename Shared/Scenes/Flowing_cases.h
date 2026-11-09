@@ -37,10 +37,8 @@
             float v = psi * lineK;
             float fw = max(length(sg.yz) * sc * lineK / res.y, 1e-5);   // lines per pixel, exact
             float wpx = max(0.7, k * (0.45 + 0.35 * z)) + k * dof * 22.0 * pow(abs(z - focusZ), 1.7);
-            // Where the flow packs strands closer than ~1.5 px (or blurs several into one) they
-            // can't be resolved: fade them into their average glow instead of letting them moiré.
-            float crowd = max(smoothstep(0.6, 0.9, fw), smoothstep(1.3, 2.2, fw * wpx));
             float energy = k / wpx;                              // defocus spreads the same light
+            float invW2 = 1.0 / (wpx * wpx), invHalo = 1.0 / (wpx * 2.5 + 3.0 * k);
             float atm = mix(0.38, 1.0, z);
             // ribbons: strands gather in bands that follow the streamlines and breathe slowly
             float wob = sin(q.x * 0.5 - ts * 0.03 + fl * 1.7);
@@ -51,37 +49,55 @@
             float sh = clamp(shift, -1.0, 1.0);
             float3 hz = sh < 0.0 ? mix(k0, kM, -sh) : mix(k0, kP, sh);
             col += hz * glowAmt * 0.05 * atm * rib * (0.3 + 0.7 * density);   // scattered haze
-            if (crowd > 0.0) {   // the strands' mean light: avg brightness × profile area × strands/px
-                float area = 2.5 * wpx + glowAmt * 0.12 * (wpx * 2.5 + 3.0 * k);
-                float eAvg = 0.224 * env * (5.0 + pulseAmt * 1.3) * (k / wpx) * atm;
-                col += hz * eAvg * area * min(fw, 1.0) * crowd * 0.5;   // (the strand pass only ever sums two)
-            }
-            if (crowd >= 1.0) continue;
-            float id0 = floor(v + 0.5);
-            float idStep = v > id0 ? 1.0 : -1.0;
-            bool both = wpx * fw > 0.1;                          // neighbour only matters when blurred
-            for (int j = 0; j < 2; ++j) {
-                if (j == 1 && !both) break;
-                float id = id0 + float(j) * idStep;
-                float dpx = abs(v - id) / fw;
-                float h  = hash21(float2(id * 0.137 + 0.31, fl * 7.31 + 0.5));
-                float h2 = hash21(float2(id * 0.291 + 3.1, fl * 3.7 + 1.1));
-                float bright = 0.03 + 0.97 * h * h * h * h;          // a few bright strands, many faint
-                float ph = q.x * 1.3 - ts * (0.22 + 0.4 * h2) + h2 * 40.0;
-                float pulse = max(sin(ph), 0.0);
-                pulse *= pulse; pulse *= pulse; pulse *= pulse;  // ^8
-                pulse *= pulse * pulse;                          // ^24
-                float I = bright * env * (5.0 + pulseAmt * 16.0 * pulse);
-                float x2 = dpx * dpx / (wpx * wpx);
-                float core = exp(-1.4 * x2);                     // hot centre …
-                float bq = 1.0 / (1.0 + 0.25 * x2);
-                float body = bq * bq * 0.32;                     // … inside a coloured sheath
-                float hq = 1.0 / (1.0 + dpx / (wpx * 2.5 + 3.0 * k));
-                float halo = glowAmt * 0.06 * hq * hq;
-                float sl = clamp(shift + (h2 - 0.5) * 0.6, -1.0, 1.0);
-                float3 lc = sl < 0.0 ? mix(k0, kM, -sl) : mix(k0, kP, sl);
-                float e = I * energy * atm * mix(0.9, 1.15, h) * (1.0 - crowd);
-                col += (lc * (core * 0.9 + body + halo) + (lc * 0.5 + 0.5) * core * 0.35 * clamp(e, 0.0, 1.5)) * e;
+            // Strand level of detail. Where the flow packs strands closer than ~1.5 px they
+            // can't be resolved (they'd moiré and crawl), so the drawing steps to every 2nd,
+            // 4th… strand: the same strands, carrying their neighbours' light. The lattices
+            // nest, so a strand never pops; it fades out smoothly as its spacing shrinks, and
+            // the bundle stays crisp individual strands at any size instead of a blur.
+            float lev = max(log2(fw * 2.0), 0.0);                // 0 while strands are ≥ 2 px apart
+            float l0 = floor(lev);
+            float fr = smoothstep(0.3, 1.0, lev - l0);           // weight of the next, coarser lattice
+            for (int L = 0; L < 2; ++L) {
+                float wL = L == 0 ? 1.0 - fr : fr;
+                if (wL <= 0.0) continue;
+                float m = exp2(l0 + float(L));                   // draw every m-th strand …
+                float vm = v / m, fwm = fw / m;
+                float gain = m * wL;                             // … carrying m strands' light
+                // The strands either side of the pixel (so a strand's long glow is never cut
+                // off halfway to its neighbour, which left hard seams down the soft strands),
+                // and, once the blur is a good fraction of the spacing, the next one out on the
+                // near side with a tent weight that is zero where the set changes: the blurred
+                // strands then overlap smoothly instead of switching at each strand's centre.
+                float n0 = floor(vm), f = vm - n0;
+                float reach = smoothstep(0.15, 0.3, wpx * fwm);
+                // (× π/4: the shipped strands were sized with fwidth's |dx|+|dy|, on average
+                // 4/π wider than the exact spacing; this keeps their weight and glow)
+                float pxPerV = 0.785 / fwm;
+                for (int j = 0; j < 3; ++j) {
+                    if (j == 2 && reach <= 0.0) break;
+                    float idm = j == 0 ? n0 : (j == 1 ? n0 + 1.0 : (f < 0.5 ? n0 - 1.0 : n0 + 2.0));
+                    float wj = j == 2 ? abs(2.0 * f - 1.0) * reach : 1.0;
+                    float id = idm * m;
+                    float dpx = abs(vm - idm) * pxPerV;
+                    float h  = hash21(float2(id * 0.137 + 0.31, fl * 7.31 + 0.5));
+                    float h2 = hash21(float2(id * 0.291 + 3.1, fl * 3.7 + 1.1));
+                    float bright = 0.03 + 0.97 * h * h * h * h;      // a few bright strands, many faint
+                    float ph = q.x * 1.3 - ts * (0.22 + 0.4 * h2) + h2 * 40.0;
+                    float pulse = max(sin(ph), 0.0);
+                    pulse *= pulse; pulse *= pulse; pulse *= pulse;  // ^8
+                    pulse *= pulse * pulse;                      // ^24
+                    float I = bright * env * (5.0 + pulseAmt * 16.0 * pulse);
+                    float x2 = dpx * dpx * invW2;
+                    float core = exp(-1.4 * x2);                 // hot centre …
+                    float bq = 1.0 / (1.0 + 0.25 * x2);
+                    float body = bq * bq * 0.32;                 // … inside a coloured sheath
+                    float hq = 1.0 / (1.0 + dpx * invHalo);
+                    float halo = glowAmt * 0.06 * hq * hq;
+                    float sl = clamp(shift + (h2 - 0.5) * 0.6, -1.0, 1.0);
+                    float3 lc = sl < 0.0 ? mix(k0, kM, -sl) : mix(k0, kP, sl);
+                    float e = I * energy * atm * mix(0.9, 1.15, h) * gain * wj;
+                    col += (lc * (core * 0.9 + body + halo) + (lc * 0.5 + 0.5) * core * 0.35 * clamp(e, 0.0, 1.5)) * e;
+                }
             }
         }
         return flowing_out(col, px);
