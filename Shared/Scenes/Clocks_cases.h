@@ -68,7 +68,7 @@
             float lw = fwidth(dot(rv, L3));
             // the ground: a tinted, lighter shadow (light gets through) with focused light in it
             float3 ground = bg * vig * mix(float3(1.0), tint * 0.55, 0.55 * F.shadow) * (1.0 - 0.10 * F.ao)
-                          + mix(bg, float3(1.0), 0.35) * tint * (0.16 * F.caus);
+                          + mix(bg, float3(1.0), 0.35) * tint * (0.13 * F.caus);
             col = ground;
             if (F.m > 0.0) {
                 // refraction (IOR ≈ 1.5, slight dispersion): the backdrop under the glass, shifted
@@ -82,9 +82,9 @@
                 trn.g = clocks_glassBg(p + tG.xy / max(-tG.z, 0.25) * th, t, A, B, B2, B3).g;
                 trn.b = clocks_glassBg(p + tB.xy / max(-tB.z, 0.25) * th, t, A, B, B2, B3).b;
                 trn *= vig * mix(float3(1.0), tint * 0.55, 0.55 * F.shadow * (1.0 - hgt));
-                trn += mix(bg, float3(1.0), 0.35) * tint * (0.25 * F.caus);
+                trn += mix(bg, float3(1.0), 0.35) * tint * (0.20 * F.caus);
                 float3 absorb = pow(tint, float3(0.4 + 0.9 * hgt));            // thicker → deeper colour
-                float edge = mix(1.0, 0.5, smoothstep(0.55, 0.97, r1) * F.pres);   // light lost at grazing exits
+                float edge = mix(1.0, 0.6, smoothstep(0.6, 0.98, r1) * F.pres);   // light lost at grazing exits
                 float fres = 0.04 + 0.96 * pow(1.0 - n.z, 5.0);
                 float3 room = mix(float3(luma(bg)), bg, 0.5) * 0.9 + 0.02;
                 float3 env = clocks_glassEnv(rv, L3, bg * 0.8, room, lw);
@@ -107,9 +107,12 @@
             float mn = clocks_grain(p * ms + 7.3);
             float2 bump = gn.yz * (0.016 * gfade);
             float grain = 1.0 + 0.008 * gfade * gn.x + 0.012 * mfade * mn;
+            // the face's shading is held at its silhouette value just outside it, so a pixel the
+            // edge only partly covers mixes the shoulder's own tone into the wall (never a flat-lit
+            // fleck along the contour)
             float x = clamp(-F.d / pw, 0.0, 1.0);
             float slope = pow(1.0 - x, 1.4) * (0.55 + 0.55 * depth) * F.pres;   // soft rounded shoulder
-            float3 n = normalize(float3(F.g * slope * step(F.d, 0.0) + bump, 1.0));
+            float3 n = normalize(float3(F.g * slope + bump, 1.0));
             float3 ng = normalize(float3(bump, 1.0));
             float nl = dot(n, L3) / L3.z, ngl = dot(ng, L3) / L3.z;           // 1 on flat faces
             float lit = 0.86 + 0.24 * pool;
@@ -248,7 +251,10 @@
         float3 face = cardC * (top ? 1.03 : 0.95) * (1.0 + 0.05 * (abs(P.y) - 0.25) * (top ? 1.0 : -1.0));
         face *= 1.0 + (top ? 0.045 : 0.015) * smoothstep(0.05, 0.48, abs(P.y)) * (top ? 1.0 : -1.0);
         face = mix(face, inkC * (top ? 1.0 : 0.94), clamp(0.5 - dInk / pxs, 0.0, 1.0));
-        face *= 1.0 - 0.22 * exp(-abs(P.y) / 0.018);                 // shade into the hinge
+        // the hinge: the upper flap's lip rolls away into the slit, and the flap stands a hair
+        // proud of the lower one, laying a soft contact shadow across its top (light from above)
+        face *= top ? 1.0 - 0.20 * exp(-P.y / 0.014)
+                    : (1.0 - 0.16 * exp(P.y / 0.010)) * (1.0 - 0.13 * exp(P.y / 0.055));
         // shadow of the falling flap on the static halves
         float3 fn = float3(0.0, -sin(th), cos(th));
         float3 fu = float3(0.0, cos(th), sin(th));
@@ -413,14 +419,19 @@
         float gfade = smoothstep(0.30, 0.12, gs / res.y);
         float tooth = 1.0 + gfade * 0.04 * clocks_grain(p * gs);
         float3 panel = A * tooth * (1.0 - 0.28 * dot(pv, pv)) * (0.97 + 0.06 * smoothstep(0.5, -0.5, p.y));
-        panel += B * glow * glowAmt * 0.032;                             // light spill on the panel
+        panel += B * glow * glowAmt * 0.042;                             // light spill on the panel
         float3 off = (mix(A, B, unlit) * tooth + B * glow * glowAmt * 0.04) * cut;
         float led = 1.0 + 0.025 * (hash21(float2(col, row) + 7.1) - 0.5) * glowAmt;   // LED-to-LED variance
         float3 lit = B * (1.0 + 0.18 * glowAmt) * led * mix(cut, 1.0, glowAmt);
+        // a backlit diffuser seen through the cut: it burns hottest (whiter) down the middle of a
+        // stroke and a touch deeper and warmer toward the faceplate's edge
+        float gl = smoothstep(0.0, 0.35, glowAmt);
+        float core = smoothstep(0.0, -max(1.3 * ww, 2.5 * fpC), d);
+        lit = mix(lit * (1.0 - 0.08 * gl), lit + max(1.0 - lit, 0.0) * (0.34 * gl), core);
         float3 ink = mix(off, lit, litHere);
         float3 colr = mix(panel, ink, cov);
         float hal = smoothstep(CLK_FAR, 0.0, d);                        // fades to 0 at the field's reach
-        colr += B * litHere * glowAmt * 0.30 * hal * hal * hal * (1.0 - cov);   // letter halo
+        colr += B * litHere * glowAmt * (0.30 * hal * hal * hal + 0.10 * hal) * (1.0 - cov);   // letter halo: hot rim, soft skirt
         colr += bandDither(px) * 2.0;
         return float4(colr, 1.0);
     }

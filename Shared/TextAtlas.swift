@@ -110,11 +110,11 @@ enum TextAtlas {
         case 50:                                                     // Type Clock: time + date
             let sel = menu(u.p0.y)
             return face(sel, u.p0.z) | face(sel, u.p0.z + 0.3)
-        case 51:                                                     // Flip Clock
+        case 51:                                                     // Flip Clock (menu: Grotesk, Rounded, Serif)
             switch menu(u.p0.x) {
-            case 1: return 1 << 2
-            case 2: return 1 << 3
-            default: return 1 << 1
+            case 1: return 1 << 3                                    // Rounded
+            case 2: return 1 << 2                                    // New York
+            default: return 1 << 1                                   // Bold
             }
         case 52:                                                     // Word Clock
             return face(menu(u.p0.x), u.p0.y)
