@@ -254,6 +254,137 @@ static inline float sobelMag(texture2d<float> tex, sampler s, float2 uv, float2 
     return length(float2(gx, gy));
 }
 
+// ---------------------------------------------------------------- Starfield (37)
+// A flight through a uniform 3D star field. Stars live on depth layers; a star on the layer
+// at depth z with pattern coordinates (θ, q = ln(r·z)) shows at screen radius r = e^q / z, so
+// flying forward just slides each layer's pattern outward along ln r and every motion-blur
+// streak is exactly radial. Cells are angular sectors × q-steps; the sector count doubles
+// every octave of q, so a cell is never narrower than a star's footprint wherever it can
+// show (no clipped stars, no hole at the vanishing point), and stars are accepted and placed
+// ∝ e^{2q}, which keeps their on-screen density uniform. Each star is an energy-conserving
+// Gaussian swept along its streak (erf ends): long streaks are dimmer per pixel, exactly
+// as a camera's shutter would record them.
+
+// Standard normal CDF (erf via the Winitzki approximation, |error| < 2e-3).
+static inline float sf_ncdf(float x) {
+    float a2 = x * x * 0.5;
+    float e = sqrt(max(1.0 - exp(-a2 * (1.2732395 + 0.147 * a2) / (1.0 + 0.147 * a2)), 0.0));
+    return 0.5 + 0.5 * (x < 0.0 ? -e : e);
+}
+
+// ---------------------------------------------------------------- Black Hole (40)
+// Light around a Schwarzschild black hole, followed along its true null geodesics: with
+// h = |x × v| conserved, x'' = −(3/2)·rs·h²·x/|x|⁵ in flat Cartesian coordinates bends
+// light exactly as GR does, so the shadow (impact parameter √27/2·rs), the far side of the
+// disk lensed over and under the hole, the thin photon ring and the warped sky behind all
+// come out of one integrator. The disk is thin and Novikov–Thorne-like (T ∝ r^−¾ with a
+// soft inner edge); each crossing is seen at g·T, g = Doppler × gravitational redshift,
+// and a black body at g·T is exactly what reaches the camera — so the approaching side's
+// beaming (brighter, bluer) needs no fudge.
+
+// Linear-RGB radiance of a black body at T kelvin (at ~610/550/465 nm), relative to a
+// 6500 K body (= 1, 1, 1).
+static inline float3 bh_planck(float T) {
+    float3 x = min(14388.0 / (float3(0.610, 0.550, 0.465) * max(T, 600.0)), 80.0);
+    return float3(36.665764, 54.958782, 115.780694) / (exp(x) - 1.0);
+}
+// Value noise on an integer-hashed 3D lattice (no sin: stable and cheap).
+static inline float bh_vn3(float3 p) {
+    float3 i = floor(p), f = p - i;
+    f = f * f * (3.0 - 2.0 * f);
+    uint3 c = uint3(int3(i) + int3(1 << 16));
+    uint bx = c.x * 0x8da6b343u, by = c.y * 0xd8163841u, bz = c.z * 0xcb1ab31fu;
+    const uint X1 = 0x8da6b343u, Y1 = 0xd8163841u, Z1 = 0xcb1ab31fu;
+    #define BH_H(h) (float(((h) ^ ((h) >> 15u)) * 0x2c1b3c6du >> 8u) * (1.0 / 16777216.0))
+    float a = BH_H(bx ^ by ^ bz),               b = BH_H((bx + X1) ^ by ^ bz);
+    float cc = BH_H(bx ^ (by + Y1) ^ bz),       d = BH_H((bx + X1) ^ (by + Y1) ^ bz);
+    float e = BH_H(bx ^ by ^ (bz + Z1)),        g = BH_H((bx + X1) ^ by ^ (bz + Z1));
+    float h = BH_H(bx ^ (by + Y1) ^ (bz + Z1)), k = BH_H((bx + X1) ^ (by + Y1) ^ (bz + Z1));
+    #undef BH_H
+    return mix(mix(mix(a, b, f.x), mix(cc, d, f.x), f.y), mix(mix(e, g, f.x), mix(h, k, f.x), f.y), f.z);
+}
+// Gas density at disk radius r, angle a (already advected): filaments sheared along the
+// orbit (log-radial so they thin toward the hole), octaves faded by the pixel's footprint
+// fr (radius units) so the compressed inner images never alias.
+static inline float bh_gas(float r, float a, float fr) {
+    float3 p = float3(cos(a) * 1.5, sin(a) * 1.5, log(r) * 10.0);
+    float lod = fr * 10.0 / r;                       // noise units per pixel, radially
+    float v = 0.0, amp = 0.5, wsum = 0.0;
+    for (int o = 0; o < 4; ++o) {
+        float k = 1.0 - smoothstep(0.25, 0.6, lod);
+        v += (bh_vn3(p) - 0.5) * amp * k;
+        wsum += amp;
+        p = p * float3(2.0, 2.0, 2.3) + float3(3.1, 1.7, 5.3);
+        amp *= 0.55; lod *= 2.3;
+    }
+    return 0.5 + v / wsum * 2.0;
+}
+// Emission (rgb) and opacity (a) of one disk crossing H = (r, φ, g).
+static inline float4 bh_disk(float3 H, float fr, float ts, float rin, float rout, float rot, float T0) {
+    float r = H.x;
+    if (r <= 0.0) return float4(0.0);
+    float nr = (r - rin) / (rout - rin);
+    float edge = smoothstep(-0.04, 0.06, nr) * smoothstep(1.0, 0.45, nr);
+    if (edge <= 0.0) return float4(0.0);
+    float q = rin / max(r, rin * 0.96);
+    float f = pow(q, 0.75) * pow(max(1.0 - sqrt(q), 0.004), 0.25) * 2.0497;   // = 1 at r = 1.36 rin
+    f = max(f, 0.75 * smoothstep(-0.04, 0.03, nr));                            // the hot inner rim
+    // Keplerian flow, two phases cross-faded so the shear never winds up.
+    float Om = rot * pow(r, -1.5);
+    const float P = 9.0;
+    float c = fmod(ts, P), w = c / P;
+    float n = mix(bh_gas(r, H.y - Om * (c + P), fr), bh_gas(r, H.y - Om * c, fr), w);
+    n = mix(n, 0.5, 0.5 * w * (1.0 - w));                  // (the cross-fade dims contrast a little; even it out)
+    float tau = edge * (0.5 + 4.0 * max(n, 0.0) * max(n, 0.0));
+    float alpha = 1.0 - exp(-tau);
+    // Colour from the black body at the observed temperature; brightness ∝ (f·g)³ — the
+    // bolometric g⁴ tempered — so the receding side dims without vanishing.
+    float Tobs = T0 * f * H.z;
+    float3 B = bh_planck(Tobs);
+    B /= max(dot(B, float3(0.2126, 0.7152, 0.0722)), 1e-6);
+    float I = f * H.z;
+    return float4(B * (I * I * I) * alpha * (0.25 + 0.75 * smoothstep(0.15, 0.95, n)), alpha);
+}
+// Point stars + a faint galactic band on the sky, for a ray leaving along d. Lensing maps
+// image pixels to the sky through the Jacobian whose inverse is Ji (sky offset in the
+// tangent frame e1, e2 → image pixels): each star is splatted as a round ~1 px point in the
+// IMAGE, so magnified stars stay points (not smeared arcs) and get brighter by the
+// magnification mu, while the compressed sky at the photon ring fades as it should.
+static inline float3 bh_sky(float3 d, float3 e1, float3 e2, float2x2 Ji, float mu, float amt) {
+    float3 acc = float3(0.0);
+    float az = atan2(d.x, d.z);
+    for (int L = 0; L < 2; ++L) {
+        float sc = L == 0 ? 90.0 : 240.0;
+        float2 g = float2(az, d.y) * sc;
+        float2 cell = floor(g);
+        float3 h = pcg3(float3(cell, 11.0 + float(L) * 17.0));
+        if (h.z < (L == 0 ? 0.80 : 0.86)) continue;
+        float2 sg = (cell + 0.2 + 0.6 * h.xy) / sc;                         // the star's (az, y)
+        float cs = sqrt(max(1.0 - sg.y * sg.y, 0.0));
+        float3 s = float3(sin(sg.x) * cs, sg.y, cos(sg.x) * cs);
+        float3 ds = s - d;
+        float2 o = Ji * float2(dot(ds, e1), dot(ds, e2));                  // pixels in the image
+        float rr = dot(o, o);
+        if (rr > 12.0) continue;
+        float3 h2 = pcg3(float3(cell + 401.0, 5.0 + float(L)));
+        float b = L == 0 ? 0.03 + 0.9 * pow(h2.x, 7.0) : 0.012 + 0.05 * h2.x * h2.x;
+        float3 tint = mix(float3(0.70, 0.80, 1.0), float3(1.0, 0.82, 0.62), h2.y);
+        acc += tint * b * exp(-rr / 1.3);
+    }
+    acc *= amt * mu;
+    // Galactic band, tilted across the view, lensed with everything else.
+    float3 gN = normalize(float3(0.25, 0.92, 0.30));
+    float gl = dot(d, gN);
+    float band = exp(-gl * gl * 22.0);
+    if (band > 0.01) {
+        float3 p = d * 6.0;
+        float n = bh_vn3(p) * 0.6 + bh_vn3(p * 2.7 + 4.1) * 0.4;
+        float dust = smoothstep(0.02, 0.09, abs(gl + 0.05 * (n - 0.5)));
+        acc += mix(float3(0.30, 0.36, 0.55), float3(0.62, 0.50, 0.40), n) * band * (0.4 + 0.8 * n) * mix(0.3, 1.0, dust) * 0.035 * min(amt, 1.5);
+    }
+    return acc;
+}
+
 // ---------------------------------------------------------------- Universe (3D solar system)
 // World space: the Sun sits at the origin, the ecliptic is the y = 0 plane, +y is
 // ecliptic north. Body 0 = Sun, 1…8 = Mercury…Neptune, 9 = the Moon.
@@ -322,8 +453,8 @@ static inline float3 uniStars(float3 q, float R, float k, float3 eye, float3 rd,
     if (any(floor(s * k) != cell)) return float3(0.0);
     float ang = length(normalize(s - eye) - rd);              // ≈ angle in radians
     float big = h2.y * h2.y * h2.y * h2.y;
-    float sz = (0.6 + 1.5 * big) * sizeK * pix;
-    float I = exp(-ang * ang / (sz * sz)) * (0.2 + 0.7 * h2.z) * (0.6 + 1.1 * big);
+    float sz = (1.06 + 0.5 * big) * sizeK * pix;              // σ ≥ 0.75 px: no shimmer as the camera turns
+    float I = exp(-ang * ang / (sz * sz)) * (0.2 + 0.7 * h2.z) * (0.6 + 1.6 * big);
     return mix(float3(0.70, 0.80, 1.0), float3(1.0, 0.86, 0.68), h.z) * I;
 }
 
@@ -351,9 +482,19 @@ static inline float3 uniShade(int i, float3 c, float3 n0, float3 rd, float fp, f
     if (i == 0) {                                                // the Sun: emissive, granulated, limb-darkened
         float s = ts * 0.02, cs = cos(s), sn = sin(s);
         float3 nr = float3(cs * n0.x - sn * n0.z, n0.y, sn * n0.x + cs * n0.z);
-        float g = fbm3(nr * 9.0 + float3(0.0, ts * 0.015, 0.0), 2.0, 0.5);
-        float limb = sqrt(mu);
-        return mix(float3(1.0, 0.38, 0.06), float3(1.0, 0.90, 0.70), limb) * (0.74 + 0.45 * g) * mix(0.75, 1.12, limb);
+        // Granulation: fine cells, octaves faded by the pixel's footprint (fp, in solar radii)
+        // so the disc never sparkles; faint large-scale mottling under it.
+        float3 p = nr * 34.0 + float3(0.0, ts * 0.02, 0.0);
+        float lod = fp * 34.0, g = 0.0, a = 0.5, wsum = 0.0;
+        for (int o = 0; o < 3; ++o) {
+            g += (bh_vn3(p) - 0.5) * a * (1.0 - smoothstep(0.3, 0.7, lod));
+            wsum += a; p = p * 2.13 + 1.7; a *= 0.5; lod *= 2.13;
+        }
+        g /= wsum;
+        float big = bh_vn3(nr * 3.2 + float3(7.0, ts * 0.004, 0.0)) - 0.5;
+        // Limb darkening, stronger toward blue (the limb is cooler: darker and redder).
+        float3 I = 1.0 - float3(0.48, 0.62, 0.80) * (1.0 - mu);
+        return float3(1.0, 0.90, 0.74) * I * (1.32 + 0.34 * g + 0.10 * big);
     }
     float3 E, N = float3(0.0, 1.0, 0.0), M; float lon0 = 0.0;
     if (i == 3)      { E = eE; N = eN; M = eM; lon0 = subLon; }
@@ -1089,34 +1230,80 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         return float4(best * s, 1.0);
     }
 
-    case 37: { // STARFIELD — flying through adjustable stars (generative)
-        float speed = u.p0.x;
-        float density = max(u.p0.y, 1.0);
-        float warp = u.p0.z;
-        float sz = max(u.p0.w, 0.2);
-        float2 uv2 = (uv - 0.5) * float2(res.x / res.y, 1.0);
-        float2 rd = normalize(uv2 + 1e-5);
+    case 37: { // STARFIELD — a flight through a 3D star field (model: see sf_ncdf above).
+               // p0 = (speed, density, warp = shutter → streak length, star size)
+               // colorA space, colorB starlight.
+        float speed = max(u.p0.x, 0.0);
+        float density = clamp(u.p0.y, 1.0, 60.0);
+        float warp = clamp(u.p0.z, 0.0, 1.0);
+        float sz = clamp(u.p0.w, 0.2, 3.0);
+        float pxs = res.y * 0.5;                              // pixels per screen unit
+        float2 s = (uv - 0.5) * float2(res.x / res.y, 1.0) * 2.0;
+        float rp = max(length(s), 1e-4);
+        float rpx = rp * pxs;
+        float thp = atan2(s.y, s.x);
+        float rho = log(rp);
+        float sigT = sz * res.y * 0.0008;                     // star PSF σ in px: same look at any size,
+        float sig = max(0.72 * min(sz, 1.0), sigT);           // never under-sampled; a small frame (a
+        float thumb = min(sigT / sig, 1.0);                   // thumbnail) dims them as downscaling would
+        thumb *= thumb;
+        float M0 = exp2(floor(log2(512.0 / max(sz, 1.0))));  // sectors in q's octave 0
+        const float LQ = 0.34657359;                          // ln 2 / 2: two q-cells per octave
+        const int NL = 8;
+        float v = 0.08 * speed;                               // depth units per second
+        float w2 = warp * warp;
+        float vT = v * max(w2 * w2 * 0.8, 1.0 / 60.0);        // flown while the shutter is open (≥ 180°)
+        float Dk = density * 10.0;                            // stars per pattern area / e^{2q}
+        float m = 3.0 * sig / rpx;                            // PSF reach, in ln r
         float3 acc = float3(0.0);
-        const int LAYERS = 18;
-        for (int i = 0; i < LAYERS; ++i) {
-            float fi = (float(i) + 0.5) / float(LAYERS);
-            float depth = fract(fi + t * speed * 0.08);     // 0..1, wraps (flying in)
-            float scale = mix(density * 2.0, density * 0.25, depth);
-            float fade = depth * (1.0 - depth) * 4.0;
-            float2 p = uv2 * scale + float2(fi * 91.7, fi * 47.3);
-            float2 cell = floor(p);
-            float2 f = fract(p) - 0.5;
-            float2 jit = (hash22(cell + fi * 71.0) - 0.5) * 0.7;
-            float2 fd = f - jit;
-            fd -= rd * dot(fd, rd) * warp;                  // streak along radial dir
-            float d = length(fd);
-            float r = 0.05 * sz;
-            float star = smoothstep(r, r * 0.28, d);        // tight core (crisper, no cell seams)
-            float b = hash21(cell + fi * 31.0);
-            acc += star * fade * (0.55 + 0.55 * b);
+        for (int i = 0; i < NL; ++i) {
+            float ph = float(i) / float(NL) + t * v + 0.37;
+            float z = 1.0 - fract(ph);
+            float fade = smoothstep(1.0, 0.8, z) * smoothstep(0.0, 0.05, z);
+            if (fade <= 0.0) continue;
+            float seed = float(i) * 7.0 + floor(ph) * 71.0;   // a fresh pattern every pass
+            float vz = min(vT, z);                            // streaks capped at half the radius
+            float qa = rho + log(z) - m, qb = rho + log(z + vz) + m;
+            float ia = floor(qa / LQ), ib = min(floor(qb / LQ), ia + 3.0);
+            float flux = fade * rsqrt(z * (z + vz)) / z;      // ~1/z^1.5: far stars stay visible
+            for (float iq = ia; iq <= ib; iq += 1.0) {
+                float M = clamp(M0 * exp2(floor(iq * 0.5)), 8.0, 16384.0);
+                float eq0 = exp(iq * LQ);
+                // P(star in cell) = density × ∫ e^{2q} dq dθ over the cell (e^{2·LQ} = 2).
+                float pc = min(Dk * eq0 * eq0 * 3.14159265 / M, 1.0);
+                float cth = (thp + 3.14159265) * M * 0.15915494;
+                float ith = floor(cth), fth = cth - ith;
+                float w = 6.2831853 / M * rpx;                // sector width here, px
+                int nn = (3.0 * sig > min(fth, 1.0 - fth) * w + 0.15 * w) ? 2 : 1;
+                for (int k = 0; k < nn; ++k) {
+                    float cell = ith + (k == 0 ? 0.0 : (fth < 0.5 ? -1.0 : 1.0));
+                    cell -= M * floor(cell / M);
+                    float3 h = pcg3(float3(cell, iq, seed));
+                    if (h.x >= pc) continue;
+                    float ths = (cell + 0.15 + 0.7 * h.y) * 6.2831853 / M - 3.14159265;
+                    float dth = thp - ths;
+                    dth -= 6.2831853 * floor(dth * 0.15915494 + 0.5);
+                    float perp = rpx * dth;                   // (the angle is tiny wherever it counts)
+                    if (abs(perp) > 3.7 * sig) continue;
+                    float g = exp(-perp * perp / (2.0 * sig * sig));
+                    float rs = eq0 * sqrt(1.0 + h.z) * pxs;   // ∝ e^{2q} inside the cell
+                    float rh = rs / z, rt = rs / (z + vz);
+                    float ell = rh - rt;
+                    float along = rh - rpx * (1.0 - 0.5 * dth * dth);
+                    float a = ell > 0.02 * sig
+                            ? (sf_ncdf(along / sig) - sf_ncdf((along - ell) / sig)) * 2.5066283 * sig / ell
+                            : exp(-along * along / (2.0 * sig * sig));
+                    float3 h2 = pcg3(float3(cell + 9137.0, iq, seed + 3.0));
+                    float L2 = h2.x * h2.x * h2.x;
+                    float L = 0.03 + 0.10 * h2.x + 1.4 * L2 * L2;
+                    float3 tint = mix(float3(0.82, 0.90, 1.10), float3(1.10, 0.96, 0.82), h2.y);
+                    acc += tint * (L * flux * g * a);
+                }
+            }
         }
-        acc = clamp(acc, 0.0, 1.0);
-        return float4(mix(u.colorA.rgb, u.colorB.rgb, acc), 1.0);
+        float3 A = srgbToLinear(u.colorA.rgb), B = srgbToLinear(u.colorB.rgb);
+        float3 col = A + B * (1.0 - exp(-acc * 1.8 * thumb));
+        return float4(linearToSrgb(col) + bandDither(px), 1.0);
     }
 
     case 39: { // UNIVERSE — the solar system in 3D. A perspective camera above the ecliptic
@@ -1177,16 +1364,17 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
 
         // ---- background: space colour, far + near star shells, Milky Way ----
         float3 col = u.colorA.rgb;
+        float spix = pix * max(1.0, res.y / 1300.0);         // star size: the same share of the frame at 5K
         if (c1 < 0.999 && starsAmt > 0.0) {
-            float bri = min(starsAmt, 1.0);
+            float bri = min(starsAmt, 1.0) * clamp(res.y / 900.0, 0.3, 1.0);   // thumbnails: a downscaled sky
             float3 gN = normalize(float3(0.46, 0.84, -0.29));      // galactic pole, ~60° off the ecliptic's
             float gl = dot(rd, gN);
             float band = exp(-gl * gl * 30.0);                     // the Milky Way: denser stars + soft glow
-            col += uniStars(rd * 100.0, 100.0, 0.9, float3(0.0), rd, pix, 0.0,
+            col += uniStars(rd * 100.0, 100.0, 0.9, float3(0.0), rd, spix, 0.0,
                             (0.035 + 0.11 * band) * starsAmt, 1.0) * bri;
             float b = dot(ro, rd), cq = dot(ro, ro) - 1600.0;      // near shell (radius 40): parallax
             float3 q = ro + rd * (-b + sqrt(max(b * b - cq, 0.0)));
-            col += uniStars(q, 40.0, 0.45, ro, rd, pix, 101.0, 0.07 * starsAmt, 1.3) * bri;
+            col += uniStars(q, 40.0, 0.45, ro, rd, spix, 101.0, 0.07 * starsAmt, 1.3) * bri;
             if (band > 0.03) {
                 float3 gC = normalize(float3(0.84, -0.46, 0.0));      // galactic centre, in the band
                 float2 gp = float2(dot(rd, gC), dot(rd, cross(gN, gC)));
@@ -1244,16 +1432,22 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
                 const float NA = 300.0, DR = 0.06, R0 = 3.84;
                 float rot = ta * 0.62;
                 float th = (pth - rot) * 0.1591549;
-                float2 cell = floor(float2((th - floor(th)) * NA, (pr - R0) / DR));
-                float3 h = pcg3(float3(cell, 57.0));
-                if (h.x < 0.28) {
+                float2 cell0 = floor(float2((th - floor(th)) * NA, (pr - R0) / DR));
+                // Cells are only a few pixels deep when foreshortened: gather the radial
+                // neighbours too, so a rock is never clipped by its cell's edge.
+                for (int j = -1; j <= 1; ++j) {
+                    float2 cell = cell0 + float2(0.0, float(j));
+                    float3 h = pcg3(float3(cell, 57.0));
+                    if (h.x >= 0.28) continue;
                     float aa = (cell.x + 0.2 + 0.6 * h.y) / NA * 6.2831853 + rot;
                     float3 pa = float3(cos(aa), 0.0, -sin(aa)) * (R0 + (cell.y + 0.2 + 0.6 * h.z) * DR);
                     float3 v = pa - ro;
                     float tv = dot(v, rd);
-                    float dpx = length(v - rd * tv) / (tv * pix);
-                    float sz = 0.5 + 0.5 * h.y;
-                    pc += float3(0.78, 0.72, 0.66) * exp(-dpx * dpx / (sz * sz)) * (0.25 + 0.45 * h.z) * belt;
+                    float dpx = length(v - rd * tv) / (tv * spix);
+                    float sz = 1.05 + 0.45 * h.y;                 // σ ≥ 0.75 px
+                    float rb = exp(-(R0 + (cell.y + 0.5) * DR - 4.18) * (R0 + (cell.y + 0.5) * DR - 4.18) * 30.0);
+                    pc += float3(0.78, 0.72, 0.66) * exp(-dpx * dpx / (sz * sz)) * (0.18 + 0.32 * h.z) * rb
+                        * clamp(res.y / 900.0, 0.3, 1.0);
                 }
             }
             if (u.p2.w > 0.5) {                              // orbit lines, with a trail behind each planet
@@ -1299,7 +1493,11 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         return float4(col, 1.0);
     }
 
-    case 40: { // BLACK HOLE — gravitational lensing + accretion disk raymarch
+    case 40: { // BLACK HOLE — a Schwarzschild hole and its accretion disk, traced along true
+               // null geodesics (see bh_planck / bh_disk above). The shadow edge is anti-aliased
+               // analytically from the ray's impact parameter; disk crossings are shaded after
+               // the march so their texture can be filtered by the pixel's footprint.
+               // p0 = (mass, brightness, rotation, disk size)  p1 = (speed, stars, angle)
         float mass = max(u.p0.x, 0.05);
         float brightness = u.p0.y;
         float rotSpeed = u.p0.z;
@@ -1308,86 +1506,89 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         float starsAmt = max(u.p1.y, 0.0);
         float angle = clamp(u.p1.z, 0.03, 1.45);   // viewing elevation: low = edge-on, high = top-down
         float ts = t * speed;
-        float rs = mass * 2.0;
-        float innerR = 4.1 * diskScale, outerR = 14.5 * diskScale;
-        const float diskTemp = 49.78, tempFalloff = 5.22, turbScale = 1.81, turbStretch = 0.75;
-        const float turbSharp = 7.4, turbCycle = 5.0, turbLac = 2.5, turbPers = 0.8;
-        const float edgeIn = 0.18, edgeOut = 0.5, lensing = 2.4, dopplerStr = 1.0, stepSize = 1.0;
+        float rs = mass * 3.2;                      // Schwarzschild radius
+        float rin = max(4.1 * diskScale, 3.0 * rs); // never inside the last stable orbit
+        float rout = max(14.5 * diskScale, rin * 1.6);
 
-        float2 sp = (uv - 0.5) * 2.0; sp.y = -sp.y; sp.x *= res.x / res.y;
-        // gentle slow azimuth orbit at the chosen elevation angle (no fast tumble)
+        // Camera: a slow azimuth orbit at the chosen elevation.
+        const float D = 30.0, F = 2.0;
         float ce = cos(angle), se = sin(angle);
         float ct = ts * 0.025;
-        float3 camPos = float3(sin(ct) * 20.0 * ce, -se * 20.0, -cos(ct) * 20.0 * ce);
-        float3 fwd = normalize(-camPos);
-        float3 right = normalize(cross(float3(0, 1, 0), fwd));
-        float3 cup = cross(fwd, right);
-        float3 rayDir = normalize(fwd + right * sp.x + cup * sp.y);
-        float3 rayPos = camPos, prevPos = camPos;
-        float3 acc = float3(0.0);
-        float alpha = 0.0;
-        int state = 0;
+        float3 ro = D * float3(sin(ct) * ce, se, -cos(ct) * ce);
+        float3 fwd = normalize(-ro);
+        float3 rgt = normalize(cross(float3(0.0, 1.0, 0.0), fwd));
+        float3 cup = cross(fwd, rgt);
+        float2 sp = (uv - 0.5) * 2.0; sp.y = -sp.y; sp.x *= res.x / res.y;
+        float3 rd = normalize(fwd * F + rgt * sp.x + cup * sp.y);
+        float pix = 2.0 / (res.y * F);
 
-        for (int s = 0; s < 32; ++s) {
-            if (alpha > 0.99) break;
-            float r = length(rayPos);
-            if (r < rs * 1.01) { state = 2; break; }
-            if (r > 100.0) { state = 1; break; }
-            float3 toC = -rayPos / r;
-            rayDir = normalize(rayDir + toC * (rs / (r * r) * stepSize * lensing));
-            prevPos = rayPos;
-            rayPos += rayDir * stepSize;
-            if (prevPos.y * rayPos.y < 0.0) {
-                float tt = -prevPos.y / (rayPos.y - prevPos.y);
-                float3 hit = mix(prevPos, rayPos, tt);
-                float hitR = sqrt(hit.x * hit.x + hit.z * hit.z);
-                if (hitR > innerR && hitR < outerR) {
-                    float ang = atan2(hit.z, hit.x);
-                    float normR = clamp((hitR - innerR) / (outerR - innerR), 0.0, 1.0);
-                    float tf = pow(innerR / hitR, tempFalloff);
-                    float3 dc = blackbody(mix(1500.0, diskTemp * 1000.0, tf));
-                    float rotSign = sign(rotSpeed);
-                    float3 velDir = float3(-sin(ang) * rotSign, 0.0, cos(ang) * rotSign);
-                    float beta = (1.0 / sqrt(hitR / innerR)) * 0.3;
-                    float dopp = 1.0 / (1.0 - beta * dot(velDir, rayDir));
-                    dc *= clamp(pow(dopp, 3.0 * dopplerStr), 0.1, 5.0);
-                    float dlum = dot(dc, float3(0.3, 0.59, 0.11));
-                    dc = mix(dc, float3(dlum, dlum * 0.9, dlum * 0.74), 0.4);   // softer, warmer palette
-                    float edge = smoothstep(0.0, edgeIn, normR) * smoothstep(1.0, 1.0 - edgeOut, normR);
-                    float cyc = fmod(ts, turbCycle);
-                    float blend = cyc / turbCycle;
-                    float kp1 = cyc * rotSpeed / pow(hitR, 1.5);
-                    float kp2 = (cyc + turbCycle) * rotSpeed / pow(hitR, 1.5);
-                    float ra1 = ang + kp1, ra2 = ang + kp2;
-                    float3 nc1 = float3(hitR * turbScale, cos(ra1) / max(turbStretch, 0.1), sin(ra1) / max(turbStretch, 0.1));
-                    float3 nc2 = float3(hitR * turbScale, cos(ra2) / max(turbStretch, 0.1), sin(ra2) / max(turbStretch, 0.1));
-                    float tb = mix(fbm3(nc2, turbLac, turbPers), fbm3(nc1, turbLac, turbPers), blend);
-                    float opacity = pow(clamp(tb, 0.0, 1.0), turbSharp) * edge;
-                    float rem = 1.0 - alpha;
-                    acc += dc * brightness * opacity * rem;
-                    alpha += rem * opacity;
+        float b = length(cross(ro, rd));            // impact parameter: conserved, decides capture
+        float bc = 2.5980762 * rs;
+        float shadow = clamp((bc - b) / max(fwidth(b), 1e-6) + 0.5, 0.0, 1.0);
+
+        // ---- march (kick-drift, step ∝ r) ----
+        float3 x = ro, v = rd;
+        float h2 = b * b;
+        float3 H0 = float3(0.0), H1 = float3(0.0), H2 = float3(0.0);   // (r, φ, g) per crossing
+        int nh = 0;
+        float sgn = rotSpeed < 0.0 ? -1.0 : 1.0;
+        if (b > rout + 3.0 * rs) {
+            // Never reaches the disk: weak-field deflection 2rs/b toward the hole, no march.
+            float3 cp = ro - rd * dot(ro, rd);
+            float al = 2.0 * rs / b;
+            v = rd * cos(al) - normalize(cp) * sin(al);
+        } else {
+            for (int i = 0; i < 120; ++i) {
+                float r2 = dot(x, x);
+                float r = sqrt(r2);
+                if (r < rs || (r > D * 1.5 && dot(x, v) > 0.0)) break;
+                float dt = clamp(0.085 * r, 0.02, 3.0);
+                v -= (1.5 * rs * h2 / (r2 * r2 * r) * dt) * x;
+                float3 xn = x + v * dt;
+                if (x.y * xn.y < 0.0 && nh < 3) {
+                    float3 hp = mix(x, xn, x.y / (x.y - xn.y));
+                    float hr = length(hp.xz);
+                    if (hr > rin * 0.9 && hr < rout) {
+                        float phi = atan2(hp.z, hp.x);
+                        float beta = min(sqrt(rs / (2.0 * max(hr - rs, 0.5 * rs))), 0.7);
+                        float3 vdir = float3(-sin(phi), 0.0, cos(phi)) * sgn;
+                        float g = sqrt(max(1.0 - rs / hr, 0.02)) * sqrt(1.0 - beta * beta)
+                                / (1.0 + beta * dot(vdir, normalize(v)));   // photon leaves along −v
+                        g = pow(g, 0.6);                    // beaming tempered: still clearly lopsided
+                        float3 H = float3(hr, phi, g);
+                        if (nh == 0) H0 = H; else if (nh == 1) H1 = H; else H2 = H;
+                        ++nh;
+                    }
                 }
+                x = xn;
             }
         }
+        float3 dOut = normalize(v);
 
-        if (state != 2 && alpha < 0.99) {
-            float3 bg = float3(0.0);
-            float theta = atan2(rayDir.z, rayDir.x), phi = asin(clamp(rayDir.y, -1.0, 1.0));
-            float2 scd = float2(theta, phi) * 50.0;
-            float2 cell = floor(scd), cuv = fract(scd);
-            float sprob = step(1.0 - 0.1 * starsAmt, hash21(cell));
-            float2 spos = hash22(cell + 42.0) * 0.8 + 0.1;
-            float dts = length(cuv - spos);
-            float bsv = hash21(cell + 100.0) * 0.03 + 0.012;
-            float si = (smoothstep(bsv, 0.0, dts) + smoothstep(bsv * 3.0, 0.0, dts) * 0.3) * sprob;
-            bg += mix(float3(0.8, 0.9, 1.0), float3(1.0, 0.95, 0.8), hash21(cell + 200.0)) * si * 0.7 * starsAmt;
-            float n1 = fbm3(rayDir * 2.0, 2.0, 0.5) * 2.0 - 1.0;
-            bg += float3(0.027, 0.122, 0.267) * clamp(n1 + 0.5, 0.0, 1.0) * 0.06;
-            float n2 = fbm3(rayDir * 5.5, 2.0, 0.5) * 2.0 - 1.0;
-            bg += float3(0.004, 0.024, 0.082) * clamp(n2 + 0.05, 0.0, 1.0) * 0.22;
-            acc += bg * (1.0 - alpha);
-        }
-        return float4(aces(acc), 1.0);
+        // ---- shade (uniform control flow again: footprints from screen derivatives) ----
+        float T0 = 4400.0;
+        float3 acc = float3(0.0);
+        float A = 0.0;
+        float4 d0 = bh_disk(H0, fwidth(H0.x), ts, rin, rout, rotSpeed, T0);
+        acc += d0.rgb; A = d0.a;
+        float4 d1 = bh_disk(H1, max(fwidth(H1.x), fwidth(H0.x)), ts, rin, rout, rotSpeed, T0);
+        acc += (1.0 - A) * d1.rgb; A += (1.0 - A) * d1.a;
+        float4 d2 = bh_disk(H2, max(fwidth(H2.x), 0.5), ts, rin, rout, rotSpeed, T0);
+        acc += (1.0 - A) * d2.rgb; A += (1.0 - A) * d2.a;
+        // Lensing Jacobian (sky radians per image pixel) in a tangent frame at dOut.
+        float3 e1 = normalize(cross(dOut, abs(dOut.y) < 0.9 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0)));
+        float3 e2 = cross(dOut, e1);
+        float3 jx = dfdx(dOut), jy = dfdy(dOut);
+        float ja = dot(jx, e1), jc = dot(jx, e2), jb = dot(jy, e1), jd = dot(jy, e2);
+        float det = ja * jd - jb * jc;
+        det = abs(det) < 1e-12 ? 1e-12 : det;
+        float2x2 Ji = float2x2(float2(jd, -jc) / det, float2(-jb, ja) / det);
+        float mu = clamp(pix * pix / abs(det), 0.0, 5.0);
+        float expo = brightness * 0.24;
+        float3 bg = bh_sky(dOut, e1, e2, Ji, mu, starsAmt * clamp(res.y / 900.0, 0.3, 1.0)) * expo;
+        bg = 0.25 * (1.0 - exp(-bg * 4.0));         // stars stay under a bloom pass's threshold
+        float3 col = aces(acc * expo + (1.0 - A) * (1.0 - shadow) * bg);
+        return float4(col + bandDither(px), 1.0);
     }
 
     // ================================================================ modern pack
