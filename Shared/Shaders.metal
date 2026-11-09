@@ -495,12 +495,12 @@ static inline float chrome_softbox(float3 r, float3 c, float3 R, float3 U, float
     float e = pow(a.x * a.x * a.x * a.x + a.y * a.y * a.y * a.y + 1e-8, 0.25);  // rounded frame
     float edge = 0.22 + length(blur / hsz) + pxw;
     float body = 1.0 - smoothstep(1.0 - edge, 1.0 + edge * 0.35, e);
-    float core = exp(-3.2 * dot(ln, ln));
+    float core = exp(-2.4 * dot(ln, ln));
     // on-screen area of the glint, in (screen height)^2
     float det = abs(dx.x * dy.y - dx.y * dy.x) * resY * resY;
     float area = 4.0 * hsz.x * hsz.y / max(det, 1e-7);
     float vis = smoothstep(0.0012, 0.004, area);
-    return body * (0.24 + 1.25 * core) * vis * smoothstep(0.0, 0.25, facing);
+    return body * (0.28 + 0.72 * core) * vis * smoothstep(0.0, 0.25, facing);
 }
 
 // Procedural photo studio, in linear light (HDR). r = reflected direction (y up,
@@ -586,6 +586,12 @@ static inline float3 chrome_reflectance(float cosI, float thicknessNm, float iri
     // pastel pearl at low iridescence, richer holographic colour toward 1
     film = max(fl + (film - fl) * mix(1.0, 1.3, saturate(iris)), 0.0);
     film *= F0 / max(dot(film, float3(0.2126, 0.7152, 0.0722)), 0.05);
+    // At equal luminance a yellow tint reads darker than its pink and blue neighbours
+    // (they gain brightness from their colourfulness), so on the dim faces of a strongly
+    // iridescent foil the yellow orders went khaki. Lift them into the pale gold a real
+    // interference yellow shows.
+    float yel = saturate((film.r + film.g) * 0.5 - film.b) / F0;
+    film *= 1.0 + 1.2 * smoothstep(0.15, 0.6, iris) * yel;
     film = film + (1.0 - film) * fr;
     return mix(metal, film, amt);
 }
@@ -608,16 +614,20 @@ static inline float3 topo_gnoised(float2 p) {
              + du * (float2(vb - va, vc - va) + u.yx * k);
     return float3(v, d);
 }
-static inline float3 topo_fbmd(float2 p, int oct) {
+// gs = the same gradient with the fine octaves rolled off: the broad landforms only, for
+// relief shading that reads as terrain instead of crinkled foil when the map is downscaled.
+static inline float3 topo_fbmd(float2 p, int oct, thread float2 &gs) {
     const float2x2 R = float2x2(0.8, 0.6, -0.6, 0.8);
-    float a = 0.5, s = 0.0;
+    float a = 0.5, s = 0.0, ws = 1.0;
     float2 g = float2(0.0);
+    gs = float2(0.0);
     float2x2 M = float2x2(1.0, 0.0, 0.0, 1.0);             // d(p_k)/d(p_0)
     for (int i = 0; i < oct; ++i) {
         float3 n = topo_gnoised(p);
         s += a * n.x;
-        g += a * (transpose(M) * n.yz);
-        p = R * p * 2.03; M = (R * 2.03) * M; a *= 0.5;
+        float2 gi = a * (transpose(M) * n.yz);
+        g += gi; gs += gi * ws;
+        p = R * p * 2.03; M = (R * 2.03) * M; a *= 0.5; ws *= 0.4;
     }
     return float3(s, g);
 }
@@ -1593,8 +1603,10 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         float wyv = gfbm(p * 0.6 + float2(5.2, 1.3 - ts), 3);
         float pixW = sc * 1.5 / res.y;
         float2 jx = float2(dfdx(wxv), dfdy(wxv)) / pixW, jy = float2(dfdx(wyv), dfdy(wyv)) / pixW;
-        float3 g = topo_fbmd(p + 1.1 * float2(wxv, wyv) + float2(ts * 0.5, -ts * 0.3) + 3.7, 4);
+        float2 gsm;
+        float3 g = topo_fbmd(p + 1.1 * float2(wxv, wyv) + float2(ts * 0.5, -ts * 0.3) + 3.7, 4, gsm);
         float2 gp = g.yz + 1.1 * (g.y * jx + g.z * jy);
+        float2 hps = (gsm + 1.1 * (gsm.x * jx + gsm.y * jy)) * 0.75;   // broad landforms only
         float h = g.x * 0.75 + 0.5;                               // ≈ 0..1, no clamping (no plateaus)
         float2 hp = gp * 0.75;                                    // dh/dp
 
@@ -1604,7 +1616,10 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         float lw = max(res.y / 1000.0, 0.8);
         float d = abs(fract(v + 0.5) - 0.5) / fw;                // distance to isoline, in px
         bool major = fmod(floor(v + 0.5) + 1000.0, 5.0) < 0.5;
-        float width = major ? lw * 1.7 : lw * 0.95;
+        // The shipped widths were measured with fwidth's |dx|+|dy|, which runs ~4/π (1.27×)
+        // wider than the true distance on average; scale by that so the ink weight and the
+        // index-line hierarchy stay exactly as they were, just without the beading.
+        float width = major ? lw * 2.29 : lw * 1.27;
         float line = clamp(width * 0.5 + 0.5 - d, 0.0, 1.0);
         line *= smoothstep(0.5, 0.2, fw);                         // fade where lines would crowd
         float alpha = major ? 0.95 : 0.62;
@@ -1622,7 +1637,9 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         // On a dark map the relief also reads as faint moonlit slopes in the line colour
         // (shading a near-black ground alone left it invisible). Centred on zero, so the
         // ground keeps its tone; paper maps keep the printed shading.
-        col = max(col + ink * darkGround * fillAmt * 0.014 * (smoothstep(-0.35, 0.35, r) - 0.4), 0.0);
+        float3 ns = normalize(float3(-hps.x, hps.y, 1.0) * float3(0.75, 0.75, 1.0));
+        float rs = dot(ns, Ld) - Ld.z;
+        col = max(col + ink * darkGround * fillAmt * 0.008 * (smoothstep(-0.4, 0.4, rs) - 0.4), 0.0);
         // ink composited in display space, as before, so line weights keep their look
         float3 outc = mix(linearToSrgb(col), u.colorB.rgb, line * alpha);
         return float4(outc + bandDither(px), 1.0);
@@ -1654,15 +1671,21 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
 
         float3 Bl = srgbToLinear(u.colorB.rgb);
         float3 c = chrome_env(r, Bl, rough, aniso, res.y, gys);
-        // Film thickness (nm): a broad, slow field much larger than the forms (so a whole
-        // swell shares one or two soft hues instead of banding with its height), nudged
-        // only a little by the height. The view-angle term inside the film still shifts
-        // the hue toward the rims, as on a real pearl.
-        // Strong iridescence (a holographic foil) gets a livelier, more form-following film.
+        // Film thickness (nm). A soft pearl (low iridescence) takes a broad, slow field much
+        // larger than the forms, so a whole swell shares one or two pastel hues. A holographic
+        // foil (high iridescence) takes it from the reflected direction instead, mostly its
+        // sideways swing: like a foil's colour, which depends on how each facet catches the
+        // studio, so every swell carries one smooth sweep of hue from flank to flank that
+        // turns with the form and travels with it (no blotches, no rings around the crests).
         float hv = smoothstep(0.15, 0.6, iris);
-        float2 fq = p * (mix(0.42, 0.75, hv) / sc) + float2(ts * 0.06, -ts * 0.045);
-        float broad = gnoise(fq) * 1.3 + 0.22 * sin(fq.x * 2.3 - fq.y * 1.9 + hs.x * 0.4 + ts * 0.2);
-        float thick = mix(200.0, 600.0, film) + mix(100.0, 150.0, hv) * broad + mix(14.0, 30.0, hv) * hs.x;
+        float broad = 0.0;
+        if (hv < 1.0) {                                    // (a uniform: the branch is free)
+            float2 fq = p * (0.42 / sc) + float2(ts * 0.06, -ts * 0.045);
+            broad = gnoise(fq) * 1.3 + 0.22 * sin(fq.x * 2.3 - fq.y * 1.9 + hs.x * 0.4 + ts * 0.2);
+        }
+        float slope = r.x * 0.6 - (r.y - 0.27) * 0.25;            // 0 on flat metal
+        float thick = mix(200.0, 600.0, film) + 100.0 * (1.0 - hv) * broad
+                    + 190.0 * hv * slope + mix(14.0, 8.0, hv) * hs.x;
         c *= chrome_reflectance(saturate(dot(n, -v)), thick, iris);
         // poured-metal depth: troughs sit slightly in their own shadow
         c *= mix(0.8, 1.0, smoothstep(-1.1, 0.5, hs.x));
