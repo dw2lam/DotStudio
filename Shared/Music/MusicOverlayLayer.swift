@@ -9,7 +9,7 @@
 //    • full — Full Screen music (and a legacy Now Playing style's foreground), per layout:
 //        Album  (Apple Music full screen) artwork left, big type right;
 //        Stage  (Spotify TV)              artwork centred, type below;
-//        Cover  (legacy styles only)      type bottom-left over the shader's scrim.
+//        Cover  (artwork fills the screen) type bottom-left over the shader's scrim.
 //      It fades with the renderer's backdrop (fullFadeSeconds).
 //    • card — Corner: rounded artwork, title, artist and a thin bar drawn straight on the
 //      scene over a feathered scrim that fades out with no edge — no box.
@@ -917,7 +917,8 @@ private final class MusicOverlayGroup: CALayer {
         }
     }
 
-    /// Full-bleed artwork (the shader), type bottom-left over its scrim (legacy styles).
+    /// Full-bleed artwork (the shader), type bottom-left over its scrim (Full Screen's Cover
+    /// layout, and legacy Cover styles).
     private func buildCover(_ d: MusicDisplay, _ o: MusicSceneOptions, _ insets: MusicOverlayLayer.Insets) {
         let m = 0.072 * u
         let left = m + insets.left
