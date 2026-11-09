@@ -209,7 +209,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .aurora:    return "Northern lights rippling above a dark ridge."
         case .topography: return "A living contour map with shaded relief."
         case .liquidChrome: return "Molten mirror metal, optionally iridescent."
-        case .silk:      return "A flow field of fine strands drifting like brushed silk."
+        case .silk:      return "Draped satin rippling in a slow breeze, its sheen sliding down the folds."
         case .risograph: return "Two-ink riso print with grain and misregistration."
         case .grainWash: return "Dreamy soft focus with film grain and an optional color wash."
         case .glass:     return "Looks through fluted, tiled or liquid glass."
@@ -401,7 +401,7 @@ enum EffectKind: String, Codable, CaseIterable {
                                     ParamSpec("aniso", "Brushed", 0, 1, def: 0),
                                     ParamSpec("film", "Film Tone", 0, 1, def: 0.5)]
         case .silk:      return [ParamSpec("speed", "Speed", 0, 2, def: 0.6),
-                                 ParamSpec("scale", "Swirl Size", 0.4, 2.5, def: 1),
+                                 ParamSpec("scale", "Fold Size", 0.4, 2.5, def: 1),
                                  ParamSpec("sheen", "Sheen", 0, 1, def: 0.4)]
         case .risograph: return [ParamSpec(menu: "screen", "Screen", ["Grain", "Halftone"], def: 0),
                                  ParamSpec("cell", "Dot Size", 2, 16, def: 4),
@@ -433,7 +433,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .aurora:       return RGBA(0.015, 0.03, 0.07)      // night sky
         case .topography:   return RGBA(0.05, 0.06, 0.07)       // ground
         case .liquidChrome: return RGBA(0.03, 0.03, 0.05)       // shadow
-        case .silk:         return RGBA(0.03, 0.03, 0.06)       // ground
+        case .silk:         return RGBA(0.03, 0.03, 0.06)       // shadow
         case .risograph:    return RGBA(1.0, 0.28, 0.53)        // fluorescent pink ink
         case .grainWash:    return RGBA(0.12, 0.08, 0.24)       // shadow wash
         default: return SceneCatalog.spec(self)?.colorA
@@ -450,7 +450,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .aurora:       return RGBA(0.32, 1.0, 0.50)        // oxygen green
         case .topography:   return RGBA(0.93, 0.90, 0.82)       // contour ink
         case .liquidChrome: return RGBA(0.92, 0.94, 1.0)        // highlight
-        case .silk:         return RGBA(0.98, 0.78, 0.55)       // champagne strands
+        case .silk:         return RGBA(0.98, 0.78, 0.55)       // champagne satin
         case .risograph:    return RGBA(0.0, 0.47, 0.75)        // riso medium blue
         case .grainWash:    return RGBA(1.0, 0.80, 0.64)        // highlight wash
         default: return SceneCatalog.spec(self)?.colorB
@@ -466,8 +466,8 @@ enum EffectKind: String, Codable, CaseIterable {
         case .halftone, .crosshatch: return "Paper"
         case .meshGradient: return "Deep"
         case .aurora: return "Sky"
-        case .topography, .silk: return "Ground"
-        case .liquidChrome, .grainWash: return "Shadow"
+        case .topography: return "Ground"
+        case .liquidChrome, .grainWash, .silk: return "Shadow"
         default: return SceneCatalog.spec(self)?.colorALabel ?? "Background"
         }
     }
@@ -478,7 +478,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .meshGradient: return "Light"
         case .aurora: return "Aurora"
         case .topography: return "Lines"
-        case .silk: return "Strands"
+        case .silk: return "Silk"
         case .liquidChrome, .grainWash: return "Highlight"
         default: return SceneCatalog.spec(self)?.colorBLabel ?? "Foreground"
         }

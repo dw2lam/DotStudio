@@ -34,16 +34,24 @@ static inline float4 flowing_out(float3 lin, float2 px) {
 
 // Stream function: its isolines are the streamlines of a divergence-free flow, so drawing
 // them gives long, unbroken, never-crossing filaments (LIC would smear into fur).
-static inline float flowing_stream(float2 q, float ts, float s) {
-    float2 w = q;
-    w += 0.45 * float2(sin(q.y * 1.15 + ts * 0.9 + s), sin(q.x * 0.80 - ts * 0.7 + s * 1.7));
-    float psi = w.y + 0.25 * sin(w.x * 1.1 + ts * 0.4 + s * 3.1) + 0.07 * sin(w.x * 2.7 - w.y * 1.9 + ts * 0.5 + s * 2.3);
+// Returns (ψ, ∂ψ/∂q) with the gradient analytic, so strand widths are measured from the
+// exact line spacing (a 2×2-quad fwidth stair-stepped the strand edges, which crawled).
+static inline float3 flowing_stream(float2 q, float ts, float s) {
+    float A1 = q.y * 1.15 + ts * 0.9 + s, A2 = q.x * 0.80 - ts * 0.7 + s * 1.7;
+    float2 w = q + 0.45 * float2(sin(A1), sin(A2));
+    float B1 = w.x * 1.1 + ts * 0.4 + s * 3.1, B2 = w.x * 2.7 - w.y * 1.9 + ts * 0.5 + s * 2.3;
+    float psi = w.y + 0.25 * sin(B1) + 0.07 * sin(B2);
+    float cB2 = cos(B2);
+    float2 pw = float2(0.275 * cos(B1) + 0.189 * cB2, 1.0 - 0.133 * cB2);       // ∂ψ/∂w
+    float2 g = float2(pw.x + pw.y * 0.36 * cos(A2), pw.x * 0.5175 * cos(A1) + pw.y);
     // two slow eddies the strands wrap around (Gaussian vortices, opposite spin)
     float sn = sin(ts * 0.19 + s), cs = cos(ts * 0.19 + s);
     float2 c1 = float2(1.2 * sn, 0.45 * cs);
     float2 c2 = float2(-1.4 * cs, -0.5 * sn) + float2(0.3, 0.0);
-    psi += 0.30 * exp(-dot(q - c1, q - c1) * 2.2) - 0.24 * exp(-dot(q - c2, q - c2) * 2.6);
-    return psi;
+    float e1 = 0.30 * exp(-dot(q - c1, q - c1) * 2.2), e2 = 0.24 * exp(-dot(q - c2, q - c2) * 2.6);
+    psi += e1 - e2;
+    g += -4.4 * e1 * (q - c1) + 5.2 * e2 * (q - c2);
+    return float3(psi, g);
 }
 
 // ---------------------------------------------------------------- Lava Lamp (55)
