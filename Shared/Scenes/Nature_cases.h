@@ -43,7 +43,9 @@
         float e = asin(clamp(rd.y, -1.0, 1.0));
         float az = atan2(rd.x, rd.z);                              // 0 north, ±π south
         float azS = az < 0.0 ? az + 6.2831853 : az;                // continuous around south
-        float land = nature_nightLand(azS, e, pix);
+        // Foreground matte, measured up from the true horizon line (screen y = −F·tan pitch).
+        float2 land2 = nature_nightLand(sp.x, sp.y + F * tan(pitch), 1.0 / res.y);
+        float land = max(land2.x, land2.y);
 
         float3 skyC = nature_lin(u.colorA.rgb);
         float3 glowC = srgbToLinear(u.colorB.rgb);
@@ -63,45 +65,46 @@
         float md = acos(clamp(dot(rd, mDir), -1.0, 1.0));
         float moonSky = moonAmt * illum * illum;
 
-        // Sky: base colour, horizon glow (distant town + airglow), moonlit brightening.
+        // The air: base colour, horizon glow (distant town + airglow), scattered moonlight.
+        // It lies in front of everything in space, the moon included.
         float3 col = skyC * (1.0 + 2.2 * exp(-he * 5.0));
         float dz = (azS - 3.6) / 0.5;
         col += glowC * 0.05 * exp(-he * 10.0) * (0.3 + 0.7 * exp(-dz * dz));
         col += float3(0.10, 0.35, 0.16) * 0.004 * exp(-he * 9.0);           // green airglow
         col += float3(0.30, 0.45, 0.85) * 0.010 * moonSky * (0.6 + 0.4 * exp(-he * 3.0));
         col += float3(0.85, 0.88, 1.0) * moonSky * (0.020 * exp(-md * 9.0) + 0.06 * exp(-md * 40.0));
+        float3 atm = col;
 
         if (land < 0.999) {
             float wash = 1.0 / (1.0 + 2.5 * moonSky);                 // moonlight eats contrast
-            float4 mw = nature_milkyWay(g);
-            col += mw.rgb * 0.055 * mwAmt * ext * wash;
+            float4 mw = nature_milkyWay(g, pix);
+            float3 space = mw.rgb * 0.06 * mwAmt * ext * wash;
             float band = exp(-(g.z * g.z) / 0.02);
             float twk = smoothstep(0.5, 0.0, rd.y);
-            col += nature_galStars(g, pix, band * min(mwAmt, 1.0), mix(1.0, mw.w, 0.85), t, twk)
-                   * 0.55 * starAmt * ext * mix(1.0, wash, 0.5);
+            space += nature_galStars(g, pix, band * min(mwAmt, 1.0), mix(1.0, mw.w, 0.85), t, twk)
+                   * 0.55 * starAmt * ext * mix(1.0, wash, 0.5) * clamp(res.y / 900.0, 0.3, 1.0);   // (thumbnails: downscaled)
 
-            // The moon.
-            // Drawn in screen space so the lens never stretches it into an oval.
+            // The moon, drawn in screen space so the lens never stretches it into an oval.
+            // It hides what lies beyond it; the air in front (its own halo) stays.
             const float rS = 0.034;
             float2 dp = (sp - float2(aspect * 0.55, 0.55)) / rS;
             float r2 = dot(dp, dp);
+            float disc = 0.0;
             if (r2 < 2.0 && moonAmt > 0.0) {
                 float edgeW = 2.0 / (res.y * rS);
-                float disc = smoothstep(1.0 + edgeW, 1.0 - edgeW, sqrt(r2));
+                disc = smoothstep(1.0 + edgeW, 1.0 - edgeW, sqrt(r2));
                 if (disc > 0.0) {
                     float zc = sqrt(max(1.0 - r2, 0.0));
                     float3 nrm = normalize(dp.x * rgt + dp.y * up - zc * mDir);
-                    // Maria: dark low-frequency patches; fine highland texture.
-                    float3 s3 = float3(dp * 2.2, zc * 2.2);
-                    float maria = smoothstep(0.45, 0.7, nature_dirNoise(s3 + 5.0, 3));
-                    float alb = (0.85 - 0.38 * maria) * (0.92 + 0.16 * noise3(s3 * 9.0));
+                    float alb = nature_moonAlbedo(normalize(float3(dp, zc)));
                     float mu0 = dot(nrm, sunD), mu = max(dot(nrm, -rd), 0.05);
                     float ls = mu0 > 0.0 ? mu0 / (mu0 + mu) : 0.0;     // Lommel–Seeliger
-                    float shine = 0.006 * (1.0 - illum);                 // earthshine
+                    float shine = 0.010 * (1.0 - illum);                 // earthshine
                     float3 mc = float3(1.0, 0.97, 0.92) * alb * (ls * 1.8 + shine);
-                    col = mix(col, mc * moonAmt + col * 0.2, disc);
+                    space = space * (1.0 - disc) + mc * moonAmt * disc;
                 }
             }
+            col += space;
 
             // Meteors: now and then a short streak with a fading tail.
             if (meteorAmt > 0.0) {
@@ -118,15 +121,17 @@
                     float along = -dot(rel, dir);
                     float across = abs(dir.x * rel.y - dir.y * rel.x);
                     float wpx = 2.4 / res.y;
-                    float a = smoothstep(wpx, 0.0, across) * step(0.0, along) * exp(-along / (0.09 * len))
+                    float a = smoothstep(wpx, 0.0, across) * smoothstep(-wpx, wpx, along) * exp(-max(along, 0.0) / (0.09 * len))
                             * sin(3.14159 * lt);
                     col += float3(0.85, 0.95, 1.0) * a * 1.2;
                 }
             }
         }
-        // Ground: near-black, catching a little glow and moonlight.
+        // Ground: the near hill near-black, catching a little glow and moonlight; the far
+        // ridge veiled by the air in front of it, so the two read as separate distances.
         float3 gcol = skyC * 0.08 + glowC * 0.002 + float3(0.4, 0.5, 0.7) * 0.004 * moonSky;
-        col = mix(col, gcol, land);
+        col = mix(col, gcol + atm * 0.22, land2.y);
+        col = mix(col, gcol, land2.x);
         return float4(nature_display(col, px), 1.0);
     }
 
