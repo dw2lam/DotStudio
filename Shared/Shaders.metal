@@ -495,12 +495,12 @@ static inline float chrome_softbox(float3 r, float3 c, float3 R, float3 U, float
     float e = pow(a.x * a.x * a.x * a.x + a.y * a.y * a.y * a.y + 1e-8, 0.25);  // rounded frame
     float edge = 0.22 + length(blur / hsz) + pxw;
     float body = 1.0 - smoothstep(1.0 - edge, 1.0 + edge * 0.35, e);
-    float core = exp(-2.4 * dot(ln, ln));
+    float core = exp(-3.2 * dot(ln, ln));
     // on-screen area of the glint, in (screen height)^2
     float det = abs(dx.x * dy.y - dx.y * dy.x) * resY * resY;
     float area = 4.0 * hsz.x * hsz.y / max(det, 1e-7);
     float vis = smoothstep(0.0012, 0.004, area);
-    return body * (0.28 + 0.72 * core) * vis * smoothstep(0.0, 0.25, facing);
+    return body * (0.24 + 1.25 * core) * vis * smoothstep(0.0, 0.25, facing);
 }
 
 // Procedural photo studio, in linear light (HDR). r = reflected direction (y up,
@@ -583,10 +583,77 @@ static inline float3 chrome_reflectance(float cosI, float thicknessNm, float iri
     film = max(film, 0.0);
     // keep chrome's brightness, take the film's hue; grazing angles still go white
     float fl = dot(film, float3(0.2126, 0.7152, 0.0722));
-    film = max(fl + (film - fl) * 1.3, 0.0);                // pastel to saturated pearl
+    // pastel pearl at low iridescence, richer holographic colour toward 1
+    film = max(fl + (film - fl) * mix(1.0, 1.3, saturate(iris)), 0.0);
     film *= F0 / max(dot(film, float3(0.2126, 0.7152, 0.0722)), 0.05);
     film = film + (1.0 - film) * fr;
     return mix(metal, film, amt);
+}
+
+// ---- Topography (44) ---------------------------------------------------------------
+// gnoise / gfbm with their analytic gradients (identical values), so contour widths and
+// hillshade come from the exact slope instead of 2×2-quad derivatives (which stair-step
+// the line edges and facet the relief).
+static inline float3 topo_gnoised(float2 p) {
+    float2 i = floor(p), f = fract(p);
+    float2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    float2 du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
+    float2 ga = ghash(i), gb = ghash(i + float2(1, 0));
+    float2 gc = ghash(i + float2(0, 1)), gd = ghash(i + float2(1, 1));
+    float va = dot(ga, f), vb = dot(gb, f - float2(1, 0));
+    float vc = dot(gc, f - float2(0, 1)), vd = dot(gd, f - float2(1, 1));
+    float k = va - vb - vc + vd;
+    float v = va + u.x * (vb - va) + u.y * (vc - va) + u.x * u.y * k;
+    float2 d = ga + u.x * (gb - ga) + u.y * (gc - ga) + u.x * u.y * (ga - gb - gc + gd)
+             + du * (float2(vb - va, vc - va) + u.yx * k);
+    return float3(v, d);
+}
+static inline float3 topo_fbmd(float2 p, int oct) {
+    const float2x2 R = float2x2(0.8, 0.6, -0.6, 0.8);
+    float a = 0.5, s = 0.0;
+    float2 g = float2(0.0);
+    float2x2 M = float2x2(1.0, 0.0, 0.0, 1.0);             // d(p_k)/d(p_0)
+    for (int i = 0; i < oct; ++i) {
+        float3 n = topo_gnoised(p);
+        s += a * n.x;
+        g += a * (transpose(M) * n.yz);
+        p = R * p * 2.03; M = (R * 2.03) * M; a *= 0.5;
+    }
+    return float3(s, g);
+}
+
+// ---- Silk (46) ---------------------------------------------------------------------
+// A sheet of satin drifting in a slow breeze. Folds run along D (a = along, b = across),
+// meander with a, and travel slowly; a long swell rolls under them. Returns (h, dh/dx,
+// dh/dy) in p units with the gradient analytic (so highlights are exact at any size).
+static inline float3 silk_surface(float2 p, float ts) {
+    const float2 D = float2(0.894, -0.447), Dp = float2(0.447, 0.894);
+    float a = dot(p, D), b = dot(p, Dp);
+    // meander: the fold lines drift sideways along their length
+    float m1 = 0.9 * a + ts * 0.23, m2 = 1.7 * a - ts * 0.31 + 1.3;
+    float w = 0.36 * sin(m1) + 0.14 * sin(m2);
+    float wa = 0.324 * cos(m1) + 0.238 * cos(m2);
+    // folds fan out and gather along their length (cloth hangs from a few points)
+    float fa = 0.42 * a + ts * 0.07 + 0.8;
+    float fan = 1.0 + 0.32 * sin(fa);
+    float bb = (b + w) * fan;
+    float bba = wa * fan + (b + w) * 0.1344 * cos(fa);       // d(bb)/da
+    float bbb = fan;                                         // d(bb)/db
+    // three fold families: broad, medium and a few fine creases, each travelling
+    float s1 = 0.6 * a + ts * 0.17;
+    float f1 = 2.2 * bb + 0.45 * sin(s1) + ts * 0.28;
+    float f2 = 3.7 * bb + 0.30 * a - ts * 0.36 + 2.0;
+    float f3 = 6.6 * bb - 0.55 * a + ts * 0.47 + 4.1;
+    float f4 = 0.55 * a + 0.35 * b + ts * 0.12;            // long swell under everything
+    // cloth folds: rounded crests, tighter valleys (a sine pushed toward its crest)
+    float c1 = sin(f1), c2 = sin(f2), c3 = sin(f3);
+    float h = 0.62 * (c1 - 0.18 * c1 * c1) + 0.30 * (c2 - 0.12 * c2 * c2) + 0.085 * c3 + 0.45 * sin(f4);
+    float d1 = 0.62 * (1.0 - 0.36 * c1) * cos(f1);
+    float d2 = 0.30 * (1.0 - 0.24 * c2) * cos(f2);
+    float d3 = 0.085 * cos(f3), d4 = 0.45 * cos(f4);
+    float ha = d1 * (2.2 * bba + 0.27 * cos(s1)) + d2 * (3.7 * bba + 0.30) + d3 * (6.6 * bba - 0.55) + d4 * 0.55;
+    float hb = (d1 * 2.2 + d2 * 3.7 + d3 * 6.6) * bbb + d4 * 0.35;
+    return float3(h, ha * D + hb * Dp);
 }
 
 // ---------------------------------------------------------------- fragment
@@ -1399,9 +1466,12 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         float ts = t * speed * 0.09;
         float aspect = res.x / res.y;
         float2 p = (uv - 0.5) * float2(aspect, 1.0);
-        float2 w = float2(vnoise(p * 1.5 + float2(ts * 1.3, -ts)),
-                          vnoise(p * 1.5 + float2(4.1 - ts, 2.7 + ts * 1.1))) - 0.5;
-        p += w * 0.5;
+        // Organic edges from a smooth gradient-noise warp (value noise left faint
+        // axis-aligned creases in the blends) plus a finer ripple carried by it, drifting slowly.
+        float2 wq = p * 1.15;
+        float2 w = float2(gnoise(wq + float2(ts * 1.1, -ts * 0.8)), gnoise(wq + float2(4.1 - ts * 0.9, 2.7 + ts)));
+        w += 0.12 * float2(sin(wq.y * 2.3 + w.x * 3.0 - ts * 1.4), sin(wq.x * 2.1 - w.y * 3.0 + ts * 1.3 + 3.1));
+        p += w * 0.62;
 
         float3 A = srgbToOklab(u.colorA.rgb), B = srgbToOklab(u.colorB.rgb);
         float3 st[5];
@@ -1414,20 +1484,30 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         st[3] = oklabHue(B, spread * 1.2);
         st[3].x = min(B.x + 0.07, 0.97); st[3].yz *= 0.85;
         st[4] = oklabHue(A, -spread * 1.5);
-        st[4].x = mix(A.x, B.x, 0.25); st[4].yz *= 1.2;
+        st[4].x = mix(A.x, B.x, 0.25); st[4].yz *= 0.95;
 
-        float expo = 1.5 / soft;
-        float3 acc = float3(0.0); float wsum = 0.0;
+        float expo = 1.9 / soft;
+        float3 acc = float3(0.0); float wsum = 0.0, csum = 0.0;
         for (int i = 0; i < 5; ++i) {
             float fi = float(i);
             float2 c = float2(cos(fi * 1.2566 + ts * (0.55 + 0.11 * fi)),
                               sin(fi * 1.6336 + ts * (0.47 + 0.17 * fi))) * float2(0.40 * aspect, 0.36);
             float2 d = p - c;
-            float wi = pow(dot(d, d) + 0.012, -expo);
-            acc += st[i] * wi; wsum += wi;
+            float wi = pow(dot(d, d) + 0.04, -expo);   // finite at the point: no flat spot or bullseye
+            acc += st[i] * wi; wsum += wi; csum += length(st[i].yz) * wi;
         }
-        float3 col = oklabToSrgb(acc / wsum);
-        col += filmGrain(px, t) * grainAmt;
+        float3 lab = acc / wsum;
+        // Keep most of the chroma through a blend (as an OkLCh mix would): two far-apart
+        // hues meet through a vivid in-between hue instead of a greyed, muddy midpoint.
+        float cAvg = csum / wsum, cNow = length(lab.yz);
+        lab.yz *= mix(1.0, cAvg / max(cNow, 1e-4), 0.55 * smoothstep(0.0, 0.03, cNow));
+        float3 col = oklabToSrgb(lab);
+        // Grain like film: strongest in the midtones, quieter in deep shadow and highlight
+        // (flat additive noise read as a dirty screen in the darks), and a touch stronger
+        // per pixel on dense displays so it reads the same from viewing distance.
+        float gw = 0.45 + 2.2 * lab.x * (1.0 - lab.x);
+        float gk = clamp(sqrt(res.y / 1000.0), 1.0, 1.6);
+        col += filmGrain(px, t) * grainAmt * 0.8 * gw * gk + bandDither(px);
         return float4(col, 1.0);
     }
 
@@ -1506,29 +1586,46 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         float aspect = res.x / res.y;
         float2 p = (uv - 0.5) * float2(aspect, 1.0) * sc * 1.5;
         float ts = t * speed * 0.03;
-        float2 w = float2(gfbm(p * 0.6 + float2(0.0, ts), 3), gfbm(p * 0.6 + float2(5.2, 1.3 - ts), 3));
-        float h = gfbm(p + 1.1 * w + float2(ts * 0.5, -ts * 0.3) + 3.7, 4);
-        h = h * 0.75 + 0.5;                                       // ≈ 0..1, no clamping (no plateaus)
+        // Same terrain as ever, now with its exact gradient: analytic through the detailed
+        // fbm, chain rule through the warp. The warp is broad and smooth, so its Jacobian
+        // from screen derivatives is accurate to ~1% and costs nothing.
+        float wxv = gfbm(p * 0.6 + float2(0.0, ts), 3);
+        float wyv = gfbm(p * 0.6 + float2(5.2, 1.3 - ts), 3);
+        float pixW = sc * 1.5 / res.y;
+        float2 jx = float2(dfdx(wxv), dfdy(wxv)) / pixW, jy = float2(dfdx(wyv), dfdy(wyv)) / pixW;
+        float3 g = topo_fbmd(p + 1.1 * float2(wxv, wyv) + float2(ts * 0.5, -ts * 0.3) + 3.7, 4);
+        float2 gp = g.yz + 1.1 * (g.y * jx + g.z * jy);
+        float h = g.x * 0.75 + 0.5;                               // ≈ 0..1, no clamping (no plateaus)
+        float2 hp = gp * 0.75;                                    // dh/dp
 
+        float pix = sc * 1.5 / res.y;                             // p units per pixel
         float v = h * lines;
-        float fw = max(fwidth(v), 1e-4);
+        float fw = max(length(hp) * lines * pix, 1e-4);           // contour levels per pixel, exact
         float lw = max(res.y / 1000.0, 0.8);
         float d = abs(fract(v + 0.5) - 0.5) / fw;                // distance to isoline, in px
         bool major = fmod(floor(v + 0.5) + 1000.0, 5.0) < 0.5;
-        float width = major ? lw * 1.8 : lw * 1.0;
+        float width = major ? lw * 1.7 : lw * 0.95;
         float line = clamp(width * 0.5 + 0.5 - d, 0.0, 1.0);
-        line *= smoothstep(0.6, 0.25, fw);                        // fade where lines would crowd
+        line *= smoothstep(0.5, 0.2, fw);                         // fade where lines would crowd
         float alpha = major ? 0.95 : 0.62;
 
-        float gk = res.y * 0.5 / sc;
-        float3 n = normalize(float3(-dfdx(h) * gk, dfdy(h) * gk, 1.0));
-        float shade = dot(n, normalize(float3(-0.55, 0.55, 0.63)));
-        float3 ground = u.colorA.rgb;
-        float3 tinted = mix(ground, u.colorB.rgb, 0.04 + 0.10 * clamp(h, 0.0, 1.0));
-        float3 col = mix(ground, tinted * (0.72 + 0.45 * shade), fillAmt);
-        col = mix(col, u.colorB.rgb, line * alpha);
-        col += bandDither(px);
-        return float4(col, 1.0);
+        // Hillshade from the exact normal (the old 2×2-quad derivative faceted the relief),
+        // lit from the upper left like a printed relief map, mixed in linear light.
+        float3 n = normalize(float3(-hp.x, hp.y, 1.0) * float3(0.75, 0.75, 1.0));
+        float3 Ld = normalize(float3(-0.55, 0.55, 0.63));
+        float r = dot(n, Ld) - Ld.z;                              // vs flat ground: <0 shade, >0 lit
+        // faint hypsometric tint, mixed perceptually as before so the ground keeps its tone
+        float3 base = srgbToLinear(mix(u.colorA.rgb, u.colorB.rgb, (0.04 + 0.10 * saturate(h)) * fillAmt));
+        float3 ink = srgbToLinear(u.colorB.rgb);
+        float darkGround = 1.0 - smoothstep(0.02, 0.25, dot(base, float3(0.2126, 0.7152, 0.0722)));
+        float3 col = base * max(1.0 + 1.1 * fillAmt * r, 0.2);
+        // On a dark map the relief also reads as faint moonlit slopes in the line colour
+        // (shading a near-black ground alone left it invisible). Centred on zero, so the
+        // ground keeps its tone; paper maps keep the printed shading.
+        col = max(col + ink * darkGround * fillAmt * 0.014 * (smoothstep(-0.35, 0.35, r) - 0.4), 0.0);
+        // ink composited in display space, as before, so line weights keep their look
+        float3 outc = mix(linearToSrgb(col), u.colorB.rgb, line * alpha);
+        return float4(outc + bandDither(px), 1.0);
     }
 
     case 45: { // LIQUID CHROME (scene) — a rippling mirror surface reflecting a studio
@@ -1557,9 +1654,15 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
 
         float3 Bl = srgbToLinear(u.colorB.rgb);
         float3 c = chrome_env(r, Bl, rough, aniso, res.y, gys);
-        // film thickness drifts slowly over the forms (nm): 1st–3rd interference orders
-        // and follows the forms, so the colour bands run with the contours like a real film
-        float thick = mix(180.0, 520.0, film) + 100.0 * sin(hs.x * 1.1 + n.x * 0.9 + p.x * 0.3 - p.y * 0.2 + ts * 0.3);
+        // Film thickness (nm): a broad, slow field much larger than the forms (so a whole
+        // swell shares one or two soft hues instead of banding with its height), nudged
+        // only a little by the height. The view-angle term inside the film still shifts
+        // the hue toward the rims, as on a real pearl.
+        // Strong iridescence (a holographic foil) gets a livelier, more form-following film.
+        float hv = smoothstep(0.15, 0.6, iris);
+        float2 fq = p * (mix(0.42, 0.75, hv) / sc) + float2(ts * 0.06, -ts * 0.045);
+        float broad = gnoise(fq) * 1.3 + 0.22 * sin(fq.x * 2.3 - fq.y * 1.9 + hs.x * 0.4 + ts * 0.2);
+        float thick = mix(200.0, 600.0, film) + mix(100.0, 150.0, hv) * broad + mix(14.0, 30.0, hv) * hs.x;
         c *= chrome_reflectance(saturate(dot(n, -v)), thick, iris);
         // poured-metal depth: troughs sit slightly in their own shadow
         c *= mix(0.8, 1.0, smoothstep(-1.1, 0.5, hs.x));
@@ -1577,45 +1680,73 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         return float4(o, 1.0);
     }
 
-    case 46: { // SILK (scene) — flow field rendered by animated line-integral convolution:
-               // fine noise smeared along a slowly turning vector field, with pulses
-               // travelling down the streamlines. p0 = (speed, scale, sheen); A ground, B strands.
-        float speed = u.p0.x, sc = max(u.p0.y, 0.2), sheen = u.p0.z;
-        float k = res.y / 1000.0;
+    case 46: { // SILK (scene) — a sheet of satin drifting in a slow breeze, lit by a large
+               // soft key. Folds are an analytic height field (silk_surface); the weave makes
+               // the sheen anisotropic (Kajiya–Kay along the weft, which runs across the folds),
+               // so light gathers in long liquid bands down each fold's flank, with a dimmer
+               // dyed second lobe and a soft cloth sheen at grazing. Linear light, soft shoulder.
+               // p0 = (speed, fold size, sheen); colorA shadow, colorB silk.
+        float speed = u.p0.x, sc = max(u.p0.y, 0.2), sheen = saturate(u.p0.z);
         float aspect = res.x / res.y;
-        float ts = t * speed;
-        float2 q = (uv - 0.5) * float2(aspect, 1.0);
-        const int M = 7;                     // 2×7 taps ≈ Black Hole's per-pixel budget
-        float stepPx = 3.5 * k;              // step ≲ noise feature size, or strands bead
-        float fieldScale = 1.6 / sc;
-        float noiseScale = 1.0 / (3.5 * k);
-        float acc = 0.0, wsum = 0.0;
-        for (int dir = -1; dir <= 1; dir += 2) {
-            float2 pp = px;
-            float2 v = float2(1.0, 0.0);
-            for (int i = 0; i < M; ++i) {
-                if ((i & 1) == 0) {          // the field is smooth: re-evaluate every other step
-                    float2 fq = (pp / res.y - float2(0.5 * aspect, 0.5)) * fieldScale;
-                    float th = sin(fq.x * 1.3 + sin(fq.y * 1.9 + ts * 0.05) * 1.4 + ts * 0.03)
-                             + 0.8 * cos(fq.y * 1.1 - sin(fq.x * 2.3 - ts * 0.04) + 0.6)
-                             + 0.35 * sin((fq.x + fq.y) * 3.1 + ts * 0.07);
-                    v = float2(cos(th * 1.7), sin(th * 1.7));
-                }
-                float fi = float(i) / float(M);
-                float wgt = (1.0 - fi) * (0.6 + 0.4 * sin(6.2831853 * (fi * float(dir) * 0.5 - ts * 0.18)));
-                acc += vnoise(pp * noiseScale) * wgt; wsum += wgt;
-                pp += v * stepPx * float(dir);
-            }
-        }
-        float lic = acc / max(wsum, 1e-4);
-        float s = smoothstep(0.32, 0.70, lic);
-        // broad folds of light across the cloth
-        float tone = smoothstep(0.15, 0.85, gnoise(q * 1.4 + float2(ts * 0.02, -ts * 0.015)) * 0.9 + 0.5);
-        float3 Bl = srgbToOklab(u.colorB.rgb);
-        float3 strand = oklabToSrgb(oklabHue(Bl, (tone - 0.5) * sheen * 1.4));
-        float3 col = mix(u.colorA.rgb, strand, s * mix(0.25, 1.0, tone));
-        col += bandDither(px);
-        return float4(col, 1.0);
+        float ts = t * speed * 0.55;
+        float2 p = float2((uv.x - 0.5) * aspect, 0.5 - uv.y) * (2.6 / sc);   // y up
+        float3 hs = silk_surface(p, ts);
+        const float relief = 0.42;
+        float3 n = normalize(float3(-hs.yz * relief, 1.0));
+        // weft direction: across the folds, lying in the surface
+        const float2 Dp = float2(0.447, 0.894);
+        float3 T = normalize(float3(Dp, dot(hs.yz, Dp) * relief));
+        const float3 V = float3(0.0, 0.0, 1.0);
+        float3 L = normalize(float3(-0.50, 0.62, 0.62));          // key: big softbox, upper left
+        float3 Lf = normalize(float3(0.75, -0.25, 0.60));         // fill: low right
+        float3 H = normalize(L + V), Hf = normalize(Lf + V);
+
+        float3 silk = srgbToLinear(u.colorB.rgb);
+        float3 shadow = srgbToLinear(u.colorA.rgb);
+        // shot silk: the sheen takes a slightly different hue than the body
+        float3 Bk = srgbToOklab(u.colorB.rgb);
+        float3 shot = srgbToLinear(oklabToSrgb(float3(min(Bk.x + 0.12, 0.98), oklabHue(Bk, sheen * 0.5).yz * 0.6)));
+
+        // Kajiya–Kay: highlight where the thread is perpendicular to the half vector.
+        // Exponent limited by the pixel footprint so the bands never alias.
+        float TH = dot(T, H), THf = dot(T, Hf);
+        float fp = fwidth(TH) * 1.5 + 1e-4;
+        float m1 = min(70.0, 1.2 / (fp * fp));
+        float sinTH = sqrt(saturate(1.0 - TH * TH));
+        float spec = pow(sinTH, m1) * 0.9 + pow(sinTH, m1 * 0.18) * 0.18;
+        float specF = pow(sqrt(saturate(1.0 - THf * THf)), 24.0) * 0.18;
+        // second lobe, shifted toward the root and dyed by the fibre (silk's warm glow)
+        float3 T2 = normalize(T + n * 0.22);
+        float TH2 = dot(T2, H);
+        float spec2 = pow(sqrt(saturate(1.0 - TH2 * TH2)), 18.0);
+
+        float ndl = dot(n, L), ndf = dot(n, Lf);
+        float wrap = saturate((ndl + 0.35) / 1.35);
+        float diff = wrap * wrap * wrap;
+        float fill = saturate((ndf + 0.2) / 1.2) * 0.12;
+        // cavities: the valleys between folds sit in their own shadow
+        float ao = mix(0.35, 1.0, smoothstep(-1.25, 0.55, hs.x));
+        // cloth sheen at grazing (fibres catching the light edge-on)
+        float graze = pow(1.0 - saturate(n.z), 2.0);
+
+        // Slubs: the faint streaks real silk yarn leaves in the sheen, running along the
+        // warp. Fixed in cloth units, so they only appear once a display resolves them
+        // (≥ ~2.5 px per streak) and never shimmer on smaller screens.
+        float a0 = dot(p, float2(0.894, -0.447)), b0 = dot(p, Dp) + 0.36 * sin(0.9 * a0 + ts * 0.23);
+        float streakPx = res.y * sc / (2.6 * 190.0);
+        float slub = gnoise(float2(b0 * 190.0, a0 * 5.0)) * smoothstep(2.0, 4.0, streakPx);
+        spec *= 1.0 + 0.22 * slub;
+        float key = 1.3 * (0.45 + 0.55 * smoothstep(-1.0, 0.8, -p.x * 0.14 * sc + p.y * 0.2 * sc));  // pool of light, upper left
+        float3 col = shadow * (0.6 + 0.4 * ao);
+        col += silk * (diff * key + fill) * ao * 0.5;
+        col += shot * spec2 * key * ao * 0.22 * (0.4 + sheen);
+        // the sheen is near-white but keeps a breath of the dye (pale gold, pale blue…)
+        float3 specCol = srgbToLinear(oklabToSrgb(float3(0.94, Bk.yz * 0.5)));
+        col += specCol * (spec * key + specF) * mix(0.30, 1.25, sheen) * mix(0.55, 1.0, ao);
+        col += silk * graze * 0.25 * ao * (0.4 + diff);
+        float2 vq = uv - 0.5;
+        col *= 1.0 - 0.35 * dot(vq, vq);
+        return float4(linearToSrgb(flowing_tone(col)) + bandDither(px) * 1.5, 1.0);
     }
 
     case 47: { // RISOGRAPH — separates the source into two spot inks (least-squares on

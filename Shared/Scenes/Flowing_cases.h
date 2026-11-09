@@ -31,10 +31,15 @@
             float an = 0.18 + (fl - 1.4) * 0.05;
             float2 q = float2(cos(an) * p.x - sin(an) * p.y, sin(an) * p.x + cos(an) * p.y) * sc
                      + float2(ts * mix(0.016, 0.07, z) + 3.7 * fl, 1.3 * fl);
-            float psi = flowing_stream(q, ts * 0.11, fl * 2.1);
-            float v = psi * density * mix(80.0, 15.0, z * z);
-            float fw = max(fwidth(v), 1e-5);                     // lines per pixel
+            float3 sg = flowing_stream(q, ts * 0.11, fl * 2.1);
+            float psi = sg.x;
+            float lineK = density * mix(80.0, 15.0, z * z);
+            float v = psi * lineK;
+            float fw = max(length(sg.yz) * sc * lineK / res.y, 1e-5);   // lines per pixel, exact
             float wpx = max(0.7, k * (0.45 + 0.35 * z)) + k * dof * 22.0 * pow(abs(z - focusZ), 1.7);
+            // Where the flow packs strands closer than ~1.5 px (or blurs several into one) they
+            // can't be resolved: fade them into their average glow instead of letting them moiré.
+            float crowd = max(smoothstep(0.6, 0.9, fw), smoothstep(1.3, 2.2, fw * wpx));
             float energy = k / wpx;                              // defocus spreads the same light
             float atm = mix(0.38, 1.0, z);
             // ribbons: strands gather in bands that follow the streamlines and breathe slowly
@@ -46,6 +51,12 @@
             float sh = clamp(shift, -1.0, 1.0);
             float3 hz = sh < 0.0 ? mix(k0, kM, -sh) : mix(k0, kP, sh);
             col += hz * glowAmt * 0.05 * atm * rib * (0.3 + 0.7 * density);   // scattered haze
+            if (crowd > 0.0) {   // the strands' mean light: avg brightness × profile area × strands/px
+                float area = 2.5 * wpx + glowAmt * 0.12 * (wpx * 2.5 + 3.0 * k);
+                float eAvg = 0.224 * env * (5.0 + pulseAmt * 1.3) * (k / wpx) * atm;
+                col += hz * eAvg * area * min(fw, 1.0) * crowd * 0.5;   // (the strand pass only ever sums two)
+            }
+            if (crowd >= 1.0) continue;
             float id0 = floor(v + 0.5);
             float idStep = v > id0 ? 1.0 : -1.0;
             bool both = wpx * fw > 0.1;                          // neighbour only matters when blurred
@@ -69,7 +80,7 @@
                 float halo = glowAmt * 0.06 * hq * hq;
                 float sl = clamp(shift + (h2 - 0.5) * 0.6, -1.0, 1.0);
                 float3 lc = sl < 0.0 ? mix(k0, kM, -sl) : mix(k0, kP, sl);
-                float e = I * energy * atm * mix(0.9, 1.15, h);
+                float e = I * energy * atm * mix(0.9, 1.15, h) * (1.0 - crowd);
                 col += (lc * (core * 0.9 + body + halo) + (lc * 0.5 + 0.5) * core * 0.35 * clamp(e, 0.0, 1.5)) * e;
             }
         }
