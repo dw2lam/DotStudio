@@ -26,6 +26,11 @@
 //  their foreground; --veilbench times live frames with and without each backdrop (GPU timestamps).
 //  --scale 2 sets the overlay's pixels per point (default 2 from 2400 px wide, else 1);
 //  --tag name appends "@name" to the file names. Fixtures: tools/music-fixtures/make.sh.
+//  Song text (never cut off): music renders as with Reduce Motion (a line too long to fit takes a
+//  third line) unless --marquee P poses every scrolling line at fraction P of its travel (0 = at
+//  rest at its start, 1 = at its end), as the saver shows it; --notch 32 gives the screen a
+//  notch band of that many points (a top corner keeps clear); --textcheck verifies every text
+//  block and the artwork sit inside the screen (≥ 8 pt in) without overlapping, and prints a summary.
 //  --framebench times whole live frames (MetalRenderer.renderFrame: source, every effect and any
 //  compute pass, e.g. the error-diffusion dithers) with GPU timestamps, per preset, on its own renderer.
 //  --checks runs the live-renderer checks (wall-clock time base, synced slideshow, held-frame
@@ -67,6 +72,12 @@ var runChecks = false
 var frameBench = false
 var weathers: [String] = []
 var benchTime: Float?
+var notchPoints: CGFloat = 0
+var textCheck = false
+var textCheckRuns = 0
+var textCheckFailures = 0
+var textCheckBuildMs = 0.0
+var textCheckWarmMs = 0.0
 while !args.isEmpty {
     let a = args.removeFirst()
     switch a {
@@ -113,6 +124,9 @@ while !args.isEmpty {
     case "--veilbench": veilBench = true
     case "--scale": overlayScale = CGFloat(Double(args.removeFirst()) ?? 2)
     case "--tag": tag = args.removeFirst()
+    case "--notch": notchPoints = CGFloat(Double(args.removeFirst()) ?? 0)
+    case "--marquee": MusicOverlayLayer.stillMarqueePose = CGFloat(Double(args.removeFirst()) ?? 0)
+    case "--textcheck": textCheck = true
     case "--size":
         let p = args.removeFirst().split(separator: "x").compactMap { Int($0) }
         if p.count == 2 { W = p[0]; H = p[1] }
@@ -145,6 +159,39 @@ func musicSettings(corner: MusicSpec.Corner?) -> MusicSpec {
     return m
 }
 
+/// --textcheck: every text block, marquee viewport, the artwork and the corner's block inside the
+/// screen (≥ 8 pt in), no text over the artwork, and a top corner clear of the notch band.
+func checkText(_ layer: MusicOverlayLayer, mode: MusicOverlayLayer.Mode) {
+    textCheckRuns += 1
+    let inner = layer.bounds.insetBy(dx: 8, dy: 8)
+    let rects = layer.debugRects
+    let arts = rects.filter { $0.kind == "art" }.map(\.rect)
+    var problems: [String] = []
+    func fmt(_ r: CGRect) -> String { String(format: "(%.0f,%.0f %.0fx%.0f)", r.minX, r.minY, r.width, r.height) }
+    for (kind, r) in rects {
+        if r.minX < inner.minX - 0.5 || r.minY < inner.minY - 0.5 || r.maxX > inner.maxX + 0.5 || r.maxY > inner.maxY + 0.5 {
+            problems.append("\(kind) \(fmt(r)) leaves the screen \(fmt(layer.bounds))")
+        }
+        if kind == "text" || kind == "marquee", let a = arts.first(where: { $0.insetBy(dx: 1, dy: 1).intersects(r) }) {
+            problems.append("\(kind) \(fmt(r)) overlaps the artwork \(fmt(a))")
+        }
+    }
+    if case .card(let corner) = mode, let block = rects.first(where: { $0.kind == "block" })?.rect {
+        if block.width > layer.bounds.width * MusicGeometry.Card.maxShare + 1 {
+            problems.append("block \(fmt(block)) wider than \(MusicGeometry.Card.maxShare) of the screen")
+        }
+        if notchPoints > 0, corner == .topLeft || corner == .topRight,
+           block.minY < max(notchPoints, 0.03 * layer.bounds.height) {
+            problems.append("block \(fmt(block)) inside the notch band")
+        }
+    }
+    if rects.isEmpty && mode != .hidden { problems.append("nothing drawn") }
+    if !problems.isEmpty {
+        textCheckFailures += 1
+        for p in problems { print("TEXTCHECK FAIL \(mode): \(p)") }
+    }
+}
+
 /// The music foreground composited over a Metal frame, the way the saver stacks its layers,
 /// at `alpha` (a frame of the full-screen fade).
 func compositeMusic(_ cg: CGImage, mode: MusicOverlayLayer.Mode, settings: MusicSpec, now: Date,
@@ -154,8 +201,24 @@ func compositeMusic(_ cg: CGImage, mode: MusicOverlayLayer.Mode, settings: Music
     let layer = MusicOverlayLayer()
     layer.contentsScale = scale
     layer.frame = CGRect(x: 0, y: 0, width: CGFloat(W) / scale, height: CGFloat(H) / scale)
-    layer.reduceMotion = true
+    layer.reduceMotion = MusicOverlayLayer.stillMarqueePose == nil
+    layer.notch = notchPoints
+    let t0 = CFAbsoluteTimeGetCurrent()
     layer.update(mode: mode, music: musicFeed.snapshot, settings: settings, now: now, animated: false)
+    textCheckBuildMs = max(textCheckBuildMs, (CFAbsoluteTimeGetCurrent() - t0) * 1000)
+    if textCheck {
+        checkText(layer, mode: mode)
+        // A track change in a running saver: fonts and the scaled cover warm, the text not.
+        MusicText.purge()
+        let again = MusicOverlayLayer()
+        again.contentsScale = scale
+        again.frame = layer.frame
+        again.reduceMotion = layer.reduceMotion
+        again.notch = notchPoints
+        let t1 = CFAbsoluteTimeGetCurrent()
+        again.update(mode: mode, music: musicFeed.snapshot, settings: settings, now: now, animated: false)
+        textCheckWarmMs = max(textCheckWarmMs, (CFAbsoluteTimeGetCurrent() - t1) * 1000)
+    }
     guard let ctx = CGContext(data: nil, width: W, height: H, bitsPerComponent: 8, bytesPerRow: 0,
                               space: CGColorSpace(name: CGColorSpace.sRGB)!,
                               bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
@@ -536,6 +599,10 @@ for p in presets {
         var pres = (musicRun || (overlay && p.isMusicScene))
             ? MusicPresentation.resolve(settings: settings, music: musicFeed.snapshot, preset: p, now: now) : .none
         if p.isMusicScene && !overlay { pres.overlay = .hidden }
+        if textCheck && musicRun && !p.isMusicScene && pres.overlay == .hidden {
+            textCheckRuns += 1; textCheckFailures += 1
+            print("TEXTCHECK FAIL: music not visible (no track, or a stale fixture — run make.sh again)")
+        }
         let fadeList: [Double?] = fades.isEmpty || pres.backdrop == .none ? [nil] : fades.map { Optional($0) }
         for k in fadeList {
         let t0 = CFAbsoluteTimeGetCurrent()
@@ -570,4 +637,9 @@ for p in presets {
     }
     }
     }
+}
+if textCheck {
+    print(String(format: "textcheck: %d renders, %d with problems; slowest overlay build %.1f ms cold, %.1f ms warm",
+                 textCheckRuns, textCheckFailures, textCheckBuildMs, textCheckWarmMs))
+    if textCheckFailures > 0 { exit(1) }
 }
