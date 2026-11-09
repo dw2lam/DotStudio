@@ -71,8 +71,12 @@ final class WallpaperController: ObservableObject {
     private var hosts: [CGDirectDisplayID: WallpaperHost] = [:]
     private let power = WallpaperPowerMonitor()
     private var observers: [NSObjectProtocol] = []
+    /// A wallpaper session is up: the power monitor, the screen/occlusion observers and the
+    /// slot timer belong to it. Tracked apart from `hosts`, which can be empty while running
+    /// (no GPU for a display yet, every surface failed) — tearDown must still end the session.
+    private var running = false
     private var librarySub: AnyCancellable?
-    private var applied: (preset: Preset, source: SourceSpec)?
+    private var applied: (preset: Preset, source: SourceSpec, location: (lat: Double, lon: Double)?)?
     private var profile: WallpaperPacing.Profile = .still
     private var openMainWindowAction: (() -> Void)?
     private var nextToken: UInt64 = 0
@@ -245,7 +249,8 @@ final class WallpaperController: ObservableObject {
 
     private func start() {
         guard let model, settings.enabled, currentPreset != nil else { tearDown(); return }
-        if hosts.isEmpty {
+        if !running {
+            running = true
             power.onChange = { [weak self] state in
                 self?.log("power \(state)")
                 self?.reevaluate()
@@ -271,7 +276,8 @@ final class WallpaperController: ObservableObject {
     }
 
     private func tearDown() {
-        guard !hosts.isEmpty else { return }
+        guard running || !hosts.isEmpty else { return }
+        running = false
         log("stop")
         renderLoop?.removeAll()
         for h in hosts.values { h.close() }
@@ -296,7 +302,8 @@ final class WallpaperController: ObservableObject {
         let nc = NotificationCenter.default
         observers.append(nc.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                         object: nil, queue: .main) { [weak self] _ in
-            guard let self, let model = self.model else { return }
+            // Only while a wallpaper is meant to be up: a change must never bring one back.
+            guard let self, self.running, self.settings.enabled, let model = self.model else { return }
             self.log("screens changed (\(NSScreen.screens.count))")
             self.rebuildHosts(store: model.store)
             self.applyStyle()
@@ -366,7 +373,7 @@ final class WallpaperController: ObservableObject {
     // MARK: Style
 
     private func libraryChanged() {
-        guard settings.enabled, !hosts.isEmpty else { return }
+        guard settings.enabled, running else { return }
         guard currentPreset != nil else {
             log("style deleted — stopping")
             stop()
@@ -387,15 +394,18 @@ final class WallpaperController: ObservableObject {
     private func applyStyle(fade: Bool = false) {
         guard let model, let preset = currentPreset else { return }
         let source = model.library.source
-        if let a = applied, a.preset == preset, a.source == source { return }
+        let location = model.locationTuple
+        // The location matters too (live sky, Universe marker): it is refreshed about daily.
+        if let a = applied, a.preset == preset, a.source == source,
+           a.location?.lat == location?.lat, a.location?.lon == location?.lon { return }
         let styleChanged = applied?.preset.id != preset.id
         let newProfile = pacingProfile(preset, source: source)
         var seconds = 0.0
         if fade, styleChanged, applied != nil, profile == .motion, newProfile == .motion, stillReason == nil {
             seconds = model.library.rotation?.transitionSeconds ?? 1.5
         }
-        renderLoop?.setStyle(preset, source: source, location: model.locationTuple, fade: seconds)
-        applied = (preset, source)
+        renderLoop?.setStyle(preset, source: source, location: location, fade: seconds)
+        applied = (preset, source, location)
         profile = newProfile
         if styleChanged { log("style \(preset.name) profile=\(profile)\(seconds > 0 ? " fade=\(seconds)" : "")") }
         reevaluate(forceDraw: true)   // an edit shows even when holding a still

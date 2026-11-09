@@ -498,6 +498,7 @@ struct EffectRow: View {
             }
             .buttonStyle(.borderless)
             .help(effect.enabled ? "Hide this effect" : "Show this effect")
+            .accessibilityLabel(effect.enabled ? "Hide \(name)" : "Show \(name)")
 
             HStack(alignment: .firstTextBaseline, spacing: layout.controlGap) {
                 Text(name)
@@ -540,6 +541,7 @@ struct EffectRow: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .help("Reset, duplicate or remove \(name)")
+            .accessibilityLabel("\(name) options")
 
             Button { toggleExpanded() } label: {
                 Image(systemName: "chevron.right")
@@ -659,11 +661,16 @@ struct ParamRow: View {
                     .adaptiveControlSize(.small)
             } else {
                 HStack(spacing: layout.controlGap) {
-                    if spec.step > 0 {
-                        Slider(value: $value, in: spec.min...spec.max, step: spec.step)
-                    } else {
-                        Slider(value: $value, in: spec.min...spec.max)
+                    Group {
+                        if spec.step > 0 {
+                            Slider(value: $value, in: spec.min...spec.max, step: spec.step)
+                        } else {
+                            Slider(value: $value, in: spec.min...spec.max)
+                        }
                     }
+                    // The row's label is a separate Text: name the slider and speak its readout.
+                    .accessibilityLabel(spec.label)
+                    .accessibilityValue(formatted)
                     HStack(spacing: layout.labelGap) {
                         Text(formatted)
                             .textRole(.value).foregroundStyle(.secondary)
@@ -680,6 +687,8 @@ struct ParamRow: View {
                         .opacity(isDefault ? 0.3 : 1)
                         .disabled(isDefault)
                         .help(isDefault ? "At its default (\(format(spec.def)))" : "Reset to \(format(spec.def))")
+                        .accessibilityLabel("Reset \(spec.label)")
+                        .accessibilityValue(isDefault ? "At its default" : "Default \(format(spec.def))")
                     }
                 }
                 .adaptiveControlSize(.small)
@@ -1000,6 +1009,7 @@ private struct SourceEditorContent: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Swap colors")
+                .accessibilityLabel("Swap colors")
             }
             ParamRow(spec: ParamSpec("angle", "Angle", 0, 6.28, def: 1.1), value: $source.gradientAngle)
             ParamRow(spec: ParamSpec("drift", "Drift", 0, 3, def: 1.0), value: $source.gradientDrift)

@@ -73,25 +73,33 @@ struct ContentView: View {
         .onChange(of: model.storeAlert == nil) { _, clear in
             if clear { presentOnboardingIfNeeded() }   // wait out a launch-time library alert
         }
-        .alert(item: $model.storeAlert) { alert in
-            if let backup = alert.backupURL {
-                return Alert(
-                    title: Text(alert.title),
-                    message: Text(alert.message),
-                    primaryButton: .default(Text("Reveal Backup in Finder")) {
-                        NSWorkspace.shared.activateFileViewerSelecting([backup])
-                    },
-                    secondaryButton: .cancel(Text("OK")))
-            }
-            return Alert(title: Text(alert.title), message: Text(alert.message),
-                         dismissButton: .default(Text("OK")))
-        }
+        // While the welcome sheet is up it presents the alert itself (OnboardingView): one shown
+        // here would sit behind the sheet. Exactly one of the two presenters is active.
+        .alert(item: Binding(get: { model.showOnboarding ? nil : model.storeAlert },
+                             set: { model.storeAlert = $0 })) { $0.alert }
     }
 
     private func presentOnboardingIfNeeded() {
         guard !hasCompletedOnboarding, !Self.isRenderingShots, !DemoHooks.isActive,
               !model.showOnboarding, model.storeAlert == nil else { return }
         model.showOnboarding = true
+    }
+}
+
+extension StoreAlert {
+    /// The alert as ContentView and the welcome sheet present it.
+    var alert: Alert {
+        if let backup = backupURL {
+            return Alert(
+                title: Text(title),
+                message: Text(message),
+                primaryButton: .default(Text("Reveal Backup in Finder")) {
+                    NSWorkspace.shared.activateFileViewerSelecting([backup])
+                },
+                secondaryButton: .cancel(Text("OK")))
+        }
+        return Alert(title: Text(title), message: Text(message),
+                     dismissButton: .default(Text("OK")))
     }
 }
 

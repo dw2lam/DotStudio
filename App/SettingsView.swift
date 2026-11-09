@@ -84,6 +84,10 @@ struct SettingsView: View {
                                           set: { v in model.updateRotation { $0.transitionSeconds = v } }),
                            in: 0...3)
                         .labelsHidden()   // outside a LabeledContent a Form keeps a label column for it
+                        // labelsHidden drops the slider's name for VoiceOver too: give it back.
+                        .accessibilityLabel("Crossfade")
+                        .accessibilityValue(model.rotation.transitionSeconds < 0.05
+                                            ? "Off" : String(format: "%.1f seconds", model.rotation.transitionSeconds))
                     Text(model.rotation.transitionSeconds < 0.05
                          ? "Off" : String(format: "%.1f s", model.rotation.transitionSeconds))
                         .textRole(.value)

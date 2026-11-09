@@ -134,16 +134,27 @@ final class WallpaperPowerMonitor {
             }
             tokens.append((center, t))
         }
+        // Lock and screensaver each clear only on their own end notification — and those can be
+        // missed (a sleep while the saver runs, a lock screen that ends it without didstop). A
+        // wake or an unlock re-reads both, so the wallpaper never stays paused for a state that's
+        // already over.
         on(dist, .init("com.apple.screenIsLocked")) { $0.screenLocked = true }
-        on(dist, .init("com.apple.screenIsUnlocked")) { $0.screenLocked = false }
+        on(dist, .init("com.apple.screenIsUnlocked")) { s in
+            s.screenLocked = false
+            s.screensaverRunning = Self.screensaverActive()
+        }
         on(dist, .init("com.apple.screensaver.didstart")) { $0.screensaverRunning = true }
         on(dist, .init("com.apple.screensaver.didstop")) { $0.screensaverRunning = false }
         on(ws, NSWorkspace.screensDidSleepNotification) { $0.displayAsleep = true }
-        on(ws, NSWorkspace.screensDidWakeNotification) { $0.displayAsleep = false }
+        on(ws, NSWorkspace.screensDidWakeNotification) { s in
+            s.displayAsleep = false
+            Self.resync(&s)
+        }
         on(ws, NSWorkspace.willSleepNotification) { $0.systemAsleep = true }
         on(ws, NSWorkspace.didWakeNotification) { s in
             s.systemAsleep = false
             s.displayAsleep = false      // a wake always lights the displays
+            Self.resync(&s)
         }
         on(local, .NSProcessInfoPowerStateDidChange) { [weak self] s in
             s.lowPowerMode = self?.readLowPower() ?? false
@@ -164,6 +175,7 @@ final class WallpaperPowerMonitor {
         }
 
         state = State(screenLocked: Self.sessionLocked(),
+                      screensaverRunning: Self.screensaverActive(),
                       lowPowerMode: readLowPower(),
                       thermalHot: readThermal(),
                       onBattery: readBattery())
@@ -203,6 +215,17 @@ final class WallpaperPowerMonitor {
               let type = IOPSGetProvidingPowerSourceType(snap)?.takeUnretainedValue() as String?
         else { return false }
         return type == kIOPMBatteryPowerKey
+    }
+
+    /// After a wake: the lock and screensaver as they are now, not as the last notification said.
+    private static func resync(_ s: inout State) {
+        s.screenLocked = sessionLocked()
+        s.screensaverRunning = screensaverActive()
+    }
+
+    /// Whether the screensaver is up right now: its engine process is running.
+    private static func screensaverActive() -> Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.ScreenSaver.Engine").isEmpty
     }
 
     /// Whether the login session is locked right now (the notifications only report changes).
