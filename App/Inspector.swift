@@ -31,6 +31,15 @@ enum InspectorMetrics {
     static let wellColumn: CGFloat = 64
     /// Disclosure chevron and "…" menu glyph boxes at the end of an effect row.
     static let glyphColumn: CGFloat = 16
+    /// A regular stock segmented control's height at the default text size; the
+    /// role-sized segments keep that proportion to their titles.
+    static let segmentHeight: CGFloat = Space.grid(6)   // 24
+}
+
+extension LayoutMetrics {
+    /// Between parameter rows. When a row stacks (label above its control, `labelGap`
+    /// apart), rows sit a full item gap apart so each label reads with its own control.
+    var inspectorRowGap: CGFloat { prefersStacking ? itemGap : controlGap }
 }
 
 extension TextRole {
@@ -39,25 +48,166 @@ extension TextRole {
     static let inspectorSection = TextRole(style: .subheadline, weight: .semibold)
     /// The small outlined "SCENE" tag after a scene layer's name.
     static let inspectorTag = TextRole(style: .caption2, weight: .bold, tracking: 0.6, uppercase: true)
+    /// A small (`.small` control size) button's title: 11 pt, the stock small-control font.
+    static let inspectorSmallControl = TextRole(style: .subheadline)
+}
+
+/// A button title (and symbol) that follows the text size. On macOS a stock control keeps
+/// its own 13-pt title (11 pt small) at every text size, and `adaptiveControlSize` only
+/// grows the bezel; but a Label/Text that carries its own font is drawn at that font, and
+/// the bezel grows to fit. At the default size the role IS the stock font, so nothing
+/// changes there. `role`: `.body` for regular and larger controls, `.inspectorSmallControl`
+/// for small ones.
+struct ScaledControlLabel: View {
+    let title: String
+    var systemImage: String? = nil
+    var role: TextRole = .body
+
+    var body: some View {
+        if let systemImage {
+            Label { Text(title) } icon: { Image(systemName: systemImage) }
+                .textRole(role)
+        } else {
+            Text(title).textRole(role)
+        }
+    }
 }
 
 /// The inspector's one rule for a segmented choice (Effects | Source tabs, the source
-/// kind, media scaling): it spans its column, segments sharing it equally. On the macOS 26
-/// SDK segments are equal-width (each as wide as the widest label) and never shrink below
-/// that, so when the column is too narrow the choice steps down to small segments, then
-/// to a pop-up menu — it never runs past the column. `picker` is a Picker with its label
-/// hidden and no style.
-struct SegmentedChoice<Content: View>: View {
-    @ViewBuilder var picker: Content
+/// kind, media scaling): it spans its column and never runs past it, and stacked choices
+/// share one height.
+///
+/// The stock control is used where it fits: equal segments stretched across the column.
+/// On the macOS 26/27 SDK its segments are each as wide as the widest title and it never
+/// shrinks (the 4-way Kind control is 342 pt, 294 pt even when small, against a 288-pt
+/// column), so otherwise — and from .xxLarge at every width, since a stock control keeps
+/// 13-pt titles while `adaptiveControlSize` grows its bezel and the text around it is 1.2×
+/// and up — it draws `RoleSegments`: the same track, at the same height, with `.body`-role
+/// titles; equal segments, then title-sized ones, then a column, so a title never shrinks,
+/// truncates or breaks mid-word.
+struct SegmentedChoice<Value: Hashable>: View {
+    let title: String
+    @Binding var selection: Value
+    let options: [(title: String, value: Value)]
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        Group {
+            if typeSize >= .xxLarge {
+                RoleSegments(title: title, selection: $selection, options: options)
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    Picker(title, selection: $selection) {
+                        ForEach(options.indices, id: \.self) { i in Text(options[i].title).tag(options[i].value) }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .fillsColumn()
+                    RoleSegments(title: title, selection: $selection, options: options)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// `SegmentedChoice`'s drawn control: a segmented track drawn here, because a stock
+/// control's titles can't take a font and its segments can't be sized to their titles.
+/// At the default size it matches a regular stock control (24 pt, 13-pt titles); its fills
+/// match the stock control's in light and dark.
+private struct RoleSegments<Value: Hashable>: View {
+    let title: String
+    @Binding var selection: Value
+    let options: [(title: String, value: Value)]
+    @ScaledLength(relativeTo: .body) private var height: CGFloat = InspectorMetrics.segmentHeight
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private static var trackFill: Color { Color.primary.opacity(0.078) }
+    private static var selectedFill: Color { Color.primary.opacity(0.13) }
+    private static var separatorFill: Color { Color.primary.opacity(0.15) }
+
+    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: height / 2, style: .continuous) }
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            picker.pickerStyle(.segmented).adaptiveControlSize().fillsColumn()
-            picker.pickerStyle(.segmented).controlSize(.small).fillsColumn()
-            picker.pickerStyle(.menu).adaptiveControlSize().fixedSize()
-            picker.pickerStyle(.menu).adaptiveControlSize()
+            SegmentRowLayout(equal: true) { segments(.horizontal) }
+            SegmentRowLayout(equal: false) { segments(.horizontal) }
+            VStack(spacing: 0) { segments(.vertical) }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(shape.fill(Self.trackFill))
+        .animation(reduceMotion ? Motion.reduced : .easeOut(duration: 0.18), value: selection)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(title)
+    }
+
+    private func segments(_ axis: Axis) -> some View {
+        ForEach(options.indices, id: \.self) { i in segment(i, axis: axis) }
+    }
+
+    private func segment(_ i: Int, axis: Axis) -> some View {
+        let isOn = options[i].value == selection
+        // The stock control draws a hairline between two unselected neighbours.
+        let separates = i > 0 && !isOn && options[i - 1].value != selection
+        return Button { selection = options[i].value } label: {
+            Text(options[i].title)
+                .textRole(.body)
+                .foregroundStyle(.primary)
+                .lineLimit(axis == .horizontal ? 1 : nil)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, height / 2)
+                .padding(.vertical, Space.xxs)
+                .frame(maxWidth: .infinity, minHeight: height)
+                .background(shape.fill(Self.selectedFill).opacity(isOn ? 1 : 0))
+                .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: axis == .horizontal ? .leading : .top) {
+            if separates {
+                Rectangle()
+                    .fill(Self.separatorFill)
+                    .frame(width: axis == .horizontal ? 1 : nil, height: axis == .horizontal ? height / 2 : 1)
+                    .padding(.horizontal, axis == .vertical ? height / 2 : 0)
+                    .accessibilityHidden(true)
+            }
+        }
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+    }
+}
+
+/// Segments in one row across the proposed width: `equal` gives each the widest title's
+/// width (ideally `count × widest`), otherwise each gets its own title's width plus an
+/// equal share of the spare room. Its ideal width is what `ViewThatFits` compares with the
+/// column, so a row is only chosen when no title would truncate.
+private struct SegmentRowLayout: Layout {
+    var equal: Bool
+
+    private func widths(_ subviews: Subviews, total: CGFloat?) -> [CGFloat] {
+        let ideal = subviews.map { $0.sizeThatFits(.unspecified).width }
+        let n = CGFloat(subviews.count)
+        if equal {
+            let each = max(ideal.max() ?? 0, (total ?? 0) / n)
+            return Array(repeating: each, count: subviews.count)
+        }
+        let spare = max(0, (total ?? 0) - ideal.reduce(0, +)) / n
+        return ideal.map { $0 + spare }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard !subviews.isEmpty else { return .zero }
+        let total = proposal.width.flatMap { $0.isFinite ? $0 : nil }
+        let ws = widths(subviews, total: total)
+        let height = zip(subviews, ws)
+            .map { $0.sizeThatFits(ProposedViewSize(width: $1, height: nil)).height }.max() ?? 0
+        return CGSize(width: ws.reduce(0, +), height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        for (sv, w) in zip(subviews, widths(subviews, total: bounds.width)) {
+            sv.place(at: CGPoint(x: x, y: bounds.minY), proposal: ProposedViewSize(width: w, height: bounds.height))
+            x += w
+        }
     }
 }
 
@@ -168,6 +318,9 @@ struct EffectStackView: View {
     /// the macOS 26 SDK). Row insets make up the rest, so every row's content lands
     /// exactly on the panel's content edge, `cardPadding`.
     private static let listMargin: CGFloat = 16
+    /// …and its first row this far below its top (measured the same way). The Source tab
+    /// starts its content at the same depth.
+    static let listTopInset: CGFloat = 10
 
     // Section titles, the Add Effect footer and the Motion group are ordinary rows, not
     // List section headers/footers: macOS gives a section header one fixed line of height
@@ -186,7 +339,9 @@ struct EffectStackView: View {
                           onDuplicate: { duplicate(effect.id) },
                           onRemove: { remove(effect.id) })
                     .listRowInsets(rowInsets(vertical: layout.labelGap))
-                    // The separator under each effect ends on the content edge too.
+                    // The separator under each effect spans the content edges, edge A to
+                    // edge A, like the header divider above the list.
+                    .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
                     .alignmentGuide(.listRowSeparatorTrailing) { $0[.trailing] }
             }
             .onMove { preset.effects.move(fromOffsets: $0, toOffset: $1) }
@@ -198,7 +353,7 @@ struct EffectStackView: View {
                         .wrapping()
                 }
                 Button { showAdd = true } label: {
-                    Label("Add Effect", systemImage: "plus")
+                    ScaledControlLabel(title: "Add Effect", systemImage: "plus")
                         .frame(maxWidth: .infinity)
                 }
                 .adaptiveControlSize(.large)
@@ -227,6 +382,8 @@ struct EffectStackView: View {
                 .listRowSeparator(.hidden)
 
             VStack(alignment: .leading, spacing: layout.labelGap) {
+                // A stock pop-up: its title can't take a font (AppKit draws it at the
+                // control size's own font), so it keeps 13 pt while its bezel steps up.
                 InspectorRow(label: "Frame rate") {
                     FittingPicker {
                         Picker("Frame rate", selection: $preset.fps) {
@@ -236,9 +393,11 @@ struct EffectStackView: View {
                     }
                     .adaptiveControlSize()
                 }
+                // One sentence per line, each short enough for the narrowest inspector at
+                // the default size, so the caption breaks on the sentence, not mid-phrase.
                 Text(preset.fps > 60
-                     ? "120 fps needs a ProMotion display; elsewhere it plays at the screen's rate. It costs more GPU and battery."
-                     : "Lower frame rates save battery. Most styles look the same at 30 fps.")
+                     ? "120 fps needs a ProMotion display.\nIt uses more GPU and battery."
+                     : "Lower frame rates save battery.\nMost styles look the same at 30 fps.")
                     .textRole(.caption).foregroundStyle(.secondary)
                     .wrapping()
             }
@@ -247,7 +406,9 @@ struct EffectStackView: View {
             .listRowSeparator(.hidden)
         }
         .listStyle(.inset)
-        .environment(\.defaultMinListRowHeight, 0)
+        // Rows hug their content. (Any minimum above 0: AppKit rejects a 0 row height
+        // with a logged error on every layout.)
+        .environment(\.defaultMinListRowHeight, 1)
         .scrollContentBackground(.hidden)
         .onAppear {
             // Open the first effect so the main knobs are right there.
@@ -329,7 +490,7 @@ struct EffectRow: View {
         VStack(alignment: .leading, spacing: layout.controlGap) {
             header
             if isExpanded {
-                VStack(alignment: .leading, spacing: layout.controlGap) {
+                VStack(alignment: .leading, spacing: layout.inspectorRowGap) {
                     ForEach(effect.kind.params) { spec in
                         ParamRow(spec: spec, value: paramBinding(spec))
                     }
@@ -580,8 +741,10 @@ private struct AddEffectGrid: View {
     @ScaledLength(relativeTo: .caption) private var iconColumn: CGFloat = 16
     @State private var query = ""
 
-    /// Narrowest a picker cell gets (at the default text size) before the grid drops a column.
-    private static let cellMinWidth: CGFloat = 112
+    /// Narrowest a picker cell gets (at the default text size) before the grid drops a
+    /// column: three columns in the 430-pt popover, and still two in the onboarding canvas
+    /// at accessibility sizes.
+    private static let cellMinWidth: CGFloat = 104
 
     private var groups: [(EffectCategory, [EffectKind])] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -619,8 +782,11 @@ private struct AddEffectGrid: View {
                                 .textRole(.captionEmphasis)
                                 .foregroundStyle(.secondary)
                                 .accessibilityElement(children: .combine)
-                                LazyVGrid(columns: layout.columns(minimum: Self.cellMinWidth, spacing: layout.gridColumnGap),
-                                          alignment: .leading, spacing: layout.gridRowGap) {
+                                // A small grid: cells an item gap apart both ways, so a
+                                // category's rows sit clearly closer than the categories
+                                // (sectionGap) — the gallery's grid gaps are for big tiles.
+                                LazyVGrid(columns: layout.columns(minimum: Self.cellMinWidth, spacing: layout.itemGap),
+                                          alignment: .leading, spacing: layout.itemGap) {
                                     ForEach(kinds, id: \.self) { kind in
                                         Button { onPick(kind) } label: { cell(kind) }
                                             .buttonStyle(.plain)
@@ -697,9 +863,28 @@ private struct AddEffectGrid: View {
 
 // MARK: - Source
 
-/// The one source every Look restyles. Used in the editor's Source tab and the
-/// library's Source popover.
+/// The one source every Look restyles. Used in the editor's Source tab, the library's
+/// Source popover and onboarding.
+///
+/// `isLayoutRoot`: a popover or canvas column is narrow whatever the window's width class
+/// is, so by default the editor measures its own width (`.adaptiveLayout()`) and lays out
+/// for that — its rows stack and its gaps tighten like any narrow column's. The editor's
+/// Source tab passes false to share the inspector's metrics with the Effects tab.
 struct SourceEditor: View {
+    @Binding var source: SourceSpec
+    @ObservedObject var model: AppModel
+    var isLayoutRoot = true
+
+    var body: some View {
+        if isLayoutRoot {
+            SourceEditorContent(source: $source, model: model).adaptiveLayout()
+        } else {
+            SourceEditorContent(source: $source, model: model)
+        }
+    }
+}
+
+private struct SourceEditorContent: View {
     @Binding var source: SourceSpec
     @ObservedObject var model: AppModel
     @Environment(\.layout) private var layout
@@ -713,15 +898,9 @@ struct SourceEditor: View {
                 .textRole(.caption).foregroundStyle(.secondary)
                 .wrapping()
 
-            SegmentedChoice {
-                Picker("Kind", selection: $source.kind) {
-                    Text("Slideshow").tag(SourceKind.collection)
-                    Text("Photo").tag(SourceKind.image)
-                    Text("Video").tag(SourceKind.video)
-                    Text("Gradient").tag(SourceKind.gradient)
-                }
-                .labelsHidden()
-            }
+            SegmentedChoice(title: "Kind", selection: $source.kind,
+                            options: [("Slideshow", .collection), ("Photo", .image),
+                                      ("Video", .video), ("Gradient", .gradient)])
 
             switch source.kind {
             case .collection: slideshowControls
@@ -760,18 +939,22 @@ struct SourceEditor: View {
                     .textRole(.caption).foregroundStyle(.secondary)
                     .wrapping()
             }
-            VStack(alignment: .leading, spacing: layout.controlGap) {
+            VStack(alignment: .leading, spacing: layout.inspectorRowGap) {
                 ParamRow(spec: ParamSpec("hold", "Seconds Each", 6, 120, def: SourceSpec.defaultSlideSeconds),
                          value: Binding(get: { source.slideInterval }, set: { source.slideSeconds = $0 }))
                 ParamRow(spec: ParamSpec("motion", "Pan & Zoom", 0, 1, def: SourceSpec.defaultMotion),
                          value: Binding(get: { source.motionAmount }, set: { source.motion = $0 }))
             }
             FlowLayout(spacing: layout.controlGap, lineSpacing: layout.controlGap) {
-                Button(choose) { importing = true }
-                    .help(choose)
+                Button { importing = true } label: {
+                    ScaledControlLabel(title: choose, role: .inspectorSmallControl)
+                }
+                .help(choose)
                 if own {
-                    Button("Use Built-in Photos") { model.useBuiltInPhotos() }
-                        .help("Use Built-in Photos")
+                    Button { model.useBuiltInPhotos() } label: {
+                        ScaledControlLabel(title: "Use Built-in Photos", role: .inspectorSmallControl)
+                    }
+                    .help("Use Built-in Photos")
                 }
             }
             .adaptiveControlSize(.small)
@@ -795,7 +978,7 @@ struct SourceEditor: View {
     }
 
     private var gradientControls: some View {
-        VStack(alignment: .leading, spacing: layout.controlGap) {
+        VStack(alignment: .leading, spacing: layout.inspectorRowGap) {
             ColorWellsRow(wells: [.init(title: "From", color: colorBinding(\.colorA)),
                                   .init(title: "To", color: colorBinding(\.colorB))]) {
                 Button {
@@ -855,12 +1038,8 @@ struct SourceEditor: View {
             }
 
             InspectorRow(label: "Scaling") {
-                SegmentedChoice {
-                    Picker("Scaling", selection: $source.fillMode) {
-                        Text("Fill").tag(1); Text("Fit").tag(0); Text("Stretch").tag(2)
-                    }
-                    .labelsHidden()
-                }
+                SegmentedChoice(title: "Scaling", selection: $source.fillMode,
+                                options: [("Fill", 1), ("Fit", 0), ("Stretch", 2)])
             }
         }
     }
