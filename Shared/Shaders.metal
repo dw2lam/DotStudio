@@ -451,21 +451,34 @@ static inline float3 kenBurnsSample(texture2d<float> tex, sampler s, float2 uv, 
     return tex.sample(s, center + (uv - 0.5) * span).rgb;
 }
 
-// Risograph (47) grain screen: smooth two-octave cell noise at q (one unit ≈ one ink clump),
-// remapped to a roughly uniform 0…1 so thresholding it with a tone gives that coverage.
-static inline float risoScreen(float2 q, float seed) {
-    float n = 0.0, amp = 0.62;
-    for (int o = 0; o < 2; ++o) {
-        float2 i = floor(q), f = q - i;
-        float2 w = f * f * (3.0 - 2.0 * f);
-        float z = seed + float(o) * 101.0;
-        float a = pcg3(float3(i, z)).x, b = pcg3(float3(i + float2(1, 0), z)).x;
-        float c = pcg3(float3(i + float2(0, 1), z)).x, d = pcg3(float3(i + float2(1, 1), z)).x;
-        n += amp * mix(mix(a, b, w.x), mix(c, d, w.x), w.y);
-        q = float2(q.x * 0.6 - q.y * 0.8, q.x * 0.8 + q.y * 0.6) * 2.1 + 5.3;
-        amp = 0.38;
-    }
-    return smoothstep(0.16, 0.84, n);
+// Risograph (47) FM screen: one screen cell of ink A (or B) — the cell's ink coverage from the
+// two-ink separation of the source at its centre, against a dispersed per-cell threshold
+// (interleaved gradient noise, lightly jittered: missing ink spreads out as fine specks).
+static inline float risoDot(texture2d<float> src, sampler samp, float2 c, float cell, float2 res,
+                            float3 kA, float3 kB, float a11, float a12, float a22, float det, bool inkB) {
+    float3 D = 1.0 - src.sample(samp, (c + 0.5) * cell / res).rgb;
+    float bA = dot(kA, D), bB = dot(kB, D);
+    float cov = smoothstep(0.06, 0.94, (inkB ? a11 * bB - a12 * bA : a22 * bA - a12 * bB) / det);
+    float th = inkB ? fract(ign(c + 31.0) + 0.5 + (pcg3(float3(c, 9.0)).x - 0.5) * 0.25)
+                    : fract(ign(c) + 0.5 + (pcg3(float3(c, 3.0)).x - 0.5) * 0.25);
+    return step(th, cov * 0.98);
+}
+// The same screen with rounded dots for cells ≥ 3 px: the 2×2 nearest cells' dots, smoothly
+// interpolated and thresholded, so ink lands as soft blobs that merge like real ink instead
+// of square pixels (smaller cells keep crisp whole-cell dots: detail first).
+static inline float risoInk(texture2d<float> src, sampler samp, float2 p, float cell, float2 res,
+                            float3 kA, float3 kB, float a11, float a12, float a22, float det, bool inkB) {
+    if (cell < 3.0)
+        return risoDot(src, samp, floor(p / cell), cell, res, kA, kB, a11, a12, a22, det, inkB);
+    float2 g = p / cell - 0.5, i = floor(g), f = g - i;
+    float2 w = f * f * (3.0 - 2.0 * f);
+    float d00 = risoDot(src, samp, i, cell, res, kA, kB, a11, a12, a22, det, inkB);
+    float d10 = risoDot(src, samp, i + float2(1, 0), cell, res, kA, kB, a11, a12, a22, det, inkB);
+    float d01 = risoDot(src, samp, i + float2(0, 1), cell, res, kA, kB, a11, a12, a22, det, inkB);
+    float d11 = risoDot(src, samp, i + float2(1, 1), cell, res, kA, kB, a11, a12, a22, det, inkB);
+    float m = mix(mix(d00, d10, w.x), mix(d01, d11, w.x), w.y);
+    float aa = clamp(fwidth(m), 0.02, 0.5);
+    return smoothstep(0.5 - aa, 0.5 + aa, m);
 }
 
 // Glass (49) LIQUID: the surface of a slowly flowing sheet of hand-rolled glass, in
@@ -799,8 +812,11 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         // Each spot integrates to its line's brightness (amplitude 1 / (σ√2π)).
         float3 beam = a * exp(-fr * fr / (2.0 * va)) * rsqrt(6.2831853 * va)
                     + b * exp(-(1.0 - fr) * (1.0 - fr) / (2.0 * vb)) * rsqrt(6.2831853 * vb);
-        // The tube is dimmer than the signal (as dim as the old sRGB-multiply scanlines).
-        float3 lin = mix(srgbToLinear(base.rgb), beam, inten) * (1.0 - 0.8 * inten);
+        // The tube is dimmer than the signal: as dim on average as the old sRGB-multiply
+        // scanlines with their RGB mask (×(1 − inten/2)·0.85 in sRGB), so saved presets keep
+        // their exposure.
+        float fs = (1.0 - 0.5 * inten) * mix(1.0, 0.85, saturate(inten * 4.0));
+        float3 lin = mix(srgbToLinear(base.rgb), beam, inten) * pow(fs, 1.75);
         // Aperture grille: vertical stripes at 2/3 of the line pitch, faded out once a
         // stripe is under ~2.5 px.
         float gp = P * 0.667;
@@ -832,7 +848,7 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         return mix(u.colorA, u.colorB, g);
     }
 
-    case 13: { // CROSSHATCH
+    case 13: { // CROSSHA0.0
         float L2 = L;
         float spacing = max(u.p0.x, 2.0);
         float3 ink = u.colorB.rgb, paper = u.colorA.rgb;
@@ -1045,7 +1061,7 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         return src.sample(samp, q);
     }
 
-    case 26: { // GLITCH BLOCKS
+    case 26: { // GLI0.0 BLOCKS
         float amt = u.p0.x;
         float blockH = 0.05;
         float row = floor(uv.y / blockH);
@@ -1734,19 +1750,9 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
             float aa = 1.2 / cs;
             mA = smoothstep(rA + aa, rA - aa, length((rpA - gA) / cs));
             mB = smoothstep(rB + aa, rB - aa, length((rpB - gB) / cs));
-        } else {                 // GRAIN: stochastic screen. Each ink's tone thresholds a smooth
-                                 // noise field (two octaves, equalised so tone maps evenly), so
-                                 // ink lands in soft, organic clumps like a riso master's instead
-                                 // of square pixels; edges are antialiased by the pixel footprint.
-            float3 DA = 1.0 - src.sample(samp, uv).rgb;
-            float3 DB = 1.0 - src.sample(samp, pB / res).rgb;
-            float bAA = dot(kA, DA), bBA = dot(kB, DA), bAB = dot(kA, DB), bBB = dot(kB, DB);
-            float covA = smoothstep(0.06, 0.94, (a22 * bAA - a12 * bBA) / det) * 0.985;
-            float covB = smoothstep(0.06, 0.94, (a11 * bBB - a12 * bAB) / det) * 0.985;
-            float tA = risoScreen(px / (cell * 1.25), 3.0), tB = risoScreen(pB / (cell * 1.25), 9.0);
-            float wA = clamp(fwidth(covA - tA), 0.02, 0.5), wB = clamp(fwidth(covB - tB), 0.02, 0.5);
-            mA = smoothstep(tA - wA, tA + wA, covA);
-            mB = smoothstep(tB - wB, tB + wB, covB);
+        } else {                 // GRAIN: stochastic (FM) screen, like a riso master's
+            mA = risoInk(src, samp, px, cell, res, kA, kB, a11, a12, a22, det, false);
+            mB = risoInk(src, samp, pB, cell, res, kA, kB, a11, a12, a22, det, true);
         }
         // uneven ink laydown (drum pressure) + overprint (inks are translucent → multiply)
         float dA = 0.86 + 0.14 * vnoise(px / (160.0 * k) + 3.0);
@@ -1789,22 +1795,28 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
             c += glow * (1.0 - c) * 0.45 * soft;
         }
         if (halo > 0.0) {
-            // Halation: bright light scatters back off the film base and re-exposes the red
-            // (then green) layer around it — the warm glow round street lights and sun-lit
-            // edges. A small spiral of taps gathers what is bright nearby (linear light).
-            float hr = 7.0 * k;
+            // Halation: light from a near-clipping source scatters back off the film base and
+            // re-exposes the red (a little green) layer just around it — the warm ring round a
+            // street lamp or a lit window at night. Only light past ~0.7 linear luminance
+            // counts, and the halo is what the neighbourhood gathers minus what this pixel
+            // already has, so it lands outside small bright sources while a large bright area
+            // (snow, sky, sand, a sunlit petal) never lifts or tints itself. Never touches blue.
+            float hr = 9.0 * k;
             float rot = (ign(floor(px * 0.5)) + 0.5) * 6.2831853;
-            float3 hsum = float3(0.0);
-            for (int i = 0; i < 8; ++i) {
+            float3 sl = base.rgb * base.rgb;                       // ≈ linear light (cheap)
+            float e0 = smoothstep(0.7, 1.0, dot(sl, float3(0.2126, 0.7152, 0.0722)));
+            float hsum = 0.0, wsum = 0.0;
+            for (int i = 0; i < 10; ++i) {
                 float a = float(i) * 2.39996323 + rot;
-                float r = hr * sqrt((float(i) + 0.5) / 8.0);
-                float3 s = src.sample(samp, uv + float2(cos(a), sin(a)) * r / res).rgb;
-                float3 over = max(s * s - 0.28, 0.0);             // s² ≈ linear light
-                hsum += over * over / (over + 0.25);              // soft knee: highlights, not midtones
+                float rr = sqrt((float(i) + 0.5) / 10.0);
+                float3 s = src.sample(samp, uv + float2(cos(a), sin(a)) * rr * hr / res).rgb;
+                s *= s;
+                float w = exp(-2.5 * rr * rr);                     // most of the glow close in
+                hsum += w * smoothstep(0.7, 1.0, dot(s, float3(0.2126, 0.7152, 0.0722)));
+                wsum += w;
             }
-            float h = dot(hsum, float3(0.45, 0.45, 0.10)) / 8.0;
-            // Red first, a little green: the halo fringes orange-red around the light.
-            float3 lin = srgbToLinear(c) + float3(1.0, 0.30, 0.10) * h * halo * 3.5;
+            float h = max(hsum / wsum - e0, 0.0);
+            float3 lin = srgbToLinear(c) + float3(1.0, 0.30, 0.0) * h * halo * 5.0;
             c = linearToSrgb(lin);
         }
         float l = luma(c);
@@ -1821,10 +1833,13 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
             float paperL = smoothstep(0.25, 0.9, l);
             c *= 1.0 + paperAmt * (fib * mix(0.035, 0.07, paperL) + mot * mix(0.12, 0.04, paperL));
         }
-        // Grain: clumps about 1.2 px wide per 1000 px of height (per-pixel noise used to
-        // vanish at 5K and look digital in thumbnails), strongest in the midtones.
-        c += grainK(px, t, k) * grainAmt * (0.35 + 2.6 * l * (1.0 - l));
-        return float4(c + bandDither(px), 1.0);
+        // Grain, strongest in the midtones: on an in-focus (film) image, clumps about 1.2 px
+        // wide per 1000 px of height (per-pixel noise vanishes at 5K); over a soft-focus blur,
+        // fine per-pixel grain (coarse clumps on a blurred picture read as noise, not film).
+        // Grain already dithers away banding; without it, a static ±½ LSB dither does.
+        float g = R > 0.75 ? filmGrain(px, t) : grainK(px, t, k);
+        c += g * grainAmt * (0.35 + 2.6 * l * (1.0 - l));
+        return float4(grainAmt > 0.0 ? c : c + bandDither(px), 1.0);
     }
 
     case 49: { // GLASS — the source seen through reeded glass, glass blocks or a flowing sheet
@@ -1854,11 +1869,14 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
             // under convex swells and spreads it under hollows, so brightness follows the
             // focusing (never a milky veil laid on top).
             float3 n = normalize(float3(-g * 0.35, 1.0));
-            float glint = pow(saturate(dot(n, normalize(float3(-0.22, -0.30, 0.93)))), 420.0);
+            // The window's reflection: a small, hard-edged light (~2° across), so the glint is
+            // a crisp streak on a ripple's flank, never a soft smear over gently tilted glass.
+            float ndl = dot(n, normalize(float3(-0.22, -0.30, 0.93)));
+            float glint = smoothstep(0.99970, 0.99988, ndl);
             float hxx = liquidGlassHeight(q - float2(e, 0.0), ts);
             float hyy = liquidGlassHeight(q - float2(0.0, e), ts);
             float curv = (hx + hxx + hy + hyy - 4.0 * h0) / (e * e);   // < 0 on crests
-            specC = glint * 0.13;
+            specC = glint * 0.12;
             shadeC = clamp(curv * 0.035, -0.10, 0.10);              // < 0 brightens (focus)
         }
         float disp = 0.025 + frost * 0.05;
@@ -1881,8 +1899,14 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
                 // squeezed — the slices that make reeded glass read as glass.
                 float f = fract(sp.x / S) - 0.5;
                 float sn = 1.54 * f;                                  // sin of the surface angle
-                float tn = sn * rsqrt(1.0 - sn * sn);
-                off = float2(-tn * refr * S * 6.0, 0.0);
+                // Deviation ∝ tan of the surface angle, capped where the reed turns steep
+                // at its edges (no spikes). Refraction is a saturating curve, 2r / (1 + 5r):
+                // the 0.2 the Fluted Glass look is tuned on stays put, while 0.5 (the
+                // default) and 1.0 bend at most ~2 and ~2.4 reed widths, so any setting still
+                // reads as the photo through glass rather than as slivers.
+                float tn = clamp(sn * rsqrt(1.0 - sn * sn), -1.0, 1.0);
+                float rf = 2.0 * refr / (1.0 + 5.0 * refr);
+                off = float2(-tn * rf * S * 6.0, 0.0);
                 // Window light to the upper left: one soft highlight down each reed where it
                 // faces the light, a faint sheen around it, and a dark line in each groove.
                 spc = 0.10 * exp(-(sn + 0.30) * (sn + 0.30) * 81.0) + 0.018 * exp(-(sn + 0.30) * (sn + 0.30) * 4.84);
@@ -1919,6 +1943,10 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         float3 lin = acc * inv;
         lin *= lin;                                       // ≈ linear light (gamma 2: cheap at 5K)
         lin = lin * (1.0 - clamp(shade * inv, -0.2, 1.0)) * float3(0.955, 0.975, 0.965);   // faint green glass body
+        // Tiles and Liquid: highlights read as light on the glass where there is light behind
+        // it; over a dark background (a night sky, shadowed foliage) they stay a faint sheen,
+        // never grey smoke or grey blocks.
+        if (style != 0) spec *= mix(0.15, 1.0, smoothstep(0.01, 0.2, dot(lin, float3(0.2126, 0.7152, 0.0722))));
         lin += spec * inv;
         return float4(sqrt(lin) + bandDither(px), 1.0);
     }
@@ -1961,21 +1989,38 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
 // ---------------------------------------------------------------- error-diffusion dither (compute)
 //
 // Error diffusion (Floyd–Steinberg, Atkinson, Jarvis… and Riemersma) on a grid of whole-pixel
-// cells, as two parallel GPU passes (it used to be one serial GPU thread: 100+ ms a frame):
+// cells, as parallel GPU passes (it used to be one serial GPU thread: 100+ ms a frame):
 //   1. dither_prep, one thread per cell: the cell's area-averaged, lightly sharpened input,
 //      and how "sticky" the cell is this frame (its input barely moved since the last one).
 //   2. dither_wave, one threadgroup: a wavefront — row y runs `lag` cells behind row y − 1, so
 //      every error a cell gathers from its quantised neighbours is already final. Each cell
-//      only ever writes itself, so there are no races. (Riemersma: dither_riem below.)
+//      only ever writes itself, so there are no races. (Riemersma: dither_riem.)
+//   3. dither_relax, 9 interleaved phases: a few steps of direct binary search.
+//   4. dither_final: writes the grid and keeps the levels for the next frame.
+//
 // Temporal stability: error diffusion is chaotic — a 0.1 px Ken Burns drift used to re-roll
 // the whole pattern every frame (≈ 40 % of the pixels flickering at 30 fps). A cell whose
-// input barely changed keeps last frame's level unless its value leaves a hysteresis band;
-// the difference still diffuses as error, so the tone stays right and the pattern stays put.
+// input barely changed keeps last frame's level unless its value leaves a hysteresis band.
+// Held on its own that drifts within seconds: as the photo moves under the fixed grid, held
+// cells carry up to 1.5× the usual error, the error field runs hot, and the dots fuse into
+// dashes and worms. So:
+//   • a held cell passes on at most half a level of error, like any freshly quantised cell;
+//     the excess isn't lost but spread thinly over its 5×5 neighbourhood's input next frame
+//     (low-frequency, so it shifts tone, never texture);
+//   • the relax pass then toggles any cell whose toggle clearly lowers the eye-filtered error
+//     of the pattern around it (two dots side by side read as a bright dash: one lets go).
+//     The margin keeps it from touching a fresh error-diffused pattern, so each algorithm
+//     keeps its character, and from oscillating frame to frame.
+// Measured on the slideshow, 130 frames at 30 fps: ≈ 0.6 % of pixels change per frame and the
+// pattern keeps fresh error diffusion's statistics (it used to fuse into dashes within 4 s).
 //
-// st (2·N half4): st[i] = this frame's work — the input, then (once quantised) the error;
-//                 st[N + i] = what persists — (last level rgb, last input luma + 1; 0 = none).
+// st (5·N half4):  S0 = st[i]       this frame's error (rgb)
+//                  S1 = st[N + i]   persistent: (final level rgb, last input luma + 1; 0 = none)
+//                  S2 = st[2N + i]  this frame's input (rgb), stickiness (w)
+//                  S3 = st[3N + i]  this frame's level (rgb)
+//                  S4 = st[4N + i]  persistent: error a held cell couldn't pass on (rgb)
 // Uniforms: p0 = (cell, levels, mono, algo) as packed; p1 = (kernel id, W, H, cell px);
-//           p2 = (hysteresis in levels, sharpen, threshold jitter, 0).
+//           p2 = (hysteresis in levels, sharpen, threshold jitter, relax margin).
 
 // Gather taps (dx, dy, weight): cell (x, y) receives weight × error of (x − dx, y − dy), the
 // transpose of each kernel's scatter. Kernel ids: 0 Floyd–Steinberg, 1 Atkinson, 2 Jarvis-
@@ -2009,8 +2054,9 @@ kernel void dither_prep(texture2d<float, access::sample> inTex [[texture(0)]],
                         uint2 gid [[thread_position_in_grid]])
 {
     int W = int(u.p1.y + 0.5), H = int(u.p1.z + 0.5);
-    if (int(gid.x) >= W || int(gid.y) >= H) return;
-    int N = W * H, i = int(gid.y) * W + int(gid.x);
+    int x = int(gid.x), y = int(gid.y);
+    if (x >= W || y >= H) return;
+    int N = W * H, i = y * W + x;
     float cp = u.p1.w;
     float2 ires = 1.0 / u.resolution;
     float2 c0 = (float2(gid) + 0.5) * cp;
@@ -2028,7 +2074,18 @@ kernel void dither_prep(texture2d<float, access::sample> inTex [[texture(0)]],
     float lum = luma(c);
     float prev = float(st[N + i].w);
     float stick = prev > 0.5 ? 1.0 - smoothstep(0.015, 0.08, abs(lum - (prev - 1.0))) : 0.0;
-    st[i] = half4(half3(u.p0.z > 0.5 ? float3(lum, 0.0, 0.0) : c), half(stick));
+    // Last frame's held-back error, spread over the 5×5 cells around each holder.
+    float3 xs = float3(0.0);
+    for (int dy = -2; dy <= 2; ++dy) {
+        int yy = y + dy;
+        if (yy < 0 || yy >= H) continue;
+        for (int dx = -2; dx <= 2; ++dx) {
+            int xx = x + dx;
+            if (xx >= 0 && xx < W) xs += float3(st[4 * N + yy * W + xx].xyz);
+        }
+    }
+    float3 inp = (u.p0.z > 0.5 ? float3(lum, 0.0, 0.0) : c) + xs * (1.0 / 25.0);
+    st[2 * N + i] = half4(half3(inp), half(stick));
     st[N + i].w = half(lum + 1.0);
 }
 
@@ -2040,8 +2097,16 @@ static inline float3 ditherQuant(float3 v, float3 pq, float L1, float jit, float
     return mix(qn, pq, keep * step(0.001, stick));
 }
 
+// A quantised cell's outputs: its level, at most half a level of error to diffuse, and the
+// rest held back for next frame's input (S4).
+static inline void ditherStore(device half4* st, int N, int i, float3 v, float3 q, float L1) {
+    float3 e = v - q, ec = clamp(e, -0.5 / L1, 0.5 / L1);
+    st[i] = half4(half3(ec), 0.0h);
+    st[3 * N + i] = half4(half3(q), 0.0h);
+    st[4 * N + i] = half4(half3(e - ec), 0.0h);
+}
+
 kernel void dither_wave(device half4* st [[buffer(1)]],
-                        texture2d<float, access::write> outTex [[texture(1)]],
                         constant FXUniforms& u [[buffer(0)]],
                         uint tid [[thread_index_in_threadgroup]],
                         uint tn [[threads_per_threadgroup]])
@@ -2051,7 +2116,6 @@ kernel void dither_wave(device half4* st [[buffer(1)]],
     float L1 = max(u.p0.y, 2.0) - 1.0;
     bool mono = u.p0.z > 0.5;
     float hyst = u.p2.x, jamp = u.p2.z;
-    float3 cA = u.colorA.rgb, cB = u.colorB.rgb;
     int n = EDN[kid];
     int T = int(tn), lag = (kid == 10) ? 4 : 3;     // Shiau-Fan 2 reaches 3 cells back
     for (int y0 = 0; y0 < H; y0 += T) {
@@ -2061,23 +2125,20 @@ kernel void dither_wave(device half4* st [[buffer(1)]],
             int x = s - lag * int(tid);
             if (y < H && x >= 0 && x < W) {
                 int i = y * W + x;
-                float4 in4 = float4(st[i]);
+                float4 in4 = float4(st[2 * N + i]);
                 float3 acc = float3(0.0);
                 for (int k = 0; k < n; ++k) {
                     float3 tap = EDK[kid][k];
                     int xx = x - int(tap.x), yy = y - int(tap.y);
                     if (xx >= 0 && xx < W && yy >= 0) acc += float3(st[yy * W + xx].xyz) * tap.z;
                 }
-                float4 prev = float4(st[N + i]);
                 float3 v = in4.xyz + acc;
                 // A little static threshold jitter breaks Floyd–Steinberg's worms and the
                 // regular checker/stripe textures it settles into in flat midtones.
                 float jit = (pcg3(float3(float(x), float(y), 41.0)).x - 0.5) * jamp;
-                float3 q = ditherQuant(v, prev.xyz, L1, jit, in4.w, hyst);
+                float3 q = ditherQuant(v, float3(st[N + i].xyz), L1, jit, in4.w, hyst);
                 if (mono) { v.yz = 0.0; q.yz = 0.0; }
-                st[i] = half4(half3(v - q), 0.0h);
-                st[N + i] = half4(half3(q), half(prev.w));
-                outTex.write(float4(mono ? mix(cA, cB, q.x) : q, 1.0), uint2(x, y));
+                ditherStore(st, N, i, v, q, L1);
             }
             threadgroup_barrier(mem_flags::mem_device);
         }
@@ -2086,9 +2147,9 @@ kernel void dither_wave(device half4* st [[buffer(1)]],
 
 // Riemersma: error diffusion along a Hilbert curve with a 16-cell memory. That memory is
 // short, so the curve splits into chunks that run in parallel, each first replaying the
-// cells just before it (without writing) to fill its history.
+// cells just before it (without writing; with the same hysteresis and error limit the owning
+// chunk used) to fill its history. The replay only reads S1 and S2, which no chunk writes.
 kernel void dither_riem(device half4* st [[buffer(1)]],
-                        texture2d<float, access::write> outTex [[texture(1)]],
                         constant FXUniforms& u [[buffer(0)]],
                         uint tid [[thread_position_in_grid]])
 {
@@ -2101,7 +2162,6 @@ kernel void dither_riem(device half4* st [[buffer(1)]],
     float L1 = max(u.p0.y, 2.0) - 1.0;
     bool mono = u.p0.z > 0.5;
     float hyst = u.p2.x, jamp = u.p2.z;
-    float3 cA = u.colorA.rgb, cB = u.colorB.rgb;
     float w[RN]; float wsum = 0.0;
     for (int k = 0; k < RN; ++k) { w[k] = pow(1.0 / 16.0, float(RN - 1 - k) / float(RN - 1)); wsum += w[k]; }
     float3 hist[RN];
@@ -2116,20 +2176,65 @@ kernel void dither_riem(device half4* st [[buffer(1)]],
         }
         if (x >= W || y >= H) continue;
         int i = y * W + x;
-        bool own = d >= start;
-        float4 in4 = float4(st[i]);
+        float4 in4 = float4(st[2 * N + i]);
         float3 acc = float3(0.0);
         for (int k = 0; k < RN; ++k) acc += hist[k] * (w[k] / wsum);
-        float4 prev = float4(st[N + i]);
         float3 v = in4.xyz + acc;
         float jit = (pcg3(float3(float(x), float(y), 41.0)).x - 0.5) * jamp;
-        float3 q = ditherQuant(v, prev.xyz, L1, jit, own ? in4.w : 0.0, hyst);
+        float3 q = ditherQuant(v, float3(st[N + i].xyz), L1, jit, in4.w, hyst);
         if (mono) { v.yz = 0.0; q.yz = 0.0; }
         for (int k = 0; k < RN - 1; ++k) hist[k] = hist[k + 1];
-        hist[RN - 1] = v - q;
-        if (own) {
-            st[N + i] = half4(half3(q), half(prev.w));
-            outTex.write(float4(mono ? mix(cA, cB, q.x) : q, 1.0), uint2(x, y));
+        hist[RN - 1] = clamp(v - q, -0.5 / L1, 0.5 / L1);
+        if (d >= start) ditherStore(st, N, i, v, q, L1);
+    }
+}
+
+// Direct binary search, one step per cell, in 9 interleaved phases (cells 3 apart never read
+// each other: no races, the same result every run). The eye-filtered error of the pattern
+// around a cell is a Gaussian (σ ≈ 0.8 cells, so a pair of dots weighs clearly more than one)
+// over 5×5 cells of level − input; toggling the cell one level toward its input changes the
+// error energy by 2·d·c + d²·h(0). The cell toggles only when that drops by more than the
+// margin: fresh error diffusion barely moves, chained dots come apart.
+kernel void dither_relax(device half4* st [[buffer(1)]],
+                         constant FXUniforms& u [[buffer(0)]],
+                         constant uint& phase [[buffer(2)]],
+                         uint2 gid [[thread_position_in_grid]])
+{
+    int W = int(u.p1.y + 0.5), H = int(u.p1.z + 0.5);
+    int x = int(gid.x) * 3 + int(phase % 3), y = int(gid.y) * 3 + int(phase / 3);
+    if (x >= W || y >= H) return;
+    int N = W * H, i = y * W + x;
+    float L1 = max(u.p0.y, 2.0) - 1.0;
+    float3 q = float3(st[3 * N + i].xyz);
+    float3 c = float3(0.0);
+    for (int dy = -2; dy <= 2; ++dy) {
+        int yy = y + dy;
+        if (yy < 0 || yy >= H) continue;
+        for (int dx = -2; dx <= 2; ++dx) {
+            int xx = x + dx;
+            if (xx < 0 || xx >= W) continue;
+            int j = yy * W + xx;
+            c += exp(-float(dx * dx + dy * dy) * 0.78) * (float3(st[3 * N + j].xyz) - float3(st[2 * N + j].xyz));
         }
     }
+    float3 d = -sign(c) / L1;
+    float3 qn = q + d;
+    float3 ok = step(-0.001, qn) * step(qn, 1.001);
+    if (u.p0.z > 0.5) ok.yz = 0.0;
+    float3 better = step(2.0 * d * c + d * d * (1.0 + u.p2.w), float3(0.0)) * ok;
+    if (any(better > 0.5)) st[3 * N + i].xyz = half3(mix(q, qn, better));
+}
+
+// Write the grid and keep the final levels for the next frame.
+kernel void dither_final(device half4* st [[buffer(1)]],
+                         texture2d<float, access::write> outTex [[texture(1)]],
+                         constant FXUniforms& u [[buffer(0)]],
+                         uint2 gid [[thread_position_in_grid]])
+{
+    int W = int(u.p1.y + 0.5), H = int(u.p1.z + 0.5);
+    if (int(gid.x) >= W || int(gid.y) >= H) return;
+    int N = W * H, i = int(gid.y) * W + int(gid.x);
+    float3 q = float3(st[3 * N + i].xyz);
+    st[N + i].xyz = half3(q);
+    outTex.write(float4(u.p0.z > 0.5 ? mix(u.colorA.rgb, u.colorB.rgb, q.x) : q, 1.0), gid);
 }

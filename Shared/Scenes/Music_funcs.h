@@ -49,17 +49,10 @@ static inline float3 musicBicubic(texture2d<float> tex, sampler s, float2 uv, ui
 
 // Grade for legible white type: saturate in Oklab, then compress lightness into [lo, hi]
 // (Oklab L; 0.52 ≈ sRGB 0.42 — white text keeps ≥ 5:1 everywhere), nudged toward `tint`.
-// `expo` lifts a dark cover's lightness before the compression (so a night photo becomes a
-// deep, lit colour field instead of brown murk); `neutralTint` is how far near-neutral areas
-// (white lettering, grey sky) take the palette's hue, so they never sit in a vivid field as
-// grey islands.
-static inline float3 musicGrade(float3 c, float sat, float lo, float hi, float3 tint, float tintAmt,
-                                float expo = 1.0, float neutralTint = 0.0) {
+static inline float3 musicGrade(float3 c, float sat, float lo, float hi, float3 tint, float tintAmt) {
     float3 lab = srgbToOklab(c);
     float3 tl = srgbToOklab(tint);
-    float ta = mix(max(tintAmt, neutralTint), tintAmt, smoothstep(0.02, 0.09, length(lab.yz)));
-    lab.yz = mix(lab.yz * sat, tl.yz * max(sat, 1.0), ta);
-    lab.x *= expo;
+    lab.yz = mix(lab.yz * sat, tl.yz * max(sat, 1.0), tintAmt);
     // Near-neutral colour (white or grey covers) tops out lower: a pale grey field reads as
     // dull haze, a deeper graphite as intentional.
     float chroma = length(lab.yz);
@@ -222,10 +215,7 @@ static inline float3 musicBackground(texture2d<float> art, bool has, sampler s, 
     float2 p = (uv - 0.5) * float2(asp, 1.0);
     if (bg == 0) {
         col = musicLivingArt(art, s, wp, asp, tm);
-        // The cover's true average (its 1×1 mip) sets the exposure lift for dark artwork.
-        float3 avg = art.sample(s, float2(0.5), level(float(art.get_num_mip_levels() - 1))).rgb;
-        float expo = clamp(0.60 / max(srgbToOklab(avg).x, 0.08), 1.0, 1.8);
-        col = musicGrade(col, 1.35, 0.17, 0.53, vivid, 0.10, expo, 0.55);
+        col = musicGrade(col, 1.35, 0.17, 0.53, vivid, 0.10);
     } else if (bg == 1) {
         float zoom = 1.18 + 0.03 * sin(tm * 0.021);
         float2 pan = float2(sin(tm * 0.011), cos(tm * 0.009)) * 0.02;

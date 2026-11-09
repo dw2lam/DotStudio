@@ -27,10 +27,15 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private var ditherPrepPSO: MTLComputePipelineState?
     private var ditherWavePSO: MTLComputePipelineState?
     private var ditherRiemPSO: MTLComputePipelineState?
+    private var ditherRelaxPSO: MTLComputePipelineState?
+    private var ditherFinalPSO: MTLComputePipelineState?
     private var gridTex: MTLTexture?
     private var errBuf: MTLBuffer?
-    private var gridNeedsClear = false
     private var gridW = 0, gridH = 0, gridCell = 1
+    /// What the dither history in `errBuf` was made with (packed params, colours, grid). Any
+    /// change (another preset, an edited param, a resize) or apply() starts from no history:
+    /// a different dither must never inherit the previous one's pattern.
+    private var ditherHistoryKey: [Float]?
 
     /// Media-clock origin of the animation time: t = now − startTime. With the instance
     /// time base it's when the source was applied; with the wall-clock base it is re-derived
@@ -171,6 +176,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         ditherPrepPSO = compute("dither_prep")
         ditherWavePSO = compute("dither_wave")
         ditherRiemPSO = compute("dither_riem")
+        ditherRelaxPSO = compute("dither_relax")
+        ditherFinalPSO = compute("dither_final")
 
         let sd = MTLSamplerDescriptor()
         sd.minFilter = .linear; sd.magFilter = .linear
@@ -204,6 +211,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             if timeBase == .instance { startTime = CACurrentMediaTime() }
             loadMedia(for: source)
         }
+        ditherHistoryKey = nil
     }
 
     /// The animation time (seconds) a frame drawn at `now` would use, per the time base.
@@ -906,27 +914,31 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         d.usage = [.shaderRead, .shaderWrite]
         d.storageMode = .private
         gridTex = device.makeTexture(descriptor: d)
-        // Two half4 per cell: this frame's input/error, and the persistent last level + input.
-        errBuf = device.makeBuffer(length: max(w * h, 1) * 2 * 8, options: .storageModePrivate)
-        gridNeedsClear = true
+        // Five half4 per cell (see dither_prep): error, persistent level + input, input, level,
+        // held-back error.
+        errBuf = device.makeBuffer(length: max(w * h, 1) * 5 * 8, options: .storageModePrivate)
+        ditherHistoryKey = nil
     }
 
     private func encodeSerialDither(_ cmd: MTLCommandBuffer, inst: EffectInstance, input: MTLTexture, size: CGSize) {
-        guard let prep = ditherPrepPSO, let wave = ditherWavePSO, let riem = ditherRiemPSO else { return }
+        guard let prep = ditherPrepPSO, let wave = ditherWavePSO, let riem = ditherRiemPSO,
+              let relax = ditherRelaxPSO, let final = ditherFinalPSO else { return }
         let cp = MetalRenderer.ditherCellPixels(cell: Double(inst.g("cell")), size: size)
         let gw = max(1, Int((size.width / CGFloat(cp)).rounded(.up)))
         let gh = max(1, Int((size.height / CGFloat(cp)).rounded(.up)))
         ensureGrid(gw, gh)
         guard let gridTex = gridTex, let errBuf = errBuf else { return }
-        if gridNeedsClear, let bl = cmd.makeBlitCommandEncoder() {
-            bl.fill(buffer: errBuf, range: 0..<errBuf.length, value: 0)   // no history yet
-            bl.endEncoding()
-            gridNeedsClear = false
-        }
-        guard let enc = cmd.makeComputeCommandEncoder() else { return }
         var u = FXUniforms()
         u.resolution = simd_float2(Float(size.width), Float(size.height))
         inst.pack(into: &u)                        // p0 = (cell, levels, mono, algo), colorA/B
+        let key: [Float] = [u.p0.x, u.p0.y, u.p0.z, u.p0.w, u.colorA.x, u.colorA.y, u.colorA.z,
+                            u.colorB.x, u.colorB.y, u.colorB.z, Float(cp), Float(gw), Float(gh)]
+        if key != ditherHistoryKey, let bl = cmd.makeBlitCommandEncoder() {
+            bl.fill(buffer: errBuf, range: 0..<errBuf.length, value: 0)   // no history
+            bl.endEncoding()
+            ditherHistoryKey = key
+        }
+        guard let enc = cmd.makeComputeCommandEncoder() else { return }
         let algo = Int((inst.params["algo"] ?? 4).rounded())
         let riemersma = algo == 16
         u.p1 = simd_float4(Float(riemersma ? 100 : algo - 4), Float(gw), Float(gh), Float(cp))
@@ -936,9 +948,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         enc.setTexture(gridTex, index: 1)
         enc.setBuffer(errBuf, offset: 0, index: 1)
         enc.setSamplerState(sampler, index: 0)
+        let cells = MTLSize(width: (gw + 15) / 16, height: (gh + 15) / 16, depth: 1)
+        let tile = MTLSize(width: 16, height: 16, depth: 1)
         enc.setComputePipelineState(prep)
-        enc.dispatchThreadgroups(MTLSize(width: (gw + 15) / 16, height: (gh + 15) / 16, depth: 1),
-                                 threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
+        enc.dispatchThreadgroups(cells, threadsPerThreadgroup: tile)
         if riemersma {
             var side = 1
             while side < gw || side < gh { side <<= 1 }
@@ -953,11 +966,21 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             enc.dispatchThreadgroups(MTLSize(width: 1, height: 1, depth: 1),
                                      threadsPerThreadgroup: MTLSize(width: t, height: 1, depth: 1))
         }
+        // Relax chained dots, 9 interleaved phases (see dither_relax), then write the grid.
+        enc.setComputePipelineState(relax)
+        let thirds = MTLSize(width: (gw + 47) / 48, height: (gh + 47) / 48, depth: 1)
+        for phase in 0..<9 {
+            var ph = UInt32(phase)
+            enc.setBytes(&ph, length: 4, index: 2)
+            enc.dispatchThreadgroups(thirds, threadsPerThreadgroup: tile)
+        }
+        enc.setComputePipelineState(final)
+        enc.dispatchThreadgroups(cells, threadsPerThreadgroup: tile)
         enc.endEncoding()
         gridW = gw; gridH = gh; gridCell = cp
     }
-    /// (hysteresis in levels, sharpen, threshold jitter, 0) — see dither_prep / dither_wave.
-    static let ditherTuning = simd_float4(0.35, 0.35, 0.18, 0)
+    /// (hysteresis in levels, sharpen, threshold jitter, relax margin) — see dither_prep.
+    static let ditherTuning = simd_float4(0.5, 0.35, 0.18, 0.5)
 
     // MARK: Thumbnails (offscreen, one frame, synchronous)
 
