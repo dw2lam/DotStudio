@@ -1,4 +1,4 @@
-//  SceneCatalog.swift — metadata for the scene packs (Clocks, Flowing, Nature, Retro).
+//  SceneCatalog.swift — metadata for the scene packs (Clocks, Flowing, Nature, Retro, Music).
 //
 //  Each pack owns three files and nothing else:
 //    Shared/Scenes/<Pack>.swift       — `extension SceneCatalog { static let <pack>: [EffectKind: SceneSpec]`
@@ -27,9 +27,10 @@ enum SceneCatalog {
         .merging(flowing) { a, _ in a }
         .merging(nature) { a, _ in a }
         .merging(retro) { a, _ in a }
+        .merging(music) { a, _ in a }
 
     static func spec(_ kind: EffectKind) -> SceneSpec? { all[kind] }
 
     /// Default-library presets contributed by the packs, in pack order.
-    static var presets: [Preset] { clocksPresets + flowingPresets + naturePresets + retroPresets }
+    static var presets: [Preset] { clocksPresets + flowingPresets + naturePresets + retroPresets + musicPresets }
 }

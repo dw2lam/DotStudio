@@ -19,6 +19,16 @@ final class DotSaverView: ScreenSaverView {
     private var lastFrameAt = CACurrentMediaTime()
     private var idleWatchdog: Timer?
 
+    // Music: what's playing (music.json, written by the app), drawn by MusicOverlayView at
+    // native resolution above the Metal view — the Now Playing scene's foreground, or the
+    // corner card over any style. Built and torn down with the Metal stack.
+    private var musicFeed: MusicFeed?
+    private var musicOverlay: MusicOverlayView?
+    private var musicSettings = MusicSpec()
+    private var musicActive = false            // visible (playing / paused within the linger)
+    private var lastMusicTick: CFTimeInterval = 0
+    private var shownPreset: Preset?           // what reload() last applied (overlay mode)
+
     /// Every live instance in this host process. The host leaks instances (see
     /// teardownMetalStack), so each new activation sweeps the previous ones.
     private static var instances = NSHashTable<DotSaverView>.weakObjects()
@@ -111,6 +121,18 @@ final class DotSaverView: ScreenSaverView {
         renderer = r
         metalView = view
         addSubview(view)
+        // The music foreground sits above the (often reduced-resolution) Metal view so its
+        // type stays crisp. The feed is polled ~1 Hz from animateOneFrame (a stat, plus a
+        // decode only when music.json changes).
+        let feed = MusicFeed(baseDir: store.baseDir)
+        feed.poll()
+        musicFeed = feed
+        musicActive = false
+        r.reduceMotion = MusicOverlayLayer.systemReduceMotion
+        r.setMusic(feed.snapshot)
+        let ov = MusicOverlayView(frame: bounds)
+        addSubview(ov, positioned: .above, relativeTo: view)
+        musicOverlay = ov
         store.debug("renderer ready, store base=\(store.baseDir.path)")
         reload(force: true)
     }
@@ -143,6 +165,13 @@ final class DotSaverView: ScreenSaverView {
         metalView?.removeFromSuperview()
         metalView = nil
         renderer = nil
+        // The overlay holds artwork bitmaps and the feed a decoded cover: a leaked husk keeps neither.
+        musicOverlay?.removeFromSuperview()
+        musicOverlay = nil
+        musicFeed = nil
+        MusicArtwork.purge()           // process-wide scaled-cover cache (the host outlives us)
+        musicActive = false
+        shownPreset = nil
         activeID = nil
         lastModified = nil
         frameTick = 0
@@ -174,12 +203,18 @@ final class DotSaverView: ScreenSaverView {
             return
         }
         renderScale = CGFloat(lib.renderScale ?? 1)   // picked up next frame by syncDrawableSize
-        let target = DotSaverView.effectivePreset(in: lib, now: Date())
+        musicSettings = lib.musicSettings
+        renderer?.musicLingerMinutes = musicSettings.linger
+        if let feed = musicFeed { musicActive = feed.isVisible(settings: musicSettings) }
+        // Match Screensaver: the same wall-clock time base as a wallpaper that follows us.
+        renderer?.timeBase = lib.rendererTimeBase
+        let target = DotSaverView.effectivePreset(in: lib, now: Date(), musicActive: musicActive)
         let changed = force || target.id != activeID || mod != lastModified
         if force { store.debug("reload active=\(target.name) effects=\(target.effects.count) sourceKind=\(lib.source.kind.rawValue)") }
         if changed {
-            // Crossfade on rotation/schedule-driven switches; hard cut on first load and edits.
+            // Crossfade on rotation/schedule/music-driven switches; hard cut on first load and edits.
             let automatic = (lib.rotation?.enabled ?? false) || (lib.schedule?.enabled ?? false)
+                || musicSettings.takesOver
             let fade = !force && target.id != activeID && automatic
             activeID = target.id
             lastModified = mod
@@ -194,6 +229,8 @@ final class DotSaverView: ScreenSaverView {
             }
             presetFPS = target.fps
             animationTimeInterval = effectiveInterval()
+            shownPreset = target
+            updateMusicOverlay(animated: !force)
         }
     }
 
@@ -201,8 +238,38 @@ final class DotSaverView: ScreenSaverView {
 
     /// Which preset belongs on screen right now (see Shared/Playback.swift, which the
     /// app also uses so the gallery always shows what the saver will play).
-    static func effectivePreset(in lib: Library, now: Date) -> Preset {
-        Playback.effectivePreset(in: lib, now: now)
+    static func effectivePreset(in lib: Library, now: Date, musicActive: Bool = false) -> Preset {
+        Playback.effectivePreset(in: lib, now: now, musicActive: musicActive)
+    }
+
+    // MARK: Music
+
+    /// ~1 Hz: re-read music.json if it changed, hand new artwork to the renderer, follow
+    /// take-over, and tick the overlay (progress, times, linger expiry).
+    private func musicTick() {
+        guard let feed = musicFeed else { return }
+        if feed.poll() { renderer?.setMusic(feed.snapshot) }
+        let active = feed.isVisible(settings: musicSettings)
+        if active != musicActive {
+            musicActive = active
+            if musicSettings.takesOver { reload(force: false) }   // the lineup changes with it
+        }
+        updateMusicOverlay(animated: true)
+    }
+
+    /// The Now Playing scene's foreground when that's the style on screen; otherwise the
+    /// corner card (when enabled — it shows only while music is visible).
+    private func updateMusicOverlay(animated: Bool) {
+        guard let ov = musicOverlay?.overlay, let feed = musicFeed else { return }
+        let mode: MusicOverlayLayer.Mode
+        if let inst = shownPreset?.musicScene {
+            mode = .full(MusicSceneOptions(inst))
+        } else if musicSettings.isCardEnabled {
+            mode = .card(musicSettings.corner)
+        } else {
+            mode = .hidden
+        }
+        ov.update(mode: mode, music: feed.snapshot, settings: musicSettings, animated: animated)
     }
 
     // MARK: Frame pacing (preview + power aware)
@@ -249,8 +316,13 @@ final class DotSaverView: ScreenSaverView {
             if metalView == nil { buildMetalStack() }   // revive after a teardown
             guard let mv = metalView else { return }
             if mv.frame.size != bounds.size { mv.frame = bounds }   // catch up if we started 0×0
+            if let ov = musicOverlay, ov.frame.size != bounds.size { ov.frame = bounds }
             syncDrawableSize()
             frameTick += 1
+            if lastFrameAt - lastMusicTick >= 1 {
+                lastMusicTick = lastFrameAt
+                musicTick()                                         // music.json ~1×/sec (a stat)
+            }
             if frameTick % 30 == 0 {
                 reload(force: false)                                // poll for edits ~1×/sec
                 animationTimeInterval = effectiveInterval()         // track battery/power changes

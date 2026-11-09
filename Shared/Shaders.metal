@@ -410,6 +410,7 @@ static inline float3 uniShade(int i, float3 c, float3 n0, float3 rd, float fp, f
 #include "Scenes/Flowing_funcs.h"
 #include "Scenes/Nature_funcs.h"
 #include "Scenes/Retro_funcs.h"
+#include "Scenes/Music_funcs.h"
 
 // ---------------------------------------------------------------- slideshow source
 
@@ -593,6 +594,8 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
                             texture2d_array<float> planetTex [[texture(4)]],
                             texture2d<float> fadePrev [[texture(5)]],   // outgoing preset during a crossfade
                             texture2d<float> textAtlas [[texture(6)]],  // Clocks pack SDF type (TextAtlas.swift)
+                            texture2d<float> musicArt  [[texture(7)]],  // Now Playing artwork (mipmapped)
+                            texture2d<float> musicArtPrev [[texture(8)]],  // the previous track's, while cross-fading
                             sampler samp           [[sampler(0)]])
 {
     float2 uv  = in.uv;
@@ -725,7 +728,7 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         float2 q = uv * scale;
         float2 flow = float2(vnoise(q + t * 0.15), vnoise(q + 7.3 - t * 0.12)) - 0.5;
         float3 c = src.sample(samp, uv + flow * warp).rgb;
-        float n = hash21(px + floor(t * 60.0));
+        float n = pcg3(float3(px, floor(t * 60.0))).x;   // integer hash: exact at any t
         c += (n - 0.5) * grain;
         return float4(c, 1.0);
     }
@@ -824,7 +827,7 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         float b = src.sample(samp, uv + d - float2(off, 0)).b;
         float3 c = float3(r, g, b);
         c *= 0.9 + 0.1 * sin(px.y * 1.4);                   // scanlines
-        c += (hash21(px + floor(t * 50.0)) - 0.5) * 0.10 * amt; // noise
+        c += (pcg3(float3(px, floor(t * 50.0))).x - 0.5) * 0.10 * amt; // noise (exact at any t)
         float band = step(0.992, fract(uv.y * 1.3 - t * 0.4)); // roll bar
         c = mix(c, c + 0.25, band * amt);
         return float4(c, 1.0);
@@ -867,7 +870,7 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         float dist = head - float(cellPx.y);
         float bright = 0.0;
         if (dist >= 0.0) bright = exp(-dist * 0.18);
-        float glyphSel = floor(hash21(float2(float(cellPx.x), float(cellPx.y) + floor(t * 6.0))) * float(u.glyphCount));
+        float glyphSel = floor(pcg3(float3(float(cellPx.x), float(cellPx.y), floor(t * 6.0))).x * float(u.glyphCount));
         int gi = clamp(int(glyphSel), 0, u.glyphCount - 1);
         float2 local = (px - float2(cellPx) * cell) / cell;
         float2 auv = float2((float(gi) + local.x) / float(u.glyphCount), local.y);
@@ -959,9 +962,10 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         float blockH = 0.05;
         float row = floor(uv.y / blockH);
         float slot = floor(t * 8.0);
-        float h = hash21(float2(row, slot));
+        float2 hh = pcg3(float3(row, slot, 26.0)).xy;     // integer hash: hash21 froze past t ≈ 40 min
+        float h = hh.x;
         float2 q = uv;
-        if (h > 0.6) q.x += (hash21(float2(row, slot + 2.7)) - 0.5) * 0.3 * amt;
+        if (h > 0.6) q.x += (hh.y - 0.5) * 0.3 * amt;
         float3 c = src.sample(samp, q).rgb;
         if (h > 0.85) {
             float sh = 0.02 * amt;
@@ -1779,11 +1783,12 @@ fragment float4 fx_fragment(VOut in [[stage_in]],
         return src.sample(samp, g);
     }
 
-    // ---- scene packs (ids 50–65), one file each
+    // ---- scene packs (ids 50–66), one file each
 #include "Scenes/Clocks_cases.h"
 #include "Scenes/Flowing_cases.h"
 #include "Scenes/Nature_cases.h"
 #include "Scenes/Retro_cases.h"
+#include "Scenes/Music_cases.h"
 
     case 41: { // INTERNAL crossfade — set by the renderer during preset rotation,
                // never by an EffectInstance. src = incoming frame, fadePrev = outgoing.

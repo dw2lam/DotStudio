@@ -130,4 +130,13 @@ struct Library: Codable, Equatable {
     /// Names of built-in presets this library has already been offered, so new built-ins
     /// (e.g. Now Playing, Tidewater) are added to existing libraries exactly once (migration v4).
     var seenBuiltIns: [String]?
+    /// "Match Screensaver" sync: the saver (and a wallpaper that follows it) animate on the
+    /// shared wall-clock time base (MetalRenderer.TimeBase.wallClock), so the screensaver
+    /// starts on exactly the frame the desktop was showing. nil/false = per-instance time.
+    var syncTimeBase: Bool?
+}
+
+extension Library {
+    /// The renderer time base the screensaver uses for this library.
+    var rendererTimeBase: MetalRenderer.TimeBase { (syncTimeBase ?? false) ? .wallClock : .instance }
 }

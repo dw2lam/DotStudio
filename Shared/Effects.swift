@@ -79,7 +79,7 @@ enum EffectKind: String, Codable, CaseIterable {
     // modern pack: scenes + looks
     case meshGradient, aurora, topography, liquidChrome, silk, risograph, grainWash, glass
     // Scene packs — metadata lives in Shared/Scenes/<Pack>.swift (SceneCatalog), shaders in
-    // Shared/Scenes/<Pack>_cases.h. One line per pack; shader ids 50–53, 54–57, 58–61, 62–65.
+    // Shared/Scenes/<Pack>_cases.h. One line per pack; shader ids 50–53, 54–57, 58–61, 62–65, 66.
     case typeClock, flipClock, wordClock, windowLight         // Clocks   50–53
 
     case flowLines, lavaLamp, inkFluid, fireflies             // Flowing  54–57
@@ -87,6 +87,8 @@ enum EffectKind: String, Codable, CaseIterable {
     case rainGlass, oceanHorizon, nightSky, snowfall          // Nature   58–61
 
     case synthGrid, pipes, polyTrails, demoTunnel             // Retro    62–65
+
+    case nowPlaying                                           // Music    66
 
     var displayName: String {
         switch self {

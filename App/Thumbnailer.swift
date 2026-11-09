@@ -44,19 +44,80 @@ final class Thumbnailer {
         hasher.combine(preset)
         hasher.combine(source)
         hasher.combine(override != nil)   // re-render once the poster arrives
+        // Now Playing tiles show the current track: re-render when it (not its progress) changes.
+        var music: MusicSnapshot?
+        if preset.isMusicScene {
+            watchMusic()
+            let snap = MusicFeedHub.shared.snapshot(store: store)
+            music = snap
+            hasher.combine(Self.musicKey(snap))
+        }
         let key = hasher.finalize()
         if keys[preset.id] == key, let img = cache[preset.id] { return img }
 
-        guard let cg = renderer?.renderThumbnail(preset: preset, source: source,
+        if let music { renderer?.setMusic(music) }
+        guard var cg = renderer?.renderThumbnail(preset: preset, source: source,
                                                  width: width, height: height,
                                                  time: thumbTime(preset, source),
                                                  sourceTexOverride: override) else {
             return cache[preset.id]
         }
+        if let music, let inst = preset.musicScene {
+            cg = Self.composite(cg, mode: .full(MusicSceneOptions(inst)), music: music) ?? cg
+        }
         let img = NSImage(cgImage: cg, size: NSSize(width: width / 2, height: height / 2))
         cache[preset.id] = img
         keys[preset.id] = key
         return img
+    }
+
+    // MARK: Music (Now Playing tiles)
+
+    private var musicToken: MusicFeedHub.Token?
+    private var lastMusicKey: String?
+
+    /// What a Now Playing tile depends on: the track, its artwork and whether it's showing —
+    /// not the progress, so a playing song doesn't re-render the gallery every second.
+    private static func musicKey(_ s: MusicSnapshot) -> String {
+        let visible = s.isVisible(settings: MusicSpec())
+        guard visible, let st = s.state else { return "idle" }
+        return [st.trackID ?? st.title ?? "", st.artwork ?? "-", st.isPlaying == true ? "▶" : "Ⅱ"].joined(separator: "|")
+    }
+
+    /// Once a Now Playing tile exists, follow the feed and repaint the gallery when its key
+    /// changes — only while an app window is up: with every window closed (menu-bar mode) the
+    /// subscription drops itself, and the next gallery render subscribes again.
+    private func watchMusic() {
+        guard musicToken == nil else { return }
+        musicToken = MusicFeedHub.shared.subscribe(store: store) { [weak self] snap, _ in
+            guard let self else { return }
+            if let app = NSApp, !app.windows.contains(where: { $0.isVisible && $0.styleMask.contains(.titled) }) {
+                self.musicToken = nil
+                self.lastMusicKey = nil
+                return
+            }
+            let k = Self.musicKey(snap)
+            if self.lastMusicKey != nil, k != self.lastMusicKey { self.onUpdate?() }
+            self.lastMusicKey = k
+        }
+    }
+
+    /// The music foreground (native-resolution CALayer tree) drawn over a rendered frame.
+    static func composite(_ frame: CGImage, mode: MusicOverlayLayer.Mode, music: MusicSnapshot,
+                          scale: CGFloat = 2) -> CGImage? {
+        let w = frame.width, h = frame.height
+        let layer = MusicOverlayLayer()
+        layer.contentsScale = scale
+        layer.frame = CGRect(x: 0, y: 0, width: CGFloat(w) / scale, height: CGFloat(h) / scale)
+        layer.update(mode: mode, music: music, settings: MusicSpec(), animated: false)
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+                                      | CGBitmapInfo.byteOrder32Little.rawValue) else { return nil }
+        ctx.draw(frame, in: CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.scaleBy(x: scale, y: scale)
+        layer.render(in: ctx)
+        return ctx.makeImage()
     }
 
     /// Thumbnail time. For a slideshow, each Look gets its own photo (stable per name), so
