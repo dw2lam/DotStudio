@@ -52,6 +52,13 @@ typedef struct {
     FX_FLOAT4 music;        // (has artwork 0/1, progress 0–1 or −1 = unknown, playing 0/1,
                             //  seconds since the artwork changed — cross-fade clock)
     FX_FLOAT4 musicRect;    // where the foreground draws the artwork, in uv (x, y from the top, w, h)
+
+    // Weather for Ocean Horizon / Shallows (filled per frame by WeatherLink, Shared/Weather;
+    // zero otherwise). See WeatherMix.swift and Shared/Weather/Weather_funcs.h.
+    FX_FLOAT4 weather;      // (cloud cover 0–1, precipitation 0–1, snow share 0–1, wind m/s)
+    FX_FLOAT4 weather2;     // (gusts m/s, fog 0–1 = visibility 20 km … 150 m (log), storm 0–1,
+                            //  1 = weather differs from the scene's own clear sky)
+    FX_FLOAT4 weather3;     // (cloud clock offset s (wind drift), lightning on 0/1, 0, 0)
 } FXUniforms;
 
 #endif /* EffectUniforms_h */
