@@ -14,10 +14,10 @@ extension SceneCatalog {
     static let studio3: [EffectKind: SceneSpec] = [
         .pleats: SceneSpec(
             name: "Pleats",
-            blurb: "A macro of pleated paper, satin or linen, breathing under a raking light.",
+            blurb: "A macro of pleated paper, satin or linen under a raking light, or a lantern glowing at dusk.",
             shaderID: 69,
-            params: [ParamSpec("pleats", "Pleats", 20, 120, step: 1, def: 55),
-                     ParamSpec("depth", "Depth", 0, 1, def: 0.55),
+            params: [ParamSpec("pleats", "Pleats", 20, 120, step: 1, def: 32),
+                     ParamSpec("depth", "Depth", 0, 1, def: 0.7),
                      ParamSpec("breathe", "Breathe", 0, 1, def: 0.5),
                      ParamSpec("speed", "Speed", 0, 2, def: 1),
                      ParamSpec(menu: "material", "Material", ["Paper", "Satin", "Linen", "Lantern"], def: 0),
@@ -42,9 +42,9 @@ extension SceneCatalog {
         return [
             scene("Pleats", ["material": 0],
                   a: RGBA(0.90, 0.86, 0.79), b: RGBA(1.0, 0.86, 0.68)),
-            scene("Graphite Satin", ["material": 1, "pleats": 70, "depth": 0.65, "light": 40, "focus": 0.6],
+            scene("Graphite Satin", ["material": 1, "pleats": 46, "depth": 0.65, "light": 40, "focus": 0.4],
                   a: RGBA(0.15, 0.15, 0.16), b: RGBA(0.80, 0.88, 1.0)),
-            scene("Paper Lantern", ["material": 3, "pleats": 44, "depth": 0.6, "breathe": 0.45, "light": -50, "focus": 0.55],
+            scene("Paper Lantern", ["material": 3, "pleats": 30, "depth": 0.7, "breathe": 0.45, "light": -50, "focus": 0.35],
                   a: RGBA(0.95, 0.92, 0.86), b: RGBA(1.0, 0.82, 0.62)),
         ]
     }
