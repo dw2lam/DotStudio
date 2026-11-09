@@ -130,61 +130,10 @@
         return float4(nature_display(col, px), 1.0);
     }
 
-    case 58: { // RAIN ON GLASS — beads, runners and fog on a window over a defocused street.
+    case 58: { // RAIN ON GLASS — mist, beads and runners on a window over a defocused street.
                // p0 = (speed, rain, condensation, city blur); colorA night, colorB lamp light.
-        float speed = u.p0.x, rain = clamp(u.p0.y, 0.0, 1.0), fogAmt = clamp(u.p0.z, 0.0, 1.0);
-        float blur = clamp(u.p0.w, 0.0, 1.0);
-        float aspect = res.x / res.y;
-        float2 p = float2(uv.x * aspect, uv.y);
-        float ts = t * speed;
-        float3 night = nature_lin(u.colorA.rgb);
-        float3 lamp = srgbToLinear(u.colorB.rgb);
-
-        NatureRainDrop D;
-        D.h = 0.0; D.o = float2(0.0); D.c = p; D.trail = 0.0; D.tdx = 0.0;
-        nature_runners(D, p, 0.11, 0.25 + 0.6 * rain, ts);
-        float trail = D.trail;
-        NatureRainDrop B = D;
-        B.h = 0.0;
-        nature_beads(B, p, 0.075, 0.10 + 0.40 * rain, ts, 2.0);
-        nature_beads(B, p, 0.024, 0.10 + 0.45 * rain, ts, 7.0);
-        // Runners sweep the beads off the glass along their trails.
-        if (B.h * (1.0 - trail) > D.h) { D.h = B.h * (1.0 - trail * 0.9); D.o = B.o; D.c = B.c; }
-
-        // Condensation: patchy, thinner near the warm middle, wiped clean along trails.
-        float fogN = 0.7 + 0.45 * gnoise(p * 3.0 + 1.7);
-        float fog = fogAmt * clamp(fogN, 0.0, 1.0) * (1.0 - trail);
-
-        float3 col;
-        float bBack = blur * (0.7 + 0.3 * fog) + 0.06;
-        if (D.h > 0.0) {
-            // A drop is a small lens: it pulls in (and flips) a patch of the street, focused
-            // much sharper than the glass around it.
-            // Spherical aberration keeps some of the soft glow, so the drop reads as clear
-            // water rather than a dark bead.
-            float2 sample = D.c - D.o * 0.045;
-            float3 seen = nature_street(sample, aspect, bBack * 0.3, ts, night, lamp, true);
-            float3 soft = nature_street(D.c + D.o * 0.01, aspect, bBack, ts, night, lamp, true);
-            float l = length(D.o);
-            float rim = smoothstep(1.0, 0.8, l);                            // thin dark refracting rim
-            col = mix(seen, soft, 0.5) * (0.55 + 0.75 * rim) * 1.15;
-            // Specular glint from the light above-left; light gathers in the lower edge.
-            float2 hl = D.o - float2(-0.36, -0.42);
-            col += (night * 5.0 + lamp * 0.35) * exp(-dot(hl, hl) * 34.0);
-            float lower = smoothstep(0.55, 0.92, l) * smoothstep(0.0, 0.7, D.o.y) * rim;
-            col += (soft * 1.2 + night * 1.5 + lamp * 0.03) * lower;
-        } else {
-            // A runner's wet streak is a thin cylindrical lens: it squeezes the street sideways.
-            float2 sp = p + float2(D.tdx * 0.008 * trail, 0.0);
-            col = nature_street(sp, aspect, bBack, ts, night, lamp);
-            // Fog scatters light: lifts and flattens the scene behind it.
-            float3 fogC = night * 2.6 + lamp * 0.012;
-            col = mix(col, fogC + col * 0.55, fog * 0.6);
-            // The streak's water film: a faint sheen toward its edges.
-            float ae = abs(D.tdx);
-            col += (night * 0.8 + lamp * 0.008) * smoothstep(0.3, 0.95, ae) * trail * 0.5;
-        }
-        return float4(nature_display(col, px), 1.0);
+               // See nature_rainGlass in Nature_funcs.h.
+        return float4(nature_display(nature_rainGlass(uv, res, t, u), px), 1.0);
     }
 
     case 61: { // SNOWFALL — flakes on depth layers through lamplight at a forest edge.
