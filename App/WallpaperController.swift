@@ -75,6 +75,14 @@ final class WallpaperController: ObservableObject {
         librarySub = model.$library
             .receive(on: DispatchQueue.main)        // $library fires in willSet; read it after
             .sink { [weak self] _ in self?.libraryChanged() }
+        // The gallery (tiles, Wallpaper card, editor) talks to WallpaperSlot; plug in.
+        if DemoHooks.wallpaperStub == nil {
+            WallpaperSlot.shared.connect(.init(
+                styleID: { [weak self] in self?.isActive == true ? self?.settings.presetID : nil },
+                set: { [weak self] in self?.use($0) },
+                stop: { [weak self] in self?.stop() },
+                changes: objectWillChange.map { _ in }.eraseToAnyPublisher()))
+        }
     }
 
     /// Bring back the wallpaper the user left on (applicationDidFinishLaunching).

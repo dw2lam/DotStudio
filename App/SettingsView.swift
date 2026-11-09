@@ -1,6 +1,6 @@
 //  SettingsView.swift — rarely-touched, library-wide settings (⌘,).
-//  What plays (mode, rotation, day/night) lives in the main window's Playback
-//  panel; this is only setup, transitions, performance, and updates.
+//  What plays (playlist, night style, wallpaper) lives in the main window's
+//  destination cards; this is only setup, transitions, performance, and updates.
 
 import SwiftUI
 
@@ -62,7 +62,7 @@ struct SettingsView: View {
                         .frame(width: 36, alignment: .trailing)
                 }
             }
-            Text("Blend between styles when rotating or at sunrise and sunset.")
+            Text("Blend between styles as the playlist changes, and at sunrise and sunset.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

@@ -116,15 +116,3 @@ struct WallpaperSettingsSection: View {
         loginStatus = SMAppService.mainApp.status
     }
 }
-
-/// Tile badge for the style that's on the desktop.
-struct WallpaperBadge: View {
-    var body: some View {
-        Label("Wallpaper", systemImage: "menubar.dock.rectangle")
-            .font(.caption2.weight(.semibold))
-            .labelStyle(.titleAndIcon)
-            .foregroundStyle(.white)
-            .padding(.horizontal, 7).padding(.vertical, 3)
-            .background(Capsule().fill(Color.black.opacity(0.55)))
-    }
-}

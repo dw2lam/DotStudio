@@ -56,7 +56,9 @@ struct EffectStackView: View {
                 Picker("Frame rate", selection: $preset.fps) {
                     ForEach(fpsOptions, id: \.self) { Text("\($0) fps").tag($0) }
                 }
-                Text("Lower frame rates save battery; most styles look the same at 30.")
+                Text(preset.fps > 60
+                     ? "120 fps needs a ProMotion display; elsewhere it plays at the screen's rate. Costs more GPU and battery."
+                     : "Lower frame rates save battery; most styles look the same at 30.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -69,7 +71,7 @@ struct EffectStackView: View {
     }
 
     private var fpsOptions: [Int] {
-        var opts = [15, 24, 30, 60]
+        var opts = [15, 24, 30, 60, 120]
         if !opts.contains(preset.fps) { opts.append(preset.fps); opts.sort() }
         return opts
     }
