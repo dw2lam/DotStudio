@@ -60,14 +60,17 @@ final class Thumbnailer {
         if keys[preset.id] == key, let img = cache[preset.id] { return img }
 
         if let music { renderer?.setMusic(music) }
+        renderer?.musicLingerMinutes = settings.linger
         guard var cg = renderer?.renderThumbnail(preset: preset, source: source,
                                                  width: width, height: height,
                                                  time: thumbTime(preset, source),
                                                  sourceTexOverride: override) else {
             return cache[preset.id]
         }
-        if let music, let inst = preset.musicScene {
-            cg = Self.composite(cg, mode: .full(MusicSceneOptions(inst)), music: music, settings: settings) ?? cg
+        // A legacy Now Playing style: its own foreground while a song shows (calm art otherwise).
+        if let music {
+            let p = MusicPresentation.resolve(settings: settings, music: music, preset: preset)
+            cg = Self.composite(cg, mode: p.overlay, music: music, settings: settings) ?? cg
         }
         let img = NSImage(cgImage: cg, size: NSSize(width: width / 2, height: height / 2))
         cache[preset.id] = img
@@ -75,7 +78,7 @@ final class Thumbnailer {
         return img
     }
 
-    // MARK: Music (Now Playing tiles, the card on a still)
+    // MARK: Music (legacy Now Playing tiles, music on the screensaver's still)
 
     private var musicToken: MusicFeedHub.Token?
     private var lastMusicKey: String?
@@ -83,23 +86,34 @@ final class Thumbnailer {
     private var musicSettings = MusicSpec()
     private var cardCache: [UUID: (key: String, image: NSImage)] = [:]
 
-    /// The thumbnail with the music corner card drawn on it while a song shows — what the
-    /// screensaver looks like right now (the Screensaver card's still hero), the card at its
-    /// true share of the screen. Plain otherwise.
-    func image(for preset: Preset, source: SourceSpec, music card: MusicSpec, showsCard: Bool) -> NSImage? {
-        let base = image(for: preset, source: source, music: card)
-        guard showsCard, !preset.isMusicScene, let base else { return base }
-        musicSettings = card
+    /// The thumbnail with music presented on it as the screensaver shows it right now
+    /// (MusicPresentation: Corner at its true share of the screen, or Full Screen over its
+    /// backdrop) — the Screensaver card's still hero. Plain while nothing shows.
+    func image(for preset: Preset, source: SourceSpec, music settings: MusicSpec, showsMusic: Bool) -> NSImage? {
+        let base = image(for: preset, source: source, music: settings)
+        guard showsMusic, !preset.isMusicScene, settings.displayMode != .off, let base else { return base }
+        musicSettings = settings
         watchMusic()
         let snap = MusicFeedHub.shared.snapshot(store: store)
-        guard snap.isVisible(settings: card) else { return base }
-        let key = [Self.musicKey(snap, card), card.corner.rawValue, card.cardSizePreference.rawValue,
+        let p = MusicPresentation.resolve(settings: settings, music: snap, preset: preset)
+        guard p.overlay != .hidden else { return base }
+        let key = [Self.musicKey(snap, settings), "\(p.overlay)", "\(p.backdrop)", settings.cardSizePreference.rawValue,
                    "\(ObjectIdentifier(base).hashValue)"].joined(separator: "|")
         if let hit = cardCache[preset.id], hit.key == key { return hit.image }
-        var rect = CGRect(x: 0, y: 0, width: width, height: height)
-        guard let cg = base.cgImage(forProposedRect: &rect, context: nil, hints: nil),
-              let out = Self.composite(cg, mode: .card(card.corner), music: snap, settings: card,
-                                       trueScale: true) else { return base }
+        var frame: CGImage?
+        if p.backdrop != .none {
+            renderer?.setMusic(snap)
+            renderer?.musicLingerMinutes = settings.linger
+            let poster = source.kind == .video ? source.mediaFilename.flatMap { posters[$0] } : nil
+            frame = renderer?.renderThumbnail(preset: preset, source: source, width: width, height: height,
+                                              time: thumbTime(preset, source), sourceTexOverride: poster,
+                                              musicBackdrop: p.backdrop)
+        } else {
+            var rect = CGRect(x: 0, y: 0, width: width, height: height)
+            frame = base.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+        }
+        guard let frame, let out = Self.composite(frame, mode: p.overlay, music: snap, settings: settings,
+                                                  trueScale: true) else { return base }
         let img = NSImage(cgImage: out, size: base.size)
         cardCache[preset.id] = (key, img)
         return img

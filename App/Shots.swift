@@ -234,11 +234,11 @@ enum UIShots {
         }, view: main))
         s.append(Screen(name: "dest-music-denied", frame: .window,
                         prepare: { _ in MusicDemo.apply(.denied) }, view: main))
-        // Take-over on and a song showing: the hero (and the menu's line) show Now Playing,
-        // as the saver does — no corner card over it.
-        s.append(Screen(name: "dest-music-takeover", frame: .window, prepare: { st in
+        // Show music: Full Screen with a song showing: the hero shows it over the Album Art
+        // backdrop, as the saver does; the row's menu reads Full Screen.
+        s.append(Screen(name: "dest-music-full", frame: .window, prepare: { st in
             MusicDemo.apply(.playing)
-            var m = st.model.library.musicSettings; m.takeOver = true
+            var m = st.model.library.musicSettings; m.setDisplay(.fullScreen)
             st.model.library.music = m
         }, view: main))
         // The Wallpaper card while matching shows what follow mode would: the screensaver's
@@ -246,11 +246,7 @@ enum UIShots {
         s.append(Screen(name: "dest-wallpaper-match", frame: .window, prepare: { st in
             st.lineup(st.playlist)
             WallpaperController.shared.update { $0.enabled = true; $0.followsScreensaver = true }
-            WallpaperSlot.shared.set(st.model.nowPlayingID(musicActive: false) ?? st.hero)
-        }, view: main))
-        s.append(Screen(name: "library-music", frame: .window, prepare: { _ in
-            MusicDemo.apply(.playing)
-            DemoHooks.filter = .tag(.music)
+            WallpaperSlot.shared.set(st.model.nowPlayingID ?? st.hero)
         }, view: main))
 
         // Editor (preview + destination bar + inspector with every effect expanded)
@@ -263,13 +259,6 @@ enum UIShots {
             st.lineup([st.hero], night: st.stress ? st.look : nil)
             st.edit(st.look)
         }, view: main))
-        // A Now Playing style: the status row under its name, playing / nothing / no permission
-        for (scenario, tag) in [(MusicDemo.Scenario.playing, ""), (.idle, "-idle"), (.denied, "-denied")] {
-            s.append(Screen(name: "editor-nowplaying\(tag)", frame: .window, prepare: { st in
-                MusicDemo.apply(scenario)
-                st.edit(st.nowPlaying)
-            }, view: main))
-        }
 
         // Popover contents
         s.append(Screen(name: "add-effect", frame: .fixed(CGSize(width: 430, height: 500)), view: { st in
@@ -321,13 +310,16 @@ enum UIShots {
         s.append(Screen(name: "settings-general-off", frame: .fit(width: 460, minHeight: 160),
                         prepare: { _ in AppPresence.shared.menuBarMode = false },
                         view: { _ in AnyView(SettingsSectionPreview { GeneralSettingsSection() }) }))
-        // Settings › Music: nothing playing, playing (controls), permission needed, not watching
-        for (scenario, tag) in [(MusicDemo.Scenario.idle, ""), (.playing, "-playing"), (.denied, "-denied"), (.off, "-off")] {
+        // Settings › Music: nothing playing, playing (controls), permission needed (all Corner,
+        // the default), Show music Off (not watching), and Full Screen (its own options)
+        for (scenario, tag) in [(MusicDemo.Scenario.idle, ""), (.playing, "-playing"), (.denied, "-denied"),
+                                (.off, "-off"), (.playing, "-full")] {
             s.append(Screen(name: "settings-music\(tag)", frame: .fit(width: 460, minHeight: 300), prepare: { st in
                 MusicDemo.apply(scenario)
-                if scenario == .off {
-                    st.model.library.music = MusicSpec(cardEnabled: false)
-                }
+                var m = MusicSpec()
+                if scenario == .off { m.setDisplay(.off) }
+                if tag == "-full" { m.setDisplay(.fullScreen) }
+                if scenario == .off || tag == "-full" { st.model.library.music = m }
             }, view: { _ in AnyView(SettingsSectionPreview { MusicSettingsSlot() }) }))
         }
         // …with menu-bar mode off: closing the window quits, and the note says so
@@ -394,7 +386,6 @@ enum UIShots {
         let wallpaper: UUID
         let scene: UUID         // opened in the editor
         let look: UUID          // opened in the editor
-        let nowPlaying: UUID    // a Now Playing style (the editor's music status row)
         let searchText: String
         let noMatchText: String
 
@@ -421,7 +412,6 @@ enum UIShots {
                 ?? scenes.max { $0.effects.count < $1.effects.count }?.id ?? first
             look = (stress ? named(UIShots.stackName) : nil)
                 ?? looks.max { $0.effects.count < $1.effects.count }?.id ?? first
-            nowPlaying = all.first(where: \.isMusicScene)?.id ?? scene
             let heroName = all.first { $0.id == hero }?.name ?? ""
             searchText = stress ? "golden hour over the pacific extended director's cut"
                                 : String(heroName.lowercased().split(separator: " ").first ?? "a")

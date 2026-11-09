@@ -64,7 +64,7 @@ struct WallpaperSettings: Codable, Equatable {
     /// On battery: freeze on a still frame (opt-in). Otherwise it plays at 30 fps.
     var freezeOnBattery = false
     /// "Match Screensaver": show whatever the screensaver would (Playback.effectivePreset —
-    /// rotation, night style, music take-over) on the shared wall-clock time base, instead
+    /// rotation, night style) on the shared wall-clock time base, instead
     /// of `presetID`. See WallpaperController.setFollowsScreensaver(_:).
     var followsScreensaver = false
 

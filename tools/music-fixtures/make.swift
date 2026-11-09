@@ -53,6 +53,15 @@ do {
     NSGraphicsContext.restoreGraphicsState()
     save(c, "art-podcast.jpg")
 }
+// A bright cover — the hard case for white type: near-white paper with pale pastel shapes.
+do {
+    let n = 1000, c = ctx(n)
+    c.setFillColor(col(0.97, 0.95, 0.90)); c.fill(CGRect(x: 0, y: 0, width: n, height: n))
+    c.setFillColor(col(1.0, 0.86, 0.55)); c.fillEllipse(in: CGRect(x: 420, y: 430, width: 460, height: 460))
+    c.setFillColor(col(0.70, 0.86, 0.98, 0.85)); c.fill(CGRect(x: 90, y: 120, width: 420, height: 300))
+    c.setFillColor(col(1.0, 0.70, 0.74, 0.8)); c.fillEllipse(in: CGRect(x: 120, y: 520, width: 260, height: 260))
+    save(c, "art-bright.jpg")
+}
 // Photo crops from the bundled slideshow set.
 func crop(_ file: String, _ name: String) {
     guard let src = CGImageSourceCreateWithURL(photos.appendingPathComponent(file) as CFURL, nil),
@@ -99,6 +108,9 @@ write("podcast", ["source": "spotify", "title": "Episode 412: How Screensavers S
 write("paused", ["source": "music", "title": "Blinding Lights", "artist": "The Weeknd", "album": "After Hours",
                  "duration": 200.0, "position": 61.0, "positionAt": now - 30, "isPlaying": false, "pausedAt": now - 30,
                  "artwork": "art-budapest.jpg", "trackID": "music:fixture-paused"])
+write("bright", ["source": "music", "title": "Daylight", "artist": "Harbour Lights", "album": "Paper Summer",
+                 "duration": 233.0, "position": 70.0, "positionAt": now, "isPlaying": true, "artwork": "art-bright.jpg",
+                 "trackID": "music:fixture-bright"])
 write("noart", ["source": "music", "title": "Clair de Lune", "artist": "Claude Debussy", "album": "Suite bergamasque",
                 "duration": 302.0, "position": 150.0, "positionAt": now, "isPlaying": true,
                 "palette": pal([[0.55, 0.68, 0.92], [0.30, 0.38, 0.60], [0.08, 0.10, 0.20]]), "trackID": "music:fixture-noart"])

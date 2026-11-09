@@ -5,7 +5,8 @@
 
     case 62: { // NEON HORIZON — a glossy black floor ruled by a neon grid, racing toward a
                // striped sun over two ranges of backlit mountains. The floor mirrors the sky
-               // (Fresnel-weighted, glossy-blurred, sun stretched into a wet streak).
+               // (Fresnel-weighted; the sun's mirror image blurs and spreads into a soft glossy
+               // lobe toward the viewer, broken by fine ripples).
                // p0 = (speed, grid, mountains, sun), p1 = (haze, stars); A neon, B sun.
         float speed = u.p0.x, dens = max(u.p0.y, 0.2), sunK = max(u.p0.w, 0.2);
         float hazeK = u.p1.x;
@@ -19,7 +20,7 @@
         s.haze = mix(s.sunBot, s.neon, 0.6) * (0.03 + 0.055 * hazeK);
         s.mtnDark = s.top * 0.5 + s.neon * 0.002;
         s.sunR = 0.25 * sunK; s.sunY = 0.13 * sunK + 0.02;
-        s.mtn = u.p0.z; s.stripes = 1.0; s.stars = u.p1.y; s.clouds = 1.0; s.t = t;
+        s.mtn = u.p0.z; s.stripes = 1.0; s.stars = u.p1.y; s.clouds = 1.0; s.t = t; s.sunGain = 1.0; s.sunBlur = 0.0;
 
         const float hy = -0.06;                                  // horizon, in screen units
         float pix = 1.0 / res.y;
@@ -55,15 +56,31 @@
         float2 qr = q;
         float sliver = 1.0;
         if (!up) {
+            // ripples are filtered by the pixel footprint: toward the horizon a pixel spans many
+            // ripples, so they average out (into a smooth glossy blur) instead of crawling
             float2 wp = float2(q.x * tf, tf + travel);
-            float rip = gnoise(wp * float2(0.9, 3.2)) + 0.5 * gnoise(wp * float2(2.1, 7.5) + 3.1);
-            qr = float2(q.x + rip * 0.02 * -qy, -qy * (1.0 + 0.6 * rip));
-            sliver = smoothstep(-0.25, 0.35, gnoise(wp * float2(0.35, 6.0) + float2(0.0, t * 0.3)));
+            float fwp = fwidth(wp.y);
+            float k1 = smoothstep(0.45, 0.12, fwp * 3.2), k2 = smoothstep(0.45, 0.12, fwp * 7.5);
+            float rip = gnoise(wp * float2(0.9, 3.2)) * k1 + 0.5 * gnoise(wp * float2(2.1, 7.5) + 3.1) * k2;
+            qr = float2(q.x + rip * 0.032 * -qy, -qy * (1.0 + 0.6 * rip));
+            float ks = smoothstep(0.45, 0.12, fwp * 6.0);
+            sliver = mix(0.55, smoothstep(-0.25, 0.35, gnoise(wp * float2(0.35, 6.0) + float2(0.0, t * 0.3))), ks);
+            s.sunGain = 2.2;                       // the sun is far brighter than its LDR disc
+            s.sunBlur = 0.004 + 0.35 * -qy;          // glossy blur of the sun widens toward the viewer
         }
         // one sky lookup per pixel: the sky itself above the horizon, its mirror image below
-        float3 sky = retro_synthSky(up ? q : qr, up ? pix : pix + 0.05 * -qy,
-                                    up ? 1.0 : 1.0 + 1.2 * smoothstep(0.0, 0.25, -qy), up ? 1.0 : 0.0, s);
-        float3 floorC = s.top * 0.3 + sky * F * 0.5 * (0.35 + 0.9 * sliver);
+        float3 sky = retro_synthSky(up ? q : qr, up ? pix : pix + 0.002 + 0.03 * -qy,
+                                    up ? 1.0 : 1.0 + 0.3 * smoothstep(0.0, 0.25, -qy), up ? 1.0 : 0.0, s);
+        float3 floorC = s.top * 0.3 + sky * F * 0.5 * (0.18 + 1.1 * sliver);
+        if (!up) {
+            // the rough part of the gloss: a soft lobe of sunlight under the mirrored disc,
+            // widening and fading toward the viewer (so the reflection glows, never a cut-out)
+            float e = -qy;
+            float lw = s.sunR * (0.8 + 1.2 * e);
+            float lob = exp(-q.x * q.x / (lw * lw));
+            float3 sc = mix(s.sunMid, s.sunBot, 0.4) * s.sunGain;
+            floorC += sc * lob * 0.8 * F * exp(-e / 0.3) * (0.6 + 0.6 * sliver);
+        }
         floorC += s.neon * gridE;
         float fog = 1.0 - exp(-tf * 0.035 * (0.4 + hazeK));
         floorC = mix(floorC, s.haze * 1.3, fog);
@@ -118,12 +135,28 @@
         float ex = min(cu.x, 1.0 - cu.x) * cellW, ev = min(cu.y, 1.0 - cu.y) * s.plen;
         float e = min(ex, ev);
         float fe = max(fU * cellW, fz) + 1e-5;
+        // distance (along the wall) to the nearest rail: rails light the panels beside them, and
+        // where a rail runs along a corner it hides the seam (whose derivatives break there)
+        float duR;
+        if (s.shape == 0) {
+            float ua = fract(uu - P.z * s.twist * 0.012);
+            duR = min(abs(ua - 0.25), abs(ua - 0.75)) * 6.2831853;
+        } else {
+            float Nf = s.shape == 1 ? 4.0 : 6.0;
+            float f = fract(uu * Nf);
+            duR = min(f, 1.0 - f) * 2.0 * tan(3.14159265 / Nf);
+        }
         float detail = smoothstep(0.25, 0.04, max(fU, fV));          // fade fine detail with distance
+        float nearRail = s.shape == 0 ? 1.0 : smoothstep(0.02, 0.07, duR);
+        // round the polygon's corners off (a small fillet under the rail): the two faces' normals
+        // blend into the radial one, so the crease can't flip between faces pixel to pixel
+        if (s.shape != 0) n = normalize(mix(float3(-normalize(P.xy), 0.0), n, smoothstep(0.0, 0.06, duR)));
 
         // bevelled panel normal
         float3 T = normalize(cross(float3(0.0, 0.0, 1.0), n));
         float bw = 0.06;
-        float tilt = (1.0 - smoothstep(0.0, bw, e)) * 0.7 * detail;
+        // (a bevel narrower than a couple of pixels flattens out: its glints would only crawl)
+        float tilt = (1.0 - smoothstep(0.0, bw, e)) * 0.7 * detail * smoothstep(bw * 0.9, bw * 0.3, fe) * nearRail;
         float2 dir = ex < ev ? float2(sign(cu.x - 0.5), 0.0) : float2(0.0, sign(cu.y - 0.5));
         float3 nb = normalize(n + tilt * (T * dir.x + float3(0.0, 0.0, 1.0) * dir.y));
 
@@ -137,20 +170,29 @@
         if (kind < 0.16) {                                            // vented panel
             alb *= 0.35;
             float sl = abs(fract(cu.y * 7.0) - 0.5);
-            float inset = step(0.18, cu.x) * step(cu.x, 0.82) * step(0.15, cu.y) * step(cu.y, 0.85);
+            float inset = clamp(min(cu.x - 0.18, 0.82 - cu.x) / (fU + 1e-4) + 0.5, 0.0, 1.0)     // box-filtered, not stepped
+                        * clamp(min(cu.y - 0.15, 0.85 - cu.y) / (fV + 1e-4) + 0.5, 0.0, 1.0);
             alb *= 1.0 - inset * retro_lineCov(sl, 0.2, fwidth(cu.y * 7.0) + 1e-4) * 0.8 * detail;
             rough = 0.6;
         } else if (kind > 0.95) {                                     // light tile
             float2 c2 = abs(cu - 0.5);
             float2 bx = c2 * float2(cellW, s.plen) - float2(min(0.3, 0.36 * cellW), 0.045);
-            float tile = clamp(-max(bx.x, bx.y) / fe + 0.5, 0.0, 1.0);
+            float sdb = max(bx.x, bx.y);
+            float tile = clamp(-sdb / fe + 0.5, 0.0, 1.0);
             float blink = 0.5 + 0.5 * sin(t * (1.5 + 2.0 * h.y) + h.z * 30.0);
-            emit += mix(s.neon, s.neon2, h.y) * tile * (0.6 + 1.6 * blink) * s.lights * 1.4;
+            // a diffuser panel: brighter toward its middle, a white-hot centre, and light
+            // spilling onto the metal around it
+            float inner = smoothstep(0.0, -0.035, sdb);
+            float spill = exp(-max(sdb, 0.0) / 0.05) * 0.22 * (1.0 - tile);
+            float3 tc = mix(s.neon, s.neon2, h.y);
+            float I = (0.6 + 1.6 * blink) * s.lights * 1.4;
+            emit += (tc * (tile * (0.55 + 0.45 * inner) + spill) + (tc * 0.3 + 0.7) * tile * inner * 0.35) * I;
         }
-        float seam = clamp((0.012 - e) / fe + 0.5, 0.0, 1.0) * detail;
+        float seam = clamp((0.012 - e) / fe + 0.5, 0.0, 1.0) * detail * nearRail;
 
         // direct light + one reflection bounce
         float3 lit = retro_tunLight(P, nb, ro, s);
+        lit += s.neon2 * s.lights * (exp(-duR * 5.0) * 1.1 + exp(-duR * 1.6) * 0.25);
         float3 col = alb * lit * 0.16 * (1.0 - seam * 0.85);
         col += emit + retro_tunEmit(uu, P.z, fz, 0.0, s);
 
@@ -190,9 +232,12 @@
         s.G = float3(7.0, 4.0, 7.0);
         s.org = -(s.G - 1.0) * 0.5 - 0.5;
         s.rate = 2.2 * speed;
-        float cycLen = 27.0 / s.rate + float(s.count) * 0.9 + 6.0;
-        float cyc = floor(t / cycLen);
-        s.lt = t - cyc * cycLen; s.cyc = cyc + 1.0;
+        // every pipe starts at once with a quick first burst (see retro_walkInit), and the
+        // clock starts a third of the way into a cycle, so no frame opens on an empty room
+        float cycLen = 22.0 / s.rate + float(s.count) * 0.3 + 5.0;
+        float tc = t + 0.34 * cycLen;
+        float cyc = floor(tc / cycLen);
+        s.lt = tc - cyc * cycLen; s.cyc = cyc + 1.0;
         float fadeK = smoothstep(cycLen, cycLen - 1.6, s.lt) * smoothstep(0.0, 0.4, s.lt);
 
         float3 cA = u.colorA.rgb, cB = u.colorB.rgb;
@@ -286,6 +331,17 @@
         if (pipeMain) {
             P = ro + rd * t1;
             N = retro_pipeNormal(P, H.u1, k1, s);
+            // the pixel's footprint averages the normal over its width: near the silhouette it
+            // can't be more grazing than half a pixel in from the rim (else the Fresnel rim is a
+            // sub-pixel line that the pixel centres catch in dashes)
+            float rr = ((H.u1 >> 23) & 1u) != 0u ? s.rb : s.r;
+            float dEff = max(rr - 0.5 * t1 * pixA, 0.0) / rr;
+            float cMin = sqrt(max(1.0 - dEff * dEff, 0.0));
+            float cN = dot(N, -rd);
+            if (cN < cMin) {
+                float3 Tn = N - cN * -rd;
+                N = normalize(cMin * -rd + sqrt(1.0 - cMin * cMin) * Tn * rsqrt(max(dot(Tn, Tn), 1e-8)));
+            }
             base = col1;
         } else {
             P = ro + rd * min(tf, 60.0);
@@ -340,20 +396,29 @@
         sh = sh * sh * (3.0 - 2.0 * sh);
         float ao = clamp(1.0 - occ * (pipeMain ? 0.9 : 1.3), 0.0, 1.0);
 
-        // reflected radiance
-        float3 refl = retro_studio(R);
+        // (a cylinder spreads the reflected rays of one pixel over ~2·pixel/r radians: blur the
+        // studio by that, or its thin strip light lands between pixel centres in dashes)
+        float curvSpread = 2.0 * t1 * pixA / s.r;
+        // reflected radiance: the floor (glossy) and a pipe's grazing rim (where the normal turns
+        // fast across a pixel) see the studio's lights blurred, so neither streaks nor crawls
+        float rimSoft = pipeMain ? max(0.85 * smoothstep(0.35, 0.03, dot(N, -rd)), smoothstep(0.0, 0.35, curvSpread)) : 1.0;
+        float3 studioR = retro_studioS(R, rimSoft);
+        float3 refl = studioR;
         if (kr >= 0) {
             float3 Q = Po + R * tr;
             float3 Nq = retro_pipeNormal(Q, S.ur, kr, s);
             float3 bq = colR;
             float3 rp = bq * (metal ? 0.15 : 1.0) * (max(dot(Nq, Lk), 0.0) * 1.1 + 0.05)
-                      + retro_studio(reflect(R, Nq)) * (metal ? bq : float3(0.05));
-            refl = mix(refl, rp, fadeK);
+                      + retro_studioS(reflect(R, Nq), 0.9) * (metal ? bq : float3(0.05));
+            // a curved mirror squeezes other pipes into slivers; where they'd be thinner than the
+            // pixel can hold, let them fade toward the average instead of sparkling
+            float squeeze = pipeMain ? smoothstep(0.40, 0.10, curvSpread * tr / (2.0 * s.r)) : 1.0;
+            refl = mix(refl, rp, fadeK * smoothstep(RETRO_REFL_MAX, RETRO_REFL_MAX * 0.7, tr) * squeeze);
         }
 
         float3 col;
         if (pipeMain) {
-            float cosv = clamp(dot(N, -rd), 0.0, 1.0);
+            float cosv = clamp(dot(N, -rd), 0.12, 1.0);
             float3 F0 = metal ? base : float3(0.04);
             float3 F = F0 + (1.0 - F0) * pow(1.0 - cosv, 5.0);
             float ndl = max(dot(N, Lk), 0.0);
@@ -365,34 +430,58 @@
             // glossy black floor: dim diffuse, contact shadows, reflections fading with distance
             float cosv = clamp(-rd.y, 0.0, 1.0);
             float F = 0.03 + 0.97 * pow(1.0 - cosv, 5.0);
-            float3 fr = kr >= 0 ? refl * exp(-tr * 0.35) : retro_studio(R) * 0.12;
+            // glossy, not mirror: the studio's lights blur into soft streaks, pipe reflections
+            // fade out with distance instead of ending at the search range
+            float3 studioF = studioR * 0.12;
+            float3 fr = kr >= 0 ? mix(studioF, refl * exp(-tr * 0.35), smoothstep(RETRO_REFL_MAX, RETRO_REFL_MAX * 0.6, tr)) : studioF;
             col = float3(0.018, 0.018, 0.02) * (sh * 0.9 + 0.12) * ao + fr * (0.08 + F * 0.6) * mix(0.5, 1.0, gloss);
             col *= exp(-max(length(P.xz) - 6.0, 0.0) * 0.18);
         } else {
             col = float3(0.004, 0.0045, 0.006);
         }
 
-        // ---- edge anti-aliasing: blend the front layer over whatever lies behind it
-        if (k1 >= 0 && !pipeMain) {
-            // the front pipe only partly covers this pixel: cheap-shade it over the main surface
-            float3 Pe = ro + rd * t1;
-            float3 Ne = retro_pipeNormal(Pe, H.u1, k1, s);
-            float3 be = col1;
-            float cv = clamp(dot(Ne, -rd), 0.0, 1.0);
-            float3 F0 = metal ? be : float3(0.04);
-            float3 ce = be * (metal ? 0.12 : 1.0) * (max(dot(Ne, Lk), 0.0) * 1.1 + 0.06)
-                      + retro_studio(reflect(rd, Ne)) * (F0 + (1.0 - F0) * pow(1.0 - cv, 5.0)) * mix(0.25, 1.0, gloss);
-            col = mix(col, ce * fadeK, a1 * fadeK);
-        } else if (pipeMain && a1 < 1.0) {
-            // silhouette of the main pipe: behind it is the second layer or the floor
-            float3 behind = tf < 1e8 ? float3(0.012) : float3(0.004, 0.0045, 0.006);
-            if (k2 >= 0 && a2 > 0.0) {
-                float3 Pb = ro + rd * t2;
-                float3 Nb = retro_pipeNormal(Pb, H.u2, k2, s);
-                float3 bb = col2;
-                behind = mix(behind, bb * (metal ? 0.12 : 1.0) * (max(dot(Nb, Lk), 0.0) * 1.1 + 0.06) * fadeK, a2);
+        // ---- edge anti-aliasing: blend the front layer over whatever lies behind it. Every
+        // partly covered pixel uses the same soft rim shade (ce), whichever surface "won" the
+        // pixel, so the silhouette doesn't flip between two looks as the edge crosses a pixel.
+        if (k1 >= 0 && a1 < 1.0) {
+            float3 Ne = N;
+            if (!pipeMain) {
+                Ne = retro_pipeNormal(ro + rd * t1, H.u1, k1, s);
+                float rr = ((H.u1 >> 23) & 1u) != 0u ? s.rb : s.r;
+                float dEff = max(rr - 0.5 * t1 * pixA, 0.0) / rr;
+                float cMin = sqrt(max(1.0 - dEff * dEff, 0.0));
+                float cN = dot(Ne, -rd);
+                if (cN < cMin) {
+                    float3 Tn = Ne - cN * -rd;
+                    Ne = normalize(cMin * -rd + sqrt(1.0 - cMin * cMin) * Tn * rsqrt(max(dot(Tn, Tn), 1e-8)));
+                }
             }
-            col = mix(behind, col, a1);
+            float3 be = col1;
+            float cv = clamp(dot(Ne, -rd), 0.12, 1.0);
+            float3 F0 = metal ? be : float3(0.04);
+            float3 ce = (be * (metal ? 0.12 : 1.0) * (max(dot(Ne, Lk), 0.0) * 1.1 + 0.06)
+                      + retro_studioS(reflect(rd, Ne), 0.85) * (F0 + (1.0 - F0) * pow(1.0 - cv, 5.0)) * mix(0.25, 1.0, gloss)) * fadeK;
+            if (!pipeMain) {
+                // the front pipe only partly covers this pixel: lay it over the main surface
+                col = mix(col, ce, a1 * fadeK);
+            } else {
+                // silhouette of the main pipe: behind it is the second layer or the floor (its
+                // diffuse + the soft studio streaks), not a flat grey
+                float3 behind = float3(0.004, 0.0045, 0.006);
+                if (tf < 1e8) {
+                    float3 Rf = reflect(rd, float3(0.0, 1.0, 0.0));
+                    float Ff = 0.03 + 0.97 * pow(1.0 - clamp(-rd.y, 0.0, 1.0), 5.0);
+                    behind = float3(0.018, 0.018, 0.02) * 0.9 + retro_studioS(Rf, 1.0) * 0.12 * (0.08 + Ff * 0.6) * mix(0.5, 1.0, gloss);
+                    behind *= exp(-max(length((ro + rd * tf).xz) - 6.0, 0.0) * 0.18);
+                }
+                if (k2 >= 0 && a2 > 0.0) {
+                    float3 Pb = ro + rd * t2;
+                    float3 Nb = retro_pipeNormal(Pb, H.u2, k2, s);
+                    float3 bb = col2;
+                    behind = mix(behind, bb * (metal ? 0.12 : 1.0) * (max(dot(Nb, Lk), 0.0) * 1.1 + 0.06) * fadeK, a2);
+                }
+                col = mix(behind, mix(ce, col, smoothstep(0.5, 0.95, a1)), a1);
+            }
         }
 
         col *= 1.0 - 0.3 * dot(p, p);
@@ -412,8 +501,9 @@
         RetroRibbon s;
         s.head = srgbToLinear(u.colorA.rgb); s.tail = srgbToLinear(u.colorB.rgb);
         s.white = float3(1.0, 0.97, 0.94);
-        s.pix = 1.0 / res.y; s.E = float(RETRO_RB_ECHOES);
+        s.pix = 1.0 / res.y; s.E = float(RETRO_RB_ECHOES - 1);   // fades reach ~0 at the last patch drawn
         s.echoK = u.p1.x; s.glowK = u.p1.y; s.fillK = 0.12;
+        float hue2 = u.p1.z;                                  // second shape's hue offset (rad)
         s.sigma = 0.0035 * (0.6 + 0.4 * s.glowK);
         s.margin = s.sigma * 3.5 + 2.0 * s.pix;
         float margin = s.margin;
@@ -434,11 +524,15 @@
             float2 tc = 0.5 * (tmin + tmax);
             float trad = 0.5 * length(tmax - tmin) + margin;          // the group as a disc
             float te = tau0 - float(lane) * dT, te1 = te - dT;
+            // lane 8·shape + vertex hashes that vertex's motion once; everyone else shuffles it
+            float2 myPh, myVl; retro_rbParams(int(min(lane / 8u, 1u)), int(lane % 8u), myPh, myVl);
+            float4 myPV = float4(myPh, myVl);
             for (int sh = 0; sh < shapes; ++sh) {
                 float hueSh = float(sh) * 2.1;
                 RetroRibbon ss = s;
-                if (sh == 1) { ss.head = retro_hueRGB(s.head, 0.9); ss.tail = retro_hueRGB(s.tail, 0.9); }
-                float2 ph0, vl0; retro_rbParams(sh, 0, ph0, vl0);
+                if (sh == 1) { ss.head = retro_hueRGB(s.head, hue2); ss.tail = retro_hueRGB(s.tail, hue2); }
+                float4 PV0 = simd_shuffle(myPV, ushort(sh * 8));
+                float2 ph0 = PV0.xy, vl0 = PV0.zw;
                 float2 pa = ph0, va = vl0;
                 float2 F0 = retro_rbPos(ph0, vl0, te, lo, hi), F1 = retro_rbPos(ph0, vl0, te1, lo, hi);
                 float2 A0 = F0, A1 = F1;
@@ -446,7 +540,8 @@
                     float2 pb, vb, B0, B1;
                     if (v + 1 == sides) { pb = ph0; vb = vl0; B0 = F0; B1 = F1; }
                     else {
-                        retro_rbParams(sh, v + 1, pb, vb);
+                        float4 PVb = simd_shuffle(myPV, ushort(sh * 8 + v + 1));
+                        pb = PVb.xy; vb = PVb.zw;
                         B0 = retro_rbPos(pb, vb, te, lo, hi); B1 = retro_rbPos(pb, vb, te1, lo, hi);
                     }
                     // the patch of this edge owned by this lane (echo lane to lane+1): does it reach the group?
@@ -457,7 +552,7 @@
                     float4 pu = float4(dot(A0, ax), dot(B0, ax), dot(A1, ax), dot(B1, ax));
                     float4 pv = float4(dot(A0, ay), dot(B0, ay), dot(A1, ay), dot(B1, ay));
                     float cu = dot(tc, ax), cv = dot(tc, ay);
-                    bool hit = lane < uint(RETRO_RB_ECHOES - 1)
+                    bool hit = lane < uint(RETRO_RB_ECHOES - 2)
                             && cu > min(min(pu.x, pu.y), min(pu.z, pu.w)) - trad && cu < max(max(pu.x, pu.y), max(pu.z, pu.w)) + trad
                             && cv > min(min(pv.x, pv.y), min(pv.z, pv.w)) - trad && cv < max(max(pv.x, pv.y), max(pv.z, pv.w)) + trad;
                     uint m = uint(ulong(simd_vote::vote_t(simd_ballot(hit))));
@@ -480,12 +575,12 @@
             for (int sh = 0; sh < shapes; ++sh) {
                 float hueSh = float(sh) * 2.1;
                 RetroRibbon ss = s;
-                if (sh == 1) { ss.head = retro_hueRGB(s.head, 0.9); ss.tail = retro_hueRGB(s.tail, 0.9); }
+                if (sh == 1) { ss.head = retro_hueRGB(s.head, hue2); ss.tail = retro_hueRGB(s.tail, hue2); }
                 for (int v = 0; v < sides; ++v) {
                     float2 pa, va, pb, vb;
                     retro_rbParams(sh, v, pa, va);
                     retro_rbParams(sh, v + 1 == sides ? 0 : v + 1, pb, vb);
-                    for (int L = 0; L < RETRO_RB_ECHOES - 1; ++L) {
+                    for (int L = 0; L < RETRO_RB_ECHOES - 2; ++L) {
                         float tl = tau0 - float(L) * dT, tl1 = tl - dT;
                         float2 A0 = retro_rbPos(pa, va, tl, lo, hi), B0 = retro_rbPos(pb, vb, tl, lo, hi);
                         float2 A1 = retro_rbPos(pa, va, tl1, lo, hi), B1 = retro_rbPos(pb, vb, tl1, lo, hi);

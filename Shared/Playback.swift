@@ -1,13 +1,10 @@
 //  Playback.swift — which style the screensaver shows, as a pure function of the library.
 //
 //  Shared by the saver (what to render) and the app (what the gallery says is playing),
-//  so the two can never disagree. Precedence: music take-over > day/night schedule >
-//  rotation > active.
+//  so the two can never disagree. Precedence: day/night schedule > rotation > active.
 //
-//  Music take-over (Library.music.takeOver, opt-in): while music is visible (playing, or
-//  paused within the linger window — MusicSnapshot.isVisible), the lineup collapses to the
-//  library's Now Playing style. Callers pass `musicActive` from their own MusicFeed; the
-//  default `false` is the plain lineup.
+//  Music never changes the lineup: it is a presentation over whatever style plays here
+//  (MusicPresentation), and the style keeps playing behind it.
 
 import Foundation
 
@@ -21,9 +18,8 @@ enum Playback {
 
     /// The styles eligible to play at one time of day, before a rotation slot is picked.
     /// One element = that style plays; several = they rotate. Empty only for an empty library.
-    static func pool(in lib: Library, night: Bool, musicActive: Bool = false) -> [Preset] {
+    static func pool(in lib: Library, night: Bool) -> [Preset] {
         guard let first = lib.presets.first else { return [] }
-        if musicTakesOver(lib, musicActive: musicActive) { return [musicPreset(in: lib)] }
         let fallback = lib.presets.first { $0.id == lib.activeID } ?? first
         if let sched = lib.schedule, sched.enabled,
            let id = night ? sched.nightPresetID : sched.dayPresetID,
@@ -41,9 +37,9 @@ enum Playback {
 
     /// The style on screen at `now`. Every display computes the same answer with no
     /// coordination. Requires a non-empty library.
-    static func effectivePreset(in lib: Library, now: Date, musicActive: Bool = false) -> Preset {
+    static func effectivePreset(in lib: Library, now: Date) -> Preset {
         let night = (lib.schedule?.enabled ?? false) && isNight(lib)
-        let pool = pool(in: lib, night: night, musicActive: musicActive)
+        let pool = pool(in: lib, night: night)
         let fallback = lib.presets.first { $0.id == lib.activeID } ?? lib.presets.first!
         guard pool.count > 1, let rot = lib.rotation else { return pool.first ?? fallback }
         let interval = max(rot.intervalMinutes, 0.25) * 60
@@ -51,31 +47,6 @@ enum Playback {
         let idx = rot.shuffle ? shuffledIndex(slot: slot, count: pool.count) : slot % pool.count
         return pool[idx]
     }
-
-    /// Whether music take-over is on and decides what's on screen right now.
-    static func musicTakesOver(_ lib: Library, musicActive: Bool) -> Bool {
-        musicActive && lib.musicSettings.takesOver && !lib.presets.isEmpty
-    }
-
-    /// The style music take-over plays: the active style if it is a Now Playing style, else
-    /// the library's first one, else the built-in "Now Playing" (with a fixed id, so the
-    /// saver doesn't see a "new" style on every poll) for a library that has none.
-    static func musicPreset(in lib: Library) -> Preset {
-        if let active = lib.presets.first(where: { $0.id == lib.activeID }), active.isMusicScene { return active }
-        if let p = lib.presets.first(where: { $0.isMusicScene }) { return p }
-        return builtInMusicPreset
-    }
-
-    static let builtInMusicPreset: Preset = {
-        var p = SceneCatalog.musicPresets.first ?? Preset(name: "Now Playing", effects: [EffectInstance(.nowPlaying)])
-        p.id = UUID(uuidString: "6D757369-6300-4000-8000-000000000066")!
-        p.effects = p.effects.map { e in
-            var e = e
-            e.id = UUID(uuidString: "6D757369-6300-4000-8000-000000000067")!
-            return e
-        }
-        return p
-    }()
 
     /// Seconds until the rotation (or nothing) next changes what's on screen; nil = static.
     static func secondsUntilNextSlot(in lib: Library, now: Date) -> TimeInterval? {

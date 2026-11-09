@@ -1,19 +1,28 @@
 //  MusicOverlayLayer.swift — the music foreground, drawn as a CALayer tree at the display's
 //  native scale above the Metal layer (Metal output is often reduced and nearest-upscaled,
 //  so type there would pixelate). No SwiftUI: the saver, the live wallpaper, the in-app
-//  previews and thumbnails (layer.render(in:)) all host the same layer.
+//  previews and thumbnails (layer.render(in:)) all host the same layer. What it shows is
+//  decided by MusicPresentation, the same for every host.
 //
-//  Two modes:
-//    • full — the Now Playing scene's foreground, per its Layout param:
+//  Two modes, both shown only while music is visible (playing, or paused within the linger) —
+//  nothing playing is never an empty screen, just the screensaver:
+//    • full — Full Screen music (and a legacy Now Playing style's foreground), per layout:
 //        Album  (Apple Music full screen) artwork left, big type right;
 //        Stage  (Spotify TV)              artwork centred, type below;
-//        Cover  (artwork full-bleed)      type bottom-left over the shader's scrim.
-//      Nothing playing ⇒ a calm "Not Playing" state.
-//    • card — a compact glass card in a corner, over any style, while music is visible.
+//        Cover  (legacy styles only)      type bottom-left over the shader's scrim.
+//      It fades with the renderer's backdrop (fullFadeSeconds).
+//    • card — Corner: rounded artwork, title, artist and a thin bar drawn straight on the
+//      scene over a feathered scrim that fades out with no edge — no box.
+//  The player's name never shows on screen. Paused = the progress bar dims (and a small
+//  pause glyph sits after the elapsed time, or where a stream's bar would be).
+//
+//  Type: SF Pro (Display for the large lines, Text for the small — the system font's own
+//  optical sizes), Medium titles (Semibold only where a corner title gets small), Regular
+//  for the rest; every line carries MusicText's soft two-layer shadow.
 //
 //  Hosts call `update(mode:music:settings:)` about once a second and whenever the mode or the
 //  feed changes; between track changes that only moves the progress bar and the times.
-//  Track changes cross-fade (the card's artwork flips); Reduce Motion keeps only fades.
+//  Track changes cross-fade (the corner's artwork flips); Reduce Motion keeps only fades.
 //  Main thread only.
 
 import AppKit
@@ -26,24 +35,25 @@ final class MusicOverlayLayer: CALayer {
 
     enum Mode: Equatable {
         case hidden
-        /// The Now Playing scene's foreground (its Layout / Show Album / Show Progress params).
+        /// Full Screen music, or a legacy Now Playing style's foreground (its Layout / Show
+        /// Album / Show Progress params).
         case full(MusicSceneOptions)
-        /// The corner card over any style; shown only while music is visible.
+        /// Corner music over any style.
         case card(MusicSpec.Corner)
     }
 
     /// Screen areas to keep the type clear of, in points (menu bar and Dock on the wallpaper).
     /// Album is centred with margins wider than both; Stage centres its block in the area
-    /// between them; the Cover type and the card move off them.
+    /// between them; the Cover type and the corner move off them.
     var safeInsets = Insets() { didSet { if safeInsets != oldValue { setNeedsLayout() } } }
-    /// Accessibility Reduce Motion: no flips, no scaling, no equalizer bounce — fades only.
+    /// Accessibility Reduce Motion: no flips, no scaling — fades only.
     var reduceMotion = MusicOverlayLayer.systemReduceMotion
     static var systemReduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
-    /// Continuous decoration: the equalizer bounce and the progress bar gliding between
-    /// ticks. Both keep WindowServer compositing every refresh, so the live wallpaper turns
-    /// them off (bars hold still, progress steps once a second); the screensaver keeps them.
+    /// Continuous decoration: the progress bar gliding between ticks. It keeps WindowServer
+    /// compositing every refresh, so the live wallpaper turns it off (progress steps once a
+    /// second); the screensaver keeps it.
     var ambientMotion = true
-    /// A miniature of a real screen (the app's Screensaver hero, its still): the card keeps
+    /// A miniature of a real screen (the app's Screensaver hero, its still): the corner keeps
     /// its true share of the screen instead of the legibility floor a small preview of the
     /// saver itself gets (System Settings' thumbnail). Set before the first update.
     var trueScale = false { didSet { if trueScale != oldValue { groupKey = nil; setNeedsLayout() } } }
@@ -51,6 +61,32 @@ final class MusicOverlayLayer: CALayer {
     /// Continuous decoration never needs the panel's full rate: at most 30 Hz, so a ProMotion
     /// display doesn't recomposite the overlay at 120 Hz over a 30 fps Metal background.
     static let decorationRate = CAFrameRateRange(minimum: 10, maximum: 30, preferred: 30)
+    /// Full Screen fades in step with the renderer's backdrop (MetalRenderer.musicBackdropSeconds),
+    /// choreographed so the type never ghosts over a still-sharp style: in, the foreground
+    /// starts `fullFadeInDelay` after the backdrop and lands with it; out, it is gone in
+    /// `fullFadeOutSeconds`, before the backdrop has cleared.
+    static let fullFadeSeconds = MetalRenderer.musicBackdropSeconds
+    static let fullFadeInDelay: Double = 0.35
+    static let fullFadeOutSeconds: Double = 0.9
+
+    /// The foreground's opacity `t` seconds into a full-screen fade in (0…1) — CA's
+    /// ease-in-ease-out after the delay. Tools use it to draw frames of the transition.
+    static func fullFadeInOpacity(at t: Double) -> Double {
+        let k = min(max((t - fullFadeInDelay) / (fullFadeSeconds - fullFadeInDelay), 0), 1)
+        return easeInEaseOut(k)
+    }
+
+    /// CAMediaTimingFunction(name: .easeInEaseOut) — cubic-bezier(0.42, 0, 0.58, 1) — at `k`.
+    static func easeInEaseOut(_ k: Double) -> Double {
+        var lo = 0.0, hi = 1.0
+        for _ in 0..<32 {                                   // solve x(s) = k
+            let s = (lo + hi) / 2
+            let x = 3 * (1 - s) * (1 - s) * s * 0.42 + 3 * (1 - s) * s * s * 0.58 + s * s * s
+            if x < k { lo = s } else { hi = s }
+        }
+        let s = (lo + hi) / 2
+        return 3 * (1 - s) * s * s + s * s * s
+    }
 
     private(set) var mode: Mode = .hidden
     private var music = MusicSnapshot.empty
@@ -88,16 +124,10 @@ final class MusicOverlayLayer: CALayer {
 
     // MARK: Resolve + transitions
 
+    /// Something shows only while music is visible, in every mode.
     private func resolve(now: Date) -> MusicDisplay? {
-        let visible = music.isVisible(settings: settings, at: now)
-        switch mode {
-        case .hidden:
-            return nil
-        case .card:
-            return visible ? MusicDisplay(mode: mode, idle: false, music: music, now: now) : nil
-        case .full:
-            return MusicDisplay(mode: mode, idle: !visible, music: music, now: now)
-        }
+        guard mode != .hidden, music.isVisible(settings: settings, at: now) else { return nil }
+        return MusicDisplay(mode: mode, music: music)
     }
 
     private func refresh(now: Date, animated: Bool) {
@@ -153,17 +183,16 @@ final class MusicOverlayLayer: CALayer {
     /// What forces a rebuild (anything else updates in place).
     private struct GroupKey: Equatable {
         var mode: Mode
-        var idle: Bool
         var track: String
         var art: ObjectIdentifier?
         var size: CGSize
         var scale: CGFloat
         var insets: Insets
-        /// Card mode only (nil otherwise, so a size change never rebuilds a full layout).
+        /// Corner only (nil otherwise, so a size change never rebuilds a full layout).
         var cardSize: MusicSpec.CardSize?
 
         init(_ d: MusicDisplay, size: CGSize, scale: CGFloat, insets: Insets, cardSize: MusicSpec.CardSize) {
-            mode = d.mode; idle = d.idle; track = d.trackKey
+            mode = d.mode; track = d.trackKey
             art = d.art.map { ObjectIdentifier($0) }
             self.size = size; self.scale = scale; self.insets = insets
             if case .card = d.mode { self.cardSize = cardSize }
@@ -171,8 +200,7 @@ final class MusicOverlayLayer: CALayer {
 
         /// Same place, same mode, a different song (or new artwork for it).
         func isTrackChange(to n: GroupKey) -> Bool {
-            mode == n.mode && !idle && !n.idle && (track != n.track || art != n.art)
-                && size == n.size && scale == n.scale
+            mode == n.mode && (track != n.track || art != n.art) && size == n.size && scale == n.scale
         }
     }
 }
@@ -182,39 +210,26 @@ final class MusicOverlayLayer: CALayer {
 /// The overlay's resolved content for one moment.
 struct MusicDisplay {
     var mode: MusicOverlayLayer.Mode
-    var idle: Bool
     var state: MusicState?
     var art: CGImage?
     var palette: [RGBA]
     var title: String
     var artist: String
     var album: String
-    var source: MusicSource
     var playing: Bool
 
-    init(mode: MusicOverlayLayer.Mode, idle: Bool, music: MusicSnapshot, now: Date) {
+    init(mode: MusicOverlayLayer.Mode, music: MusicSnapshot) {
         self.mode = mode
-        self.idle = idle
-        let s = idle ? nil : music.state
-        state = s
-        art = idle ? nil : music.artwork
-        palette = idle ? [] : music.palette
-        title = s?.title ?? ""
-        artist = s?.artist ?? ""
-        album = s?.album ?? ""
-        source = s?.source ?? .unknown
-        playing = s?.isPlaying ?? false
+        state = music.state
+        art = music.artwork
+        palette = music.palette
+        title = state?.title ?? ""
+        artist = state?.artist ?? ""
+        album = state?.album ?? ""
+        playing = state?.isPlaying ?? false
     }
 
     var trackKey: String { state?.trackID ?? "\(title)\u{1F}\(artist)\u{1F}\(album)" }
-
-    var sourceName: String {
-        switch source {
-        case .spotify: return "Spotify"
-        case .music: return "Apple Music"
-        case .unknown: return "Music"
-        }
-    }
 
     /// A stream (no duration) has no bar.
     var hasDuration: Bool { (state?.duration ?? 0) > 0 }
@@ -231,21 +246,18 @@ private final class MusicOverlayGroup: CALayer {
     private let reduceMotion: Bool
     private let ambient: Bool
     private let mode: MusicOverlayLayer.Mode
-    private let idle: Bool
 
     private var artFace: CALayer?
-    private var captionLayer: CALayer?
-    private var captionStyle: MusicTextStyle?
-    private var captionOrigin: (x: CGFloat, top: CGFloat, width: CGFloat, align: CTTextAlignment) = (0, 0, 0, .left)
-    private var eq: MusicEQGlyph?
-    private var eqLead: CGFloat = 0
     private var fill: CALayer?
     private var barRect: CGRect = .zero
     private var timeStyle: MusicTextStyle?
     private var elapsedLayer: CALayer?
     private var remainingLayer: CALayer?
     private var timesTop: CGFloat = 0
-    private var cardRemaining: Bool = false
+    /// The paused indicator and where it goes: after the elapsed time, or at a fixed spot.
+    private var pauseGlyph: MusicPauseGlyph?
+    private var glyphFollowsElapsed = false
+    private var elapsedWidth: CGFloat = 0
     private var lastSecond = Int.min
     private var lastPlaying: Bool?
     private var lastFill: CGFloat = -1
@@ -259,7 +271,6 @@ private final class MusicOverlayGroup: CALayer {
         self.scale = scale
         self.reduceMotion = reduceMotion
         mode = d.mode
-        idle = d.idle
         display = d
         super.init()
         frame = bounds
@@ -272,7 +283,7 @@ private final class MusicOverlayGroup: CALayer {
             case .cover: buildCover(d, o, insets)
             }
         case .card(let corner):
-            buildCard(d, corner, insets, size: cardSize, trueScale: trueScale)
+            buildCorner(d, corner, insets, size: cardSize, trueScale: trueScale)
         case .hidden:
             break
         }
@@ -281,14 +292,16 @@ private final class MusicOverlayGroup: CALayer {
     override init(layer: Any) {
         let g = layer as? MusicOverlayGroup
         W = g?.W ?? 0; H = g?.H ?? 0; u = g?.u ?? 1; scale = g?.scale ?? 2
-        reduceMotion = g?.reduceMotion ?? false; ambient = g?.ambient ?? false; mode = g?.mode ?? .hidden; idle = g?.idle ?? true
-        display = g?.display ?? MusicDisplay(mode: .hidden, idle: true, music: .empty, now: Date())
+        reduceMotion = g?.reduceMotion ?? false; ambient = g?.ambient ?? false; mode = g?.mode ?? .hidden
+        display = g?.display ?? MusicDisplay(mode: .hidden, music: .empty)
         super.init(layer: layer)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     override func action(forKey event: String) -> CAAction? { NSNull() }
+
+    private var isFull: Bool { if case .full = mode { return true } else { return false } }
 
     // MARK: Placement helpers
 
@@ -335,9 +348,34 @@ private final class MusicOverlayGroup: CALayer {
 
     private static let white = { (a: CGFloat) in CGColor(gray: 1, alpha: a) }
 
+    // MARK: Type
+
+    /// The type of one layout. Titles are Medium (a Display cut at these sizes, with slightly
+    /// tighter tracking), Semibold only where a corner title gets small; the artist is
+    /// Regular; album and times Regular at reduced opacity. Nothing Bold.
+    private struct TypeSet {
+        var title: MusicTextStyle
+        var artist: MusicTextStyle
+        var album: MusicTextStyle
+        var time: MusicTextStyle
+    }
+
+    private func typeSet(title: CGFloat, artist: CGFloat, album: CGFloat, time: CGFloat,
+                         align: CTTextAlignment, titleLines: Int) -> TypeSet {
+        let t = MusicTextStyle(size: title, weight: title < 20 ? .semibold : .medium, color: Self.white(0.98),
+                               tracking: title >= 28 ? -0.010 : -0.004, maxLines: titleLines, alignment: align,
+                               leading: 1.10)
+        let ar = MusicTextStyle(size: artist, weight: .regular, color: Self.white(0.82), tracking: -0.002,
+                                maxLines: 1, alignment: align)
+        let al = MusicTextStyle(size: album, weight: .regular, color: Self.white(0.64), maxLines: 1, alignment: align)
+        let tm = MusicTextStyle(size: time, weight: .regular, color: Self.white(0.64), monospacedDigits: true)
+        return TypeSet(title: t, artist: ar, album: al, time: tm)
+    }
+
     // MARK: Artwork
 
-    /// Artwork (or a placeholder) at `r`, with a soft shadow; `radius` as a fraction of the side.
+    /// Artwork (or a placeholder) at `r`, with a soft two-layer shadow (a faint contact shadow
+    /// and a wide, low one); `radius` as a fraction of the side.
     private func addArt(_ d: MusicDisplay, _ r: CGRect, radius: CGFloat, shadow: CGFloat) {
         let side = min(r.width, r.height)
         let holder = CALayer()
@@ -352,11 +390,21 @@ private final class MusicOverlayGroup: CALayer {
         face.contentsScale = scale
         let path = CGPath(roundedRect: face.bounds, cornerWidth: side * radius, cornerHeight: side * radius, transform: nil)
         if shadow > 0 {
+            // Wide and soft, on the face itself…
             face.shadowPath = path
             face.shadowColor = CGColor(gray: 0, alpha: 1)
-            face.shadowOpacity = Float(0.42 * shadow)
-            face.shadowRadius = side * 0.075 * shadow
+            face.shadowOpacity = Float(0.30 * shadow)
+            face.shadowRadius = side * 0.11 * shadow
             face.shadowOffset = CGSize(width: 0, height: -side * 0.035 * shadow)
+            // …and a faint contact shadow just under the edge.
+            let contact = CALayer()
+            contact.frame = face.bounds
+            contact.shadowPath = path
+            contact.shadowColor = CGColor(gray: 0, alpha: 1)
+            contact.shadowOpacity = Float(0.22 * shadow)
+            contact.shadowRadius = max(side * 0.018, 1)
+            contact.shadowOffset = CGSize(width: 0, height: -max(side * 0.008, 0.5))
+            face.addSublayer(contact)
         }
         holder.addSublayer(face)
 
@@ -368,69 +416,21 @@ private final class MusicOverlayGroup: CALayer {
         img.masksToBounds = true
         img.contentsGravity = .resizeAspectFill
         img.borderWidth = 1 / scale
-        img.borderColor = Self.white(0.09)
+        img.borderColor = Self.white(0.08)
         let px = Int((side * scale).rounded())
         if let art = d.art {
             img.contents = MusicArtwork.scaled(art, side: px)
         } else {
-            img.contents = MusicArtwork.placeholder(side: px, palette: d.idle ? [] : d.palette, idle: d.idle)
+            img.contents = MusicArtwork.placeholder(side: px, palette: d.palette, idle: false)
         }
         face.addSublayer(img)
         artFace = face
     }
 
-    // MARK: Caption (source) + equalizer glyph
+    // MARK: Progress + paused
 
-    private func captionText(_ d: MusicDisplay, playing: Bool) -> String {
-        if case .card = mode {
-            // The card's caption shares its line with the remaining time: one word or name
-            // ("Spotify", "Apple Music", "Podcast", "Paused") — never truncated mid-name.
-            if !playing { return "Paused" }
-            return d.state?.isPodcast == true ? "Podcast" : d.sourceName
-        }
-        if d.state?.isPodcast == true { return playing ? "\(d.sourceName) · Podcast" : "Paused · \(d.sourceName)" }
-        return playing ? d.sourceName : "Paused · \(d.sourceName)"
-    }
-
-    /// The caption row: equalizer glyph + source. `align` = .left or .center within width.
-    private func addCaption(_ d: MusicDisplay, _ style: MusicTextStyle, x: CGFloat, top: CGFloat,
-                            width: CGFloat) -> CGFloat {
-        let capH = style.size * 0.74                           // ≈ cap height
-        let glyph = MusicEQGlyph(height: capH, color: Self.white(min(style.color.alpha + 0.16, 1)), scale: scale)
-        eq = glyph
-        eqLead = glyph.bounds.width + style.size * 0.55
-        captionStyle = style
-        captionOrigin = (x, top, width, style.alignment)
-        layoutCaption(d, playing: d.playing)
-        addSublayer(glyph)
-        let b = measure(captionText(d, playing: d.playing), style, width: width)
-        return b.height
-    }
-
-    private func layoutCaption(_ d: MusicDisplay, playing: Bool) {
-        guard let style = captionStyle, let eq else { return }
-        captionLayer?.removeFromSuperlayer()
-        let (x, top, width, align) = captionOrigin
-        var s = style
-        s.alignment = .left
-        let b = measure(captionText(d, playing: playing), s, width: max(width - eqLead, 10))
-        let total = eqLead + ceil(b.width)
-        let startX = align == .center ? x + (width - total) / 2 : x
-        if let l = textLayer(b, x: startX + eqLead, top: top, width: max(width - eqLead, 10)) {
-            addSublayer(l)
-            captionLayer = l
-        }
-        // Bars sit on the caption's baseline.
-        let baseline = top + b.ascent
-        let gh = eq.bounds.height
-        let ox = snap(startX), oy = snap(H - baseline)
-        eq.frame = CGRect(x: ox, y: oy, width: eq.bounds.width, height: gh)
-        eq.set(playing: playing, animated: !reduceMotion && ambient)
-    }
-
-    // MARK: Progress
-
-    private func addProgress(_ d: MusicDisplay, bar: CGRect, timesTop: CGFloat?, timeSize: CGFloat,
+    /// The bar (and, with `timesTop`, the elapsed / remaining times under it).
+    private func addProgress(_ d: MusicDisplay, bar: CGRect, timesTop: CGFloat?, time: MusicTextStyle?,
                              trackAlpha: CGFloat = 0.20) {
         guard d.hasDuration else { return }
         barRect = bar
@@ -446,11 +446,32 @@ private final class MusicOverlayGroup: CALayer {
         f.bounds.size.width = 0
         f.position = CGPoint(x: track.frame.minX, y: track.frame.midY)
         fill = f
-        if let timesTop {
+        if let timesTop, let time {
             self.timesTop = timesTop
-            timeStyle = MusicTextStyle(size: timeSize, weight: .medium, color: Self.white(0.56),
-                                       monospacedDigits: true)
+            timeStyle = time
         }
+    }
+
+    /// The paused glyph, `h` tall: after the elapsed time (`followsElapsed`, re-placed as the
+    /// time changes), else with its top-left at `at`.
+    private func addPauseGlyph(height h: CGFloat, color: CGColor, at: CGPoint, followsElapsed: Bool) {
+        let g = MusicPauseGlyph(height: h, color: color, scale: scale)
+        g.opacity = 0
+        pauseGlyph = g
+        glyphFollowsElapsed = followsElapsed
+        let ox = snap(at.x), oy = snap(H - at.y - h)
+        g.frame = CGRect(x: ox, y: oy, width: g.bounds.width, height: h)
+        addSublayer(g)
+    }
+
+    /// Next to the elapsed time: on its cap height, a space after it.
+    private func placeGlyphAfterElapsed() {
+        guard glyphFollowsElapsed, let g = pauseGlyph, let style = timeStyle else { return }
+        let f = MusicText.font(style)
+        let baseline = timesTop + CTFontGetAscent(f)
+        let h = g.bounds.height
+        let x = barRect.minX + elapsedWidth + style.size * 0.55
+        g.frame = CGRect(x: snap(x), y: snap(H - baseline), width: g.bounds.width, height: h)
     }
 
     private func updateTimes(_ d: MusicDisplay, now: Date) {
@@ -461,6 +482,8 @@ private final class MusicOverlayGroup: CALayer {
             elapsedLayer?.removeFromSuperlayer(); remainingLayer?.removeFromSuperlayer()
             elapsedLayer = nil; remainingLayer = nil
             lastSecond = Int.min
+            elapsedWidth = -style.size * 0.55          // the glyph starts the row
+            placeGlyphAfterElapsed()
             return
         }
         let e = st.elapsed(at: now)
@@ -470,29 +493,24 @@ private final class MusicOverlayGroup: CALayer {
         let elapsed = MusicState.timeString(e)
         let remaining = "−" + MusicState.timeString(max((st.duration ?? 0) - Double(sec), 0))
         elapsedLayer?.removeFromSuperlayer(); remainingLayer?.removeFromSuperlayer()
-        if cardRemaining {
-            var s = style; s.alignment = .right
-            remainingLayer = textLayer(measure(remaining, s, width: barRect.width), x: barRect.minX,
-                                       top: timesTop, width: barRect.width)
-        } else {
-            var l = style; l.alignment = .left
-            var r = style; r.alignment = .right
-            elapsedLayer = textLayer(measure(elapsed, l, width: barRect.width), x: barRect.minX,
-                                     top: timesTop, width: barRect.width)
-            remainingLayer = textLayer(measure(remaining, r, width: barRect.width), x: barRect.minX,
-                                       top: timesTop, width: barRect.width)
-        }
+        var l = style; l.alignment = .left
+        var r = style; r.alignment = .right
+        let eb = measure(elapsed, l, width: barRect.width)
+        elapsedWidth = ceil(eb.width)
+        elapsedLayer = textLayer(eb, x: barRect.minX, top: timesTop, width: barRect.width)
+        remainingLayer = textLayer(measure(remaining, r, width: barRect.width), x: barRect.minX,
+                                   top: timesTop, width: barRect.width)
         if let l = elapsedLayer { addSublayer(l) }
         if let l = remainingLayer { addSublayer(l) }
+        placeGlyphAfterElapsed()
     }
 
     // MARK: Tick (in place, about once a second)
 
     func tick(_ d: MusicDisplay, now: Date, animated: Bool) {
-        if !idle, d.playing != lastPlaying {
+        if d.playing != lastPlaying {
             let first = lastPlaying == nil
             lastPlaying = d.playing
-            if captionStyle != nil { layoutCaption(d, playing: d.playing) }
             setPaused(!d.playing, animated: animated && !first)
         }
         if let fill, let st = d.state, let p = st.progress(at: now) {
@@ -516,8 +534,22 @@ private final class MusicOverlayGroup: CALayer {
         }
     }
 
-    /// Paused: the big artwork settles back a little, like Apple Music.
+    /// Paused: the bar dims, the pause glyph fades in, and the big artwork settles back a
+    /// little, like Apple Music.
     private func setPaused(_ paused: Bool, animated: Bool) {
+        func fade(_ l: CALayer?, to v: Float) {
+            guard let l else { return }
+            let from = l.presentation()?.opacity ?? l.opacity
+            l.opacity = v
+            guard animated, from != v else { return }
+            let a = CABasicAnimation(keyPath: "opacity")
+            a.fromValue = from; a.toValue = v
+            a.duration = 0.35
+            a.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            l.add(a, forKey: "paused")
+        }
+        fade(fill, to: paused ? 0.42 : 1)
+        fade(pauseGlyph, to: paused ? 1 : 0)
         guard let face = artFace, case .full(let o) = mode, o.layout != .cover else { return }
         let target: CGFloat = (paused && !reduceMotion) ? 0.93 : 1.0
         let from = (face.presentation()?.value(forKeyPath: "transform.scale.x") as? CGFloat)
@@ -537,13 +569,21 @@ private final class MusicOverlayGroup: CALayer {
     func appear(reduceMotion: Bool) {
         let a = CABasicAnimation(keyPath: "opacity")
         a.fromValue = 0; a.toValue = 1
-        a.duration = 0.7
-        a.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        if isFull {
+            // In step with the backdrop easing in behind it: starts once it has softened.
+            a.beginTime = CACurrentMediaTime() + MusicOverlayLayer.fullFadeInDelay
+            a.fillMode = .backwards
+            a.duration = MusicOverlayLayer.fullFadeSeconds - MusicOverlayLayer.fullFadeInDelay
+            a.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        } else {
+            a.duration = 0.8
+            a.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        }
         add(a, forKey: "in")
         if case .card = mode, !reduceMotion {
             let s = CASpringAnimation(keyPath: "transform.scale")
-            s.fromValue = 0.96; s.toValue = 1
-            s.damping = 20; s.stiffness = 180
+            s.fromValue = 0.97; s.toValue = 1
+            s.damping = 20; s.stiffness = 160
             s.duration = s.settlingDuration
             add(s, forKey: "inScale")
         }
@@ -578,15 +618,24 @@ private final class MusicOverlayGroup: CALayer {
         }
     }
 
-    /// Fade out (flip the old cover away on a card track change), then remove.
+    /// Fade out (flip the old cover away on a corner track change), then remove.
     func disappear(trackChange: Bool, reduceMotion: Bool) {
         CATransaction.begin()
         CATransaction.setCompletionBlock { [weak self] in self?.removeFromSuperlayer() }
         let a = CABasicAnimation(keyPath: "opacity")
         a.fromValue = presentation()?.opacity ?? 1
         a.toValue = 0
-        a.duration = trackChange ? 0.45 : 0.6
-        a.timingFunction = CAMediaTimingFunction(name: .easeIn)
+        if trackChange {
+            a.duration = 0.45
+            a.timingFunction = CAMediaTimingFunction(name: .easeIn)
+        } else if isFull {
+            // Gone before the backdrop clears, so no type hangs over the returning style.
+            a.duration = MusicOverlayLayer.fullFadeOutSeconds
+            a.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        } else {
+            a.duration = 0.7
+            a.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        }
         opacity = 0
         add(a, forKey: "out")
         if trackChange, !reduceMotion, case .card = mode, let face = artFace {
@@ -600,8 +649,8 @@ private final class MusicOverlayGroup: CALayer {
         }
         if case .card = mode, !trackChange, !reduceMotion {
             let s = CABasicAnimation(keyPath: "transform.scale")
-            s.fromValue = 1; s.toValue = 0.97
-            s.duration = 0.6
+            s.fromValue = 1; s.toValue = 0.98
+            s.duration = 0.7
             s.fillMode = .forwards
             s.isRemovedOnCompletion = false
             add(s, forKey: "outScale")
@@ -611,25 +660,8 @@ private final class MusicOverlayGroup: CALayer {
 
     // MARK: Layouts
 
-    private func bodyStyles(title: CGFloat, artist: CGFloat, album: CGFloat, caption: CGFloat,
-                            align: CTTextAlignment, titleLines: Int, halo: CGFloat = 0)
-        -> (caption: MusicTextStyle, title: MusicTextStyle, artist: MusicTextStyle, album: MusicTextStyle) {
-        let cap = MusicTextStyle(size: caption, weight: .semibold, color: Self.white(0.58), tracking: 0.09,
-                                 alignment: align, uppercase: true, halo: halo)
-        let t = MusicTextStyle(size: title, weight: .bold, color: Self.white(1), tracking: -0.012,
-                               maxLines: titleLines, alignment: align, leading: 1.08, halo: halo)
-        let ar = MusicTextStyle(size: artist, weight: .medium, color: Self.white(0.74), tracking: -0.004,
-                                maxLines: 1, alignment: align, halo: halo)
-        let al = MusicTextStyle(size: album, weight: .regular, color: Self.white(0.50), maxLines: 1,
-                                alignment: align, halo: halo)
-        return (cap, t, ar, al)
-    }
-
-    /// Idle copy (nothing playing).
-    private static let idleTitle = "Not Playing"
-    /// No-break spaces keep "or Apple Music" together: a narrow column (a gallery tile) wraps
-    /// before it rather than leaving one word alone on the last line.
-    private static let idleSubtitle = "Play something in Spotify or\u{00A0}Apple\u{00A0}Music"
+    /// The pause glyph's height for a line of `size`: about its cap height.
+    private static func glyphHeight(_ size: CGFloat) -> CGFloat { size * 0.70 }
 
     /// Apple Music full screen: artwork left, type right, the group centred on the art.
     private func buildAlbum(_ d: MusicDisplay, _ o: MusicSceneOptions) {
@@ -639,44 +671,35 @@ private final class MusicOverlayGroup: CALayer {
         let colW = max(min(MusicGeometry.albumText * u, W - x - 0.06 * u), 40)
         // Sized for the far side of a room: the title's cap height is ≈ 4.5 % of a 16:10
         // screen's height (0.064 u); every other line in step with it.
-        let st = bodyStyles(title: 0.064 * u, artist: 0.040 * u, album: 0.030 * u, caption: 0.0172 * u,
-                            align: .left, titleLines: 2)
-        if d.idle {
-            let tb = measure(Self.idleTitle, st.title, width: colW)
-            var sub = st.artist; sub.color = Self.white(0.5); sub.weight = .regular
-            sub.maxLines = 2   // the hint wraps rather than losing its last words
-            let sb = measure(Self.idleSubtitle, sub, width: colW)
-            let h = tb.height + 0.016 * u + sb.height
-            var y = art.midY - h / 2
-            addText(Self.idleTitle, st.title, x: x, top: y, width: colW)
-            y += tb.height + 0.016 * u
-            addText(Self.idleSubtitle, sub, x: x, top: y, width: colW)
-            return
-        }
+        let ts = typeSet(title: 0.064 * u, artist: 0.040 * u, album: 0.030 * u, time: 0.0195 * u,
+                         align: .left, titleLines: 2)
         // Measure, then centre the whole column on the artwork.
-        let tb = measure(d.title, st.title, width: colW)
-        let ab = measure(d.artist, st.artist, width: colW)
-        let lb = o.showAlbum ? measure(d.album, st.album, width: colW) : nil
-        let capH = st.caption.size * 1.2
-        let barH = max(0.0068 * u, 3)
+        let tb = measure(d.title, ts.title, width: colW)
+        let ab = measure(d.artist, ts.artist, width: colW)
+        let lb = o.showAlbum ? measure(d.album, ts.album, width: colW) : nil
+        let barH = max(0.0062 * u, 3)
         let showBar = o.showProgress && d.hasDuration
-        let timeSize = 0.0195 * u
-        var h = capH + 0.024 * u + tb.height
-        if !ab.isEmpty { h += 0.016 * u + ab.height }
-        if let lb, !lb.isEmpty { h += 0.009 * u + lb.height }
-        if showBar { h += 0.054 * u + barH + 0.017 * u + timeSize * 1.2 }
+        let rowGap = 0.054 * u
+        var h = tb.height
+        if !ab.isEmpty { h += 0.018 * u + ab.height }
+        if let lb, !lb.isEmpty { h += 0.010 * u + lb.height }
+        if showBar { h += rowGap + barH + 0.017 * u + ts.time.size * MusicGeometry.lineBox }
+        else { h += rowGap + Self.glyphHeight(ts.time.size) }
         var y = max(art.midY - h / 2, art.minY)
-        _ = addCaption(d, st.caption, x: x, top: y, width: colW)
-        y += capH + 0.024 * u
-        addText(d.title, st.title, x: x, top: y, width: colW)
+        addText(d.title, ts.title, x: x, top: y, width: colW)
         y += tb.height
-        if !ab.isEmpty { y += 0.016 * u; addText(d.artist, st.artist, x: x, top: y, width: colW); y += ab.height }
-        if let lb, !lb.isEmpty { y += 0.009 * u; addText(d.album, st.album, x: x, top: y, width: colW); y += lb.height }
+        if !ab.isEmpty { y += 0.018 * u; addText(d.artist, ts.artist, x: x, top: y, width: colW); y += ab.height }
+        if let lb, !lb.isEmpty { y += 0.010 * u; addText(d.album, ts.album, x: x, top: y, width: colW); y += lb.height }
+        y += rowGap
+        let glyphH = Self.glyphHeight(ts.time.size)
         if showBar {
-            y += 0.054 * u
             let barW = min(colW, MusicGeometry.albumArt * u)
             addProgress(d, bar: CGRect(x: x, y: y, width: barW, height: barH),
-                        timesTop: y + barH + 0.017 * u, timeSize: timeSize)
+                        timesTop: y + barH + 0.017 * u, time: ts.time)
+            addPauseGlyph(height: glyphH, color: ts.time.color, at: CGPoint(x: x, y: y + barH + 0.017 * u),
+                          followsElapsed: true)
+        } else {
+            addPauseGlyph(height: glyphH, color: ts.time.color, at: CGPoint(x: x, y: y), followsElapsed: false)
         }
     }
 
@@ -689,216 +712,217 @@ private final class MusicOverlayGroup: CALayer {
         addArt(d, art, radius: 0.024, shadow: 1)
         let colW = min(W - 0.16 * u - insets.left - insets.right, 1.3 * u)
         let x = insets.left + (W - insets.left - insets.right - colW) / 2
-        let st = bodyStyles(title: S.title * u, artist: S.artist * u, album: S.album * u, caption: S.caption * u,
-                            align: .center, titleLines: S.titleLines)
+        let ts = typeSet(title: S.title * u, artist: S.artist * u, album: S.album * u, time: S.times * u,
+                         align: .center, titleLines: S.titleLines)
         var y = art.maxY + S.artGap * u
-        if d.idle {
-            var sub = st.artist; sub.color = Self.white(0.5); sub.weight = .regular
-            y += addText(Self.idleTitle, st.title, x: x, top: y, width: colW) + S.artistGap * u
-            addText(Self.idleSubtitle, sub, x: x, top: y, width: colW)
-            return
-        }
-        y += addText(d.title, st.title, x: x, top: y, width: colW)
-        let ah = addText(d.artist, st.artist, x: x, top: y + S.artistGap * u, width: colW)
+        y += addText(d.title, ts.title, x: x, top: y, width: colW)
+        let ah = addText(d.artist, ts.artist, x: x, top: y + S.artistGap * u, width: colW)
         if ah > 0 { y += S.artistGap * u + ah }
         if o.showAlbum {
-            let lh = addText(d.album, st.album, x: x, top: y + S.albumGap * u, width: colW)
+            let lh = addText(d.album, ts.album, x: x, top: y + S.albumGap * u, width: colW)
             if lh > 0 { y += S.albumGap * u + lh }
         }
         let barH = max(S.bar * u, 3)
+        let glyphH = Self.glyphHeight(ts.time.size)
         if o.showProgress && d.hasDuration {
             y += S.barGap * u
             let bar = CGRect(x: art.minX, y: y, width: art.width, height: barH)
-            addProgress(d, bar: bar, timesTop: y + barH + S.timesGap * u, timeSize: S.times * u)
-            y += barH + S.timesGap * u + S.times * u * MusicGeometry.lineBox
+            addProgress(d, bar: bar, timesTop: y + barH + S.timesGap * u, time: ts.time)
+            addPauseGlyph(height: glyphH, color: ts.time.color, at: CGPoint(x: bar.minX, y: y + barH + S.timesGap * u),
+                          followsElapsed: true)
+        } else {
+            addPauseGlyph(height: glyphH, color: ts.time.color,
+                          at: CGPoint(x: (W - glyphH) / 2, y: y + S.barGap * u), followsElapsed: false)
         }
-        _ = addCaption(d, st.caption, x: x, top: y + S.captionGap * u, width: colW)
     }
 
-    /// Full-bleed artwork (the shader), type bottom-left over its scrim.
+    /// Full-bleed artwork (the shader), type bottom-left over its scrim (legacy styles).
     private func buildCover(_ d: MusicDisplay, _ o: MusicSceneOptions, _ insets: MusicOverlayLayer.Insets) {
         let m = 0.072 * u
         let left = m + insets.left
         let bottom = H - m - insets.bottom
         let colW = max(min(1.05 * u, W - left - m - insets.right), 40)
-        var st = bodyStyles(title: 0.080 * u, artist: 0.040 * u, album: 0.028 * u, caption: 0.0158 * u,
-                            align: .left, titleLines: 2, halo: 0.35)
+        var ts = typeSet(title: 0.080 * u, artist: 0.040 * u, album: 0.028 * u, time: 0.0172 * u,
+                         align: .left, titleLines: 2)
         // Over full-bleed art the secondary lines need more weight than over the calm Album /
         // Stage backgrounds (the shader's scrim targets ≥ 7:1 for the title; these keep ≥ 4.5:1).
-        st.caption.color = Self.white(0.72); st.artist.color = Self.white(0.84); st.album.color = Self.white(0.68)
-        if d.idle {
-            var sub = st.artist; sub.color = Self.white(0.55); sub.weight = .regular
-            let sb = measure(Self.idleSubtitle, sub, width: colW)
-            let tb = measure(Self.idleTitle, st.title, width: colW)
-            let sy = bottom - sb.height
-            addText(Self.idleSubtitle, sub, x: left, top: sy, width: colW)
-            addText(Self.idleTitle, st.title, x: left, top: sy - 0.016 * u - tb.height, width: colW)
-            return
-        }
-        // Bottom-up: times, bar, album, artist, title, caption.
+        ts.artist.color = Self.white(0.86); ts.album.color = Self.white(0.70); ts.time.color = Self.white(0.72)
+        // Bottom-up: times, bar, album, artist, title.
         var y = bottom
         let showBar = o.showProgress && d.hasDuration
+        let glyphH = Self.glyphHeight(ts.time.size)
         if showBar {
-            let ts = 0.0172 * u
             let barH = max(0.0062 * u, 3)
-            y -= ts * 1.2
+            y -= ts.time.size * 1.2
             let timesTop = y
             y -= 0.016 * u + barH
             addProgress(d, bar: CGRect(x: left, y: y, width: min(0.56 * u, colW), height: barH),
-                        timesTop: timesTop, timeSize: ts, trackAlpha: 0.26)
-            timeStyle?.halo = 0.35
-            timeStyle?.color = Self.white(0.70)
+                        timesTop: timesTop, time: ts.time, trackAlpha: 0.26)
+            addPauseGlyph(height: glyphH, color: ts.time.color, at: CGPoint(x: left, y: timesTop), followsElapsed: true)
             y -= 0.050 * u
+        } else {
+            y -= glyphH
+            addPauseGlyph(height: glyphH, color: ts.time.color, at: CGPoint(x: left, y: y), followsElapsed: false)
+            y -= 0.040 * u
         }
         if o.showAlbum {
-            let lb = measure(d.album, st.album, width: colW)
-            if !lb.isEmpty { y -= lb.height; addText(d.album, st.album, x: left, top: y, width: colW); y -= 0.010 * u }
+            let lb = measure(d.album, ts.album, width: colW)
+            if !lb.isEmpty { y -= lb.height; addText(d.album, ts.album, x: left, top: y, width: colW); y -= 0.010 * u }
         }
-        let ab = measure(d.artist, st.artist, width: colW)
-        if !ab.isEmpty { y -= ab.height; addText(d.artist, st.artist, x: left, top: y, width: colW); y -= 0.016 * u }
-        let tb = measure(d.title, st.title, width: colW)
+        let ab = measure(d.artist, ts.artist, width: colW)
+        if !ab.isEmpty { y -= ab.height; addText(d.artist, ts.artist, x: left, top: y, width: colW); y -= 0.016 * u }
+        let tb = measure(d.title, ts.title, width: colW)
         y -= tb.height
-        addText(d.title, st.title, x: left, top: y, width: colW)
-        y -= 0.024 * u + st.caption.size * 1.2
-        _ = addCaption(d, st.caption, x: left, top: y, width: colW)
+        addText(d.title, ts.title, x: left, top: y, width: colW)
     }
 
-    /// The corner card: dark glass, artwork, caption + remaining time, title, artist, bar.
-    /// It follows the screen's height (MusicGeometry.Card, per Card Size) with no upper cap —
-    /// a bigger display is read from further away — and in a small preview of the saver never
-    /// drops below a legible minimum, itself in step with the Card Size so Small / Medium /
-    /// Large still differ there. `trueScale` (the app's miniatures) skips the minimum.
-    private func buildCard(_ d: MusicDisplay, _ corner: MusicSpec.Corner, _ insets: MusicOverlayLayer.Insets,
-                           size: MusicSpec.CardSize, trueScale: Bool) {
-        let f = MusicGeometry.Card.size(size)
-        let floor = trueScale ? 0 : min(60, 0.2 * u) * f.height / MusicGeometry.Card.size(.medium).height
-        let hc = max(f.height * u, floor)
+    /// Corner: rounded artwork with a soft shadow, then title, artist and a thin bar, drawn
+    /// straight on the scene over a feathered scrim — no card. Its size follows the screen's
+    /// height (MusicGeometry.Card, per size) with no upper cap — a bigger display is read from
+    /// further away — and in a small preview of the saver never drops below a legible
+    /// minimum, in step with the size so Small / Medium / Large still differ there.
+    /// `trueScale` (the app's miniatures) skips the minimum.
+    private func buildCorner(_ d: MusicDisplay, _ corner: MusicSpec.Corner, _ insets: MusicOverlayLayer.Insets,
+                             size: MusicSpec.CardSize, trueScale: Bool) {
+        let g = MusicGeometry.Card.self
+        let f = g.size(size)
+        let floor = trueScale ? 0 : min(60, 0.2 * u) * f.height / g.size(.medium).height
+        let hc = max(f.height * u, floor)                     // the block's nominal height
         let wc = min(hc * f.width / f.height, W * 0.46)
-        let m = max(0.040 * u, min(18, 0.06 * u))
+        let s = hc * g.art                                    // artwork side
+        let gap = s * g.gap
+        let m = max(g.margin * u, min(20, 0.07 * u))
+        let tw = max(wc - s - gap, 20)                        // text column
+        let ts = typeSet(title: s * g.title, artist: s * g.artist, album: s * g.artist, time: s * g.artist,
+                         align: .left, titleLines: 1)
+        // The text block, centred on the artwork: title, artist, then the thin bar.
+        let tb = measure(d.title, ts.title, width: tw)
+        let ab = measure(d.artist, ts.artist, width: tw)
+        let barH = max(s * g.bar, 2 / scale)
+        let barGap = s * 0.15
+        var th = tb.height
+        if !ab.isEmpty { th += s * 0.045 + ab.height }
+        th += barGap + max(barH, d.hasDuration ? 0 : Self.glyphHeight(ts.artist.size))
+        // The block is as wide as what it shows (the bar spans the type), so a short title in a
+        // right-hand corner still sits against the margin.
+        let textW = min(tw, max(ceil(max(tb.width, ab.width)), s * 1.5))
+        let blockW = s + gap + textW
         let x: CGFloat, y: CGFloat
         switch corner {
-        case .bottomLeft: x = m + insets.left; y = H - m - insets.bottom - hc
-        case .bottomRight: x = W - m - insets.right - wc; y = H - m - insets.bottom - hc
+        case .bottomLeft: x = m + insets.left; y = H - m - insets.bottom - s
+        case .bottomRight: x = W - m - insets.right - blockW; y = H - m - insets.bottom - s
         case .topLeft: x = m + insets.left; y = m + insets.top
-        case .topRight: x = W - m - insets.right - wc; y = m + insets.top
+        case .topRight: x = W - m - insets.right - blockW; y = m + insets.top
         }
-        let card = CGRect(x: x, y: y, width: wc, height: hc)
-        let radius = hc * 0.24
+        // The scrim first (under everything), around what's actually drawn.
+        addScrim(around: CGRect(x: x, y: y, width: blockW, height: s), corner: corner, unit: s)
 
-        // Glass: deep artwork tint at ~70 %, a hairline rim, a soft sheen and a wide shadow.
-        let bg = CALayer()
-        let deep = d.palette.last ?? RGBA(0.1, 0.1, 0.12)
-        let k = 0.30
-        bg.backgroundColor = CGColor(srgbRed: deep.r * k, green: deep.g * k, blue: deep.b * k, alpha: 0.72)
-        bg.cornerRadius = radius
-        bg.cornerCurve = .continuous
-        bg.borderWidth = 1 / scale
-        bg.borderColor = Self.white(0.14)
-        place(bg, card)
-        bg.shadowPath = CGPath(roundedRect: bg.bounds, cornerWidth: radius, cornerHeight: radius, transform: nil)
-        bg.shadowColor = CGColor(gray: 0, alpha: 1)
-        bg.shadowOpacity = 0.32
-        bg.shadowRadius = hc * 0.22
-        bg.shadowOffset = CGSize(width: 0, height: -hc * 0.07)
-        let sheen = CAGradientLayer()
-        sheen.frame = bg.bounds
-        sheen.cornerRadius = radius
-        sheen.cornerCurve = .continuous
-        sheen.masksToBounds = true
-        sheen.colors = [Self.white(0.10), Self.white(0.02), Self.white(0.0)]
-        sheen.locations = [0, 0.45, 1]
-        sheen.startPoint = CGPoint(x: 0.5, y: 1)      // top (CA y is up)
-        sheen.endPoint = CGPoint(x: 0.5, y: 0)
-        bg.addSublayer(sheen)
-
-        let p = hc * 0.15
-        let side = hc - 2 * p
-        addArt(d, CGRect(x: x + p, y: y + p, width: side, height: side), radius: 0.13, shadow: 0.45)
-
-        let tx = x + p + side + hc * 0.14
-        let tw = max(wc - (tx - x) - p * 1.1, 20)
-        // The type is a larger share of the card than a desktop widget's: it's read from afar.
-        // At Medium on a 16:10 screen the title is 2.3 % of the screen's height and the artist
-        // 2.2 % (above tvOS's smallest text style, 2.1 %); caption and time 1.5 %.
-        let cap = MusicTextStyle(size: hc * 0.106, weight: .semibold, color: Self.white(0.58), tracking: 0.07,
-                                 uppercase: true)
-        let title = MusicTextStyle(size: hc * 0.165, weight: .semibold, color: Self.white(0.97), tracking: -0.008)
-        let artist = MusicTextStyle(size: hc * 0.155, weight: .regular, color: Self.white(0.72))
-        let showBar = d.hasDuration
-        // Caption row (glyph + source, remaining time on the right), then title, artist; the
-        // bar lines up with the artwork's bottom edge.
-        let capTop = y + p + hc * 0.010
-        let timeSize = hc * 0.106
-        var capW = tw
-        if showBar {
-            // Up to the remaining time (its longest form: the whole duration), not a guess.
-            let ts = MusicTextStyle(size: timeSize, weight: .medium, color: Self.white(0.5), monospacedDigits: true)
-            let longest = "−" + MusicState.timeString(d.state?.duration ?? 0)
-            capW = max(tw - ceil(measure(longest, ts, width: tw).width) - hc * 0.08, tw * 0.5)
+        addArt(d, CGRect(x: x, y: y, width: s, height: s), radius: 0.085, shadow: 0.8)
+        let tx = x + s + gap
+        var ty = y + max((s - th) / 2, 0)
+        addText(d.title, ts.title, x: tx, top: ty, width: tw)
+        ty += tb.height
+        if !ab.isEmpty { ty += s * 0.045; addText(d.artist, ts.artist, x: tx, top: ty, width: tw); ty += ab.height }
+        ty += barGap
+        if d.hasDuration {
+            addProgress(d, bar: CGRect(x: tx, y: ty, width: textW, height: barH),
+                        timesTop: nil, time: nil, trackAlpha: 0.22)
+        } else {
+            addPauseGlyph(height: Self.glyphHeight(ts.artist.size), color: ts.album.color,
+                          at: CGPoint(x: tx, y: ty), followsElapsed: false)
         }
-        _ = addCaption(d, cap, x: tx, top: capTop, width: capW)
-        var ty = capTop + cap.size * 1.2 + hc * 0.055
-        ty += addText(d.title, title, x: tx, top: ty, width: tw)
-        addText(d.artist, artist, x: tx, top: ty + hc * 0.022, width: tw)
-        if showBar {
-            let barH = max(hc * 0.028, 2)
-            let by = y + p + side - barH
-            addProgress(d, bar: CGRect(x: tx, y: by, width: tw, height: barH), timesTop: capTop,
-                        timeSize: timeSize, trackAlpha: 0.20)
-            timeStyle?.color = Self.white(0.50)
-            cardRemaining = true
-        }
+    }
+
+    /// The corner's feathered scrim: an elliptical darkening around `block`, leaning toward
+    /// the screen corner, with a Gaussian falloff that reaches zero long before its bitmap's
+    /// edge (no edge to see) and a little dither (no banding in a dark gradient).
+    private func addScrim(around block: CGRect, corner: MusicSpec.Corner, unit s: CGFloat) {
+        let lean: CGFloat = 0.18
+        let cx = block.midX + (corner == .bottomLeft || corner == .topLeft ? -1 : 1) * block.width * lean
+        let cy = block.midY + (corner == .bottomLeft || corner == .bottomRight ? 1 : -1) * block.height * lean
+        let rx = block.width * 0.62 + s * 0.55, ry = block.height * 0.62 + s * 0.55
+        let reach: CGFloat = 2.2                                   // radii covered by the bitmap
+        let r = CGRect(x: cx - rx * reach, y: cy - ry * reach, width: rx * reach * 2, height: ry * reach * 2)
+        // The falloff is smooth: a bitmap pixel per two points, upscaled linearly, is plenty.
+        let k: CGFloat = 0.5
+        let w = max(Int((r.width * k).rounded()), 2), h = max(Int((r.height * k).rounded()), 2)
+        guard let img = MusicScrim.image(width: w, height: h, reach: reach, peak: MusicScrim.peak) else { return }
+        let l = CALayer()
+        l.contents = img
+        l.contentsGravity = .resize
+        l.minificationFilter = .linear
+        l.magnificationFilter = .linear
+        place(l, r)
     }
 }
 
-// MARK: - Equalizer glyph
+// MARK: - Scrim bitmap
 
-/// Three bars that bounce while playing (still when paused or with Reduce Motion).
-private final class MusicEQGlyph: CALayer {
-    private var bars: [CALayer] = []
-    private let rest: [CGFloat] = [0.42, 0.78, 0.58]
-    private let playingRest: [CGFloat] = [0.62, 1.0, 0.78]
+enum MusicScrim {
+    /// The scrim's darkest point (black alpha), where the type sits. Over a dark scene it's
+    /// invisible; over a bright Look it sinks the corner enough for the type to read.
+    static let peak: CGFloat = 0.56
 
+    /// An elliptical Gaussian falloff of black, `peak` at the centre, essentially zero at
+    /// `reach` radii (the bitmap's edge), dithered. Cached for the last few sizes.
+    static func image(width w: Int, height h: Int, reach: CGFloat, peak: CGFloat) -> CGImage? {
+        if let hit = cache.first(where: { $0.w == w && $0.h == h }) { return hit.image }
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        var seed: UInt32 = 0x9E3779B9
+        let fx = 2 * reach / CGFloat(w), fy = 2 * reach / CGFloat(h)
+        for j in 0..<h {
+            let ny = (CGFloat(j) + 0.5) * fy - reach
+            for i in 0..<w {
+                let nx = (CGFloat(i) + 0.5) * fx - reach
+                let d2 = nx * nx + ny * ny
+                // Gaussian (exp(−1.35 r²)), eased to exactly zero at the bitmap's edge.
+                var a = exp(-1.35 * d2)
+                let edge = min(max((reach * reach - d2) / (reach * reach * 0.35), 0), 1)
+                a *= edge * edge * (3 - 2 * edge)
+                seed = seed &* 1664525 &+ 1013904223
+                let noise = CGFloat(seed >> 8) / CGFloat(1 << 24) - 0.5
+                let v = min(max(a * peak * 255 + noise, 0), 255)
+                px[(j * w + i) * 4 + 3] = UInt8(v.rounded())     // premultiplied black: rgb 0
+            }
+        }
+        guard let provider = CGDataProvider(data: Data(px) as CFData),
+              let img = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4,
+                                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                                provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+        else { return nil }
+        cache.insert((w, h, img), at: 0)
+        if cache.count > 4 { cache.removeLast() }
+        return img
+    }
+
+    /// Drop the cached bitmaps (the saver's teardown).
+    static func purge() { cache.removeAll() }
+    private static var cache: [(w: Int, h: Int, image: CGImage)] = []
+}
+
+// MARK: - Pause glyph
+
+/// Two short rounded bars: "paused", quietly.
+private final class MusicPauseGlyph: CALayer {
     init(height h: CGFloat, color: CGColor, scale: CGFloat) {
         super.init()
-        let bw = max(h * 0.20, 1), gap = max(h * 0.15, 1)
-        bounds = CGRect(x: 0, y: 0, width: bw * 3 + gap * 2, height: h)
+        let bw = max(h * 0.30, 1), gap = max(h * 0.28, 1)
+        bounds = CGRect(x: 0, y: 0, width: bw * 2 + gap, height: h)
         contentsScale = scale
-        for i in 0..<3 {
+        for i in 0..<2 {
             let b = CALayer()
             b.backgroundColor = color
-            b.cornerRadius = bw / 2
-            b.anchorPoint = CGPoint(x: 0.5, y: 0)          // grow up from the baseline
-            b.bounds = CGRect(x: 0, y: 0, width: bw, height: h)
-            b.position = CGPoint(x: CGFloat(i) * (bw + gap) + bw / 2, y: 0)
+            b.cornerRadius = bw * 0.4
+            b.frame = CGRect(x: CGFloat(i) * (bw + gap), y: 0, width: bw, height: h)
             b.contentsScale = scale
             addSublayer(b)
-            bars.append(b)
         }
     }
 
     override init(layer: Any) { super.init(layer: layer) }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
     override func action(forKey event: String) -> CAAction? { NSNull() }
-
-    func set(playing: Bool, animated: Bool) {
-        for (i, b) in bars.enumerated() {
-            b.removeAnimation(forKey: "eq")
-            let s = playing ? playingRest[i] : rest[i]
-            b.setValue(s, forKeyPath: "transform.scale.y")
-            guard playing, animated else { continue }
-            let a = CABasicAnimation(keyPath: "transform.scale.y")
-            a.fromValue = 0.30 + 0.1 * CGFloat(i)
-            a.toValue = 1.0
-            a.duration = [0.46, 0.38, 0.54][i]
-            a.autoreverses = true
-            a.repeatCount = .infinity
-            a.timeOffset = [0.0, 0.21, 0.37][i]
-            a.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            a.preferredFrameRateRange = MusicOverlayLayer.decorationRate
-            b.add(a, forKey: "eq")
-        }
-    }
 }
 
 // MARK: - Artwork bitmaps

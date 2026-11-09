@@ -99,6 +99,7 @@ final class WallpaperRenderLoop {
             setPlan(.none)
             style = nil
             music = nil            // drop the cover; the controller re-sends it on restart
+            musicBackdrop = .none
         }
     }
 
@@ -111,6 +112,15 @@ final class WallpaperRenderLoop {
                 s.renderer.musicLingerMinutes = lingerMinutes
                 s.renderer.setMusic(snapshot)
             }
+        }
+    }
+
+    /// Full Screen music's backdrop (MusicPresentation, decided on the main thread). Each
+    /// renderer eases it in or out over the frames it draws; a held frame shows the end state.
+    func setMusicBackdrop(_ backdrop: MusicBackdrop, animated: Bool) {
+        thread.async { [self] in
+            musicBackdrop = backdrop
+            for s in surfaces.values { s.renderer.setMusicBackdrop(backdrop, animated: animated) }
         }
     }
 
@@ -179,6 +189,7 @@ final class WallpaperRenderLoop {
     private var style: (Preset, SourceSpec)?
     private var location: (lat: Double, lon: Double)?
     private var music: (snapshot: MusicSnapshot, linger: Double)?
+    private var musicBackdrop: MusicBackdrop = .none
     private var timeBase: MetalRenderer.TimeBase = .instance
     private var clockTimer: Timer?
     /// Whether media decoders should be held. Invariant: every surface's renderer has
@@ -209,6 +220,7 @@ final class WallpaperRenderLoop {
                 r.musicLingerMinutes = music.linger
                 r.setMusic(music.snapshot)
             }
+            r.setMusicBackdrop(musicBackdrop, animated: false)   // a new display starts where the rest are
             if let (preset, source) = style { r.apply(preset, source: source) }
             return r
         }

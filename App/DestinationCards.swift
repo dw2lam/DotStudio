@@ -10,11 +10,9 @@ struct GalleryState {
     let nowPlaying: UUID?
     let wallpaperID: UUID?
 
-    /// - musicShows: a song shows right now (the caller observes `model.musicShowsNow`), for
-    ///   the music take-over.
-    init(model: AppModel, wallpaperID: UUID?, musicShows: Bool) {
+    init(model: AppModel, wallpaperID: UUID?) {
         lineup = model.screensaverLineup
-        nowPlaying = model.nowPlayingID(musicActive: musicShows)
+        nowPlaying = model.nowPlayingID
         self.wallpaperID = wallpaperID
     }
 
@@ -233,15 +231,14 @@ struct ScreensaverCard: View {
                 if let p = playing {
                     // Live while the gallery is up front; a still otherwise (no GPU in the background).
                     if model.editingID == nil && activeState != .inactive && !DemoHooks.stillPreviews {
-                        // The corner card while it's on, as the screensaver would show it (a
-                        // Now Playing style — take-over included — draws its own foreground).
+                        // Music as the screensaver would show it (Show music: Corner, or Full
+                        // Screen easing in over the style).
                         MetalPreview(preset: p, source: model.library.source,
                                      location: model.locationTuple, store: model.store, maxFPS: 30,
-                                     music: model.library.musicSettings,
-                                     showsMusicCard: model.library.musicSettings.isCardEnabled)
+                                     music: model.library.musicSettings, showsMusic: true)
                             .allowsHitTesting(false)
                     } else {
-                        StyleThumb(preset: p, showsMusicCard: model.library.musicSettings.isCardEnabled)
+                        StyleThumb(preset: p, showsMusic: true)
                     }
                 } else {
                     Color.black
@@ -382,13 +379,14 @@ struct ScreensaverCard: View {
     // MARK: Options (night, music)
 
     /// The card's options in one flow under a hairline: "Different style at night" (its
-    /// picker beside it), "Show what's playing", and — while the corner card shows a song —
-    /// what it is with Play/Pause and Next. Items share a line while they fit and wrap only
-    /// when the card is narrow, so the options take a single line in the common case.
+    /// picker beside it), "Show what's playing" (Off / Corner / Full Screen), and — while
+    /// music shows — what it is with Play/Pause and Next. Items share a line while they fit
+    /// and wrap only when the card is narrow, so the options take a single line in the common
+    /// case.
     private var optionsRow: some View {
         let spec = model.library.musicSettings
-        // The song only under its own switch: off, the card shows nothing, so neither does this.
-        let showsSong = spec.isCardEnabled && now.isVisible(spec)
+        // The song only while music shows: Off shows nothing on screen, so neither does this.
+        let showsSong = spec.displayMode != .off && now.isVisible(spec)
         return FlowLayout(spacing: layout.itemGap, lineSpacing: layout.controlGap) {
             Toggle(isOn: Binding(get: { lineup.night != nil },
                                  set: { on in Motion.run { model.setNightEnabled(on) } })) {
@@ -414,15 +412,7 @@ struct ScreensaverCard: View {
                 .transition(.lift(reduceMotion: reduceMotion))
             }
 
-            Toggle(isOn: Binding(get: { spec.isCardEnabled },
-                                 set: { on in Motion.run { model.setMusicCard(on) } })) {
-                Label("Show what's playing", systemImage: "music.note")
-                    .textRole(.callout)
-                    .lineLimit(1)
-            }
-            .toggleStyle(.switch)
-            .fixedSize()
-            .help("A card with the song, artist and progress in a corner of the screensaver while Spotify or Apple Music plays")
+            musicDisplayMenu(spec.displayMode)
 
             if showsSong {
                 nowPlayingLine
@@ -436,6 +426,33 @@ struct ScreensaverCard: View {
             Rectangle().fill(.primary.opacity(0.08)).frame(height: 1)
         }
         .motion(Motion.smooth, value: showsSong)
+    }
+
+    /// "Show what's playing  [Corner ▾]" — Off / Corner / Full Screen, the same choice as
+    /// Settings › Music, kept compact: a menu drawn like the rotation's interval, so its title
+    /// follows the text size.
+    private func musicDisplayMenu(_ current: MusicSpec.Display) -> some View {
+        HStack(spacing: layout.controlGap) {
+            Label("Show what's playing", systemImage: "music.note")
+                .textRole(.callout)
+                .lineLimit(1)
+                .fixedSize()
+            Menu {
+                ForEach(MusicSpec.Display.allCases) { d in
+                    Button { Motion.run { model.setMusicDisplay(d) } } label: {
+                        if d == current { Label(d.label, systemImage: "checkmark") } else { Text(d.label) }
+                    }
+                }
+            } label: {
+                Text(current.label).textRole(.callout)
+            }
+            .menuStyle(.button)
+            .glassButton()
+            .fixedSize()
+            .accessibilityLabel("Show what's playing")
+            .accessibilityValue(current.label)
+        }
+        .help("While Spotify or Apple Music plays: nothing, the song in a corner of the screensaver, or the song full screen over it")
     }
 
     /// Cover · "Song — Artist" · Play/Pause · Next — or, when the player refused Automation,
@@ -466,11 +483,12 @@ struct ScreensaverCard: View {
 }
 
 extension AppModel {
-    /// The music corner card on / off (Library.music.cardEnabled).
-    func setMusicCard(_ on: Bool) {
+    /// "Show music": Off / Corner / Full Screen (Library.music.display, legacy fields in step).
+    func setMusicDisplay(_ d: MusicSpec.Display) {
         var m = library.musicSettings
-        guard m.isCardEnabled != on else { return }
-        m.cardEnabled = on
+        guard m.displayMode != d || m.display == nil else { return }
+        m.setDisplay(d)
+        guard m != library.music else { return }
         library.music = m
         save()
     }
@@ -1045,7 +1063,7 @@ struct WallpaperCard: View {
     }
 
     /// "Match the screensaver": the desktop plays what the screensaver would, in step (same
-    /// playlist slot, night style and music take-over, on a shared clock), so the screensaver
+    /// playlist slot and night style, on a shared clock), so the screensaver
     /// starts exactly where the desktop was. Turning it on starts the wallpaper.
     private var matchToggle: some View {
         Toggle(isOn: Binding(get: { matching },
@@ -1057,7 +1075,7 @@ struct WallpaperCard: View {
         .toggleStyle(.switch)
         .adaptiveControlSize(.small)
         .fixedSize()
-        .help("Play whatever the screensaver shows — same playlist, night style and music — so the screensaver picks up right where your desktop was. Picking a style turns this off.")
+        .help("Play whatever the screensaver shows — same playlist and night style — so the screensaver picks up right where your desktop was. Picking a style turns this off.")
     }
 }
 
@@ -1085,9 +1103,9 @@ private struct DesktopGlyph: View {
 struct StyleThumb: View {
     @EnvironmentObject var model: AppModel
     let preset: Preset
-    /// The music corner card drawn on the still while a song shows (the Screensaver card's
-    /// hero when it can't be live); off = the plain thumbnail.
-    var showsMusicCard = false
+    /// Music presented on the still as the screensaver shows it while a song plays (the
+    /// Screensaver card's hero when it can't be live); off = the plain thumbnail.
+    var showsMusic = false
 
     var body: some View {
         // Takes exactly the size it's offered; the image fills it and is clipped, so a
@@ -1095,7 +1113,7 @@ struct StyleThumb: View {
         Color.black
             .overlay {
                 if let img = model.thumbnailer.image(for: preset, source: model.library.source,
-                                                     music: model.library.musicSettings, showsCard: showsMusicCard) {
+                                                     music: model.library.musicSettings, showsMusic: showsMusic) {
                     Image(nsImage: img).resizable().scaledToFill()
                 }
             }

@@ -34,25 +34,37 @@ static inline float4 flowing_out(float3 lin, float2 px) {
 
 // Stream function: its isolines are the streamlines of a divergence-free flow, so drawing
 // them gives long, unbroken, never-crossing filaments (LIC would smear into fur).
-static inline float flowing_stream(float2 q, float ts, float s) {
-    float2 w = q;
-    w += 0.45 * float2(sin(q.y * 1.15 + ts * 0.9 + s), sin(q.x * 0.80 - ts * 0.7 + s * 1.7));
-    float psi = w.y + 0.25 * sin(w.x * 1.1 + ts * 0.4 + s * 3.1) + 0.07 * sin(w.x * 2.7 - w.y * 1.9 + ts * 0.5 + s * 2.3);
+// Returns (ψ, ∂ψ/∂q) with the gradient analytic, so strand widths are measured from the
+// exact line spacing (a 2×2-quad fwidth stair-stepped the strand edges, which crawled).
+static inline float3 flowing_stream(float2 q, float ts, float s) {
+    float A1 = q.y * 1.15 + ts * 0.9 + s, A2 = q.x * 0.80 - ts * 0.7 + s * 1.7;
+    float2 w = q + 0.45 * float2(sin(A1), sin(A2));
+    float B1 = w.x * 1.1 + ts * 0.4 + s * 3.1, B2 = w.x * 2.7 - w.y * 1.9 + ts * 0.5 + s * 2.3;
+    float psi = w.y + 0.25 * sin(B1) + 0.07 * sin(B2);
+    float cB2 = cos(B2);
+    float2 pw = float2(0.275 * cos(B1) + 0.189 * cB2, 1.0 - 0.133 * cB2);       // ∂ψ/∂w
+    float2 g = float2(pw.x + pw.y * 0.36 * cos(A2), pw.x * 0.5175 * cos(A1) + pw.y);
     // two slow eddies the strands wrap around (Gaussian vortices, opposite spin)
     float sn = sin(ts * 0.19 + s), cs = cos(ts * 0.19 + s);
     float2 c1 = float2(1.2 * sn, 0.45 * cs);
     float2 c2 = float2(-1.4 * cs, -0.5 * sn) + float2(0.3, 0.0);
-    psi += 0.30 * exp(-dot(q - c1, q - c1) * 2.2) - 0.24 * exp(-dot(q - c2, q - c2) * 2.6);
-    return psi;
+    float e1 = 0.30 * exp(-dot(q - c1, q - c1) * 2.2), e2 = 0.24 * exp(-dot(q - c2, q - c2) * 2.6);
+    psi += e1 - e2;
+    g += -4.4 * e1 * (q - c1) + 5.2 * e2 * (q - c2);
+    return float3(psi, g);
 }
 
 // ---------------------------------------------------------------- Lava Lamp (55)
 
 // Sum of compact (1 - r²/R²)³ kernels, one per blob, with its analytic gradient.
-// p is y-up. Returns (field, ∂f/∂x, ∂f/∂y).
-static inline float3 flowing_lavaField(float2 p, float ts, int n, float size, float seed, float spanX) {
+// p is y-up. Returns (field, ∂f/∂x, ∂f/∂y). `mound` gets (height, ∂/∂x) of the bulge the pool
+// raises under blobs settling into it: wider than the blob, so two blobs resting side by side
+// sit on one swell of wax instead of trapping a pocket of liquid between them.
+static inline float3 flowing_lavaField(float2 p, float ts, int n, float size, float seed, float spanX,
+                                       thread float2& mound) {
     float f = 0.0;
     float2 g = float2(0.0);
+    mound = float2(0.0);
     for (int i = 0; i < 10; ++i) {
         if (i >= n) break;
         float fi = float(i) + seed;
@@ -70,6 +82,12 @@ static inline float3 flowing_lavaField(float2 p, float ts, int n, float size, fl
         float sy = 1.0 + 0.45 * abs(vy) * (1.0 - 0.5 * h1);   // stretch along the motion
         float sx = rsqrt(sy);                                  // keep the area
         float2 d = p - c;
+        float lowK = smoothstep(-0.10, -0.34, c.y);
+        float Wb = 2.6 * r, xb = d.x / Wb;
+        if (lowK > 0.0 && abs(xb) < 1.0) {
+            float kb = 1.0 - xb * xb;
+            mound += lowK * float2(kb * kb, -4.0 * kb * xb / Wb);
+        }
         float2 e = float2(d.x / sx, d.y / sy);
         float R2 = r * r * 4.0;
         float q = dot(e, e) / R2;
@@ -82,13 +100,20 @@ static inline float3 flowing_lavaField(float2 p, float ts, int n, float size, fl
     return float3(f, g);
 }
 
-// Studio-ish environment seen in the glossy wax: a large window upper-left, a thin strip
-// right, and the warm lamp glow from below. r is a reflection vector (y up, z to viewer).
+// Studio-ish environment seen in the glossy wax: a large soft window upper-left, a tall thin
+// strip right, and the warm lamp glow from below. Softboxes have a hot plateau and a soft
+// shoulder (1 / (1 + d⁶)), so highlights read as light sources, not cut-out shapes.
+// r is a reflection vector (y up, z to viewer).
 static inline float3 flowing_lavaEnv(float3 r, float3 warm) {
-    float win = smoothstep(0.20, 0.12, abs(r.x + 0.36)) * smoothstep(0.26, 0.16, abs(r.y - 0.40));
-    float strip = smoothstep(0.035, 0.012, abs(r.x - 0.55)) * smoothstep(0.45, 0.25, abs(r.y - 0.15));
+    float2 d1 = (r.xy - float2(-0.36, 0.42)) / float2(0.24, 0.29);
+    float q1 = dot(d1, d1);
+    float win = 1.0 / (1.0 + q1 * q1 * q1);
+    float2 d2 = (r.xy - float2(0.55, 0.15)) / float2(0.05, 0.36);
+    float q2 = dot(d2, d2);
+    float strip = 1.0 / (1.0 + q2 * q2 * q2);
     float bulb = smoothstep(-0.25, -0.85, r.y);
-    return float3(1.0, 0.97, 0.93) * (win * 1.6 + strip * 0.9) + warm * bulb * 0.8;
+    float3 c = float3(1.0, 0.97, 0.93) * (win * (1.25 + 0.35 * smoothstep(0.0, -0.6, d1.y)) + strip * 0.45);
+    return c + warm * bulb * 0.8;
 }
 
 // ---------------------------------------------------------------- Ink Bloom (56)
@@ -108,6 +133,18 @@ static inline float2 flowing_inkVel(float2 x, float tau) {
     return v;
 }
 
+// Where did the water now at d sit before a vortex core at c turned it by the integrated
+// angle G·e^{−ρ²/rc²}? Rotation about a centre by any θ(ρ) is area-preserving, so ink carried
+// through it keeps its mass and rolls into spirals; the Gaussian keeps the swirl local (a
+// pair's far fields cancel). (Inverse = rotate by −θ.)
+static inline float2 flowing_untwirl(float2 d, float2 c, float G, float rc2) {
+    float2 v = d - c;
+    float r2 = dot(v, v);
+    float th = G * exp(-r2 / rc2);
+    float s = sin(th), co = cos(th);
+    return c + float2(co * v.x + s * v.y, co * v.y - s * v.x);
+}
+
 // ---------------------------------------------------------------- Fireflies (57)
 
 // One depth layer of fireflies: a jittered grid, one candidate fly per cell, each wandering
@@ -124,7 +161,9 @@ static inline float3 flowing_fireflyLayer(float2 p, float z, float cs, float t, 
         float2 c = cell0 + float2(dx, dy);
         float3 h = pcg3(float3(c + 512.0, seed));
         // meadow flies stay low; the near (bokeh) layer can be anywhere
-        float lowBias = mix(smoothstep(0.30, -0.15, (c.y + 0.5) * cs), 1.0, smoothstep(0.75, 1.0, z));
+        float cy = (c.y + 0.5) * cs;
+        float lowBias = mix(smoothstep(0.30, -0.15, cy), 1.0, smoothstep(0.75, 1.0, z));
+        lowBias = max(lowBias, 0.20 * smoothstep(0.30, 0.0, cy));   // a few wander up into the trees
         if (h.z > countK * lowBias) continue;
         float zf = clamp(z + (fract(h.y * 17.3) - 0.5) * 0.22, 0.0, 1.0);   // each fly its own depth
         float coc = blur * abs(zf - focus) * 0.075;             // circle of confusion (p units)

@@ -113,8 +113,9 @@ final class AppModel: ObservableObject {
     // MARK: Built-ins (library migration v4)
 
     /// Featured built-ins every library gets once, even one from before seenBuiltIns existed.
-    /// "Now Playing" counts only once a built-in of that name ships (it's looked up by name).
-    static let promotedBuiltIns = ["Tidewater", "Now Playing"]
+    /// (Now Playing was one until music became a presentation over any style — it's retired:
+    /// never added, and a library that has it keeps it.)
+    static let promotedBuiltIns = ["Tidewater"]
 
     /// New built-in styles reach existing libraries exactly once (runs on every launch):
     ///  • no `seenBuiltIns` (a library from before 1.4): everything shipping now counts as

@@ -69,7 +69,7 @@ final class MusicLifecycle {
 
     /// A Now Playing style plays on the screensaver (playlist or night), on the wallpaper, is
     /// open in the editor, or fills the screen in a Preview (a gallery tile's, the editor's) —
-    /// it shows what's playing whatever the card settings say.
+    /// it shows what's playing whatever Show music says.
     static func stylesNeedMusic(_ model: AppModel) -> Bool {
         let lineup = model.screensaverLineup
         let ids = Set(lineup.playlist + [lineup.night].compactMap { $0 })
