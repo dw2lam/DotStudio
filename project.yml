@@ -70,6 +70,9 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleDisplayName: DotStudio
         LSApplicationCategoryType: "public.app-category.graphics-design"
+        # Dual-GPU (Intel) Macs: don't force the discrete GPU on just because the app
+        # uses Metal; the live wallpaper renders on the integrated low-power GPU.
+        NSSupportsAutomaticGraphicsSwitching: true
         NSHumanReadableCopyright: "DotStudio"
         # Sparkle auto-update: appcast rides on the latest GitHub release.
         SUFeedURL: "https://github.com/dw2lam/DotStudio/releases/latest/download/appcast.xml"

@@ -59,6 +59,7 @@ final class DotSaverView: ScreenSaverView {
             self.store.debug("[\(self.logID)] idle watchdog — no frames for 5s, tearing down")
             self.teardownMetalStack()
         }
+        idleWatchdog?.tolerance = 1   // a housekeeping check: let macOS coalesce its wake-ups
     }
 
     /// True when the host has stopped driving this view. 2s ≈ two poll periods —
