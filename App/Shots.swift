@@ -227,6 +227,19 @@ enum UIShots {
                         prepare: { $0.setup(.notChosen) }, view: main))
         s.append(Screen(name: "dest-wallpaper", frame: .window,
                         prepare: { WallpaperSlot.shared.set($0.wallpaper) }, view: main))
+        // The Wallpaper card's transport (Play / Pause / Off) in each state, and both beacons
+        // frozen mid-turn (BeaconHook) — offscreen, the lamps never turn by themselves.
+        s.append(Screen(name: "dest-wallpaper-paused", frame: .window, prepare: { st in
+            WallpaperSlot.shared.set(st.wallpaper)
+            WallpaperController.shared.togglePause()
+        }, view: main))
+        s.append(Screen(name: "dest-wallpaper-off", frame: .window, view: main))
+        for pct in [15, 40] {
+            s.append(Screen(name: "dest-beacon-\(pct)", frame: .window, prepare: { st in
+                WallpaperSlot.shared.set(st.wallpaper)
+                BeaconHook.phase = Double(pct) / 100
+            }, view: main))
+        }
         s.append(Screen(name: "dest-full", frame: .window, prepare: { st in
             st.lineup(st.playlist, night: st.night)
             WallpaperSlot.shared.set(st.wallpaper)
@@ -477,6 +490,7 @@ enum UIShots {
             DemoHooks.hoverName = nil
             DemoHooks.expandAllEffects = false
             SyncMorphHook.progress = nil
+            BeaconHook.phase = nil
             setup(.ready)
             WallpaperSlot.shared.stop()
             WallpaperController.shared.update { $0.enabled = false; $0.followsScreensaver = false }
