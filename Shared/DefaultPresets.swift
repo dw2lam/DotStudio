@@ -124,7 +124,7 @@ enum DefaultPresets {
         "Sunray", "Flip Clock", "Word Clock", "Window Light",
         "Lava Lamp", "Currents", "Fireflies",
         "Golden Hour", "Tidewater", "Shallows", "Night Sky", "First Snow",
-        "Neon Horizon", "Pipeworks", "Light Tunnel", "Light Ribbons",
+        "Neon Horizon", "Pipeworks", "Light Tunnel", "Light Ribbons", "Bounce",
         // Looks
         "Film", "Riso Duotone", "Cyanotype", "Floyd–Steinberg", "Atkinson", "ASCII", "Amber CRT", "Soft Focus",
     ]
