@@ -301,7 +301,8 @@ final class Thumbnailer {
         func take(_ s: TimeInterval) { best = min(best ?? s, s) }
         for e in preset.effects where e.enabled {
             switch e.kind {
-            case .typeClock, .flipClock, .wordClock, .dialClock, .windowLight: take(60)
+            case .typeClock, .flipClock, .wordClock, .dialClock, .windowLight,
+                 .standbyClock, .minimalClock, .watchClock: take(60)
             case .nightSky, .universe: take(600)
             default: break
             }

@@ -109,6 +109,8 @@ enum EffectKind: String, Codable, CaseIterable {
     // — new-scene slot 6 (shader id 72); rename the case freely on this line —
     case dialClock
 
+    case standbyClock, minimalClock, watchClock               // StandBy pack (Clocks) 75–77 (Standby.swift)
+
     var displayName: String {
         switch self {
         case .dither: return "Dithering"
