@@ -27,12 +27,24 @@ struct StoreAlert: Identifiable {
 
 final class AppModel: ObservableObject {
     let store = SharedStore(role: .app)
-    lazy var thumbnailer: Thumbnailer = {
+    /// The gallery's stills and their Metal renderer: made when a window first needs them,
+    /// dropped when the last window closes (menu-bar mode keeps none of it — tens of MB of
+    /// stills, textures and pipelines for a window nobody has open).
+    var thumbnailer: Thumbnailer {
+        if let t = _thumbnailer { return t }
         let t = Thumbnailer(store: store)
-        t.onUpdate = { [weak self] in self?.objectWillChange.send() }   // repaint when a still lands
         t.location = { [weak self] in self?.locationTuple }   // live sky, Universe, weather tiles
+        _thumbnailer = t
         return t
-    }()
+    }
+    private var _thumbnailer: Thumbnailer?
+
+    /// Every window closed (AppPresence): let the stills go; the next window renders them again
+    /// (in the background, Thumbnailer.prewarm).
+    func releaseThumbnails() {
+        _thumbnailer = nil
+        BlurCache.shared.removeAll()
+    }
     @Published var library: Library
     @Published var selectedID: UUID?
     /// The style open in the editor; nil = the library gallery is showing.
@@ -449,7 +461,7 @@ final class AppModel: ObservableObject {
         let neighbor = library.presets.indices.contains(idx) ? idx : library.presets.count - 1
         selectedID = neighbor >= 0 ? library.presets[neighbor].id : nil
         save()
-        thumbnailer.retain(ids: Set(library.presets.map(\.id)))
+        _thumbnailer?.retain(ids: Set(library.presets.map(\.id)))
     }
 
     // MARK: Preset sharing (.dotstudiopreset)

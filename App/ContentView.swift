@@ -40,7 +40,7 @@ struct ContentView: View {
         }
         .adaptiveLayout()   // width class + text size → \.layout for every view inside (Layout.swift)
         .background {
-            AmbientBackdrop(presetID: editing?.id ?? model.nowPlayingID)
+            GalleryBackdrop(presetID: editing?.id ?? model.nowPlayingID)
                 .ignoresSafeArea()
         }
         .environment(\.heroNamespace, reduceMotion ? nil : hero)

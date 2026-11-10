@@ -6,6 +6,12 @@
 //  repaints once when the new one lands. So dragging a slider in the editor never blocks the
 //  main thread on a Metal render, however many views show that style.
 //
+//  Who repaints: a view that shows a still asked `image(for:)` for it in its body, which reads
+//  that style's change signal (Observation) — so a still landing repaints exactly the views
+//  showing THAT style, never the whole gallery (posters and music changes, which can touch any
+//  still, bump one shared signal). Opening the gallery also renders every missing first still
+//  in the background (`prewarm`), so scrolling never waits on a Metal render.
+//
 //  Stills that depend on the wall clock (clocks, Window Light, the live sky, Night Sky,
 //  Universe) or on the live weather carry a time bucket / weather revision in their key, and
 //  are re-rendered at those boundaries while a DotStudio window is on screen — only those
@@ -15,6 +21,7 @@
 import AppKit
 import AVFoundation
 import MetalKit
+import Observation
 
 final class Thumbnailer {
     private let renderer: MetalRenderer?
@@ -29,9 +36,28 @@ final class Thumbnailer {
     let width = 448, height = 280
     private var effectCache: [Int: NSImage] = [:]
 
-    /// Called on the main queue when a still changes (a refresh, a video poster), so the owner
-    /// (AppModel) can trigger a SwiftUI refresh. Coalesced: once per run-loop turn.
-    var onUpdate: (() -> Void)?
+    /// One style's change signal: views read it (through `image(for:)`) while rendering, so
+    /// bumping it repaints only the views showing that style.
+    @Observable final class Signal {
+        var revision = 0
+    }
+    private var signals: [UUID: Signal] = [:]
+    /// Bumped by changes that can touch any still: a video poster landing, the track a Now
+    /// Playing still shows. Main thread.
+    private let everyStill = Signal()
+
+    private func signal(_ id: UUID) -> Signal {
+        if let s = signals[id] { return s }
+        let s = Signal()
+        signals[id] = s
+        return s
+    }
+
+    /// Registers the calling view (in its body) as showing `id`'s still.
+    private func observe(_ id: UUID) {
+        _ = signal(id).revision
+        _ = everyStill.revision
+    }
     /// The device location (live sky, Universe marker); AppModel supplies it.
     var location: () -> (lat: Double, lon: Double)? = { nil }
 
@@ -45,7 +71,6 @@ final class Thumbnailer {
     // Background refreshes (main thread bookkeeping).
     private var inFlight: Set<UUID> = []
     private var queued: [UUID: Job] = [:]
-    private var updateScheduled = false
 
     // Time-dependent stills: what was last asked for, and when a view last showed it.
     private var timed: [UUID: (job: Job, seen: Date)] = [:]
@@ -80,7 +105,25 @@ final class Thumbnailer {
     init(store: SharedStore) {
         self.store = store
         renderer = MetalRenderer(pixelFormat: .bgra8Unorm, store: store)
+        // A window coming back into view (uncovered, unminimized) catches up at once on stills
+        // whose time moved on while nobody could see them.
+        occlusion = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self, !self.timed.isEmpty, Self.appWindowOnScreen else { return }
+            // Nothing scrolled while it was hidden: what showed then still shows.
+            let now = Date()
+            for (id, entry) in self.timed { self.timed[id] = (entry.job, now) }
+            self.tick?.invalidate()
+            self.tickFired()
+        }
     }
+
+    deinit {
+        if let occlusion { NotificationCenter.default.removeObserver(occlusion) }
+        tick?.invalidate()
+    }
+
+    private var occlusion: NSObjectProtocol?
 
     /// Drop cached thumbnails for presets no longer in the library.
     func retain(ids: Set<UUID>) {
@@ -89,14 +132,16 @@ final class Thumbnailer {
         cardCache = cardCache.filter { ids.contains($0.key) }
         timed = timed.filter { ids.contains($0.key) }
         queued = queued.filter { ids.contains($0.key) }
+        signals = signals.filter { ids.contains($0.key) }
     }
 
     /// - music: the library's music settings — a Now Playing tile keeps a paused song exactly
     ///   as long as the screensaver does (its linger).
     func image(for preset: Preset, source: SourceSpec, music settings: MusicSpec = MusicSpec()) -> NSImage? {
         Perf.count("thumb:image(for:)")
-        let job = makeJob(preset, source: source, settings: settings)
         let id = preset.id
+        observe(id)
+        let job = makeJob(preset, source: source, settings: settings)
         if job.period != nil {
             timed[id] = (job, Date())
             armTick()
@@ -201,22 +246,42 @@ final class Thumbnailer {
         guard cache[id] != nil else { return }        // the style was deleted meanwhile
         if let frame {
             store(job, frame)
-            scheduleUpdate()
+            signal(id).revision += 1
         }
         if let next, next.stamp != job.stamp { refresh(next) }
     }
 
-    /// Perf probe: announce a still landing exactly as a finished refresh does.
-    func debugAnnounceUpdate() { scheduleUpdate() }
+    // MARK: Prewarm
 
-    private func scheduleUpdate() {
-        guard !updateScheduled else { return }
-        updateScheduled = true
-        DispatchQueue.main.async { [weak self] in
-            self?.updateScheduled = false
-            self?.onUpdate?()
+    /// Renders, in the background, the first still of every style that has none yet (the
+    /// gallery appearing): the tiles a scroll brings into view then find their still cached
+    /// instead of rendering it on the main thread mid-scroll. One render at a time, in order.
+    func prewarm(_ presets: [Preset], source: SourceSpec, music settings: MusicSpec) {
+        guard !Self.synchronous else { return }
+        for p in presets where cache[p.id] == nil && !inFlight.contains(p.id) {
+            let job = makeJob(p, source: source, settings: settings)
+            inFlight.insert(p.id)
+            refreshQueue.async { [weak self] in
+                let frame = self?.render(job)
+                DispatchQueue.main.async { self?.prewarmed(job, frame) }
+            }
         }
     }
+
+    private func prewarmed(_ job: Job, _ frame: CGImage?) {
+        let id = job.preset.id
+        inFlight.remove(id)
+        let next = queued.removeValue(forKey: id)
+        // A view may have rendered it itself meanwhile (it was on screen first): keep that one.
+        if cache[id] == nil, let frame {
+            store(job, frame)
+            signal(id).revision += 1
+        }
+        if let next, cache[id] != nil, next.stamp != stamps[id] { refresh(next) }
+    }
+
+    /// Perf probe: announce a still landing exactly as a finished refresh does.
+    func debugAnnounceUpdate(_ id: UUID) { signal(id).revision += 1 }
 
     // MARK: Time and weather
 
@@ -265,7 +330,9 @@ final class Thumbnailer {
     private func tickFired() {
         Perf.count("tick:Thumbnailer")
         tick = nil
-        guard Self.appWindowVisible else { return }   // the next gallery render re-arms it
+        // Nobody can see a still (every window closed, covered or minimized): stop until a
+        // window comes back into view (the occlusion observer) or a view asks again.
+        guard Self.appWindowOnScreen else { return }
         let now = Date()
         for (id, entry) in timed {
             guard let period = entry.job.period, now.timeIntervalSince(entry.seen) <= period + 120 else {
@@ -279,8 +346,11 @@ final class Thumbnailer {
         armTick()
     }
 
-    private static var appWindowVisible: Bool {
-        NSApp?.windows.contains { $0.isVisible && $0.styleMask.contains(.titled) } ?? false
+    private static var appWindowOnScreen: Bool {
+        NSApp?.windows.contains {
+            $0.isVisible && $0.styleMask.contains(.titled) && !$0.isMiniaturized
+                && $0.occlusionState.contains(.visible)
+        } ?? false
     }
 
     // MARK: Music (legacy Now Playing tiles, music on the screensaver's still)
@@ -348,7 +418,7 @@ final class Thumbnailer {
                 return
             }
             let k = Self.musicKey(snap, self.musicSettings)
-            if self.lastMusicKey != nil, k != self.lastMusicKey { self.onUpdate?() }
+            if self.lastMusicKey != nil, k != self.lastMusicKey { self.everyStill.revision += 1 }
             self.lastMusicKey = k
         }
     }
@@ -386,6 +456,7 @@ final class Thumbnailer {
 
     /// A small swatch of one effect applied alone to the current source (Add Effect picker).
     func effectImage(_ kind: EffectKind, source: SourceSpec) -> NSImage? {
+        _ = everyStill.revision
         let override = posterTexture(for: source)
         var hasher = Hasher()
         hasher.combine(kind)
@@ -446,7 +517,7 @@ final class Thumbnailer {
                     return
                 }
                 self.posters[name] = tex
-                self.onUpdate?()
+                self.everyStill.revision += 1
             }
         }
     }

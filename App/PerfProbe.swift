@@ -120,6 +120,7 @@ enum PerfProbe {
             switch mode {
             case "window": runWindow()
             case "scroll": runScroll()
+            case "backdrop": runBackdrop()
             default: runIdle()
             }
         }
@@ -333,7 +334,7 @@ enum PerfProbe {
                 scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
                 scroll.reflectScrolledClipView(scroll.contentView)
                 if i % 40 == 10 { postSpotify(playing: true, newTrack: true) }
-                if i % 40 == 30 { model.thumbnailer.debugAnnounceUpdate() }
+                if i % 40 == 30 { model.thumbnailer.debugAnnounceUpdate(model.library.presets[0].id) }
                 RunLoop.main.run(until: Date().addingTimeInterval(0.004))
                 host.layoutSubtreeIfNeeded()
                 host.displayIfNeeded()
@@ -367,7 +368,7 @@ enum PerfProbe {
         phase("window-quiet") { spin(seconds); return seconds }
 
         phase("thumbnail-lands x5") {
-            for _ in 0..<5 { model.thumbnailer.debugAnnounceUpdate(); spin(0.5) }
+            for _ in 0..<5 { model.thumbnailer.debugAnnounceUpdate(model.library.presets[0].id); spin(0.5) }
             return 2.5
         }
         phase("song-starts") { postSpotify(playing: true, newTrack: true); spin(3); return 3 }
@@ -404,7 +405,38 @@ enum PerfProbe {
         // Close it, as the user does: the app goes back to menu-bar idle.
         win.contentView = nil
         win.close()
+        model.releaseThumbnails()   // what AppPresence does once the last window has closed
         phase("closed-settle") { spin(3); return 3 }
         phase("closed-quiet") { spin(seconds); return seconds }
+    }
+
+    // MARK: Backdrop (look check)
+
+    /// DOTSTUDIO_PERF_PROBE=backdrop DOTSTUDIO_PERF_OUT=<dir>: renders the live-blur
+    /// AmbientBackdrop and the pre-blurred GalleryBackdrop with SwiftUI's own renderer
+    /// (ImageRenderer draws blur filters; offscreen window captures don't) for comparison.
+    @MainActor private static func runBackdrop() {
+        let (model, _) = bootServices()
+        let out = env["DOTSTUDIO_PERF_OUT"] ?? NSTemporaryDirectory()
+        let size = CGSize(width: 1440, height: 900)
+        let ids = [model.nowPlayingID] + model.library.presets.prefix(6).map { Optional($0.id) }
+        for (i, id) in ids.enumerated() {
+            for dark in [false, true] {
+                let scheme: ColorScheme = dark ? .dark : .light
+                func shot(_ v: some View, _ name: String) {
+                    let r = ImageRenderer(content: v.frame(width: size.width, height: size.height)
+                        .environment(\.colorScheme, scheme).environmentObject(model))
+                    r.scale = 1
+                    guard let cg = r.cgImage else { return }
+                    let url = URL(fileURLWithPath: out).appendingPathComponent("\(name)-\(i)\(dark ? "-dark" : "").png")
+                    try? NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:])?.write(to: url)
+                }
+                _ = model.thumbnailer.image(for: model.preset(id!)!, source: model.library.source,
+                                            music: model.library.musicSettings)
+                shot(AmbientBackdrop(presetID: id), "old")
+                shot(GalleryBackdrop(presetID: id), "new")
+            }
+        }
+        say("backdrops written to \(out)")
     }
 }
