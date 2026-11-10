@@ -72,18 +72,6 @@ static inline float noise3(float3 p) {
     return mix(mix(mix(a, b, u.x), mix(c, d, u.x), u.y),
                mix(mix(e, f2, u.x), mix(g, h, u.x), u.y), u.z);
 }
-static inline float fbm3(float3 p, float lac, float pers) {
-    float v = 0.0, amp = 0.5;
-    for (int i = 0; i < 4; ++i) { v += noise3(p) * amp; p *= lac; amp *= pers; }
-    return v;
-}
-static inline float3 blackbody(float tempK) {
-    float t = clamp((tempK - 1000.0) / 9000.0, 0.0, 1.0);
-    float red = clamp(1.0 - (t - 0.8) * 2.0, 0.5, 1.0);
-    float green = smoothstep(0.0, 0.5, t) * (1.0 - max((t - 0.7) * 0.3, 0.0));
-    float blue = smoothstep(0.3, 1.0, t) * t;
-    return float3(red, green, blue);
-}
 static inline float3 aces(float3 x) {
     return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
 }

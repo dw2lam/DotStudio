@@ -1341,7 +1341,6 @@ final class MusicMonitor: ObservableObject {
     /// Waits for queued file writes (tests, stop()).
     func flushWrites() { writer?.flush() }
     func artStats() async -> MusicArtStats? { await resolver?.currentStats() }
-    func debugLog(_ message: String) { logger.write(message) }
 }
 
 // MARK: - Notification receiver

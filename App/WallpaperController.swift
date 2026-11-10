@@ -231,8 +231,6 @@ final class WallpaperController: ObservableObject {
         }
     }
 
-    var hasVisibleMainWindow: Bool { mainWindows.contains { $0.isVisible } }
-
     private var mainWindows: [NSWindow] {
         NSApp.windows.filter { w in
             !(w is WallpaperWindow) && w.styleMask.contains(.titled)

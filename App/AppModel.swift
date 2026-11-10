@@ -297,15 +297,6 @@ final class AppModel: ObservableObject {
             })
     }
 
-    func setActive(_ id: UUID) {
-        library.activeID = id
-        save()
-    }
-
-    var activeName: String {
-        library.presets.first { $0.id == library.activeID }?.name ?? "—"
-    }
-
     // MARK: Navigation
 
     func edit(_ id: UUID) {
@@ -347,10 +338,6 @@ final class AppModel: ObservableObject {
 
     func updateRotation(_ change: (inout RotationSpec) -> Void) {
         var r = rotation; change(&r); library.rotation = r; save()
-    }
-
-    func updateSchedule(_ change: (inout ScheduleSpec) -> Void) {
-        var s = schedule; change(&s); library.schedule = s; save()
     }
 
     func preset(_ id: UUID) -> Preset? { library.presets.first { $0.id == id } }
@@ -430,11 +417,6 @@ final class AppModel: ObservableObject {
         selectedID = copy.id
         save()
         return copy.id
-    }
-
-    func deleteSelected() {
-        guard let id = selectedID else { return }
-        delete(id)
     }
 
     func delete(_ id: UUID) {
