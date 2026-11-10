@@ -4,7 +4,8 @@
 # Nothing is shown on screen and the user's library is never read (see main.swift's header).
 #
 # usage: tools/perf/run.sh <renderer|saver|wallpaper|idle> [--fps 30,120] [--seconds 4]
-#                          [--only chrome,zen] [--size 3024x1964]
+#                          [--only chrome,zen] [--size 3024x1964] [--power ac|battery|lowpower]
+#   --power (saver, wallpaper): the real power policy picks fps and drawable (see main.swift)
 #   PERF_BUILD=dir   build directory (default .dd/perf)      PERF_DEBUG=1   -Onone build
 set -e
 ROOT="${0:A:h:h:h}"

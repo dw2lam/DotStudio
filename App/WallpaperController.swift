@@ -81,6 +81,9 @@ final class WallpaperController: ObservableObject {
     private var openMainWindowAction: (() -> Void)?
     private var nextToken: UInt64 = 0
     private var lastLoggedState = ""
+    /// The multiplier on Quality's pixels per point the drawables are sized with
+    /// (WallpaperBudget.renderScale; reevaluate resizes them when it changes).
+    private var renderScale: CGFloat = 1
 
     /// The render thread, started the first time a wallpaper turns on, then kept
     /// (an idle run loop costs nothing).
@@ -367,7 +370,7 @@ final class WallpaperController: ObservableObject {
             let link = h.view.displayLink(target: WallpaperRenderLoop.linkTarget(loop, display: id),
                                           selector: WallpaperRenderLoop.linkSelector)
             loop.addDisplay(id, token: h.token, layer: h.metalLayer, link: link, device: device,
-                            config: h.surfaceConfig(quality: settings.quality))
+                            config: h.surfaceConfig(quality: settings.quality, scale: renderScale))
         }
         for (id, h) in hosts where !seen.contains(id) {
             loop.removeDisplay(id)
@@ -379,7 +382,7 @@ final class WallpaperController: ObservableObject {
 
     /// Hand a display's current drawable size and refresh rate to the render thread.
     private func configure(_ h: WallpaperHost) {
-        renderLoop?.configure(h.displayID, h.surfaceConfig(quality: settings.quality))
+        renderLoop?.configure(h.displayID, h.surfaceConfig(quality: settings.quality, scale: renderScale))
     }
 
     // MARK: Style
@@ -528,22 +531,14 @@ final class WallpaperController: ObservableObject {
         return nil
     }
 
-    /// Holds: keep the last frame (a clock still turns over once a minute).
-    private var stillReason: String? {
-        let s = power.state
-        if s.thermalHot { return "Still — Mac is running hot" }
-        if s.onBattery && settings.freezeOnBattery { return "Still — on battery" }
-        return nil
-    }
+    /// Holds: keep the last frame (a clock still turns over once a minute) — hot Mac, or
+    /// On Battery: Still.
+    private var stillReason: String? { WallpaperBudget.stillReason(settings, power.state) }
 
-    /// Frames per second asked of the display links: 30 (Balanced, or anything on
-    /// battery; less only if the style itself asks for fewer) or each display's own
-    /// refresh (Smooth: 120 on ProMotion, 60 on most externals — divisorRate clamps it).
+    /// Frames per second asked of the display links (WallpaperBudget.fps: 30, Smooth's display
+    /// rate, 30 / 20 on battery; less only if the style itself asks for fewer).
     private var targetFPS: Double {
-        if settings.frameRate == .smooth && !power.state.onBattery { return 120 }
-        var fps = 30.0
-        if let p = currentPreset, p.fps > 0, p.fps < 30 { fps = Double(p.fps) }
-        return fps
+        WallpaperBudget.fps(settings, presetFPS: currentPreset?.fps ?? 0, onBattery: power.state.onBattery)
     }
 
     private func isVisible(_ h: WallpaperHost) -> Bool {
@@ -556,20 +551,31 @@ final class WallpaperController: ObservableObject {
         let hard = hardPauseReason
         let visible = Set(hosts.values.filter(isVisible).map(\.displayID))
         let still = stillReason
+        let onBattery = power.state.onBattery
 
         var status: String?
         if let hard { status = hard }
         else if visible.isEmpty { status = "Paused — desktop covered" }
         else if let still { status = still }
-        else if power.state.onBattery && settings.frameRate == .smooth { status = "30 fps — on battery" }
+        else { status = WallpaperBudget.batteryStatus(settings, onBattery: onBattery) }
         if status != statusText { statusText = status }
 
-        let stateLine = "hard=\(hard ?? "-") visible=\(visible.count)/\(hosts.count) still=\(still ?? "-") fps=\(targetFPS)"
+        // Efficient on battery draws fewer pixels: resize the drawables (the next frame — forced,
+        // so a held frame redraws at the new size too — fills them).
+        var force = forceDraw
+        let scale = WallpaperBudget.renderScale(settings, onBattery: onBattery, profile: profile)
+        if scale != renderScale {
+            renderScale = scale
+            hosts.values.forEach { configure($0) }
+            force = true
+        }
+
+        let stateLine = "hard=\(hard ?? "-") visible=\(visible.count)/\(hosts.count) still=\(still ?? "-") fps=\(targetFPS) scale=\(renderScale)"
         if stateLine != lastLoggedState { lastLoggedState = stateLine; log("state \(stateLine)") }
 
         renderLoop?.update(WallpaperFrameState(canDraw: hard == nil, visible: visible, profile: profile,
                                                fps: targetFPS, still: still != nil),
-                           forceDraw: forceDraw)
+                           forceDraw: force)
         updateMusicSubscription()
     }
 
@@ -577,8 +583,9 @@ final class WallpaperController: ObservableObject {
 
     /// DOTSTUDIO_DEMO_WALLPAPER=<style name> turns the wallpaper on at launch;
     /// DOTSTUDIO_WALLPAPER_FPS=30|120 (120 = Smooth), DOTSTUDIO_WALLPAPER_QUALITY=efficient|balanced|full
-    /// and DOTSTUDIO_WALLPAPER_FREEZE_ON_BATTERY=0|1 override settings (persisted, so
-    /// pair them with DOTSTUDIO_STORE_DIR).
+    /// and DOTSTUDIO_WALLPAPER_ON_BATTERY=full|efficient|still override settings (persisted, so
+    /// pair them with DOTSTUDIO_STORE_DIR); the old DOTSTUDIO_WALLPAPER_FREEZE_ON_BATTERY=1|0
+    /// still works (Still / Efficient). Power itself: DOTSTUDIO_WALLPAPER_FORCE (WallpaperPowerMonitor).
     private func applyDevOverrides() {
         let env = ProcessInfo.processInfo.environment
         if let name = env["DOTSTUDIO_DEMO_WALLPAPER"],
@@ -592,7 +599,10 @@ final class WallpaperController: ObservableObject {
             update { $0.quality = q }
         }
         if let b = env["DOTSTUDIO_WALLPAPER_FREEZE_ON_BATTERY"] {
-            update { $0.freezeOnBattery = (b == "1") }
+            update { $0.batteryMode = b == "1" ? .still : .efficient }
+        }
+        if let m = env["DOTSTUDIO_WALLPAPER_ON_BATTERY"].flatMap(WallpaperSettings.BatteryMode.init) {
+            update { $0.batteryMode = m }
         }
     }
 
@@ -742,11 +752,12 @@ final class WallpaperHost {
                                         bottom: max(v.minY - f.minY, 0), right: max(f.maxX - v.maxX, 0))
     }
 
-    /// Drawable = display points × Quality's pixel density; the compositor upscales it.
+    /// Drawable = display points × Quality's pixel density × `scale` (WallpaperBudget.renderScale:
+    /// 0.6 for Efficient on battery); the compositor upscales it.
     /// Also sets the layer's upscale filter (a compositing property, owned here).
-    func surfaceConfig(quality: WallpaperSettings.Quality) -> WallpaperSurfaceConfig {
+    func surfaceConfig(quality: WallpaperSettings.Quality, scale: CGFloat = 1) -> WallpaperSurfaceConfig {
         let backing = window.screen?.backingScaleFactor ?? window.backingScaleFactor
-        let ppp = quality.pixelsPerPoint(backing: backing)
+        let ppp = quality.pixelsPerPoint(backing: backing) * scale
         let size = window.frame.size
         let target = CGSize(width: max((size.width * ppp).rounded(), 1),
                             height: max((size.height * ppp).rounded(), 1))
