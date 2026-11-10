@@ -28,28 +28,53 @@ extension View {
     }
 }
 
-struct StyleTile: View {
-    @EnvironmentObject var model: AppModel
-    @ObservedObject private var wallpaper = WallpaperSlot.shared
+/// Everything a tile shows comes in as plain values (no observed model), and the tile is
+/// Equatable: a model change — a selection, an edit in the editor, a slider tick — re-renders
+/// only the tiles whose values changed, not every tile in the gallery. A still landing
+/// repaints just its own thumbnail (Thumbnailer's per-style signal).
+struct StyleTile: View, Equatable {
+    /// Actions and the thumbnailer. A plain reference: the tile never observes it.
+    let model: AppModel
     @Environment(\.heroNamespace) private var hero
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let preset: Preset
     let badges: TileBadges
     let lineup: ScreensaverLineup
+    let selected: Bool
+    /// This style is open in the editor (its image lives there).
+    let isOpen: Bool
+    /// Some style is open in the editor (the gallery is behind it: no live previews).
+    let editorOpen: Bool
+    let source: SourceSpec
+    let music: MusicSpec
+    let location: GeoPoint?
 
     @State private var hovering: Bool
+    /// The pointer is over the tile (hover effects wait while the gallery scrolls).
+    @State private var pointerInside = false
     @State private var live = false
     @State private var confirmDelete = false
 
-    init(preset: Preset, badges: TileBadges, lineup: ScreensaverLineup) {
+    init(model: AppModel, preset: Preset, badges: TileBadges, lineup: ScreensaverLineup) {
+        self.model = model
         self.preset = preset
         self.badges = badges
         self.lineup = lineup
+        selected = model.selectedID == preset.id
+        isOpen = model.editingID == preset.id
+        editorOpen = model.editingID != nil
+        source = model.library.source
+        music = model.library.musicSettings
+        location = model.locationTuple.map { GeoPoint(lat: $0.lat, lon: $0.lon) }
         _hovering = State(initialValue: DemoHooks.hoverName == preset.name)
     }
 
-    private var selected: Bool { model.selectedID == preset.id }
-    private var isOpen: Bool { model.editingID == preset.id }
+    static func == (a: StyleTile, b: StyleTile) -> Bool {
+        a.model === b.model && a.preset == b.preset && a.badges == b.badges && a.lineup == b.lineup
+            && a.selected == b.selected && a.isOpen == b.isOpen && a.editorOpen == b.editorOpen
+            && a.source == b.source && a.music == b.music && a.location == b.location
+    }
+
     private static let radius = Radius.tile
 
     var body: some View {
@@ -80,17 +105,22 @@ struct StyleTile: View {
         .motion(Motion.snappy, value: hovering)
         .motion(Motion.snappy, value: selected)
         .onHover { h in
-            hovering = h || DemoHooks.hoverName == preset.name
-            // Animate the tile live after a short dwell; one live preview at a time.
-            if h {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { if hovering { live = true } }
-            } else {
-                live = false
+            pointerInside = h
+            // While the gallery scrolls, tiles slide under a still pointer: no lift, no action
+            // bar, no live preview spinning up per tile — they catch up when the scroll ends.
+            if ScrollActivity.isScrolling && h { return }
+            setHover(h)
+        }
+        .onReceive(ScrollActivity.changes) { scrolling in
+            if scrolling {
+                if hovering && DemoHooks.hoverName != preset.name { setHover(false) }
+            } else if pointerInside != hovering {
+                setHover(pointerInside)
             }
         }
         .onTapGesture(count: 2) { model.edit(preset.id) }
         .onTapGesture { model.selectedID = preset.id }
-        .contextMenu { TileMenu(preset: preset, lineup: lineup, confirmDelete: $confirmDelete) }
+        .contextMenu { TileMenu(model: model, preset: preset, lineup: lineup, confirmDelete: $confirmDelete) }
         .help("\(preset.name) — double-click to edit")
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
@@ -102,13 +132,25 @@ struct StyleTile: View {
         }
     }
 
+    private func setHover(_ h: Bool) {
+        hovering = h || DemoHooks.hoverName == preset.name
+        // Animate the tile live after a short dwell; one live preview at a time.
+        if h {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                if hovering && !ScrollActivity.isScrolling { live = true }
+            }
+        } else {
+            live = false
+        }
+    }
+
     @ViewBuilder private var thumbnail: some View {
         ZStack {
-            StyleThumb(preset: preset)
-            if live && model.editingID == nil {
-                MetalPreview(preset: preset, source: model.library.source,
-                             location: model.locationTuple, store: model.store,
-                             music: model.library.musicSettings)
+            TileThumb(thumbnailer: model.thumbnailer, preset: preset, source: source, music: music)
+            if live && !editorOpen {
+                MetalPreview(preset: preset, source: source,
+                             location: location.map { ($0.lat, $0.lon) }, store: model.store,
+                             music: music)
                     .allowsHitTesting(false)
                     .transition(.opacity.animation(.easeIn(duration: 0.25)))
             }
@@ -384,7 +426,8 @@ private struct ScaledIconButton: View {
 
 /// Grouped so new destinations slot in as one more section.
 struct TileMenu: View {
-    @EnvironmentObject var model: AppModel
+    /// Actions only (a plain reference: the menu never observes the model).
+    let model: AppModel
     @ObservedObject private var wallpaper = WallpaperSlot.shared
     let preset: Preset
     let lineup: ScreensaverLineup
@@ -439,4 +482,33 @@ struct TileMenu: View {
         Button("Export Style…") { model.exportPreset(id) }
         Button("Save Image…") { model.exportSelectedAsImage(id) }
     }
+}
+
+// MARK: - Thumbnail
+
+/// A gallery tile's cached still (black until it renders) — StyleThumb without the observed
+/// model: it repaints when its own still lands (the Thumbnailer's per-style signal, read
+/// inside `image(for:)`), or when the tile's values change.
+struct TileThumb: View {
+    let thumbnailer: Thumbnailer
+    let preset: Preset
+    let source: SourceSpec
+    let music: MusicSpec
+
+    var body: some View {
+        // Takes exactly the size it's offered; the image fills it and is clipped.
+        Color.black
+            .overlay {
+                if let img = thumbnailer.image(for: preset, source: source, music: music) {
+                    Image(nsImage: img).resizable().scaledToFill()
+                }
+            }
+            .clipped()
+    }
+}
+
+/// A location as a comparable value (tiles compare their inputs).
+struct GeoPoint: Equatable {
+    var lat: Double
+    var lon: Double
 }

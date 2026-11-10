@@ -132,10 +132,19 @@ private struct GalleryPage: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { proxy.scrollTo(id, anchor: .top) }
         }
         }
+        // Every first still renders in the background now, not on the main thread when a
+        // scroll brings its tile into view (styles added later: when they arrive).
+        .onAppear { prewarmStills() }
+        .onChange(of: model.library.presets.count) { prewarmStills() }
         .coordinateSpace(name: FilterBar.space)
         .softScrollEdges()
         .motion(Motion.smooth, value: filter)
         .motion(Motion.smooth, value: query)
+    }
+
+    private func prewarmStills() {
+        model.thumbnailer.prewarm(model.library.presets, source: model.library.source,
+                                  music: model.library.musicSettings)
     }
 
     // MARK: Sections
@@ -192,7 +201,9 @@ private struct GalleryPage: View {
                 ForEach(Array(sections.enumerated()), id: \.element.id) { i, section in
                     Section {
                         ForEach(section.presets) { preset in
-                            StyleTile(preset: preset, badges: state.badges(for: preset.id), lineup: state.lineup)
+                            StyleTile(model: model, preset: preset, badges: state.badges(for: preset.id),
+                                      lineup: state.lineup)
+                                .equatable()
                                 .id(preset.id)
                                 .transition(.lift(reduceMotion: reduceMotion))
                         }

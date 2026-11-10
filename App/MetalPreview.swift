@@ -6,9 +6,14 @@
 //  backdrop easing in). `music` is the library's music settings — Show music, the corner and
 //  size, the backdrop, the paused linger — so a preview keeps a paused song exactly as long
 //  as the screensaver does.
+//
+//  A preview draws only while someone can see it: it holds its last frame while it is scrolled
+//  out of its scroll view, while that scroll view is being scrolled (the scroll gets the main
+//  thread — MTKView draws there), and while its window is covered or minimized.
 
 import SwiftUI
 import MetalKit
+import Combine
 
 struct MetalPreview: NSViewRepresentable {
     let preset: Preset
@@ -42,6 +47,7 @@ struct MetalPreview: NSViewRepresentable {
             r.reduceMotion = MusicOverlayLayer.systemReduceMotion
             r.apply(preset, source: source)
             context.coordinator.renderer = r
+            context.coordinator.applied = (preset, source)
         }
         view.preferredFramesPerSecond = fps
         context.coordinator.container = container
@@ -50,9 +56,15 @@ struct MetalPreview: NSViewRepresentable {
     }
 
     func updateNSView(_ container: PreviewContainer, context: Context) {
-        context.coordinator.renderer?.location = location
-        context.coordinator.renderer?.apply(preset, source: source)
-        container.metal.preferredFramesPerSecond = fps
+        let c = context.coordinator
+        c.renderer?.location = location
+        // Any model change re-runs this; re-applying an unchanged style would only repack its
+        // uniforms and restart its dither history.
+        if c.applied?.preset != preset || c.applied?.source != source {
+            c.renderer?.apply(preset, source: source)
+            c.applied = (preset, source)
+        }
+        if container.metal.preferredFramesPerSecond != fps { container.metal.preferredFramesPerSecond = fps }
         context.coordinator.update(preset: preset, music: music, presents: showsMusic)
     }
 
@@ -75,6 +87,57 @@ struct MetalPreview: NSViewRepresentable {
 
         required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
+        deinit { stopWatching() }
+
+        // MARK: Draw only while seen
+
+        private var watched: [NSObjectProtocol] = []
+        private var scrollSub: AnyCancellable?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stopWatching()
+            guard let window else { return }
+            let nc = NotificationCenter.default
+            var tokens = [
+                nc.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { [weak self] _ in
+                    self?.updateDrawing()
+                },
+            ]
+            if let clip = enclosingScrollView?.contentView {
+                clip.postsBoundsChangedNotifications = true
+                tokens.append(nc.addObserver(forName: NSView.boundsDidChangeNotification, object: clip, queue: .main) { [weak self] _ in
+                    self?.updateDrawing()
+                })
+            }
+            watched = tokens
+            scrollSub = ScrollActivity.changes.sink { [weak self] _ in self?.updateDrawing() }
+            updateDrawing()
+        }
+
+        override func layout() {
+            super.layout()
+            updateDrawing()
+        }
+
+        private func stopWatching() {
+            for t in watched { NotificationCenter.default.removeObserver(t) }
+            watched = []
+            scrollSub = nil
+        }
+
+        /// Pause while nobody can see it: scrolled out of view, scrolling (its own scroll view),
+        /// or its window covered / minimized. Paused, MTKView keeps showing its last frame.
+        private func updateDrawing() {
+            var seen = false
+            if let window, window.occlusionState.contains(.visible), !window.isMiniaturized {
+                seen = !visibleRect.isEmpty
+                if seen, let sv = enclosingScrollView, ScrollActivity.isScrolling,
+                   sv.window != nil, ScrollActivity.isScrolling(sv) { seen = false }
+            }
+            if metal.isPaused == seen { metal.isPaused = !seen }
+        }
+
         func setOverlay(_ on: Bool) -> MusicOverlayView? {
             if on, overlay == nil {
                 let ov = MusicOverlayView(frame: bounds)
@@ -92,6 +155,8 @@ struct MetalPreview: NSViewRepresentable {
     final class Coordinator {
         var renderer: MetalRenderer?
         weak var container: PreviewContainer?
+        /// What the renderer last got from `apply` (skipped when unchanged).
+        var applied: (preset: Preset, source: SourceSpec)?
         private let store: SharedStore
         private var token: MusicFeedHub.Token?
         private var preset: Preset?
