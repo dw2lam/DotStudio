@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.4.3 — Setup, battery and the lock screen
+
+### New
+- **Guided setup.** An animated walkthrough of System Settings › Wallpaper › Screen Saver…
+  › Other › DotStudio, with a checklist that ticks itself: installed, chosen (on every
+  display), "Start Screen Saver when inactive", and a warning when your display sleeps
+  before the screensaver starts. Open it any time from Help › Set Up Screensaver….
+- **Open at login** is on by default in setup, and DotStudio offers it once when you turn
+  on the wallpaper or music.
+- **Lock & login screen picture** (optional): DotStudio sets a still of your wallpaper as
+  your Mac's picture, refreshed when it locks. Turning it off restores your picture.
+
+### Better on battery
+- The live wallpaper's new **On Battery** setting: Efficient (default — 20 fps at a lower
+  resolution, about 70–80% less GPU work), Full or Still.
+- The screensaver runs at 24 fps and a lower resolution on battery, 15 fps at half
+  resolution in Low Power Mode, and its System Settings preview is much lighter.
+
+### Fixed
+- The wallpaper no longer cuts out when you switch desktops.
+- The screensaver's thumbnail in System Settings shows Liquid Chrome.
+
 ## 1.4.2 — Three new clocks
 
 ### New
