@@ -355,27 +355,38 @@ struct SyncKey: View {
 /// The one structure both destination cards share:
 ///
 ///     ┌───────────────────────────────────────────┐
-///     │ ┌──────────────────┐  EYEBROW · status     │
+///     │ ┌────────────────●─┐  EYEBROW              │
 ///     │ │                  │  Title                │
 ///     │ │    thumbnail     │  Subtitle             │
 ///     │ │  fills the card  │                       │
-///     │ │      height      │  [key ············ ]  │
-///     │ │                  │  [key ············ ]  │
-///     │ └──────────────────┘  [key ············ ]  │
-///     │ banner (setup strip), full width           │
-///     └───────────────────────────────────────────┘
+///     │ │      height      │  [key ············ ]  │     with an aside (the
+///     │ │                  │  [key ············ ]  │  ←  Wallpaper's Play /
+///     │ └──────────────────┘  [key ············ ]  │     Pause / Off keys):
+///     │ banner (setup strip), full width           │                    [▶]
+///     └───────────────────────────────────────────┘                    [‖]
+///                                                        [key ········] [⏻]
 ///
 /// The column's header sits at the top and its keys at the bottom, level with the
-/// thumbnail's edges. `mirrored` puts the thumbnail on the trailing side (the Screensaver
-/// card side by side, so both thumbnails meet at the SYNC key).
-private struct DestinationCardLayout<Preview: View, Keys: View, Banner: View>: View {
+/// thumbnail's edges; an optional `aside` (a column of icon keys) stands beside the keys
+/// at the column's trailing edge, its foot level with the last key. `mirrored` puts the thumbnail on the
+/// trailing side (the Screensaver card side by side, so both thumbnails meet at the SYNC
+/// key). ● is the card's beacon (DestinationBeacon): lit and sweeping while that
+/// destination plays — the only on/off readout the card shows. The card hands VoiceOver
+/// the same state, in words, as its value (`stateValue`).
+private struct DestinationCardLayout<Preview: View, Keys: View, Aside: View, Banner: View>: View {
     @Environment(\.layout) private var layout
     let geometry: DestinationGeometry
     let header: DestinationHeader
     var mirrored = false
     var drawsSurface = true
+    let beacon: BeaconState
+    /// Where on the thumbnail the beacon sits (by the SYNC key, side by side).
+    var beaconAlignment: Alignment = .topTrailing
+    /// "On", "Paused", "Off"…: what the beacon shows, in words.
+    let stateValue: String
     @ViewBuilder var preview: Preview
     @ViewBuilder var keys: Keys
+    @ViewBuilder var aside: Aside
     @ViewBuilder var banner: Banner
 
     var body: some View {
@@ -394,12 +405,19 @@ private struct DestinationCardLayout<Preview: View, Keys: View, Banner: View>: V
         .padding(layout.cardPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .modifier(OwnSurface(enabled: drawsSurface))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(header.eyebrow)
+        .accessibilityValue(stateValue)
     }
 
     private var thumbnail: some View {
         preview
             .frame(width: geometry.thumbWidth)
             .frame(minHeight: geometry.thumbHeight, idealHeight: geometry.thumbHeight, maxHeight: .infinity)
+            .overlay(alignment: beaconAlignment) {
+                DestinationBeacon(state: beacon)
+                    .padding(Space.xs)
+            }
             .clipShape(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous)
                 .strokeBorder(.primary.opacity(0.12)))
@@ -409,8 +427,15 @@ private struct DestinationCardLayout<Preview: View, Keys: View, Banner: View>: V
         VStack(alignment: .leading, spacing: 0) {
             header
             Spacer(minLength: layout.itemGap)
-            VStack(alignment: .leading, spacing: PanelKey.gap(layout)) {
-                keys
+            // The aside stands beside the keys, never the header: the header keeps the
+            // column's full width, and a card with an aside of three keys is as tall as
+            // one with three rows of keys (the two cards stay even, stacked too).
+            HStack(alignment: .bottom, spacing: PanelKey.gap(layout)) {
+                VStack(alignment: .leading, spacing: PanelKey.gap(layout)) {
+                    keys
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                aside
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -450,7 +475,9 @@ struct ScreensaverCard: View {
         let spec = model.library.musicSettings
         // The song only while music shows: Off shows nothing on screen, so neither does this.
         let showsSong = spec.displayMode != .off && now.isVisible(spec)
-        DestinationCardLayout(geometry: geometry, header: header, mirrored: mirrored, drawsSurface: drawsSurface) {
+        DestinationCardLayout(geometry: geometry, header: header, mirrored: mirrored, drawsSurface: drawsSurface,
+                              beacon: model.setupStatus == .ready ? .active : .off,
+                              stateValue: stateValue) {
             hero
         } keys: {
             playlistKey
@@ -460,6 +487,8 @@ struct ScreensaverCard: View {
                 nowPlayingLine
                     .transition(.lift(reduceMotion: reduceMotion))
             }
+        } aside: {
+            EmptyView()
         } banner: {
             if model.setupStatus != .ready {
                 SetupStrip(status: model.setupStatus)
@@ -535,9 +564,18 @@ struct ScreensaverCard: View {
     // MARK: Header
 
     private var header: DestinationHeader {
-        DestinationHeader(eyebrow: "Screensaver", status: StatusDot(status: model.setupStatus),
+        DestinationHeader(eyebrow: "Screensaver",
                           title: playing?.name ?? "Nothing yet",
                           subtitle: geometry.showsSubtitle ? subtitle : nil)
+    }
+
+    /// The beacon's state in words (the setup strip says what to do about it).
+    private var stateValue: String {
+        switch model.setupStatus {
+        case .ready: return "On"
+        case .notChosen: return "Not selected"
+        case .notInstalled: return "Not installed"
+        }
     }
 
     private var subtitle: String {
@@ -740,7 +778,7 @@ extension AppModel {
     }
 }
 
-/// The top of both destination cards — eyebrow + status, title, subtitle — with one
+/// The top of both destination cards — eyebrow, title, subtitle — with one
 /// structure and one set of gaps, so the two cards' titles and subtitles line up when they
 /// sit side by side. `roll` (0 … 1) rolls the title and subtitle from `titleFrom` /
 /// `subtitleFrom` to `title` / `subtitle`, like a readout catching up (the passenger's zone
@@ -748,7 +786,6 @@ extension AppModel {
 private struct DestinationHeader: View {
     @Environment(\.layout) private var layout
     let eyebrow: String
-    let status: StatusDot
     let title: String
     var subtitle: String?
     var titleFrom: String? = nil
@@ -759,11 +796,7 @@ private struct DestinationHeader: View {
         // A wide window's cards are big: their titles step up with them.
         let titleRole = layout.isWide ? TextRole(style: .title, weight: .semibold) : .cardTitle
         VStack(alignment: .leading, spacing: layout.labelGap) {
-            // The status moves under the eyebrow rather than breaking either word.
-            FlowLayout(spacing: layout.controlGap, lineSpacing: layout.labelGap) {
-                CardEyebrow(text: eyebrow)
-                status
-            }
+            CardEyebrow(text: eyebrow)
             RollingReadout(from: titleFrom ?? title, to: title, progress: roll) { t in
                 Text(t)
                     .textRole(titleRole)
@@ -904,15 +937,16 @@ struct PanelKeyFace<S: InsettableShape>: View {
     }
 }
 
-/// The panel's indicator light: dark when off, glowing green when on. `level` fades it.
+/// The panel's indicator light: dark when off, glowing green (or `color`) when on. `level` fades it.
 struct PanelLED: View {
     let level: CGFloat
+    var color: Color = PanelInk.led
 
     var body: some View {
         Capsule()
             .fill(Color.primary.opacity(0.18))
-            .overlay(Capsule().fill(PanelInk.led).opacity(level))
-            .shadow(color: PanelInk.led.opacity(0.8 * level), radius: 3)
+            .overlay(Capsule().fill(color).opacity(level))
+            .shadow(color: color.opacity(0.8 * level), radius: 3)
             .accessibilityHidden(true)
     }
 }
@@ -922,10 +956,13 @@ struct PanelKeyStyle: ButtonStyle {
     var radius: CGFloat = PanelKey.radius
     /// A key on its own over the page (the SYNC key on the seam): on glass, with a shadow.
     var floating = false
+    /// A latching key that's in (the wallpaper's current Play / Pause / Off): it sits
+    /// pressed until another key of its set is pressed.
+    var latched = false
 
     func makeBody(configuration: Configuration) -> some View {
         PanelKeyBody(label: configuration.label, pressed: configuration.isPressed,
-                     radius: radius, floating: floating)
+                     latched: latched, radius: radius, floating: floating)
     }
 }
 
@@ -934,13 +971,15 @@ private struct PanelKeyBody<Label: View>: View {
     @State private var hovering = false
     let label: Label
     let pressed: Bool
+    var latched = false
     let radius: CGFloat
     let floating: Bool
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         let key = label
-            .background(PanelKeyFace(shape: shape, hovering: hovering && isEnabled, pressed: pressed))
+            .background(PanelKeyFace(shape: shape, hovering: hovering && isEnabled && !latched,
+                                     pressed: pressed || latched))
             .contentShape(shape)
             .contentShape(.focusEffect, shape)
         Group {
@@ -985,11 +1024,13 @@ struct PanelKeyLabel: View {
                 .scaledFont { .scaled(.callout, $0, weight: .medium) }
                 .foregroundStyle(PanelInk.secondary)
                 .frame(width: iconBox)
-            Text(title)
-                .textRole(.control)
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .fixedSize()
+            if !title.isEmpty {   // empty: the icon names the key (a folded label)
+                Text(title)
+                    .textRole(.control)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
             Spacer(minLength: Space.xxs)
             if let last = values.last {
                 ViewThatFits(in: .horizontal) {
@@ -1053,38 +1094,289 @@ private struct CardEyebrow: View {
     }
 }
 
-/// A dot + word for a destination's state (Screensaver: on / not selected / not
-/// installed; Wallpaper: live / synced / off). Never wraps.
-struct StatusDot: View {
-    @Environment(\.layout) private var layout
-    @ScaledLength(relativeTo: .caption) private var diameter: CGFloat = 7
-    let color: Color
-    let text: String
+// MARK: - Beacon
 
-    init(color: Color, text: String) {
-        self.color = color
-        self.text = text
-    }
+/// What a destination's beacon shows.
+enum BeaconState: Equatable {
+    /// Playing: lit, its lamp turning.
+    case active
+    /// Holding its frame (the wallpaper paused): a calm, steady, dimmer glow.
+    case paused
+    /// Not playing (the wallpaper off, the screensaver not set up): an unlit glass bead.
+    case off
+}
 
-    /// The screensaver's install state.
-    init(status: Installer.Status) {
-        switch status {
-        case .ready: self.init(color: .green, text: "On")
-        case .notChosen: self.init(color: .orange, text: "Not selected")
-        case .notInstalled: self.init(color: .secondary, text: "Not installed")
-        }
-    }
+/// Shots-only: draws every lit beacon frozen at this point of its turn (0 … 1).
+enum BeaconHook {
+    static var phase: Double?
+}
+
+/// The destination's "on air" light — a tiny lighthouse lamp in the thumbnail's corner, in
+/// the panel's LED language (the SYNC key, the panel keys): a lens in a small glass housing.
+///
+///   • active — the lens glows green, a soft halo breathes around it and two faint beams
+///              turn slowly about it (one turn every `period` seconds), brightening the lens
+///              each time one passes, like a lighthouse seen across the water;
+///   • paused — the lens holds a steady, dimmer glow; nothing moves;
+///   • off    — an unlit bead of glass.
+///
+/// The lamp only turns while someone can see it: never under Reduce Motion (a steady glow
+/// instead), and not while the app is in the background or the window is hidden or covered
+/// (WindowVisibility). It's a TimelineView at a low cadence over one small Canvas — no
+/// state loop, nothing scheduled while it's still.
+struct DestinationBeacon: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.controlActiveState) private var activeState
+    /// The housing: as tall as the thumbnail's glass badges (GlassBadge).
+    @ScaledLength(relativeTo: .caption) private var diameter: CGFloat = 20
+    @State private var windowVisible = false
+    let state: BeaconState
+
+    /// One turn of the lamp, in seconds.
+    static let period: Double = 9
+    /// Frames per second while it turns: the beams move ~1.7° a frame — smooth, and cheap.
+    static let cadence: Double = 24
 
     var body: some View {
-        HStack(spacing: layout.labelGap) {
-            Circle().fill(color).frame(width: diameter, height: diameter)
-                .shadow(color: color.opacity(0.6), radius: 3)
-            Text(text)
-                .textRole(TextRole.caption.weight(.medium))
-                .foregroundStyle(PanelInk.secondary)
-                .lineLimit(1)
+        let turns = state == .active && !reduceMotion && activeState != .inactive && windowVisible
+        let frozen = state == .active ? BeaconHook.phase : nil
+        Group {
+            if turns || frozen != nil {
+                TimelineView(.animation(minimumInterval: 1 / Self.cadence, paused: !turns)) { context in
+                    let t = context.date.timeIntervalSinceReferenceDate / Self.period
+                    BeaconLamp(state: state, phase: frozen ?? (t - t.rounded(.down)), diameter: diameter)
+                }
+            } else {
+                BeaconLamp(state: state, phase: nil, diameter: diameter)
+            }
+        }
+        .frame(width: diameter, height: diameter)
+        .background(WindowVisibility(visible: $windowVisible))
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)   // the card carries the state as its value
+        .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: state)
+    }
+}
+
+/// One frame of the beacon. `phase` (0 … 1 of a turn) is nil when the lamp is still.
+private struct BeaconLamp: View {
+    let state: BeaconState
+    let phase: Double?
+    let diameter: CGFloat
+
+    var body: some View {
+        let lens = (diameter * 0.36).rounded()
+        // How brightly the lens flares: peaks twice a turn, as each beam sweeps past.
+        let flare: Double = phase.map { 0.5 + 0.5 * cos(4 * .pi * $0) } ?? 0.55
+        ZStack {
+            Circle()
+                .fill(Color.clear)
+                .tintedGlassSurface(.regular, in: Circle(), tint: Color.black.opacity(0.45))
+            lensView(lens, flare: flare)
+        }
+        .frame(width: diameter, height: diameter)
+        .background {
+            if state == .active, let phase {
+                BeaconBeams(phase: phase, inner: lens / 2)
+                    .frame(width: diameter * 3.6, height: diameter * 3.6)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func lensView(_ d: CGFloat, flare: Double) -> some View {
+        let led = PanelInk.led
+        switch state {
+        case .active:
+            ZStack {
+                // The halo, breathing with the beams.
+                Circle()
+                    .fill(led.opacity(0.30 + 0.25 * flare))
+                    .frame(width: d * (1.9 + 0.5 * flare), height: d * (1.9 + 0.5 * flare))
+                    .blur(radius: d * 0.45)
+                Circle()
+                    .fill(RadialGradient(colors: [Color.white, Color.white.opacity(0.9), led],
+                                         center: .center, startRadius: 0, endRadius: d / 2))
+                    .frame(width: d, height: d)
+                    .shadow(color: led.opacity(0.9), radius: 2.5)
+            }
+        case .paused:
+            ZStack {
+                Circle()
+                    .fill(led.opacity(0.22))
+                    .frame(width: d * 1.7, height: d * 1.7)
+                    .blur(radius: d * 0.35)
+                Circle()
+                    .fill(RadialGradient(colors: [led.opacity(0.85), led.opacity(0.5)],
+                                         center: .center, startRadius: 0, endRadius: d / 2))
+                    .frame(width: d, height: d)
+            }
+        case .off:
+            Circle()
+                .fill(RadialGradient(colors: [Color.white.opacity(0.30), Color.white.opacity(0.10)],
+                                     center: UnitPoint(x: 0.35, y: 0.3), startRadius: 0, endRadius: d / 2))
+                .overlay(Circle().strokeBorder(Color.white.opacity(0.28), lineWidth: 0.5))
+                .frame(width: d, height: d)
+        }
+    }
+}
+
+/// The lamp's two beams at `phase`: soft wedges of green light fading out from the lens,
+/// added onto whatever's beneath (plus-lighter), so they read as light, not paint.
+private struct BeaconBeams: View {
+    let phase: Double
+    let inner: CGFloat
+
+    var body: some View {
+        Canvas { ctx, size in
+            let c = CGPoint(x: size.width / 2, y: size.height / 2)
+            let r = min(size.width, size.height) / 2
+            let spread = Angle.degrees(13)
+            ctx.blendMode = .plusLighter
+            ctx.addFilter(.blur(radius: r * 0.06))
+            let shading = GraphicsContext.Shading.radialGradient(
+                Gradient(stops: [.init(color: PanelInk.led.opacity(0.55), location: 0),
+                                 .init(color: PanelInk.led.opacity(0.18), location: 0.45),
+                                 .init(color: PanelInk.led.opacity(0), location: 1)]),
+                center: c, startRadius: inner, endRadius: r)
+            for k in 0..<2 {
+                let a = Angle.radians(2 * .pi * phase + Double(k) * .pi)
+                var wedge = Path()
+                wedge.move(to: c)
+                wedge.addArc(center: c, radius: r, startAngle: a - spread, endAngle: a + spread, clockwise: false)
+                wedge.closeSubpath()
+                ctx.fill(wedge, with: shading)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// Reports whether the view's window is on screen and not covered (its occlusion state), so
+/// ambient motion can stop when no one can see it. False until it's in a window.
+struct WindowVisibility: NSViewRepresentable {
+    @Binding var visible: Bool
+
+    func makeNSView(context: Context) -> Probe {
+        let probe = Probe()
+        probe.report = { v in if visible != v { visible = v } }
+        return probe
+    }
+
+    func updateNSView(_ probe: Probe, context: Context) {
+        probe.report = { v in if visible != v { visible = v } }
+    }
+
+    static func dismantleNSView(_ probe: Probe, coordinator: ()) {
+        probe.report = nil
+    }
+
+    final class Probe: NSView {
+        var report: ((Bool) -> Void)?
+        private var observer: NSObjectProtocol?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+            observer = nil
+            if let window {
+                observer = NotificationCenter.default.addObserver(
+                    forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
+                ) { [weak self] _ in self?.send() }
+            }
+            send()
+        }
+
+        private func send() {
+            let v = window?.occlusionState.contains(.visible) ?? false
+            // Never during a view update.
+            DispatchQueue.main.async { [weak self] in self?.report?(v) }
+        }
+
+        deinit {
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+}
+
+// MARK: - Wallpaper transport
+
+/// Play · Pause · Off: the wallpaper's three states as a column of latching icon keys (the
+/// panel-key family, sized like a key's height): the current one sits pressed in, its LED
+/// lit — green while it plays or holds a frame, amber standby while it's off. No labels:
+/// each key says what it does in its tooltip and to VoiceOver.
+private struct WallpaperTransport: View {
+    enum Mode: CaseIterable { case play, pause, off }
+
+    @Environment(\.layout) private var layout
+    @ScaledLength(relativeTo: .callout) private var height: CGFloat = 30
+    @ScaledLength(relativeTo: .caption2) private var ledWidth: CGFloat = 10
+    @ScaledLength(relativeTo: .caption2) private var ledHeight: CGFloat = 2.5
+    let mode: Mode
+    let select: (Mode) -> Void
+
+    var body: some View {
+        // The same height as a panel key (PanelKey.Frame), a touch wider than tall.
+        let h = height + (layout.isWide ? Space.xs : 0)
+        VStack(spacing: PanelKey.gap(layout)) {
+            ForEach(Mode.allCases, id: \.self) { m in
+                key(m, height: h)
+            }
         }
         .fixedSize()
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Wallpaper playback")
+    }
+
+    private func key(_ m: Mode, height h: CGFloat) -> some View {
+        let on = m == mode
+        return Button { if !on { select(m) } } label: {
+            VStack(spacing: Space.xxs - 1) {
+                PanelLED(level: on ? 1 : 0, color: m == .off ? PanelInk.standby : PanelInk.led)
+                    .frame(width: ledWidth, height: ledHeight)
+                Image(systemName: symbol(m))
+                    .scaledFont { .scaled(.footnote, $0, weight: .semibold) }
+                    .foregroundStyle(on ? Color.primary : PanelInk.secondary)
+            }
+            .frame(width: (h * 1.2).rounded(), height: h)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PanelKeyStyle(latched: on))
+        .disabled(m == .pause && mode == .off)
+        .help(help(m))
+        .accessibilityLabel(label(m))
+        .accessibilityAddTraits(on ? [.isSelected] : [])
+    }
+
+    private func symbol(_ m: Mode) -> String {
+        switch m {
+        case .play: return "play.fill"
+        case .pause: return "pause.fill"
+        case .off: return "power"
+        }
+    }
+
+    private func label(_ m: Mode) -> String {
+        switch m {
+        case .play: return "Play"
+        case .pause: return "Pause"
+        case .off: return "Off"
+        }
+    }
+
+    private func help(_ m: Mode) -> String {
+        switch (m, mode) {
+        case (.play, .play): return "Playing behind your windows"
+        case (.play, .pause): return "Resume the wallpaper"
+        case (.play, .off): return "Turn the wallpaper on"
+        case (.pause, .pause): return "Paused on its current frame"
+        case (.pause, .off): return "Pause — turn the wallpaper on first"
+        case (.pause, _): return "Pause the wallpaper on its current frame"
+        case (.off, .off): return "The wallpaper is off"
+        case (.off, _): return "Turn the wallpaper off"
+        }
     }
 }
 
@@ -1276,36 +1568,55 @@ struct WallpaperCard: View {
     private var driver: Preset? { state.nowPlaying.flatMap(model.preset) }
 
     var body: some View {
-        DestinationCardLayout(geometry: geometry, header: header, drawsSurface: false) {
+        DestinationCardLayout(geometry: geometry, header: header, drawsSurface: false,
+                              beacon: beacon,
+                              // Side by side, the beacon sits by the SYNC key, mirroring the Screensaver's.
+                              beaconAlignment: geometry.sideBySide ? .topLeading : .topTrailing,
+                              stateValue: stateValue) {
             preview
         } keys: {
-            // Synced, the zone's own controls recede: it's following the driver.
-            Group {
-                styleKey
-                pauseKey
-                powerKey
-            }
-            .opacity(1 - 0.4 * progress)
+            // Synced, the zone's own style recedes: it's following the driver.
+            styleKey
+                .opacity(1 - 0.4 * progress)
+        } aside: {
+            WallpaperTransport(mode: mode) { select($0) }
         } banner: {
             EmptyView()
         }
         .motion(Motion.smooth, value: slot.styleID)
+        .motion(Motion.snappy, value: mode)
         .onChange(of: slot.styleID, initial: true) { _, id in
             if !synced { lastOwn = id }
         }
     }
 
-    private var header: DestinationHeader {
-        let status: StatusDot
-        if progress >= 0.5 {
-            status = StatusDot(color: .green, text: "Synced")
-        } else if own != nil {
-            status = StatusDot(color: .green, text: "Live")
-        } else {
-            status = StatusDot(color: .secondary.opacity(0.6), text: "Off")
+    /// Holding its frame (WallpaperController.togglePause); only while it plays.
+    private var paused: Bool { controller.userPaused && style != nil }
+
+    private var mode: WallpaperTransport.Mode {
+        style == nil ? .off : paused ? .pause : .play
+    }
+
+    private var beacon: BeaconState {
+        switch mode {
+        case .play: return .active
+        case .pause: return .paused
+        case .off: return .off
         }
-        let ownSubtitle = own != nil ? "Playing behind your windows" : "Play any style behind your windows, or the screensaver's."
-        return DestinationHeader(eyebrow: "Wallpaper", status: status,
+    }
+
+    private var stateValue: String {
+        switch mode {
+        case .play: return synced ? "Same as Screensaver" : "On"
+        case .pause: return "Paused"
+        case .off: return "Off"
+        }
+    }
+
+    private var header: DestinationHeader {
+        let ownSubtitle = own == nil ? "Play any style behind your windows, or the screensaver's."
+            : paused ? "Paused on its current frame" : "Playing behind your windows"
+        return DestinationHeader(eyebrow: "Wallpaper",
                                  title: driver?.name ?? "Nothing yet",
                                  subtitle: geometry.showsSubtitle ? "Following the screensaver, in step" : nil,
                                  titleFrom: own?.name ?? "Your desktop, alive",
@@ -1333,10 +1644,6 @@ struct WallpaperCard: View {
             }
             .scaleEffect(reduceMotion ? 1 : 1.06 - 0.06 * progress)
             .opacity(progress)
-            GlassBadge(text: nil, symbol: "link")
-                .padding(Space.xs)
-                .help("Same as the screensaver")
-                .opacity(progress)
         }
     }
 
@@ -1352,7 +1659,15 @@ struct WallpaperCard: View {
             Divider()
             StyleMenuItems(current: synced ? nil : style?.id) { slot.set($0) }
         } label: {
-            PanelKeyLabel(symbol: "photo.on.rectangle", title: "Style", values: value, indicator: .menu)
+            // Beside the transport the key is narrower: before its value shortens or
+            // truncates, the word "Style" folds away (the icon still names the key).
+            ViewThatFits(in: .horizontal) {
+                ForEach(value, id: \.self) { v in
+                    PanelKeyLabel(symbol: "photo.on.rectangle", title: "Style", values: [v], indicator: .menu)
+                    PanelKeyLabel(symbol: "photo.on.rectangle", title: "", values: [v], indicator: .menu)
+                }
+                PanelKeyLabel(symbol: "photo.on.rectangle", title: "", values: [value[value.count - 1]], indicator: .menu)
+            }
         }
         .panelKeyMenu()
         .help(style.map { synced ? "Following the screensaver — pick a style to play one of its own" : $0.name }
@@ -1361,42 +1676,29 @@ struct WallpaperCard: View {
         .accessibilityValue(synced ? "Same as Screensaver" : (style?.name ?? "None"))
     }
 
-    /// Pause · lit while paused (the desktop holds its frame).
-    private var pauseKey: some View {
-        let paused = controller.userPaused && style != nil
-        return Button { controller.togglePause() } label: {
-            PanelKeyLabel(symbol: paused ? "play.fill" : "pause.fill", title: "Pause",
-                          values: paused ? ["Paused"] : [], indicator: .led(paused))
-        }
-        .buttonStyle(PanelKeyStyle())
-        .disabled(style == nil)
-        .help(paused ? "Resume the wallpaper" : "Pause the wallpaper on its current frame")
-        .accessibilityLabel("Pause Wallpaper")
-        .accessibilityAddTraits(paused ? [.isToggle, .isSelected] : .isToggle)
-    }
-
-    /// Power · lit while the wallpaper plays. On again resumes what it played (in sync, if
-    /// it was).
-    private var powerKey: some View {
-        let on = style != nil
-        return Button {
-            Motion.run {
-                if on {
-                    slot.stop()
-                } else if controller.followsScreensaver {
-                    controller.setFollowsScreensaver(true)
-                } else if let id = lastOwn ?? driver?.id ?? model.library.presets.first?.id {
-                    slot.set(id)
+    /// The transport (WallpaperTransport): Play starts the wallpaper when it's off — what it
+    /// played before, in sync if it was — or resumes it; Pause holds the current frame; Off
+    /// stops it.
+    private func select(_ m: WallpaperTransport.Mode) {
+        switch m {
+        case .play:
+            if style == nil {
+                Motion.run {
+                    if controller.followsScreensaver {
+                        controller.setFollowsScreensaver(true)
+                    } else if let id = lastOwn ?? driver?.id ?? model.library.presets.first?.id {
+                        slot.set(id)
+                    }
                 }
             }
-        } label: {
-            PanelKeyLabel(symbol: "power", title: "Power", values: [on ? "On" : "Off"], indicator: .led(on))
+            // Starting clears a pause in the controller; a pause left over (or the playing
+            // wallpaper's) is lifted here.
+            if controller.userPaused { controller.togglePause() }
+        case .pause:
+            if style != nil && !controller.userPaused { controller.togglePause() }
+        case .off:
+            if style != nil { Motion.run { slot.stop() } }
         }
-        .buttonStyle(PanelKeyStyle())
-        .help(on ? "Turn the wallpaper off" : "Turn the wallpaper on")
-        .accessibilityLabel("Wallpaper")
-        .accessibilityValue(on ? "On" : "Off")
-        .accessibilityAddTraits(on ? [.isToggle, .isSelected] : .isToggle)
     }
 
     private func setSynced(_ on: Bool) {
