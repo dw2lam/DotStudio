@@ -3,6 +3,7 @@
 //  and the live Wallpaper. See Destinations.swift for how they map onto library.json.
 
 import SwiftUI
+import Combine
 
 /// The gallery's snapshot of who plays where, computed once per render.
 struct GalleryState {
@@ -144,6 +145,7 @@ struct DestinationRow: View {
     private var synced: Bool { controller.followsScreensaver && slot.styleID != nil }
 
     var body: some View {
+        let _ = Perf.body("DestinationRow")
         let hasWallpaper = slot.isAvailable
         let geometry = DestinationGeometry(width: width, layout: layout, hasWallpaper: hasWallpaper, keySize: keySize)
         let progress = SyncMorphHook.progress ?? (synced ? 1 : 0)
@@ -278,7 +280,20 @@ struct DualZoneShape: Shape {
         set { progress = newValue }
     }
 
+    /// The outline depends only on the rect and these values; the glass asks for it far more
+    /// often than they change (every frame the panel moves on screen — every frame of a
+    /// scroll), so it's built once per change (PathCache) and handed back after that.
     func path(in rect: CGRect) -> Path {
+        Perf.count("DualZoneShape.path")
+        let key = PathCache.Key(rect: rect, vertical: vertical, first: first ?? -1, gap: gap, radius: radius,
+                                progress: progress, snaps: snaps)
+        return Self.cache.path(for: key) { build(in: rect) }
+    }
+
+    private static let cache = PathCache()
+
+    private func build(in rect: CGRect) -> Path {
+        Perf.count("DualZoneShape.build")
         var q = min(max(progress, 0), 1)
         if snaps { q = q >= 0.5 ? 1 : 0 }
         let whole = RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -311,6 +326,36 @@ struct DualZoneShape: Shape {
         var both = pa
         both.addPath(pb)
         return both
+    }
+}
+
+/// The last few outlines a DualZoneShape built (a resting panel needs one; a morph or a
+/// resize walks through new ones and the oldest drop off). Any thread.
+private final class PathCache: @unchecked Sendable {
+    struct Key: Equatable {
+        var rect: CGRect
+        var vertical: Bool
+        var first: CGFloat
+        var gap: CGFloat
+        var radius: CGFloat
+        var progress: CGFloat
+        var snaps: Bool
+    }
+
+    private var entries: [(key: Key, path: Path)] = []
+    private let lock = NSLock()
+    private static let capacity = 4
+
+    func path(for key: Key, build: () -> Path) -> Path {
+        lock.lock()
+        if let hit = entries.first(where: { $0.key == key }) { lock.unlock(); return hit.path }
+        lock.unlock()
+        let p = build()
+        lock.lock()
+        entries.append((key, p))
+        if entries.count > Self.capacity { entries.removeFirst() }
+        lock.unlock()
+        return p
     }
 }
 
@@ -355,13 +400,13 @@ struct SyncKey: View {
 /// The one structure both destination cards share:
 ///
 ///     ┌───────────────────────────────────────────┐
-///     │ ┌────────────────●─┐  EYEBROW              │
+///     │ ┌──────────────────┐  EYEBROW              │
 ///     │ │                  │  Title                │
 ///     │ │    thumbnail     │  Subtitle             │
 ///     │ │  fills the card  │                       │
 ///     │ │      height      │  [key ············ ]  │     with an aside (the
 ///     │ │                  │  [key ············ ]  │  ←  Wallpaper's Play /
-///     │ └──────────────────┘  [key ············ ]  │     Pause / Off keys):
+///     │ └▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒┘  [key ············ ]  │     Pause / Off keys):
 ///     │ banner (setup strip), full width           │                    [▶]
 ///     └───────────────────────────────────────────┘                    [‖]
 ///                                                        [key ········] [⏻]
@@ -370,19 +415,18 @@ struct SyncKey: View {
 /// thumbnail's edges; an optional `aside` (a column of icon keys) stands beside the keys
 /// at the column's trailing edge, its foot level with the last key. `mirrored` puts the thumbnail on the
 /// trailing side (the Screensaver card side by side, so both thumbnails meet at the SYNC
-/// key). ● is the card's beacon (DestinationBeacon): lit and sweeping while that
-/// destination plays — the only on/off readout the card shows. The card hands VoiceOver
-/// the same state, in words, as its value (`stateValue`).
+/// key). ▒ is the thumbnail's glow (DestinationGlow, which each card lays over its picture,
+/// under the picture's badges): a soft green light rising from its bottom edge while that
+/// destination plays, dimmer while it holds a frame, none while it's off — the only on/off
+/// readout the card shows. The card hands VoiceOver the same state, in words, as its
+/// value (`stateValue`).
 private struct DestinationCardLayout<Preview: View, Keys: View, Aside: View, Banner: View>: View {
     @Environment(\.layout) private var layout
     let geometry: DestinationGeometry
     let header: DestinationHeader
     var mirrored = false
     var drawsSurface = true
-    let beacon: BeaconState
-    /// Where on the thumbnail the beacon sits (by the SYNC key, side by side).
-    var beaconAlignment: Alignment = .topTrailing
-    /// "On", "Paused", "Off"…: what the beacon shows, in words.
+    /// "On", "Paused", "Off"…: what the glow shows, in words.
     let stateValue: String
     @ViewBuilder var preview: Preview
     @ViewBuilder var keys: Keys
@@ -390,6 +434,7 @@ private struct DestinationCardLayout<Preview: View, Keys: View, Aside: View, Ban
     @ViewBuilder var banner: Banner
 
     var body: some View {
+        let _ = Perf.body("DestinationCardLayout")
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: layout.cardPadding) {
                 if mirrored {
@@ -414,10 +459,6 @@ private struct DestinationCardLayout<Preview: View, Keys: View, Aside: View, Ban
         preview
             .frame(width: geometry.thumbWidth)
             .frame(minHeight: geometry.thumbHeight, idealHeight: geometry.thumbHeight, maxHeight: .infinity)
-            .overlay(alignment: beaconAlignment) {
-                DestinationBeacon(state: beacon)
-                    .padding(Space.xs)
-            }
             .clipShape(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous)
                 .strokeBorder(.primary.opacity(0.12)))
@@ -460,23 +501,25 @@ struct ScreensaverCard: View {
     @Environment(\.layout) private var layout
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.controlActiveState) private var activeState
-    @ObservedObject private var now = MusicNow.shared
-    @ScaledLength(relativeTo: .callout) private var musicArt: CGFloat = 20
     let state: GalleryState
     let geometry: DestinationGeometry
     var mirrored = false
     var drawsSurface = true
     @State private var editingPlaylist = false
+    /// A song is showing (playing, or paused within the linger). The card follows only this
+    /// from MusicNow — the track itself is NowPlayingKey's — so a song change re-renders the
+    /// one key that shows it, not the card.
+    @State private var songVisible = MusicNow.shared.state.isVisible(lingerMinutes: MusicNow.shared.lingerMinutes)
 
     private var lineup: ScreensaverLineup { state.lineup }
     private var playing: Preset? { state.nowPlaying.flatMap(model.preset) }
 
     var body: some View {
+        let _ = Perf.body("ScreensaverCard")
         let spec = model.library.musicSettings
         // The song only while music shows: Off shows nothing on screen, so neither does this.
-        let showsSong = spec.displayMode != .off && now.isVisible(spec)
+        let showsSong = spec.displayMode != .off && songVisible
         DestinationCardLayout(geometry: geometry, header: header, mirrored: mirrored, drawsSurface: drawsSurface,
-                              beacon: model.setupStatus == .ready ? .active : .off,
                               stateValue: stateValue) {
             hero
         } keys: {
@@ -484,7 +527,7 @@ struct ScreensaverCard: View {
             nightKey
             musicKey
             if showsSong {
-                nowPlayingLine
+                NowPlayingKey()
                     .transition(.lift(reduceMotion: reduceMotion))
             }
         } aside: {
@@ -498,7 +541,19 @@ struct ScreensaverCard: View {
         }
         .motion(Motion.smooth, value: lineup)
         .motion(Motion.smooth, value: model.setupStatus)
-        .motion(Motion.smooth, value: showsSong)
+        .motion(Motion.brief, value: showsSong)
+        .onReceive(Self.musicChanges) { _ in updateSongVisible(spec) }
+        .onChange(of: spec.linger) { updateSongVisible(spec) }
+    }
+
+    /// MusicNow changed: `objectWillChange` is sent before the change, so this arrives a
+    /// main-queue turn later, once it has.
+    private static let musicChanges = MusicNow.shared.objectWillChange
+        .receive(on: DispatchQueue.main).eraseToAnyPublisher()
+
+    private func updateSongVisible(_ spec: MusicSpec) {
+        let v = MusicNow.shared.isVisible(spec)
+        if v != songVisible { songVisible = v }
     }
 
     // MARK: Live preview
@@ -527,6 +582,9 @@ struct ScreensaverCard: View {
             .contentShape(Rectangle())
             .onTapGesture(count: 2) { if let p = playing { model.edit(p.id) } }
             .help(playing.map { "\($0.name) — double-click to edit" } ?? "")
+
+            // Lit while the screensaver is on (under the badges: it lights the picture).
+            DestinationGlow(state: model.setupStatus == .ready ? .active : .off)
 
             // Night/Day top left; Preview (what it previews, right on it) bottom right.
             VStack(alignment: .leading, spacing: 0) {
@@ -569,7 +627,7 @@ struct ScreensaverCard: View {
                           subtitle: geometry.showsSubtitle ? subtitle : nil)
     }
 
-    /// The beacon's state in words (the setup strip says what to do about it).
+    /// The glow's state in words (the setup strip says what to do about it).
     private var stateValue: String {
         switch model.setupStatus {
         case .ready: return "On"
@@ -672,11 +730,45 @@ struct ScreensaverCard: View {
         if m < 1 { return "\(Int(m * 60)) sec" }
         return m == 1 ? (short ? "1 min" : "Minute") : "\(Int(m)) min"
     }
+}
 
-    /// Cover · "Song — Artist" · Play/Pause · Next — or, when the player refused Automation,
-    /// the same "Allow…" fix-it as Settings, the editor and the menu. The song truncates
-    /// before the controls do. Drawn on a key face, so it lines up with the keys above it.
-    private var nowPlayingLine: some View {
+/// Cover · "Song — Artist" · Play/Pause · Next — or, when the player refused Automation,
+/// the same "Allow…" fix-it as Settings, the editor and the menu. The song truncates
+/// before the controls do. Drawn on a key face, so it lines up with the keys above it.
+///
+/// The only view on the card that follows the track, and its frame never depends on the
+/// track: the key is laid out as an empty face of the line's height, and the song is drawn
+/// over it (an overlay can't resize what it's on). So a track change or a play/pause
+/// re-renders and re-lays out this line alone — not the card, the row and the gallery's lazy
+/// stack around it (a full page layout per song, before).
+private struct NowPlayingKey: View {
+    @Environment(\.layout) private var layout
+    @ScaledLength(relativeTo: .callout) private var keyHeight: CGFloat = 30
+    /// The line's own height, measured (the same for every song: one line of text).
+    @State private var height: CGFloat?
+
+    var body: some View {
+        let _ = Perf.body("NowPlayingKey")
+        Color.clear
+            .frame(maxWidth: .infinity)
+            .frame(height: height ?? keyHeight + (layout.isWide ? Space.xs : 0))
+            .background(PanelKeyFace(shape: RoundedRectangle(cornerRadius: PanelKey.radius, style: .continuous)))
+            .overlay(alignment: .top) {
+                NowPlayingLine()
+                    .fixedSize(horizontal: false, vertical: true)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if height != $0 { height = $0 } }
+            }
+    }
+}
+
+/// What NowPlayingKey shows: the song, and the transport (or the Automation fix-it).
+private struct NowPlayingLine: View {
+    @Environment(\.layout) private var layout
+    @ObservedObject private var now = MusicNow.shared
+    @ScaledLength(relativeTo: .callout) private var musicArt: CGFloat = 20
+
+    var body: some View {
+        let _ = Perf.body("NowPlayingLine")
         HStack(spacing: layout.controlGap) {
             MusicArtThumb(image: now.artwork, palette: now.state.palette ?? [], side: musicArt)
             (Text(now.title).fontWeight(.medium)
@@ -698,7 +790,6 @@ struct ScreensaverCard: View {
         }
         .adaptiveControlSize(.small)
         .modifier(PanelKey.Frame())
-        .background(PanelKeyFace(shape: RoundedRectangle(cornerRadius: PanelKey.radius, style: .continuous)))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Now playing: \(now.trackLine)")
     }
@@ -1094,210 +1185,69 @@ private struct CardEyebrow: View {
     }
 }
 
-// MARK: - Beacon
+// MARK: - Glow
 
-/// What a destination's beacon shows.
-enum BeaconState: Equatable {
-    /// Playing: lit, its lamp turning.
+/// What a destination's glow shows.
+enum GlowState: Equatable {
+    /// Playing: lit.
     case active
-    /// Holding its frame (the wallpaper paused): a calm, steady, dimmer glow.
+    /// Holding its frame (the wallpaper paused): a dim glow.
     case paused
-    /// Not playing (the wallpaper off, the screensaver not set up): an unlit glass bead.
+    /// Not playing (the wallpaper off, the screensaver not set up): no glow.
     case off
 }
 
-/// Shots-only: draws every lit beacon frozen at this point of its turn (0 … 1).
-enum BeaconHook {
-    static var phase: Double?
-}
-
-/// The destination's "on air" light — a tiny lighthouse lamp in the thumbnail's corner, in
-/// the panel's LED language (the SYNC key, the panel keys): a lens in a small glass housing.
-///
-///   • active — the lens glows green, a soft halo breathes around it and two faint beams
-///              turn slowly about it (one turn every `period` seconds), brightening the lens
-///              each time one passes, like a lighthouse seen across the water;
-///   • paused — the lens holds a steady, dimmer glow; nothing moves;
-///   • off    — an unlit bead of glass.
-///
-/// The lamp only turns while someone can see it: never under Reduce Motion (a steady glow
-/// instead), and not while the app is in the background or the window is hidden or covered
-/// (WindowVisibility). It's a TimelineView at a low cadence over one small Canvas — no
-/// state loop, nothing scheduled while it's still.
-struct DestinationBeacon: View {
+/// The destination's "on air" light: the thumbnail lit from below like a display — a soft
+/// green (the SYNC key's LED) bleeding up from its bottom edge inside the rounded frame,
+/// faint enough that the picture shows through. Paused, a dim version; off, nothing. It
+/// never moves: a state change eases it in or out, and that's all (no timeline, no state
+/// loop — nothing is scheduled while it shows).
+struct DestinationGlow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.controlActiveState) private var activeState
-    /// The housing: as tall as the thumbnail's glass badges (GlassBadge).
-    @ScaledLength(relativeTo: .caption) private var diameter: CGFloat = 20
-    @State private var windowVisible = false
-    let state: BeaconState
+    let state: GlowState
 
-    /// One turn of the lamp, in seconds.
-    static let period: Double = 9
-    /// Frames per second while it turns: the beams move ~1.7° a frame — smooth, and cheap.
-    static let cadence: Double = 24
-
-    var body: some View {
-        let turns = state == .active && !reduceMotion && activeState != .inactive && windowVisible
-        let frozen = state == .active ? BeaconHook.phase : nil
-        Group {
-            if turns || frozen != nil {
-                TimelineView(.animation(minimumInterval: 1 / Self.cadence, paused: !turns)) { context in
-                    let t = context.date.timeIntervalSinceReferenceDate / Self.period
-                    BeaconLamp(state: state, phase: frozen ?? (t - t.rounded(.down)), diameter: diameter)
-                }
-            } else {
-                BeaconLamp(state: state, phase: nil, diameter: diameter)
-            }
-        }
-        .frame(width: diameter, height: diameter)
-        .background(WindowVisibility(visible: $windowVisible))
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)   // the card carries the state as its value
-        .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: state)
-    }
-}
-
-/// One frame of the beacon. `phase` (0 … 1 of a turn) is nil when the lamp is still.
-private struct BeaconLamp: View {
-    let state: BeaconState
-    let phase: Double?
-    let diameter: CGFloat
-
-    var body: some View {
-        let lens = (diameter * 0.36).rounded()
-        // How brightly the lens flares: peaks twice a turn, as each beam sweeps past.
-        let flare: Double = phase.map { 0.5 + 0.5 * cos(4 * .pi * $0) } ?? 0.55
-        ZStack {
-            Circle()
-                .fill(Color.clear)
-                .tintedGlassSurface(.regular, in: Circle(), tint: Color.black.opacity(0.45))
-            lensView(lens, flare: flare)
-        }
-        .frame(width: diameter, height: diameter)
-        .background {
-            if state == .active, let phase {
-                BeaconBeams(phase: phase, inner: lens / 2)
-                    .frame(width: diameter * 3.6, height: diameter * 3.6)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func lensView(_ d: CGFloat, flare: Double) -> some View {
-        let led = PanelInk.led
+    /// The glow's strength in each state (0 … 1).
+    private var level: Double {
         switch state {
-        case .active:
-            ZStack {
-                // The halo, breathing with the beams.
-                Circle()
-                    .fill(led.opacity(0.30 + 0.25 * flare))
-                    .frame(width: d * (1.9 + 0.5 * flare), height: d * (1.9 + 0.5 * flare))
-                    .blur(radius: d * 0.45)
-                Circle()
-                    .fill(RadialGradient(colors: [Color.white, Color.white.opacity(0.9), led],
-                                         center: .center, startRadius: 0, endRadius: d / 2))
-                    .frame(width: d, height: d)
-                    .shadow(color: led.opacity(0.9), radius: 2.5)
-            }
-        case .paused:
-            ZStack {
-                Circle()
-                    .fill(led.opacity(0.22))
-                    .frame(width: d * 1.7, height: d * 1.7)
-                    .blur(radius: d * 0.35)
-                Circle()
-                    .fill(RadialGradient(colors: [led.opacity(0.85), led.opacity(0.5)],
-                                         center: .center, startRadius: 0, endRadius: d / 2))
-                    .frame(width: d, height: d)
-            }
-        case .off:
-            Circle()
-                .fill(RadialGradient(colors: [Color.white.opacity(0.30), Color.white.opacity(0.10)],
-                                     center: UnitPoint(x: 0.35, y: 0.3), startRadius: 0, endRadius: d / 2))
-                .overlay(Circle().strokeBorder(Color.white.opacity(0.28), lineWidth: 0.5))
-                .frame(width: d, height: d)
+        case .active: return 1
+        case .paused: return 0.4
+        case .off: return 0
         }
     }
-}
-
-/// The lamp's two beams at `phase`: soft wedges of green light fading out from the lens,
-/// added onto whatever's beneath (plus-lighter), so they read as light, not paint.
-private struct BeaconBeams: View {
-    let phase: Double
-    let inner: CGFloat
 
     var body: some View {
-        Canvas { ctx, size in
-            let c = CGPoint(x: size.width / 2, y: size.height / 2)
-            let r = min(size.width, size.height) / 2
-            let spread = Angle.degrees(13)
-            ctx.blendMode = .plusLighter
-            ctx.addFilter(.blur(radius: r * 0.06))
-            let shading = GraphicsContext.Shading.radialGradient(
-                Gradient(stops: [.init(color: PanelInk.led.opacity(0.55), location: 0),
-                                 .init(color: PanelInk.led.opacity(0.18), location: 0.45),
-                                 .init(color: PanelInk.led.opacity(0), location: 1)]),
-                center: c, startRadius: inner, endRadius: r)
-            for k in 0..<2 {
-                let a = Angle.radians(2 * .pi * phase + Double(k) * .pi)
-                var wedge = Path()
-                wedge.move(to: c)
-                wedge.addArc(center: c, radius: r, startAngle: a - spread, endAngle: a + spread, clockwise: false)
-                wedge.closeSubpath()
-                ctx.fill(wedge, with: shading)
-            }
-        }
-        .allowsHitTesting(false)
+        let _ = Perf.body("DestinationGlow")
+        GlowFace()
+            .opacity(level)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)   // the card carries the state as its value
+            .animation(reduceMotion ? Motion.reduced : .easeInOut(duration: 0.35), value: state)
     }
 }
 
-/// Reports whether the view's window is on screen and not covered (its occlusion state), so
-/// ambient motion can stop when no one can see it. False until it's in a window.
-struct WindowVisibility: NSViewRepresentable {
-    @Binding var visible: Bool
-
-    func makeNSView(context: Context) -> Probe {
-        let probe = Probe()
-        probe.report = { v in if visible != v { visible = v } }
-        return probe
-    }
-
-    func updateNSView(_ probe: Probe, context: Context) {
-        probe.report = { v in if visible != v { visible = v } }
-    }
-
-    static func dismantleNSView(_ probe: Probe, coordinator: ()) {
-        probe.report = nil
-    }
-
-    final class Probe: NSView {
-        var report: ((Bool) -> Void)?
-        private var observer: NSObjectProtocol?
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            if let observer { NotificationCenter.default.removeObserver(observer) }
-            observer = nil
-            if let window {
-                observer = NotificationCenter.default.addObserver(
-                    forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
-                ) { [weak self] _ in self?.send() }
+/// One fixed drawing of the glow at full strength (DestinationGlow fades it): a light wash
+/// rising from the bottom edge and a brighter band right along it, added to the picture
+/// (plus-lighter) so it reads as light, not paint.
+private struct GlowFace: View {
+    var body: some View {
+        let led = PanelInk.led
+        GeometryReader { g in
+            // The wash reaches about a third of the way up (within limits).
+            let reach = min(max(g.size.height * 0.34, 40), 120)
+            ZStack(alignment: .bottom) {
+                LinearGradient(stops: [.init(color: led.opacity(0.40), location: 0),
+                                       .init(color: led.opacity(0.14), location: 0.3),
+                                       .init(color: led.opacity(0), location: 1)],
+                               startPoint: .bottom, endPoint: .top)
+                    .frame(height: reach)
+                // The lit edge.
+                LinearGradient(colors: [led.opacity(0.7), led.opacity(0)],
+                               startPoint: .bottom, endPoint: .top)
+                    .frame(height: 6)
             }
-            send()
+            .frame(width: g.size.width, height: g.size.height, alignment: .bottom)
         }
-
-        private func send() {
-            let v = window?.occlusionState.contains(.visible) ?? false
-            // Never during a view update.
-            DispatchQueue.main.async { [weak self] in self?.report?(v) }
-        }
-
-        deinit {
-            if let observer { NotificationCenter.default.removeObserver(observer) }
-        }
-
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        .blendMode(.plusLighter)
     }
 }
 
@@ -1507,6 +1457,7 @@ struct PlaylistEditor: View {
                 .padding(layout.cardPadding)
             }
         }
+        .stillContext(model)   // its own root (a popover)
         // A popover takes its ideal size; in a fixed frame (UI shots) it fits within it.
         .frame(minWidth: width.lowerBound, idealWidth: min(max(layout.scaled(420), width.lowerBound), width.upperBound),
                maxWidth: width.upperBound,
@@ -1568,10 +1519,8 @@ struct WallpaperCard: View {
     private var driver: Preset? { state.nowPlaying.flatMap(model.preset) }
 
     var body: some View {
+        let _ = Perf.body("WallpaperCard")
         DestinationCardLayout(geometry: geometry, header: header, drawsSurface: false,
-                              beacon: beacon,
-                              // Side by side, the beacon sits by the SYNC key, mirroring the Screensaver's.
-                              beaconAlignment: geometry.sideBySide ? .topLeading : .topTrailing,
                               stateValue: stateValue) {
             preview
         } keys: {
@@ -1597,7 +1546,7 @@ struct WallpaperCard: View {
         style == nil ? .off : paused ? .pause : .play
     }
 
-    private var beacon: BeaconState {
+    private var glow: GlowState {
         switch mode {
         case .play: return .active
         case .pause: return .paused
@@ -1644,6 +1593,7 @@ struct WallpaperCard: View {
             }
             .scaleEffect(reduceMotion ? 1 : 1.06 - 0.06 * progress)
             .opacity(progress)
+            DestinationGlow(state: glow)
         }
     }
 
@@ -1726,26 +1676,74 @@ private struct DesktopGlyph: View {
 
 // MARK: - Shared bits
 
-/// A style's cached thumbnail (black until it renders).
+/// A style's cached thumbnail (black until it renders). Never observes the model: what the
+/// still depends on — the thumbnailer, the source, the music settings — comes in as one
+/// value (StillContext) through the environment, so a selection or an edit elsewhere doesn't
+/// re-render it; its own still landing does (the Thumbnailer's per-style signal), and so
+/// does a change of source or music settings.
 struct StyleThumb: View {
-    @EnvironmentObject var model: AppModel
+    @Environment(\.stillContext) private var context
     let preset: Preset
     /// Music presented on the still as the screensaver shows it while a song plays (the
     /// Screensaver card's hero when it can't be live); off = the plain thumbnail.
     var showsMusic = false
 
     var body: some View {
-        // Takes exactly the size it's offered; the image fills it and is clipped, so a
-        // thumbnail never pushes its container's layout around.
-        Color.black
-            .overlay {
-                if let img = model.thumbnailer.image(for: preset, source: model.library.source,
-                                                     music: model.library.musicSettings, showsMusic: showsMusic) {
-                    Image(nsImage: img).resizable().scaledToFill()
-                }
-            }
-            .clipped()
+        let _ = Perf.body("StyleThumb")
+        if let context {
+            TileThumb(thumbnailer: context.thumbnailer, preset: preset, source: context.source,
+                      music: context.music, showsMusic: showsMusic)
+        } else {
+            // A root that doesn't provide one (a sheet or popover rendered on its own).
+            ModelStillContext { TileThumb(thumbnailer: $0.thumbnailer, preset: preset, source: $0.source,
+                                          music: $0.music, showsMusic: showsMusic) }
+        }
     }
+}
+
+/// What a still depends on besides its style. Equatable, so the environment only
+/// re-renders the stills when one of these changes.
+struct StillContext: Equatable {
+    let thumbnailer: Thumbnailer
+    let source: SourceSpec
+    let music: MusicSpec
+
+    init(_ model: AppModel) {
+        thumbnailer = model.thumbnailer
+        source = model.library.source
+        music = model.library.musicSettings
+    }
+
+    static func == (a: StillContext, b: StillContext) -> Bool {
+        a.thumbnailer === b.thumbnailer && a.source == b.source && a.music == b.music
+    }
+}
+
+private struct StillContextKey: EnvironmentKey {
+    static let defaultValue: StillContext? = nil
+}
+
+extension EnvironmentValues {
+    /// Set once at the root (ContentView, and roots of their own such as the playlist popover).
+    var stillContext: StillContext? {
+        get { self[StillContextKey.self] }
+        set { self[StillContextKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// Hands the stills below `model`'s StillContext (call where the model is observed anyway).
+    func stillContext(_ model: AppModel) -> some View {
+        environment(\.stillContext, StillContext(model))
+    }
+}
+
+/// The fallback for StyleThumb without a StillContext: reads the model (observing it).
+private struct ModelStillContext<Content: View>: View {
+    @EnvironmentObject var model: AppModel
+    @ViewBuilder let content: (StillContext) -> Content
+
+    var body: some View { content(StillContext(model)) }
 }
 
 /// The gallery's small-control height, shared by the search field and the filter chips so
@@ -1815,37 +1813,4 @@ extension View {
 /// True while UIShots renders screens offscreen (DOTSTUDIO_UI_SHOTS).
 enum OffscreenCapture {
     static let isActive = ProcessInfo.processInfo.environment["DOTSTUDIO_UI_SHOTS"] != nil
-}
-
-/// The blurred, color-washed backdrop behind the gallery and editor.
-struct AmbientBackdrop: View {
-    @EnvironmentObject var model: AppModel
-    @Environment(\.colorScheme) private var scheme
-    let presetID: UUID?
-
-    var body: some View {
-        ZStack {
-            Color(nsColor: .windowBackgroundColor)
-            if let p = presetID.flatMap(model.preset),
-               let img = model.thumbnailer.image(for: p, source: model.library.source, music: model.library.musicSettings) {
-                Image(nsImage: img)
-                    .resizable()
-                    .scaledToFill()
-                    .blur(radius: 70, opaque: true)
-                    .saturation(1.35)
-                    .opacity(scheme == .dark ? 0.8 : 0.6)
-                    .id(p.id)
-                    .transition(.opacity)
-            }
-            // Keep the top calm under the toolbar and fade the wash out down the page.
-            LinearGradient(stops: [
-                .init(color: Color(nsColor: .windowBackgroundColor).opacity(0.05), location: 0),
-                .init(color: Color(nsColor: .windowBackgroundColor).opacity(scheme == .dark ? 0.45 : 0.5), location: 0.45),
-                .init(color: Color(nsColor: .windowBackgroundColor).opacity(0.88), location: 1),
-            ], startPoint: .top, endPoint: .bottom)
-        }
-        .animation(.easeInOut(duration: 0.6), value: presetID)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
 }

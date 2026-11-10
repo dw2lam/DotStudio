@@ -39,6 +39,7 @@ struct ContentView: View {
             }
         }
         .adaptiveLayout()   // width class + text size → \.layout for every view inside (Layout.swift)
+        .stillContext(model)   // what every StyleThumb needs, so none of them observes the model
         .background {
             GalleryBackdrop(presetID: editing?.id ?? model.nowPlayingID)
                 .ignoresSafeArea()

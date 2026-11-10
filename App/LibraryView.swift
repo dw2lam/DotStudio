@@ -394,15 +394,20 @@ private struct FilterBar: View {
             // It spans the whole window, not just the page column.
             GeometryReader { g in
                 let y = g.frame(in: .named(FilterBar.space)).minY
-                Rectangle()
-                    .fill(.ultraThinMaterial)
-                    .mask(LinearGradient(stops: [.init(color: .black, location: 0),
-                                                 .init(color: .black.opacity(0.8), location: 0.6),
-                                                 .init(color: .clear, location: 1)],
-                                         startPoint: .top, endPoint: .bottom))
-                    .padding(.top, -(Space.xxl + Space.s))   // up under the toolbar
-                    .padding(.bottom, -Space.m)              // a soft tail over the first row
-                    .opacity(min(max((150 - y) / 70, 0), 1))
+                let frost = min(max((150 - y) / 70, 0), 1)
+                // Not there at all until it shows: no backdrop layer (or its blur) for the
+                // window server to keep while the page scrolls under an invisible frost.
+                if frost > 0 {
+                    Rectangle()
+                        .fill(.ultraThinMaterial)
+                        .mask(LinearGradient(stops: [.init(color: .black, location: 0),
+                                                     .init(color: .black.opacity(0.8), location: 0.6),
+                                                     .init(color: .clear, location: 1)],
+                                             startPoint: .top, endPoint: .bottom))
+                        .padding(.top, -(Space.xxl + Space.s))   // up under the toolbar
+                        .padding(.bottom, -Space.m)              // a soft tail over the first row
+                        .opacity(frost)
+                }
             }
             .allowsHitTesting(false)
         }
