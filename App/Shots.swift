@@ -330,6 +330,17 @@ enum UIShots {
             }))
         }
 
+        // The StandBy pack's clocks, each open in the editor (added from the catalog when the
+        // library doesn't have it)
+        for name in SceneCatalog.standbyPresets.map(\.name) {
+            s.append(Screen(name: "editor-clock-\(name.lowercased())", frame: .window, prepare: { st in
+                guard let id = st.builtIn(name) else { return }
+                st.lineup([id])
+                WallpaperSlot.shared.set(id)
+                st.edit(id)
+            }, view: main))
+        }
+
         // Popover contents
         s.append(Screen(name: "add-effect", frame: .fixed(CGSize(width: 430, height: 500)), view: { st in
             AnyView(AddEffectPicker(source: st.model.library.source, thumbnailer: st.model.thumbnailer,
@@ -541,6 +552,14 @@ enum UIShots {
             }
             model.library.presets[i].effects[0] = e
             return model.library.presets[i].id
+        }
+
+        /// The StandBy pack's built-in style `name`, added to the library if it isn't there; its id.
+        func builtIn(_ name: String) -> UUID? {
+            if let p = model.library.presets.first(where: { $0.name == name }) { return p.id }
+            guard let p = SceneCatalog.standbyPresets.first(where: { $0.name == name }) else { return nil }
+            model.library.presets.append(p)
+            return p.id
         }
 
         func emptyLibrary() {
