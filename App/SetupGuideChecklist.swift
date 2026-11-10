@@ -174,7 +174,7 @@ struct SetupChecklist: View {
                 : "Change it in Lock Screen › Start Screen Saver when inactive."
         } else {
             title = "Screensaver never starts on its own"
-            detail = "Start Screen Saver when inactive is set to Never in Lock Screen settings."
+            detail = "\u{201C}Start Screen Saver when inactive\u{201D} is set to Never in Lock Screen settings."
         }
         return ChecklistRow(state: idleState, title: title, detail: detail) {
             if !s.startsWhenInactive { lockScreenLink }
@@ -343,7 +343,8 @@ struct ChecklistRow<Action: View, Extra: View>: View {
         HStack(alignment: .top, spacing: layout.itemGap) {
             stateMark
             VStack(alignment: .leading, spacing: layout.controlGap) {
-                ReflowStack(rowAlignment: .center, columnAlignment: .leading, spacing: layout.controlGap) {
+                // The control beside the text (it wraps), under it at the largest sizes.
+                AdaptiveStack(rowAlignment: .top, columnAlignment: .leading, spacing: layout.controlGap) {
                     text.frame(maxWidth: .infinity, alignment: .leading)
                     action().fixedSize()
                 }

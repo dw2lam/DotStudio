@@ -28,6 +28,9 @@ struct SetupWalkthrough: View {
              detail: "Click **DotStudio**, then **Done**. More than one display? Choose it on each."),
     ]
 
+    /// The picture's widest (it grows with the text by half the text's growth).
+    static let maxPictureWidth: CGFloat = 520
+
     /// UI shots: hold this step, mid-click. nil: animate.
     var frozenStep: Int?
     /// UI shots: the Reduce Motion layout (four still cards).
@@ -57,6 +60,9 @@ struct SetupWalkthrough: View {
         let shown = frozenStep ?? step
         return VStack(alignment: .leading, spacing: layout.itemGap) {
             SettingsMock(step: shown, phase: frozenStep == nil ? phase : .clicked)
+                // A picture, not a page: stacked under big text it stays a picture's size.
+                .frame(maxWidth: layout.scaled(Self.maxPictureWidth))
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Illustration of System Settings")
                 .accessibilityValue("Step \(shown + 1) of \(Self.steps.count): \(plain(Self.steps[shown].detail))")
@@ -144,7 +150,8 @@ struct SetupWalkthrough: View {
     // MARK: Still (Reduce Motion)
 
     private var stillCards: some View {
-        LazyVGrid(columns: narrow ? [GridItem(.flexible())] : layout.columns(minimum: layout.scaled(180), spacing: layout.itemGap),
+        // Two across (the cards are small; the captions carry the words), one when stacked big.
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: layout.itemGap, alignment: .top), count: narrow ? 1 : 2),
                   alignment: .leading, spacing: layout.itemGap) {
             ForEach(Self.steps.indices, id: \.self) { i in
                 VStack(alignment: .leading, spacing: layout.controlGap) {
@@ -223,15 +230,15 @@ struct SettingsMock: View {
         static let rowHeight: CGFloat = 19
         static let sidebar: [(name: String, symbol: String, tint: Color)] = [
             ("General", "gearshape.fill", .gray),
-            ("Appearance", "circle.lefthalf.filled", Color(white: 0.2)),
+            ("Appearance", "circle.lefthalf.filled", Color(white: 0.38)),
             ("Control Center", "switch.2", .gray),
-            ("Desktop & Dock", "dock.rectangle", Color(white: 0.2)),
+            ("Desktop & Dock", "dock.rectangle", Color(white: 0.38)),
             ("Displays", "sun.max.fill", .blue),
             ("Spotlight", "magnifyingglass", .gray),
             ("Wallpaper", "photo", .cyan),
             ("Notifications", "bell.badge.fill", .red),
             ("Sound", "speaker.wave.2.fill", .pink),
-            ("Lock Screen", "lock.fill", Color(white: 0.2)),
+            ("Lock Screen", "lock.fill", Color(white: 0.38)),
         ]
         static let wallpaperIndex = 6
         static var wallpaperRow: CGRect {
@@ -240,7 +247,7 @@ struct SettingsMock: View {
         static let screenSaverButton = CGRect(x: 370, y: 264, width: 94, height: 20)
 
         // The sheet and its list (list coordinates are inside the viewport, before scrolling)
-        static let sheet = CGRect(x: 156, y: 36, width: 308, height: 258)
+        static let sheet = CGRect(x: 146, y: 30, width: 320, height: 264)
         static let viewport = CGRect(x: 168, y: 48, width: 284, height: 206)
         static let tile = CGSize(width: 88, height: 50)
         static let tileGap: CGFloat = 10
@@ -505,7 +512,10 @@ struct SettingsMock: View {
             case 0: r = G.wallpaperRow
             case 1: r = G.screenSaverButton
             case 2: r = G.otherHeader(scroll: G.scrollDistance); corner = 6
-            default: r = G.dotStudioTile(scroll: G.scrollDistance).insetBy(dx: -4, dy: -4); corner = 9
+            default:
+                // The tile and its name under it
+                let t = G.dotStudioTile(scroll: G.scrollDistance)
+                r = CGRect(x: t.minX - 4, y: t.minY - 4, width: t.width + 8, height: t.height + 20); corner = 9
             }
             let on = phase == .clicked
             return RoundedRectangle(cornerRadius: corner * k, style: .continuous)
