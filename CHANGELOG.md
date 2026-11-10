@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.1 — Bounce
+
+### New
+- **Bounce.** A logo drifts corner to corner, bouncing off the edges and changing
+  colour on every bounce — and every couple of minutes it lands exactly in a corner,
+  with a little flourish. Use the built-in DotStudio mark, type your own word, or pick
+  any image (transparent logos are trimmed to their visible edges and tinted).
+
 ## 1.4.0 — What's playing, live skies, and a wallpaper in sync
 
 ### New
