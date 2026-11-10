@@ -38,6 +38,9 @@
 //  block and the artwork sit inside the screen (≥ 8 pt in) without overlapping, and prints a summary.
 //  --framebench times whole live frames (MetalRenderer.renderFrame: source, every effect and any
 //  compute pass, e.g. the error-diffusion dithers) with GPU timestamps, per preset, on its own renderer.
+//  Bounce: --logo builtin | text:WORD | file:/path/to/image (copied into the store's media folder,
+//  as the app imports one) sets the logo of every Bounce preset; each Bounce render prints its
+//  corner period and the next corner hits (render one with --times).
 //  --checks runs the live-renderer checks (wall-clock time base, synced slideshow, held-frame
 //  track change, rapid skips) through MetalRenderer.renderFrame and exits non-zero on a failure.
 
@@ -85,6 +88,7 @@ var textCheckRuns = 0
 var textCheckFailures = 0
 var textCheckBuildMs = 0.0
 var textCheckWarmMs = 0.0
+var logoArg: String?
 while !args.isEmpty {
     let a = args.removeFirst()
     switch a {
@@ -136,6 +140,7 @@ while !args.isEmpty {
     case "--notch": notchPoints = CGFloat(Double(args.removeFirst()) ?? 0)
     case "--marquee": MusicOverlayLayer.stillMarqueePose = CGFloat(Double(args.removeFirst()) ?? 0)
     case "--textcheck": textCheck = true
+    case "--logo": logoArg = args.removeFirst()
     case "--size":
         let p = args.removeFirst().split(separator: "x").compactMap { Int($0) }
         if p.count == 2 { W = p[0]; H = p[1] }
@@ -497,11 +502,126 @@ func formatChecks() -> Bool {
     } catch {
         check(false, "a library with unknown effect kinds decodes (\(error))")
     }
+
+    // Bounce's logo fields (EffectInstance.logoKind / logoText / logoFile): optional and add-only.
+    do {
+        var lib = DefaultPresets.makeLibrary()
+        let plain = try enc.encode(lib)
+        check(!String(decoding: plain, as: UTF8.self).contains("\"logo"),
+              "Bounce: a library without logos writes no logo fields (the built-in mark is all nil)")
+        var text = EffectInstance(.bounce)
+        text.logoKind = .text; text.logoText = "Ünïcödé — Dävid 日本"
+        var image = EffectInstance(.bounce)
+        image.logoKind = .image; image.logoFile = "6F1C2E4A-0000-4000-8000-000000000001.png"; image.logoText = "kept"
+        lib.presets.append(Preset(name: "Bounce Text", effects: [text]))
+        lib.presets.append(Preset(name: "Bounce Image", effects: [image, EffectInstance(.scanlines)]))
+        let data = try enc.encode(lib)
+        let back = try JSONDecoder().decode(Library.self, from: data)
+        let again = try enc.encode(back)
+        check(back == lib && data == again,
+              "Bounce: a library with a text and an image logo decodes → saves → the same JSON, byte for byte")
+        // A logo kind from a newer build decodes as the built-in mark rather than failing the library.
+        guard var obj = (try JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              var presets = obj["presets"] as? [[String: Any]], var effects = presets.last?["effects"] as? [[String: Any]]
+        else { check(false, "Bounce: fixture"); return ok }
+        effects[0]["logoKind"] = "hologram"
+        presets[presets.count - 1]["effects"] = effects
+        obj["presets"] = presets
+        let future = try JSONDecoder().decode(Library.self, from: try JSONSerialization.data(withJSONObject: obj))
+        check(future.presets.last?.effects.first?.logoKind == .builtIn
+              && future.presets.last?.effects.first?.logoFile == image.logoFile,
+              "Bounce: an unknown logo kind decodes as the built-in mark (the rest of the effect intact)")
+        // An older build (no logo fields) reading this library: the effect's extra keys are ignored
+        // by its synthesized Codable, and Bounce itself is an unknown kind there, kept verbatim.
+        let raw = try JSONDecoder().decode(JSONValue.self, from: data)
+        if case .object(let o) = raw, case .array(let ps)? = o["presets"], case .object(let last)? = ps.last,
+           case .array(let es)? = last["effects"], case .object(let e0)? = es.first {
+            check(e0["logoKind"] == .string("image") && e0["logoText"] == .string("kept"),
+                  "Bounce: the logo fields are plain JSON keys on the effect (kept verbatim by an older build's unknown-effect path)")
+        } else {
+            check(false, "Bounce: logo fields in the JSON")
+        }
+    } catch {
+        check(false, "Bounce: logo round trip (\(error))")
+    }
+    return ok
+}
+/// Bounce's motion: a pure function of t that stays on screen, lands exactly in a corner once a
+/// period, and comes nowhere near one in between.
+func bounceChecks() -> Bool {
+    var ok = true
+    func check(_ pass: Bool, _ what: String) {
+        print("\(pass ? "PASS" : "FAIL")  \(what)")
+        if !pass { ok = false }
+    }
+    var worstOut = 0.0, worstCorner = 0.0, nearMisses = 0, periods: [Double] = []
+    for (w, h) in [(1600.0, 1000.0), (5120.0, 2880.0), (1920.0, 1080.0), (3024.0, 1964.0), (1000.0, 1600.0), (448.0, 280.0)] {
+        for aspect in [1.0, 2.14, 4.29, 0.6] {
+            for speed in [1.0, 0.5, 2.3] {
+                let m = BounceLogo.timing(width: w, height: h, aspect: aspect, size: 0.24, speed: speed)
+                if speed == 1 { periods.append(m.period) }
+                // the corner hits
+                for k in 0..<3 {
+                    let t = m.tc + Double(k) * m.period
+                    let c = BounceLogo.pose(m, at: t).center
+                    let hit = BounceLogo.lastCorner(m, at: t + 1e-6, width: w, height: h).corner
+                    let dx = min(abs(c.x - m.lw / 2), abs(c.x - (w - m.lw / 2)))
+                    let dy = min(abs(c.y - m.lh / 2), abs(c.y - (h - m.lh / 2)))
+                    worstCorner = max(worstCorner, dx, dy)
+                    // the logo's own corner sits in the screen corner the flourish starts from
+                    let lc = SIMD2(c.x + (hit.x > 0 ? m.lw / 2 : -m.lw / 2), c.y + (hit.y > 0 ? m.lh / 2 : -m.lh / 2))
+                    worstCorner = max(worstCorner, abs(lc.x - hit.x), abs(lc.y - hit.y))
+                }
+                // a whole period at 120 fps: inside the screen, and within 2 px of a corner only at the hits
+                var t = m.tc + 0.5
+                while t < m.tc + m.period - 0.5 {
+                    let c = BounceLogo.pose(m, at: t).center
+                    worstOut = max(worstOut, m.lw / 2 - c.x, c.x - (w - m.lw / 2), m.lh / 2 - c.y, c.y - (h - m.lh / 2))
+                    let dx = min(abs(c.x - m.lw / 2), abs(c.x - (w - m.lw / 2)))
+                    let dy = min(abs(c.y - m.lh / 2), abs(c.y - (h - m.lh / 2)))
+                    if dx < 2, dy < 2 { nearMisses += 1 }
+                    t += 1.0 / 120
+                }
+            }
+        }
+    }
+    check(worstOut <= 1e-6, String(format: "Bounce: the logo never leaves the screen (worst overshoot %.2g px)", worstOut))
+    check(worstCorner < 1e-6, String(format: "Bounce: every corner hit is exact, in the corner the flourish starts from (worst %.2g px)", worstCorner))
+    check(nearMisses == 0, "Bounce: no other near-corner (both edges within 2 px) in a whole period (\(nearMisses) frames)")
+    check(periods.allSatisfy { $0 > 100 && $0 < 220 },
+          String(format: "Bounce: a corner every %.0f–%.0f s at speed 1 (any screen, any logo shape)",
+                 periods.min() ?? 0, periods.max() ?? 0))
+    let md = URL(fileURLWithPath: "/tmp/media")
+    check(BounceLogo.fileURL("A1.png", mediaDir: md)?.path == "/tmp/media/A1.png"
+          && ["../library.json", "/etc/hosts", "sub/a.png", ".hidden", "", nil].allSatisfy { BounceLogo.fileURL($0, mediaDir: md) == nil },
+          "Bounce: an Image logo only ever reads a plain file name inside the media folder")
+    // Stateless: two renderers on the wall-clock time base draw the same frame (made and warmed
+    // first, then drawn back to back: the logo moves ~0.1 px between the two reads of the clock).
+    let p = Preset(name: "Bounce", effects: [EffectInstance(.bounce)])
+    let rs = (0..<2).map { _ -> MetalRenderer in
+        let r = MetalRenderer(pixelFormat: .bgra8Unorm, store: store)!
+        r.timeBase = .wallClock
+        r.apply(p, source: SourceSpec())
+        for _ in 0..<3 { _ = r.renderFrame(width: 320, height: 200, settled: true) }
+        return r
+    }
+    let a = rs[0].renderFrame(width: 320, height: 200, settled: true)
+    let b = rs[1].renderFrame(width: 320, height: 200, settled: true)
+    var diff = Double.infinity, lit = 0.0
+    if let a, let b, let da = a.dataProvider?.data, let db = b.dataProvider?.data, CFDataGetLength(da) == CFDataGetLength(db) {
+        let n = CFDataGetLength(da)
+        let pa = CFDataGetBytePtr(da)!, pb = CFDataGetBytePtr(db)!
+        var d = 0, l = 0
+        for i in 0..<n { d += abs(Int(pa[i]) - Int(pb[i])); if i % 4 != 3, pa[i] > 60 { l += 1 } }
+        diff = Double(d) / Double(n); lit = Double(l) / Double(n / 4 * 3)
+    }
+    check(diff < 0.5 && lit > 0.005,
+          String(format: "Bounce: two wall-clock renderers draw the same frame (mean |Δ| %.3f, logo lights %.1f%% of the colour channels)", diff, lit * 100))
     return ok
 }
 if runChecks {
-    let live = liveChecks(), format = formatChecks()
-    exit(live && format ? 0 : 1)
+    let live = liveChecks(), format = formatChecks(), bounce = bounceChecks()
+    exit(live && format && bounce ? 0 : 1)
 }
 
 if let tzArg, let tz = TimeZone(identifier: tzArg) { NSTimeZone.default = tz }
@@ -529,11 +649,41 @@ if looksOnly { presets = [Preset(name: "Source")] + presets.filter { !$0.isScene
 if solo {
     for i in presets.indices where presets[i].effects.count > 1 { presets[i].effects = [presets[i].effects[0]] }
 }
+if let logoArg {
+    // --logo: the logo every Bounce preset draws (an image is imported like the app does it).
+    var kind = BounceLogoKind.builtIn, text: String?, file: String?
+    if logoArg.hasPrefix("text:") { kind = .text; text = String(logoArg.dropFirst(5)) }
+    else if logoArg.hasPrefix("file:") {
+        kind = .image
+        do { file = try store.importMedia(from: URL(fileURLWithPath: String(logoArg.dropFirst(5)))) }
+        catch { print("--logo: couldn't import \(logoArg): \(error)"); exit(2) }
+    }
+    for i in presets.indices {
+        for j in presets[i].effects.indices where presets[i].effects[j].kind == .bounce {
+            presets[i].effects[j].logoKind = kind
+            presets[i].effects[j].logoText = text
+            presets[i].effects[j].logoFile = file
+        }
+    }
+}
+/// Bounce: the corner period and the next few corner hits for this preset at W×H.
+func bounceInfo(_ p: Preset) {
+    guard let inst = p.effects.first(where: { $0.enabled && $0.kind == .bounce }),
+          let e = BounceLogo.entry(for: inst, mediaDir: store.mediaDir, device: renderer.device) else { return }
+    let m = BounceLogo.timing(width: Double(W), height: Double(H), aspect: e.aspect,
+                              size: Double(inst.g("size")), speed: Double(inst.g("speed")))
+    let hits = (0..<4).map { String(format: "%.2f", m.tc + Double($0) * m.period) }.joined(separator: ", ")
+    print(String(format: "bounce %@: logo %.0f×%.0f px (aspect %.2f, %@%@), crossings x %.2f s, y %.2f s, p:q %d:%d, a corner every %.1f s — at t = %@",
+                 p.name, m.lw, m.lh, e.aspect, e.card ? "card" : "bare", e.lumHi < 0 ? ", one tone" : "",
+                 m.tx, m.ty, m.p, m.q, m.period, hits))
+}
 if !overrides.isEmpty {
     for i in presets.indices where !presets[i].effects.isEmpty {
         presets[i].effects[0].params.merge(overrides) { _, new in new }
     }
 }
+
+for p in presets { bounceInfo(p) }
 
 var source = lib.source
 var photoTex: MTLTexture?
@@ -622,8 +772,10 @@ if gpuBench {
         return (u, wall)
     }
     /// GPU ms per pass of `pso` with these uniforms: (min, median) over 12 command buffers of 3.
-    func benchPass(_ uIn: FXUniforms, kind: EffectKind?, wall: Date, pso: MTLRenderPipelineState) -> (Double, Double) {
+    func benchPass(_ uIn: FXUniforms, kind: EffectKind?, wall: Date, pso: MTLRenderPipelineState,
+                   inst: EffectInstance? = nil) -> (Double, Double) {
         var u = uIn
+        let benchInst = inst ?? kind.map { EffectInstance($0) }      // Bounce: its logo
         var samples: [Double] = []
         let sand = SandGarden.Cache()
         for rep in 0..<14 {
@@ -632,6 +784,9 @@ if gpuBench {
                 u.time = benchTime.map { $0 + Float(f) * 0.004 } ?? (Float(rep * 3 + f) * 1.7 + benchT0)
                 var sceneData: MTLTexture?
                 if kind == .sandGarden { sceneData = sand.prepare(&u, wall: wall, device: dev) }
+                if kind == .bounce, let inst = benchInst {
+                    sceneData = BounceLogo.prepare(&u, inst: inst, mediaDir: store.mediaDir, device: dev)
+                }
                 let rpd = MTLRenderPassDescriptor()
                 rpd.colorAttachments[0].texture = target
                 rpd.colorAttachments[0].loadAction = .dontCare
@@ -751,7 +906,7 @@ if gpuBench {
         guard let inst = p.effects.first(where: { $0.enabled }) else { continue }
         let (u, wall) = benchUniforms(inst)
         // The pipeline the renderer binds (rendererPipeline); --uber: fx_fragment, always.
-        let (lo, med) = benchPass(u, kind: inst.kind, wall: wall, pso: uberOnly ? pso : rendererPipeline(inst, u))
+        let (lo, med) = benchPass(u, kind: inst.kind, wall: wall, pso: uberOnly ? pso : rendererPipeline(inst, u), inst: inst)
         print(String(format: "%6.2f ms GPU  (median %5.2f)  %@ [%@]%@", lo, med,
                      p.name, inst.kind.displayName, wname.map { " @" + $0 } ?? ""))
     }

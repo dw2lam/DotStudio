@@ -87,6 +87,7 @@ enum EffectKind: String, Codable, CaseIterable {
     case rainGlass, oceanHorizon, nightSky, snowfall          // Nature   58–61
 
     case synthGrid, pipes, polyTrails, demoTunnel             // Retro    62–65
+    case bounce                                               // Retro    74 (Bounce.swift)
 
     case nowPlaying                                           // Music    66
 
