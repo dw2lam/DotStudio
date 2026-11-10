@@ -475,8 +475,8 @@ final class WallpaperRenderLoop {
         clockTickLatest = 0
     }
 
-    private func log(_ message: String) {
-        store.debug("[wallpaper \(String(format: "%.3f", CACurrentMediaTime()))] \(message)")
+    private func log(_ message: @autoclosure () -> String) {
+        store.debug("wallpaper", message())
     }
 
     // MARK: Display link target

@@ -582,8 +582,8 @@ final class WallpaperController: ObservableObject {
         }
     }
 
-    private func log(_ message: String) {
-        model?.store.debug("[wallpaper \(String(format: "%.3f", CACurrentMediaTime()))] \(message)")
+    private func log(_ message: @autoclosure () -> String) {
+        model?.store.debug("wallpaper", message())
     }
 }
 
