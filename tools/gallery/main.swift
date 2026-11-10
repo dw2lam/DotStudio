@@ -619,9 +619,101 @@ func bounceChecks() -> Bool {
           String(format: "Bounce: two wall-clock renderers draw the same frame (mean |Δ| %.3f, logo lights %.1f%% of the colour channels)", diff, lit * 100))
     return ok
 }
+
+// MARK: - 1.4.2 retirement checks (DefaultPresets.retiredStyles / retireUntouched) ─────────────
+/// The retired styles leave every offer, untouched copies leave a library (references follow),
+/// edited copies stay and still render. (Migration end to end: DOTSTUDIO_MIGRATE_ONLY fixtures.)
+func retirementChecks() -> Bool {
+    var ok = true
+    func check(_ pass: Bool, _ what: String) {
+        print("\(pass ? "PASS" : "FAIL")  \(what)")
+        if !pass { ok = false }
+    }
+    let names = Set(DefaultPresets.retiredStyles.keys)
+    let defs = names.sorted().compactMap(DefaultPresets.builtInDefinition)
+    check(defs.count == 8 && defs.allSatisfy { $0.isScene }, "retired: all eight built-in definitions still exist, as scenes")
+    check(names.isDisjoint(with: DefaultPresets.featured)
+          && names.isDisjoint(with: DefaultPresets.offeredBuiltIns().map(\.name))
+          && names.isDisjoint(with: DefaultPresets.makeLibrary().presets.map(\.name)),
+          "retired: not featured, not offered (Add Built-in Styles), not in a new library")
+    let kinds: [EffectKind] = [.dialClock, .pipes, .demoTunnel, .fireflies]
+    check(kinds.allSatisfy { $0.isRetired && $0.isScene && SceneCatalog.spec($0) != nil }
+          && kinds.allSatisfy { k in !EffectKind.allCases.filter { $0.isScene && !$0.isRetired }.contains(k) },
+          "retired: their kinds are hidden from New Scene / Add Effect but keep their scene specs")
+    check(DefaultPresets.makeLibrary().seenBuiltIns?.contains(DefaultPresets.retirementMarker) == true,
+          "retired: a new library is born past the retirement (marker recorded)")
+
+    // A library with all eight untouched (as a 1.4.1 library + Add Built-in Styles), Sunray
+    // active, Fireflies + Aurora rotating, Pipeworks the night style.
+    var lib = DefaultPresets.makeLibrary()
+    lib.presets += defs
+    func id(_ n: String, _ l: Library) -> UUID? { l.presets.first { $0.name == n }?.id }
+    lib.activeID = id("Sunray", lib)
+    lib.rotation = RotationSpec(enabled: true, presetIDs: [id("Fireflies", lib)!, id("Aurora", lib)!])
+    lib.schedule = ScheduleSpec(enabled: true, dayPresetID: id("Aurora", lib), nightPresetID: id("Pipeworks", lib))
+    let (out, r) = DefaultPresets.retireUntouched(lib)
+    let fallback = DefaultPresets.featured.lazy.compactMap { id($0, out) }.first
+    let sunrayTo = id("Chronometer", out) ?? fallback
+    check(Set(r.removed) == names && r.kept.isEmpty && names.isDisjoint(with: out.presets.map(\.name))
+          && out.presets.count == lib.presets.count - 8,
+          "retire: untouched copies of all eight leave the library")
+    check(out.activeID != nil && out.activeID == sunrayTo && out.schedule?.nightPresetID == fallback
+          && out.schedule?.dayPresetID == id("Aurora", out) && out.rotation?.presetIDs == [id("Aurora", out)!]
+          && out.rotation?.enabled == true,
+          "retire: active Sunray → \(out.presets.first { $0.id == out.activeID }?.name ?? "none"), night → first featured, rotation pruned to Aurora")
+    check(DefaultPresets.retireUntouched(out).1 == DefaultPresets.Retirement(), "retire: a second pass changes nothing")
+
+    // A stored copy from before a parameter existed is still untouched (missing = default).
+    var older = defs[0]
+    let atDefault = older.effects[0].params.keys.sorted().first {
+        older.effects[0].params[$0] == older.effects[0].kind.defaultParams[$0]
+    }
+    if let k = atDefault { older.effects[0].params[k] = nil }
+    older.id = UUID(); older.effects[0].id = UUID()
+    var moved = defs[0]; moved.effects[0].params[atDefault ?? ""] = -7
+    check(atDefault != nil && DefaultPresets.isUntouched(older, as: defs[0]) && !DefaultPresets.isUntouched(moved, as: defs[0]),
+          "retire: a param missing from an old copy counts as its default (\(defs[0].name) without \"\(atDefault ?? "?")\"); a changed one doesn't")
+
+    // Edited copies stay — and decode, and render.
+    var sunray = DefaultPresets.builtInDefinition("Sunray")!, pipes = DefaultPresets.builtInDefinition("Pipeworks")!
+    var flies = DefaultPresets.builtInDefinition("Fireflies")!, tunnel = DefaultPresets.builtInDefinition("Light Tunnel")!
+    sunray.effects[0].params["hands"] = 1
+    pipes.effects[0].colorA = RGBA(0.2, 0.8, 0.4)
+    flies.fps = 60
+    tunnel.effects[0].enabled = false; tunnel.effects.append(EffectInstance(.scanlines))
+    var edited = DefaultPresets.makeLibrary()
+    edited.presets += [sunray, pipes, flies, tunnel]
+    edited.activeID = sunray.id
+    let (kept, r2) = DefaultPresets.retireUntouched(edited)
+    check(r2.removed.isEmpty && Set(r2.kept) == ["Sunray", "Pipeworks", "Fireflies", "Light Tunnel"] && kept == edited,
+          "retire: edited copies (a param, a colour, the frame rate, the stack) all stay, nothing remapped")
+    if let data = try? JSONEncoder().encode(kept), let back = try? JSONDecoder().decode(Library.self, from: data) {
+        check(back.unknownPresets.isEmpty && back.presets.suffix(4).map(\.name) == ["Sunray", "Pipeworks", "Fireflies", "Light Tunnel"],
+              "retire: the kept copies decode as ordinary styles")
+    } else {
+        check(false, "retire: the kept library round-trips")
+    }
+    for p in [sunray, pipes, flies] {
+        let r = MetalRenderer(pixelFormat: .bgra8Unorm, store: store)!
+        r.waitsForScenePipelines = true
+        r.apply(p, source: SourceSpec())
+        var lit = 0.0
+        if let img = r.renderFrame(width: 320, height: 200, settled: true), let d = img.dataProvider?.data {
+            let n = CFDataGetLength(d), b = CFDataGetBytePtr(d)!
+            var l = 0
+            for i in 0..<n where i % 4 != 3 && b[i] > 40 { l += 1 }
+            lit = Double(l) / Double(n / 4 * 3)
+        }
+        check(lit > 0.01, String(format: "retire: the kept \(p.name) still renders (%.1f%% of channels lit)", lit * 100))
+    }
+    return ok
+}
+// MARK: - end retirement checks ────────────────────────────────────────────────────────────────
+
 if runChecks {
     let live = liveChecks(), format = formatChecks(), bounce = bounceChecks()
-    exit(live && format && bounce ? 0 : 1)
+    let retirement = retirementChecks()
+    exit(live && format && bounce && retirement ? 0 : 1)
 }
 
 if let tzArg, let tz = TimeZone(identifier: tzArg) { NSTimeZone.default = tz }
