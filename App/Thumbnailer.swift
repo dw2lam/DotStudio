@@ -8,8 +8,9 @@
 //
 //  Who repaints: a view that shows a still asked `image(for:)` for it in its body, which reads
 //  that style's change signal (Observation) — so a still landing repaints exactly the views
-//  showing THAT style, never the whole gallery (posters and music changes, which can touch any
-//  still, bump one shared signal). Opening the gallery also renders every missing first still
+//  showing THAT style, never the whole gallery (a video poster landing, which can touch any
+//  still, bumps one shared signal; the song changing bumps another, read only by the stills
+//  that show music). Opening the gallery also renders every missing first still
 //  in the background (`prewarm`), so scrolling never waits on a Metal render.
 //
 //  Stills that depend on the wall clock (clocks, Window Light, the live sky, Night Sky,
@@ -42,9 +43,15 @@ final class Thumbnailer {
         var revision = 0
     }
     private var signals: [UUID: Signal] = [:]
-    /// Bumped by changes that can touch any still: a video poster landing, the track a Now
-    /// Playing still shows. Main thread.
+    /// Bumped by changes that can touch any still: a video poster landing. Main thread.
     private let everyStill = Signal()
+    /// Bumped when what a music still shows changes (the track, play/pause): read only by the
+    /// views that show music (a legacy Now Playing tile, the Screensaver card's still hero), so
+    /// a song change never repaints the other tiles or the backdrop. Main thread.
+    private let musicStills = Signal()
+    /// Perf probe: its offscreen window counts as an app window on screen (the probe's window
+    /// is borderless and never ordered in, so nothing ticks or follows the music otherwise).
+    static var assumesWindowOnScreen = false
 
     private func signal(_ id: UUID) -> Signal {
         if let s = signals[id] { return s }
@@ -180,6 +187,7 @@ final class Thumbnailer {
         // Now Playing tiles show the current track: re-render when it (not its progress) changes.
         var music: MusicSnapshot?
         if preset.isMusicScene {
+            _ = musicStills.revision
             musicSettings = settings
             watchMusic()
             let snap = MusicFeedHub.shared.snapshot(store: store)
@@ -348,7 +356,7 @@ final class Thumbnailer {
     }
 
     private static var appWindowOnScreen: Bool {
-        NSApp?.windows.contains {
+        assumesWindowOnScreen || NSApp?.windows.contains {
             $0.isVisible && $0.styleMask.contains(.titled) && !$0.isMiniaturized
                 && $0.occlusionState.contains(.visible)
         } ?? false
@@ -368,6 +376,7 @@ final class Thumbnailer {
     func image(for preset: Preset, source: SourceSpec, music settings: MusicSpec, showsMusic: Bool) -> NSImage? {
         let base = image(for: preset, source: source, music: settings)
         guard showsMusic, !preset.isMusicScene, settings.displayMode != .off, let base else { return base }
+        _ = musicStills.revision
         musicSettings = settings
         watchMusic()
         let snap = MusicFeedHub.shared.snapshot(store: store)
@@ -406,20 +415,22 @@ final class Thumbnailer {
         return [st.trackID ?? st.title ?? "", st.artwork ?? "-", st.isPlaying == true ? "▶" : "Ⅱ"].joined(separator: "|")
     }
 
-    /// Once a Now Playing tile exists, follow the feed and repaint the gallery when its key
-    /// changes — only while an app window is up: with every window closed (menu-bar mode) the
-    /// subscription drops itself, and the next gallery render subscribes again.
+    /// Once a still shows music (a Now Playing tile, the Screensaver card's hero), follow the
+    /// feed and repaint those stills (only) when its key changes — only while an app window is
+    /// up: with every window closed (menu-bar mode) the subscription drops itself, and the next
+    /// gallery render subscribes again.
     private func watchMusic() {
         guard musicToken == nil else { return }
         musicToken = MusicFeedHub.shared.subscribe(store: store) { [weak self] snap, _ in
             guard let self else { return }
-            if let app = NSApp, !app.windows.contains(where: { $0.isVisible && $0.styleMask.contains(.titled) }) {
+            if !Self.assumesWindowOnScreen, let app = NSApp,
+               !app.windows.contains(where: { $0.isVisible && $0.styleMask.contains(.titled) }) {
                 self.musicToken = nil
                 self.lastMusicKey = nil
                 return
             }
             let k = Self.musicKey(snap, self.musicSettings)
-            if self.lastMusicKey != nil, k != self.lastMusicKey { self.everyStill.revision += 1 }
+            if self.lastMusicKey != nil, k != self.lastMusicKey { self.musicStills.revision += 1 }
             self.lastMusicKey = k
         }
     }

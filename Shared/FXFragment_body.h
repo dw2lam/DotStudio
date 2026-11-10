@@ -249,7 +249,6 @@
             if (d < best) { best = d; bestCenter = center; }
         }
         float2 cuv = bestCenter / (scale * float2(res.x / res.y, 1.0));
-        float edge = smoothstep(0.0, 0.04, best);   // would need 2nd-closest for true edges
         return src.sample(samp, clamp(cuv, 0.0, 1.0));
     }
 
@@ -322,7 +321,6 @@
         float cell = max(u.p0.x, 6.0);
         float speed = u.p0.y;
         int2 cellPx = int2(floor(px / cell));
-        int cols = int(res.x / cell);
         float colSeed = hash21(float2(float(cellPx.x), 3.0));
         float colSpeed = 0.4 + colSeed * 1.6;
         float head = fract(colSeed + t * speed * 0.08 * colSpeed) * (res.y / cell + 12.0);
@@ -347,7 +345,6 @@
         // walk left until we exit the bright/dark region, sampling sparsely
         float2 dir = float2(1.0 / res.x, 0.0);
         float3 c = base.rgb;
-        float startX = px.x;
         for (int i = 1; i < 64; ++i) {
             if (float(i) > maxLen) break;
             float2 suv = uv - dir * float(i);

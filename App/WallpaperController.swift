@@ -231,8 +231,6 @@ final class WallpaperController: ObservableObject {
         }
     }
 
-    var hasVisibleMainWindow: Bool { mainWindows.contains { $0.isVisible } }
-
     private var mainWindows: [NSWindow] {
         NSApp.windows.filter { w in
             !(w is WallpaperWindow) && w.styleMask.contains(.titled)
@@ -584,8 +582,8 @@ final class WallpaperController: ObservableObject {
         }
     }
 
-    private func log(_ message: String) {
-        model?.store.debug("[wallpaper \(String(format: "%.3f", CACurrentMediaTime()))] \(message)")
+    private func log(_ message: @autoclosure () -> String) {
+        model?.store.debug("wallpaper", message())
     }
 }
 

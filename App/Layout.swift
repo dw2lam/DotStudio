@@ -212,8 +212,6 @@ struct LayoutMetrics: Equatable {
     /// the largest it grows to in a roomy card. It never grows with the text (the text
     /// column needs the room), only with the window.
     var cardPreviewWidth: ClosedRange<CGFloat> { widthClass.pick(CGFloat(112)...200, 144...320, 176...520) }
-    /// Leading label column in parameter rows (slider label · slider · value).
-    var formLabelWidth: CGFloat { scaled(92) }
     /// Popover content width for small editors (Source, playlist).
     var popoverWidth: ClosedRange<CGFloat> { scaled(300)...scaled(440) }
 }

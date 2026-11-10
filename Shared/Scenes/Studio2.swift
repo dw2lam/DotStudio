@@ -93,7 +93,6 @@ enum SandGarden {
     }
     static let maxVerts = 120_000
     static let compositionsPerHour: Float = 5        // at Speed 1×: twelve minutes a composition
-    static let tines = 5
 
     // MARK: hashing
 

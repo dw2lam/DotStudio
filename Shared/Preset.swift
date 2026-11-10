@@ -86,6 +86,18 @@ struct Preset: Codable, Identifiable, Equatable, Hashable {
 
     /// Legacy per-style source — only decoded so old libraries can migrate.
     var source: SourceSpec?
+
+    /// Effects of a kind this build doesn't know (a library or share file written by a newer
+    /// DotStudio), kept verbatim with their place in the stack: never drawn or shown, but
+    /// written back on save, so opening a newer library here doesn't destroy them.
+    var unknownEffects: [UnknownEffect] = []
+}
+
+/// An effect this build can't decode, as it was in the file (see Preset.unknownEffects).
+struct UnknownEffect: Equatable, Hashable {
+    /// Its position in the stored `effects` array.
+    var index: Int
+    var json: JSONValue
 }
 
 extension Preset {
@@ -134,9 +146,175 @@ struct Library: Codable, Equatable {
     /// shared wall-clock time base (MetalRenderer.TimeBase.wallClock), so the screensaver
     /// starts on exactly the frame the desktop was showing. nil/false = per-instance time.
     var syncTimeBase: Bool?
+
+    /// Styles made only of effects this build doesn't know (Preset.isUnknownToThisBuild), with
+    /// their place in the stored list: left out of `presets` (nothing here can draw them), but
+    /// written back on save.
+    var unknownPresets: [UnknownPreset] = []
+}
+
+/// A style this build can't draw, kept for the newer DotStudio that wrote it (Library.unknownPresets).
+struct UnknownPreset: Equatable {
+    /// Its position in the stored `presets` array.
+    var index: Int
+    var preset: Preset
+}
+
+/// Forward compatibility: an effect whose kind this build doesn't know is skipped, not fatal
+/// (a newer DotStudio adds kinds; an unknown one used to make the whole library undecodable).
+/// Every other field decodes exactly as the synthesized Codable did.
+extension Preset {
+    private enum CodingKeys: String, CodingKey { case id, name, effects, fps, source }
+    private enum KindKey: String, CodingKey { case kind }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        var items = try c.nestedUnkeyedContainer(forKey: .effects)
+        var index = 0
+        while !items.isAtEnd {
+            let item = try items.superDecoder()
+            let kind = try item.container(keyedBy: KindKey.self).decode(String.self, forKey: .kind)
+            if EffectKind(rawValue: kind) != nil {
+                effects.append(try EffectInstance(from: item))
+            } else {
+                unknownEffects.append(UnknownEffect(index: index, json: try JSONValue(from: item)))
+            }
+            index += 1
+        }
+        fps = try c.decode(Int.self, forKey: .fps)
+        source = try c.decodeIfPresent(SourceSpec.self, forKey: .source)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        var list = c.nestedUnkeyedContainer(forKey: .effects)
+        var known = effects[...]
+        var unknown = unknownEffects[...]
+        var index = 0
+        // Each unknown effect back at its stored position (or at the end, if the stack shrank).
+        while !known.isEmpty || !unknown.isEmpty {
+            if let u = unknown.first, u.index <= index || known.isEmpty {
+                try list.encode(u.json); unknown = unknown.dropFirst()
+            } else {
+                try list.encode(known.first!); known = known.dropFirst()
+            }
+            index += 1
+        }
+        try c.encode(fps, forKey: .fps)
+        try c.encodeIfPresent(source, forKey: .source)
+    }
+
+    /// Every stored effect was of an unknown kind: nothing this build could draw.
+    var isUnknownToThisBuild: Bool { effects.isEmpty && !unknownEffects.isEmpty }
+}
+
+/// Library: as the synthesized Codable, except `presets` (see unknownPresets).
+extension Library {
+    private enum CodingKeys: String, CodingKey {
+        case presets, source, activeID, version, locationLat, locationLon, renderScale, rotation,
+             schedule, music, seenBuiltIns, syncTimeBase
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let stored = try c.decode([Preset].self, forKey: .presets)
+        for (i, p) in stored.enumerated() {
+            if p.isUnknownToThisBuild { unknownPresets.append(UnknownPreset(index: i, preset: p)) }
+            else { presets.append(p) }
+        }
+        source = try c.decode(SourceSpec.self, forKey: .source)
+        activeID = try c.decodeIfPresent(UUID.self, forKey: .activeID)
+        version = try c.decode(Int.self, forKey: .version)
+        locationLat = try c.decodeIfPresent(Double.self, forKey: .locationLat)
+        locationLon = try c.decodeIfPresent(Double.self, forKey: .locationLon)
+        renderScale = try c.decodeIfPresent(Double.self, forKey: .renderScale)
+        rotation = try c.decodeIfPresent(RotationSpec.self, forKey: .rotation)
+        schedule = try c.decodeIfPresent(ScheduleSpec.self, forKey: .schedule)
+        music = try c.decodeIfPresent(MusicSpec.self, forKey: .music)
+        seenBuiltIns = try c.decodeIfPresent([String].self, forKey: .seenBuiltIns)
+        syncTimeBase = try c.decodeIfPresent(Bool.self, forKey: .syncTimeBase)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        var stored = presets
+        for u in unknownPresets { stored.insert(u.preset, at: min(u.index, stored.count)) }
+        try c.encode(stored, forKey: .presets)
+        try c.encode(source, forKey: .source)
+        try c.encodeIfPresent(activeID, forKey: .activeID)
+        try c.encode(version, forKey: .version)
+        try c.encodeIfPresent(locationLat, forKey: .locationLat)
+        try c.encodeIfPresent(locationLon, forKey: .locationLon)
+        try c.encodeIfPresent(renderScale, forKey: .renderScale)
+        try c.encodeIfPresent(rotation, forKey: .rotation)
+        try c.encodeIfPresent(schedule, forKey: .schedule)
+        try c.encodeIfPresent(music, forKey: .music)
+        try c.encodeIfPresent(seenBuiltIns, forKey: .seenBuiltIns)
+        try c.encodeIfPresent(syncTimeBase, forKey: .syncTimeBase)
+    }
+
+    /// The effects and styles this build skipped (a library written by a newer DotStudio).
+    var unknownCounts: (effects: Int, presets: Int) {
+        (presets.reduce(0) { $0 + $1.unknownEffects.count }, unknownPresets.count)
+    }
 }
 
 extension Library {
     /// The renderer time base the screensaver uses for this library.
     var rendererTimeBase: MetalRenderer.TimeBase { (syncTimeBase ?? false) ? .wallClock : .instance }
+}
+
+/// Any JSON value, kept verbatim: what this build can't model but must write back unchanged
+/// (UnknownEffect).
+enum JSONValue: Codable, Equatable, Hashable {
+    case null, bool(Bool), number(Double), string(String), array([JSONValue]), object([String: JSONValue])
+
+    init(from decoder: Decoder) throws {
+        if var a = try? decoder.unkeyedContainer() {
+            var out: [JSONValue] = []
+            while !a.isAtEnd { out.append(try a.decode(JSONValue.self)) }
+            self = .array(out)
+        } else if let o = try? decoder.container(keyedBy: AnyKey.self) {
+            var out: [String: JSONValue] = [:]
+            for k in o.allKeys { out[k.stringValue] = try o.decode(JSONValue.self, forKey: k) }
+            self = .object(out)
+        } else {
+            let v = try decoder.singleValueContainer()
+            if v.decodeNil() { self = .null }
+            else if let b = try? v.decode(Bool.self) { self = .bool(b) }
+            else if let n = try? v.decode(Double.self) { self = .number(n) }
+            else { self = .string(try v.decode(String.self)) }
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        switch self {
+        case .array(let a):
+            var c = encoder.unkeyedContainer()
+            for v in a { try c.encode(v) }
+        case .object(let o):
+            var c = encoder.container(keyedBy: AnyKey.self)
+            for (k, v) in o { try c.encode(v, forKey: AnyKey(k)) }
+        case .null:
+            var c = encoder.singleValueContainer(); try c.encodeNil()
+        case .bool(let b):
+            var c = encoder.singleValueContainer(); try c.encode(b)
+        case .number(let n):
+            var c = encoder.singleValueContainer(); try c.encode(n)
+        case .string(let s):
+            var c = encoder.singleValueContainer(); try c.encode(s)
+        }
+    }
+
+    private struct AnyKey: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+        init(_ s: String) { stringValue = s }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
 }

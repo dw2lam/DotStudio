@@ -1183,7 +1183,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         enc.endEncoding()
     }
 
-    /// Encode the full source→effects pass chain. Last pass writes into `final`.
+    /// Encode the full source→effects pass chain. Last pass writes into `final`. A scene (the
+    /// first effect isScene) never samples its input, so its chain starts at the scene: no
+    /// source pass (gallery --checks verifies, from the pipelines' reflection, that no scene's
+    /// fragment function reads texture 0).
     /// - effects: the preset's enabled effects, when the caller keeps them (the live chains), with
     ///   packedUniforms their packed uniforms; wall: the frame's wall-clock reading.
     private func encodePasses(_ cmd: MTLCommandBuffer, final: PassTarget,
@@ -1195,10 +1198,11 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let useGradient = (source.kind == .gradient) || (sourceTex == nil)
         let effects = inEffects ?? preset.effects.filter { $0.enabled }
         let passCount = 1 + effects.count
+        let firstPass = effects.first?.kind.isScene == true ? 1 : 0
         let wall = inWall ?? clockOverride ?? Date()
         let (clock, date) = wallClockUniforms(wall)
 
-        for i in 0..<passCount {
+        for i in firstPass..<passCount {
             let isLast = (i == passCount - 1)
             let input: MTLTexture = (i == 0) ? (sourceTex ?? dummy) : ((i - 1) % 2 == 0 ? pingA : pingB)
             let inst: EffectInstance? = (i == 0) ? nil : effects[i - 1]

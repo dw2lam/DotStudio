@@ -28,8 +28,6 @@ enum MusicBackdrop: Equatable {
     case veil
     /// The artwork's living art (the Now Playing scene, shader 66) in this layout.
     case albumArt(MusicLayoutKind)
-
-    var isNone: Bool { self == .none }
 }
 
 struct MusicPresentation: Equatable {
