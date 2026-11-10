@@ -16,6 +16,12 @@ static inline float standby_shape(float d, bool outline, float sw, float capPx) 
     return clocks_cov(d, capPx);
 }
 
+/// Advance (caps) of slot i of a time run in face 4; 0 for a blank slot.
+static inline float standby_adv(texture2d<float> A, thread const ClkRun& r, int i) {
+    int g = clocks_runGlyph(r, i);
+    return (g < 0) ? 0.0 : clockkit_advRH(A, g);
+}
+
 /// StandBy: p0 = (style 0 Solid / 1 Outline / 2 Gradient, night 0 Auto / 1 On / 2 Off, 24-hour,
 /// seconds), p1.x = size; colorA figures, colorB the gradient's lower end. Display sRGB out.
 static inline float3 standby_standby(float2 px, float2 res, constant FXUniforms& u,
@@ -32,39 +38,43 @@ static inline float3 standby_standby(float2 px, float2 res, constant FXUniforms&
     float cap = size * min(0.50, 0.88 * aspect / refW);
     float capPx = cap * res.y;
     float lift = secs ? 0.10 : 0.0;                                   // room for the seconds line
-    float2 q = p / cap + float2(0.0, 0.5 + lift);                     // caps; baseline y = 0, cap top −1
+    float2 q = p / cap + float2(0.0, -0.5 + lift);                    // caps; baseline y = 0, cap top −1
 
     ClkTime T = clocks_time(u.clock);
     float3 C = saturate(u.colorA.rgb), C2 = saturate(u.colorB.rgb);
     float night = (nightSel == 1) ? 1.0 : (nightSel == 2) ? 0.0 : clockkit_night(u);
 
     float ink = 0.0;
-    if (q.y > -1.6 && q.y < 0.6) {                                    // the figures' band only
+    bool changing = T.s < STANDBY_ROLL;
+    const float D = 0.26;                                             // roll distance, caps
+    if (q.y > (changing ? -1.15 - D : -1.15) && q.y < (changing ? 0.12 + D : 0.12)) {   // the figures' band only
         // a changing figure rolls up out of view as the next one rises into place (both fading),
         // while the run slides into its new spacing; figures that stay put stay solid
         float pm = T.m - 1.0, ph = T.h;
         if (pm < 0.0) { pm = 59.0; ph = fmod(T.h + 23.0, 24.0); }
-        bool changing = T.s < STANDBY_ROLL;
-        float e = clocks_easeOut(T.s / STANDBY_ROLL);
+        float x = saturate(T.s / STANDBY_ROLL);                       // time through the roll
+        float e = clocks_easeOut(x);                                  // its travel: quick, then settling
         ClkRun rN = clocks_timeRun(T.h, T.m, h24);
         ClkRun rO = changing ? clocks_timeRun(ph, pm, h24) : rN;
-        float Wo = 0.0, Wn = 0.0;
-        for (int i = 0; i < 5; ++i) {
-            int go = clocks_runGlyph(rO, i), gn = clocks_runGlyph(rN, i);
-            if (go >= 0) Wo += clockkit_advRH(A, go) + STANDBY_TRACK;
-            if (gn >= 0) Wn += clockkit_advRH(A, gn) + STANDBY_TRACK;
+        // the slots' advances, fetched once (a blank slot: 0)
+        float4 aN = float4(standby_adv(A, rN, 0), standby_adv(A, rN, 1), standby_adv(A, rN, 2), standby_adv(A, rN, 3));
+        float aN4 = standby_adv(A, rN, 4);
+        float4 aO = aN; float aO4 = aN4;
+        if (changing) {
+            aO = float4(standby_adv(A, rO, 0), standby_adv(A, rO, 1), standby_adv(A, rO, 2), standby_adv(A, rO, 3));
+            aO4 = standby_adv(A, rO, 4);
         }
-        float xo = -0.5 * (Wo - STANDBY_TRACK), xn = -0.5 * (Wn - STANDBY_TRACK);
+        float4 kN = select(float4(0.0), float4(STANDBY_TRACK), aN > 0.0), kO = select(float4(0.0), float4(STANDBY_TRACK), aO > 0.0);
+        float Wn = dot(aN + kN, float4(1.0)) + aN4, Wo = dot(aO + kO, float4(1.0)) + aO4;
+        float xo = -0.5 * Wo, xn = -0.5 * Wn;
         float sw = max(0.034, 1.4 / capPx);                           // outline stroke, caps
-        const float D = 0.26;                                         // roll distance, caps
-        float wO = 1.0 - smoothstep(0.0, 0.55, e), wN = smoothstep(0.15, 0.85, e);
+        float wO = 1.0 - smoothstep(0.0, 0.40, x), wN = smoothstep(0.22, 0.80, x);
         for (int i = 0; i < 5; ++i) {
-            int go = clocks_runGlyph(rO, i), gn = clocks_runGlyph(rN, i);
-            float ao = (go < 0) ? 0.0 : clockkit_advRH(A, go);
-            float an = (gn < 0) ? 0.0 : clockkit_advRH(A, gn);
-            float x = mix(xo, xn, e);
-            if (q.x > x - 0.3 && q.x < x + max(ao, an) + 0.3) {
-                float2 lq = q - float2(x, 0.0);
+            float ao = (i < 4) ? aO[i] : aO4, an = (i < 4) ? aN[i] : aN4;
+            float xs = mix(xo, xn, e);
+            if (q.x > xs - 0.3 && q.x < xs + max(ao, an) + 0.3) {
+                int go = clocks_runGlyph(rO, i), gn = clocks_runGlyph(rN, i);
+                float2 lq = q - float2(xs, 0.0);
                 if (go == gn) {
                     if (gn >= 0) ink = max(ink, standby_shape(clocks_gdist(A, s, clockkit_glyphRH(A, gn), lq, float4(0)), outline, sw, capPx));
                 } else {
@@ -74,8 +84,8 @@ static inline float3 standby_standby(float2 px, float2 res, constant FXUniforms&
                         ink = max(ink, wN * standby_shape(clocks_gdist(A, s, clockkit_glyphRH(A, gn), lq - float2(0.0, D * (1.0 - e)), float4(0)), outline, sw, capPx));
                 }
             }
-            if (go >= 0) xo += ao + STANDBY_TRACK;
-            if (gn >= 0) xn += an + STANDBY_TRACK;
+            if (ao > 0.0) xo += ao + STANDBY_TRACK;
+            if (an > 0.0) xn += an + STANDBY_TRACK;
         }
     }
 
@@ -84,7 +94,7 @@ static inline float3 standby_standby(float2 px, float2 res, constant FXUniforms&
     float3 fill = C;
     if (style == 2) fill = mix(C, C2, smoothstep(-1.0, 0.05, q.y));
     float rel = clamp(luma(fill) / max(luma(C), 0.05), 0.25, 1.0);
-    fill = mix(fill, float3(0.66, 0.045, 0.03) * rel, night);
+    fill = mix(fill, float3(0.58, 0.035, 0.025) * rel, night);
     float3 col = fill * ink;
 
     // seconds: a short hairline under the figures, filling across the minute
@@ -149,7 +159,7 @@ static inline float3 standby_minimal(float2 px, float2 res, constant FXUniforms&
         float2 c1 = float2(-0.55 * aspect * 0.5 + 0.20 * sin(ph * 7.0), -0.45 + 0.12 * cos(ph * 5.0));
         float2 c2 = float2(0.50 * aspect * 0.5 + 0.18 * cos(ph * 6.0 + 1.0), 0.55 + 0.10 * sin(ph * 4.0 + 2.0));
         float3 Bl = srgbToLinear(TB);
-        float3 deep = Bl * 0.32, glow = mix(Bl, float3(1.0, 0.80, 0.70) * max(luma(Bl), 0.05) * 2.2, 0.45);
+        float3 deep = Bl * 0.30, glow = Bl * 2.3 + float3(0.030, 0.012, 0.026);   // the same hue, lit
         float3 c = mix(deep, Bl, smoothstep(0.9, -0.6, pf.y + 0.25 * pf.x));
         c = mix(c, glow, 0.85 * exp(-dot(pf - c1, pf - c1) / 0.42));
         c = mix(c, deep * 0.7, 0.55 * exp(-dot(pf - c2, pf - c2) / 0.30));
@@ -211,11 +221,26 @@ static inline float3 standby_minimal(float2 px, float2 res, constant FXUniforms&
     if (showDate && p.y > baseD - 1.4 * capD && p.y < baseD + 0.4 * capD) {
         float db; float4 dfw = clocks_face(0, 0.40, db);
         const float dtrack = 0.20;
+        float2 dq0 = (p - float2(centered ? 0.0 : xL, baseD)) / capD;
         ClkRun dr = clocks_dateRun(u.date, u.clock, true, false);
         float w = clocks_runWidth(A, dr, dfw, dtrack);
-        float2 dq = (p - float2(centered ? 0.0 : xL, baseD)) / capD;
-        if (centered) dq.x += 0.5 * w;
-        cov = max(cov, 0.62 * clocks_cov(clocks_runDist(A, s, dr, dfw, dtrack, dq) - db, capD * res.y));
+        float2 dq = dq0 + float2(centered ? 0.5 * w : 0.0, 0.0);
+        float secOfDay = u.clock.x * 3600.0;
+        float wN = clocks_ease((secOfDay - 0.40) / 0.70);             // at midnight: yesterday fades out,
+        float dc = wN * clocks_cov(clocks_runDist(A, s, dr, dfw, dtrack, dq) - db, capD * res.y);
+        if (secOfDay < 1.1) {                                         // today fades in (as the time does)
+            int yy = int(u.date.x), mo = clamp(int(u.date.y), 1, 12), dd = clamp(int(u.date.z), 1, 31);
+            float4 pdate = (dd > 1) ? float4(float(yy), float(mo), float(dd - 1), 0.0)
+                         : float4(float(mo == 1 ? yy - 1 : yy), float(mo == 1 ? 12 : mo - 1),
+                                  float(clockkit_prevMonthDays(yy, mo)), 0.0);
+            float4 pclock = float4(0.0, 0.0, 0.0, fmod(u.clock.w + 5.0, 7.0) + 1.0);
+            ClkRun pr = clocks_dateRun(pdate, pclock, true, false);
+            float pw = clocks_runWidth(A, pr, dfw, dtrack);
+            float2 pq = dq0 + float2(centered ? 0.5 * pw : 0.0, 0.0);
+            float wO = 1.0 - clocks_ease(secOfDay / 0.50);
+            dc = max(dc, wO * clocks_cov(clocks_runDist(A, s, pr, dfw, dtrack, pq) - db, capD * res.y));
+        }
+        cov = max(cov, 0.62 * dc);
     }
     float3 col = mix(bg, ink, cov);
     if (bgSel != 0) col += bandDither(px);
@@ -224,7 +249,7 @@ static inline float3 standby_minimal(float2 px, float2 res, constant FXUniforms&
 
 // ============================================================ 77 CHRONOMETER
 // Geometry, × R (the dial's radius, where it meets the rehaut).
-constant float  WATCH_REHAUT = 1.075, WATCH_BEZEL = 1.185;            // rehaut's outer edge; the case's
+constant float  WATCH_REHAUT = 1.075, WATCH_BEZEL = 1.205;            // rehaut's outer edge; the case's
 // Hands: (tail, widest point, half-width, length) of the dauphine kite; their lume inlays.
 constant float4 WATCH_HOUR   = float4(0.050, 0.125, 0.054, 0.610);
 constant float4 WATCH_MIN    = float4(0.045, 0.135, 0.042, 0.935);
@@ -237,10 +262,20 @@ constant float  WATCH_Z_IDX = 0.014, WATCH_Z_HOUR = 0.026, WATCH_Z_MIN = 0.038, 
 constant float  WATCH_IDX_MID = 0.790, WATCH_IDX_HL = 0.105, WATCH_IDX_HW = 0.0215, WATCH_IDX_LW = 0.0072;
 
 /// Polished or satin metal: the studio reflected with its lights widened by `lw`.
-static inline float3 standby_metalLw(float3 n, float3 V, float3 L, float3 Lf, float3 F0, float lw) {
+static inline float3 standby_metalLw(float3 n, float3 V, float3 L, float3 Lf, float3 F0, float lw,
+                                     ClockKitStudio S) {
     float c = saturate(dot(n, V));
     float3 F = F0 + (1.0 - F0) * pow(1.0 - c, 5.0);
-    return F * clockkit_env(reflect(-V, n), L, Lf, lw);
+    return F * clockkit_env(reflect(-V, n), L, Lf, lw, S);
+}
+
+/// The watch's studio: a dark room (polished steel reads deep, with crisp highlights), one big
+/// warm softbox and a cool strip.
+static inline ClockKitStudio standby_watchStudio() {
+    ClockKitStudio S;
+    S.domeLo = float3(0.006, 0.0065, 0.0075); S.domeHi = float3(0.055, 0.058, 0.064);
+    S.key = 3.2; S.fill = 0.65;
+    return S;
 }
 
 /// The seconds hand (screen units): a needle to near the rehaut, a lume disc ringed in steel
@@ -284,6 +319,7 @@ static inline float3 standby_watch(float2 px, float2 res, float t, constant FXUn
     float2 L2 = float2(cos(az), sin(az));
     float3 L = float3(L2 * 0.766, 0.643);
     float3 Lf = normalize(float3(float2(-L2.y, L2.x) * 0.70, 0.71));
+    ClockKitStudio S = standby_watchStudio();
     float3 V = normalize(float3(-p, 2.4));
     float2 sOff = L.xy / L.z;
     float pen0 = 0.0022 * R;
@@ -325,7 +361,8 @@ static inline float3 standby_watch(float2 px, float2 res, float t, constant FXUn
         float lit = 0.82 + 0.24 * clamp(dot(p / R, L2), -1.0, 1.0);
         float deg = pale ? mix(1.0, 0.86, smoothstep(0.30, 1.0, rr))  // dégradé: deeper toward the edge
                          : mix(1.0, 0.50, smoothstep(0.25, 1.0, rr));
-        col = (Ad * (pale ? 0.62 : 0.60) * lit + specC * (0.55 * w1 * br)) * deg;
+        float sp = pale ? 0.50 : (dialSel == 0 ? 0.26 : 0.36);         // (black shows the sheen most)
+        col = (Ad * (pale ? 0.62 : 0.60) * lit + specC * (sp * w1 * br)) * deg;
 
         // the rehaut's shadow on the dial's rim (the dial sits below the flange)
         float zr = 0.05 * R;
@@ -355,10 +392,10 @@ static inline float3 standby_watch(float2 px, float2 res, float t, constant FXUn
                     float2 dir = clockkit_dir(aI), perp = float2(cos(aI), sin(aI)) * sgn;
                     const float sl = 0.62;
                     float2 e = bx - abs(q);
-                    float3 cS = mix(clockkit_metal(normalize(float3(-perp * sl, 1.0)), V, L, Lf, F0),
-                                    clockkit_metal(normalize(float3( perp * sl, 1.0)), V, L, Lf, F0), saturate(0.5 + q.y / fp));
-                    float3 cE = mix(clockkit_metal(normalize(float3(-dir * sl, 1.0)), V, L, Lf, F0),
-                                    clockkit_metal(normalize(float3( dir * sl, 1.0)), V, L, Lf, F0), saturate(0.5 + q.x / fp));
+                    float3 cS = mix(clockkit_metal(normalize(float3(-perp * sl, 1.0)), V, L, Lf, F0, S),
+                                    clockkit_metal(normalize(float3( perp * sl, 1.0)), V, L, Lf, F0, S), saturate(0.5 + q.y / fp));
+                    float3 cE = mix(clockkit_metal(normalize(float3(-dir * sl, 1.0)), V, L, Lf, F0, S),
+                                    clockkit_metal(normalize(float3( dir * sl, 1.0)), V, L, Lf, F0, S), saturate(0.5 + q.x / fp));
                     float3 ic = mix(cS, cE, saturate(0.5 + (e.y - e.x) / (1.4 * fp)));
                     // the lume strip: a channel along the roof, the paint set a touch below it
                     float lw = (twelve ? 0.72 : 1.0) * WATCH_IDX_LW * R;
@@ -405,8 +442,8 @@ static inline float3 standby_watch(float2 px, float2 res, float t, constant FXUn
                 float2 ee = abs(q) - (hx - cr);
                 float2 g = (ee.x > 0.0 && ee.y > 0.0) ? normalize(ee) * sign(q)
                          : ((ee.x > ee.y) ? float2(sign(q.x), 0.0) : float2(0.0, sign(q.y)));
-                float3 fc = mix(clockkit_metal(normalize(float3(-g * 0.55, 1.0)), V, L, Lf, F0),
-                                clockkit_metal(normalize(float3( g * 0.55, 1.0)), V, L, Lf, F0),
+                float3 fc = mix(clockkit_metal(normalize(float3(-g * 0.55, 1.0)), V, L, Lf, F0, S),
+                                clockkit_metal(normalize(float3( g * 0.55, 1.0)), V, L, Lf, F0, S),
                                 saturate(0.5 + (dA - 0.5 * fw0) / fp));
                 col = mix(col, fc, covF);
             }
@@ -420,7 +457,7 @@ static inline float3 standby_watch(float2 px, float2 res, float t, constant FXUn
         float3 n = normalize(float3(-rad * 0.85, 1.0));
         float u0 = saturate((rr - 1.0) / (WATCH_REHAUT - 1.0));
         float3 rc = Ad * (pale ? 0.55 : 0.75) * (0.30 + 0.85 * saturate(dot(n, L)))
-                  + 0.04 * standby_metalLw(n, V, L, Lf, float3(0.04), 0.25);
+                  + 0.04 * standby_metalLw(n, V, L, Lf, float3(0.04), 0.25, S);
         rc *= 0.80 + 0.20 * u0;
         // the minute track: 60 fine strokes, every fifth longer and bolder
         float seg = TAU / 60.0, j = round(ang / seg);
@@ -448,7 +485,12 @@ static inline float3 standby_watch(float2 px, float2 res, float t, constant FXUn
             float3 n = normalize(float3(rad * sin(th), cos(th)));
             float satin = (x >= 0.22 && x < 0.62) ? 1.0 : 0.0;
             float lwPx = fpR * 4.0;
-            cc = standby_metalLw(n, V, L, Lf, steel, satin * 0.18 + lwPx);
+            cc = standby_metalLw(n, V, L, Lf, steel, satin * 0.18 + lwPx, S);
+            if (satin > 0.0) {                                        // circular graining on the satin top
+                float fb = smoothstep(1.5, 4.0, (R / 1600.0) / fp);
+                cc *= 1.0 + 0.45 * fb * (clockkit_pnoise(rr * 1600.0, 4096.0, 11.0) - 0.5)
+                          + 0.25 * (clockkit_pnoise(rr * 380.0, 4096.0, 13.0) - 0.5);
+            }
             // the bevel's edges catch a hairline of light
             cc += 0.25 * steel * exp(-abs(x - 0.22) / max(0.012, fpR * 3.0)) * saturate(dot(rad, L2) * 0.5 + 0.6);
         }
@@ -485,7 +527,7 @@ static inline float3 standby_watch(float2 px, float2 res, float t, constant FXUn
     float covH = saturate(0.5 - dH / fp);
     if (covH > 0.0) {
         float2 q = clockkit_local(p, aH) / R;
-        float3 hc = clockkit_handShade(q, aH, WATCH_COLLAR_H, fpR, V, L, Lf, F0);
+        float3 hc = clockkit_handShade(q, aH, WATCH_COLLAR_H, fpR, V, L, Lf, F0, S);
         float dl = clockkit_kite(q, WATCH_HOUR_L);
         float covL = saturate(0.5 - dl / fpR);
         hc *= 1.0 - 0.40 * exp(-max(dl, 0.0) / max(0.004, 1.5 * fpR)) * (1.0 - covL);
@@ -498,7 +540,7 @@ static inline float3 standby_watch(float2 px, float2 res, float t, constant FXUn
     float covM = saturate(0.5 - dM / fp);
     if (covM > 0.0) {
         float2 q = clockkit_local(p, aM) / R;
-        float3 mc = clockkit_handShade(q, aM, WATCH_COLLAR_M, fpR, V, L, Lf, F0);
+        float3 mc = clockkit_handShade(q, aM, WATCH_COLLAR_M, fpR, V, L, Lf, F0, S);
         float dl = clockkit_kite(q, WATCH_MIN_L);
         float covL = saturate(0.5 - dl / fpR);
         mc *= 1.0 - 0.40 * exp(-max(dl, 0.0) / max(0.004, 1.5 * fpR)) * (1.0 - covL);
@@ -512,10 +554,10 @@ static inline float3 standby_watch(float2 px, float2 res, float t, constant FXUn
         covS = max(covS, saturate(0.5 - dS / fp) * saturate(0.5 - (discS - 0.012 * R) / fp));
         if (covS > 0.0) {
             float2 q = clockkit_local(p, aS);
-            float3 sc = clockkit_ridge(clockkit_dir(aS), 0.5, V, L, Lf, steel) * 0.85;
+            float3 sc = mix(clockkit_ridge(clockkit_dir(aS), 0.5, V, L, Lf, steel, S), steel * 0.42, 0.55);   // rhodium, a satin glint
             float covL = saturate(0.5 - discS / fp);
             sc = mix(sc, lumeDay * 0.55 + lumeE, covL);
-            if (length(q) < 0.032 * R) sc = clockkit_metal(normalize(float3(q / (0.032 * R) * 0.5, 1.0)), V, L, Lf, steel);
+            if (length(q) < 0.032 * R) sc = clockkit_metal(normalize(float3(q / (0.032 * R) * 0.5, 1.0)), V, L, Lf, steel, S);
             col = mix(col, sc, covS);
         }
     }
@@ -524,7 +566,7 @@ static inline float3 standby_watch(float2 px, float2 res, float t, constant FXUn
         float covC = saturate(0.5 - (r - rc) / fp);
         if (covC > 0.0) {
             float3 n = normalize(float3(p / max(r, 1e-5) * (0.05 + 0.65 * r / rc), 1.0));
-            col = mix(col, clockkit_metal(n, V, L, Lf, secs ? steel : F0), covC);
+            col = mix(col, clockkit_metal(n, V, L, Lf, secs ? steel : F0, S), covC);
         }
     }
 
