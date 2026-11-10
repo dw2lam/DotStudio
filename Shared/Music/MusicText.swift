@@ -56,8 +56,6 @@ struct MusicTextBlock {
     var width: CGFloat { min(lineWidths.max() ?? 0, column) }
     var height: CGFloat { lines.isEmpty ? 0 : ascent + descent + CGFloat(lines.count - 1) * lineStep }
     var isEmpty: Bool { lines.isEmpty }
-    /// The overflowing last line's full advance (0 when nothing overflows).
-    var overflowWidth: CGFloat { overflows ? (lineWidths.last ?? 0) : 0 }
 
     /// Lines `r` as a block of their own (the first of them on top).
     func slice(_ r: Range<Int>) -> MusicTextBlock {

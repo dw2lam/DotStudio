@@ -583,8 +583,8 @@ final class AppPresence: NSObject, ObservableObject {
 
     // MARK: Dev
 
-    fileprivate func log(_ message: String) {
-        model?.store.debug("[presence \(String(format: "%.3f", CACurrentMediaTime()))] \(message) · policy=\(Self.policyName) windows=\(NSApp.windows.filter { Self.isAppWindow($0) }.count)")
+    fileprivate func log(_ message: @autoclosure () -> String) {
+        model?.store.debug("presence", "\(message()) · policy=\(Self.policyName) windows=\(NSApp.windows.filter { Self.isAppWindow($0) }.count)")
     }
 
     private static var policyName: String {

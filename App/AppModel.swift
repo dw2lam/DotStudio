@@ -227,7 +227,9 @@ final class AppModel: ObservableObject {
         } else {
             candidates = offered.filter { promotedBuiltIns.contains($0.name) }
         }
-        var have = Set(lib.presets.map(\.name))
+        // (A style this build can't draw still holds its name: no duplicate once the newer
+        // DotStudio that wrote it reads the library again.)
+        var have = Set(lib.presets.map(\.name) + lib.unknownPresets.map(\.preset.name))
         for p in candidates where have.insert(p.name).inserted {
             insertBuiltIn(p, into: &lib.presets)
         }
@@ -263,6 +265,10 @@ final class AppModel: ObservableObject {
             out += "version: \(before.version) → \(result.version)\n"
             out += "seenBuiltIns: \(before.seenBuiltIns.map { String($0.count) } ?? "none") → \(result.seenBuiltIns?.count ?? 0)\n"
             out += "added: \(result.presets.map(\.name).filter { !old.contains($0) })\n"
+            let unknown = before.unknownCounts
+            if unknown.effects + unknown.presets > 0 {
+                out += "kept for a newer build: \(unknown.effects) unknown effect(s) in shown styles, \(unknown.presets) style(s) of unknown effects only: \(before.unknownPresets.map(\.preset.name))\n"
+            }
         case .missing:
             result = DefaultPresets.makeLibrary()
             out += "new library: version \(result.version), seenBuiltIns \(result.seenBuiltIns?.count ?? 0)\n"
@@ -295,15 +301,6 @@ final class AppModel: ObservableObject {
                     self.save()
                 }
             })
-    }
-
-    func setActive(_ id: UUID) {
-        library.activeID = id
-        save()
-    }
-
-    var activeName: String {
-        library.presets.first { $0.id == library.activeID }?.name ?? "—"
     }
 
     // MARK: Navigation
@@ -347,10 +344,6 @@ final class AppModel: ObservableObject {
 
     func updateRotation(_ change: (inout RotationSpec) -> Void) {
         var r = rotation; change(&r); library.rotation = r; save()
-    }
-
-    func updateSchedule(_ change: (inout ScheduleSpec) -> Void) {
-        var s = schedule; change(&s); library.schedule = s; save()
     }
 
     func preset(_ id: UUID) -> Preset? { library.presets.first { $0.id == id } }
@@ -430,11 +423,6 @@ final class AppModel: ObservableObject {
         selectedID = copy.id
         save()
         return copy.id
-    }
-
-    func deleteSelected() {
-        guard let id = selectedID else { return }
-        delete(id)
     }
 
     func delete(_ id: UUID) {
@@ -523,23 +511,16 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Decode a share file, dropping effects whose kind this build doesn't know
-    /// (files from newer app versions import instead of failing outright).
+    /// Decode a share file. Effects whose kind this build doesn't know are skipped (files from
+    /// newer app versions import instead of failing outright) — and kept with the style
+    /// (Preset.unknownEffects) for a newer build; a style made only of those can't import.
     static func decodeShared(_ data: Data) throws -> (Preset, skippedEffects: Int, source: SourceSpec?) {
-        guard var obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              var presetObj = obj["preset"] as? [String: Any]
-        else { throw CocoaError(.fileReadCorruptFile) }
-        var skipped = 0
-        if let effects = presetObj["effects"] as? [[String: Any]] {
-            let known = Set(EffectKind.allCases.map(\.rawValue))
-            let kept = effects.filter { ($0["kind"] as? String).map(known.contains) ?? false }
-            skipped = effects.count - kept.count
-            presetObj["effects"] = kept
-            obj["preset"] = presetObj
+        let doc = try JSONDecoder().decode(PresetExport.self, from: data)
+        if doc.preset.isUnknownToThisBuild {
+            throw CocoaError(.fileReadCorruptFile, userInfo: [NSLocalizedDescriptionKey:
+                "“\(doc.preset.name)” was made with a newer version of DotStudio: none of its effects are available in this version."])
         }
-        let cleaned = try JSONSerialization.data(withJSONObject: obj)
-        let doc = try JSONDecoder().decode(PresetExport.self, from: cleaned)
-        return (doc.preset, skipped, doc.source)
+        return (doc.preset, doc.preset.unknownEffects.count, doc.source)
     }
 
     // MARK: Still-image export / wallpaper

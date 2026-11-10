@@ -1,15 +1,10 @@
 //  WallpaperSlot.swift — the gallery's view of the live desktop wallpaper.
 //
 //  The gallery (Wallpaper destination card, tile badges, "Set as Wallpaper") only ever
-//  talks to this adapter. Whatever actually draws the wallpaper plugs in a Backend:
-//
-//      WallpaperSlot.shared.connect(.init(
-//          styleID: { WallpaperController.shared.styleID },
-//          set:     { WallpaperController.shared.start($0) },
-//          stop:    { WallpaperController.shared.stop() },
-//          changes: WallpaperController.shared.objectWillChange.map { _ in }.eraseToAnyPublisher()))
-//
-//  Until then it runs on `.stub`: nothing is ever active and set/stop do nothing.
+//  talks to this adapter. WallpaperController, which draws the wallpaper, plugs in its
+//  Backend when it's attached to the model (`connect`); the UI demos and shots use an
+//  in-memory one (`.memory`). Until a backend connects it runs on `.stub`: nothing is
+//  ever active and set/stop do nothing.
 
 import Foundation
 import Combine
@@ -28,7 +23,6 @@ final class WallpaperSlot: ObservableObject {
         /// False hides wallpaper controls entirely (e.g. no backend in this build).
         var isAvailable = true
 
-        // TODO(wallpaper): replaced at merge by the WallpaperController-backed backend.
         static let stub = Backend(styleID: { nil }, set: { _ in }, stop: {})
     }
 
