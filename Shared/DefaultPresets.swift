@@ -121,10 +121,10 @@ enum DefaultPresets {
     static let featured: [String] = [
         // Scenes
         "Liquid Chrome", "Aurora", "Universe", "Topography", "Zen Garden", "Black Hole", "Afterglow",
-        "Sunray", "Flip Clock", "Word Clock", "Window Light",
-        "Lava Lamp", "Currents", "Fireflies",
+        "StandBy", "Minimal", "Chronometer", "Flip Clock", "Word Clock", "Window Light",
+        "Lava Lamp", "Currents",
         "Golden Hour", "Tidewater", "Shallows", "Night Sky", "First Snow",
-        "Neon Horizon", "Pipeworks", "Light Tunnel", "Light Ribbons", "Bounce",
+        "Neon Horizon", "Light Ribbons", "Bounce",
         // Looks
         "Film", "Riso Duotone", "Cyanotype", "Floyd–Steinberg", "Atkinson", "ASCII", "Amber CRT", "Soft Focus",
     ]
@@ -133,10 +133,133 @@ enum DefaultPresets {
     /// (their effects stay available in Add Effect).
     static let unlisted: Set<String> = ["Ink Bloom", "Sumi", "Ember Ribbons"]
 
-    /// Built-in styles that are no longer styles at all: the Now Playing scenes (music is now
-    /// a presentation over any style — MusicPresentation). Never offered or added; a library
-    /// that already has one keeps it working.
-    static var retired: Set<String> { Set(SceneCatalog.musicPresets.map(\.name)) }
+    /// Built-in styles no longer offered: the Now Playing scenes (music is now a presentation
+    /// over any style — MusicPresentation), and the 1.4.2 retirements (`retiredStyles`).
+    /// Never offered or added; a library that already has one keeps it working (except an
+    /// untouched copy of a `retiredStyles` one, which retireUntouched removes once).
+    static var retired: Set<String> {
+        Set(SceneCatalog.musicPresets.map(\.name)).union(retiredStyles.keys)
+    }
+
+    // MARK: 1.4.2 retirement
+
+    /// Styles retired in 1.4.2 ("cheap, Windows Vista-like"), each with the style that takes
+    /// over its references (active, schedule, wallpaper) when it leaves a library: the dial
+    /// clocks hand over to Chronometer; nil = the first featured style the library still has.
+    /// Their effect kinds stay (EffectKind.isRetired), so a copy the user edited keeps rendering.
+    static let retiredStyles: [String: String?] = [
+        "Sunray": "Chronometer", "Opaline": "Chronometer",
+        "Pipeworks": nil, "Brass Pipes": nil,
+        "Light Tunnel": nil, "Hex Tunnel": nil,
+        "Fireflies": nil, "Blue Hour": nil,
+    ]
+
+    /// Recorded in `Library.seenBuiltIns` once a library has been through retireUntouched (not
+    /// a style name, so it never matches one).
+    static let retirementMarker = "retired-1.4.2"
+
+    /// What retireUntouched did, for DOTSTUDIO_MIGRATE_ONLY and the wallpaper's own pick.
+    struct Retirement: Equatable {
+        /// Untouched retired built-ins that left the library.
+        var removed: [String] = []
+        /// Retired built-ins the user edited: kept, still rendering.
+        var kept: [String] = []
+        /// Each removed style's ID → the style that took over its references (nil: none left).
+        var replacements: [UUID: UUID?] = [:]
+        /// The references that moved ("active: Sunray → Chronometer", "rotation: −Fireflies"…).
+        var remapped: [String] = []
+    }
+
+    /// The shipping definition of a built-in by name, retired ones included.
+    static func builtInDefinition(_ name: String) -> Preset? {
+        (scenes() + looks()).first { $0.name == name }
+    }
+
+    /// A library style is an untouched copy of a built-in: same name, same frame rate, and the
+    /// same effects (kind, on/off, every parameter — a missing one counts as its default —
+    /// colours, logo), ignoring IDs.
+    static func isUntouched(_ p: Preset, as def: Preset) -> Bool {
+        guard p.name == def.name, p.fps == def.fps, p.unknownEffects.isEmpty,
+              p.effects.count == def.effects.count else { return false }
+        func near(_ a: Double, _ b: Double) -> Bool { abs(a - b) <= 1e-6 }
+        func same(_ a: RGBA?, _ b: RGBA?) -> Bool {
+            switch (a, b) {
+            case (nil, nil): return true
+            case let (a?, b?): return near(a.r, b.r) && near(a.g, b.g) && near(a.b, b.b) && near(a.a, b.a)
+            default: return false
+            }
+        }
+        return zip(p.effects, def.effects).allSatisfy { e, d in
+            guard e.kind == d.kind, e.enabled == d.enabled,
+                  same(e.colorA ?? e.kind.defaultColorA, d.colorA ?? d.kind.defaultColorA),
+                  same(e.colorB ?? e.kind.defaultColorB, d.colorB ?? d.kind.defaultColorB),
+                  e.logoKind == d.logoKind, e.logoText == d.logoText, e.logoFile == d.logoFile
+            else { return false }
+            let defaults = e.kind.defaultParams
+            return Set(e.params.keys).union(d.params.keys).allSatisfy { k in
+                guard let a = e.params[k] ?? defaults[k], let b = d.params[k] ?? defaults[k] else { return false }
+                return near(a, b)
+            }
+        }
+    }
+
+    /// 1.4.2: removes every untouched copy of a `retiredStyles` built-in (an edited one stays)
+    /// and moves what pointed at a removed style — the active style, the rotation list, the
+    /// day/night schedule — to its replacement. Pure; AppModel.migrate runs it once per library
+    /// (`retirementMarker`), after offerNewBuiltIns, so a replacement new in this version
+    /// (Chronometer) is already there. The wallpaper's pick (App-only) follows `replacements`.
+    static func retireUntouched(_ lib: Library) -> (Library, Retirement) {
+        var lib = lib
+        var r = Retirement()
+        var removedIDs: [UUID: String] = [:]
+        lib.presets.removeAll { p in
+            guard retiredStyles[p.name] != nil, let def = builtInDefinition(p.name) else { return false }
+            if isUntouched(p, as: def) {
+                r.removed.append(p.name)
+                removedIDs[p.id] = p.name
+                return true
+            }
+            r.kept.append(p.name)
+            return false
+        }
+        guard !removedIDs.isEmpty else { return (lib, r) }
+
+        func id(named n: String) -> UUID? { lib.presets.first { $0.name == n }?.id }
+        let fallback = featured.lazy.compactMap { id(named: $0) }.first ?? lib.presets.first?.id
+        for (old, name) in removedIDs {
+            r.replacements[old] = (retiredStyles[name] ?? nil).flatMap { id(named: $0) } ?? fallback
+        }
+        func label(_ id: UUID?) -> String { id.flatMap { i in lib.presets.first { $0.id == i }?.name } ?? "none" }
+        func remap(_ id: UUID?, _ what: String) -> UUID? {
+            guard let id, let name = removedIDs[id] else { return id }
+            let new = r.replacements[id] ?? nil
+            r.remapped.append("\(what): \(name) → \(label(new))")
+            return new
+        }
+        lib.activeID = remap(lib.activeID, "active")
+        if var s = lib.schedule {
+            s.dayPresetID = remap(s.dayPresetID, "day")
+            s.nightPresetID = remap(s.nightPresetID, "night")
+            lib.schedule = s
+        }
+        if var rot = lib.rotation, let ids = rot.presetIDs {
+            let dropped = ids.compactMap { removedIDs[$0] }
+            if !dropped.isEmpty {
+                rot.presetIDs = ids.filter { removedIDs[$0] == nil }
+                r.remapped.append("rotation: −" + dropped.joined(separator: ", −"))
+                if rot.presetIDs?.isEmpty == true {
+                    // Nothing the user picked is left: off (nil would mean "every style").
+                    rot.presetIDs = nil
+                    if rot.enabled {
+                        rot.enabled = false
+                        r.remapped.append("rotation: off (none of its styles left)")
+                    }
+                }
+                lib.rotation = rot
+            }
+        }
+        return (lib, r)
+    }
 
     private static var allBuiltIns: [Preset] { (scenes() + looks()).filter { !retired.contains($0.name) } }
 
@@ -150,7 +273,7 @@ enum DefaultPresets {
         lib.activeID = sc.first(where: { $0.name == "Liquid Chrome" })?.id ?? sc.first?.id
         // A new library has been offered everything shipping today (the rest is in Add
         // Built-in Styles), so only built-ins added in later versions arrive (AppModel.migrate).
-        lib.seenBuiltIns = offeredBuiltIns().map(\.name)
+        lib.seenBuiltIns = offeredBuiltIns().map(\.name) + [retirementMarker]
         return lib
     }
 
