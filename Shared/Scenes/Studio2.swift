@@ -72,7 +72,8 @@ extension SceneCatalog {
 ///   rows 258…297 the stones' shadows and contact darkening on the gravel, baked for the light:
 ///               a grid of samples (sun visibility, ambient), two a texel, row-major
 /// The cart, the head of the track, the grid's placement, the stones' places and the light
-/// go in u.scene (see Cache.prepare).
+/// go in u.scene (see Cache.prepare): [0] the rake (tine tips' middle = the track's head, and
+/// its heading), [5] the cart's body (centre, heading).
 enum SandGarden {
     static let texW = 1024
     static let countRow = 0, ringRow = 1, stoneRow = 257, shadowRow = 258, shadowRows = 40, texH = 298
