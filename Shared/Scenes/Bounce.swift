@@ -159,17 +159,17 @@ enum BounceLogo {
         let since = t - hit.time
         let flash: Float = flourishOn && since < 3 ? 1 : 0
         u.scene.3 = SIMD4(Float(hit.corner.x), Float(hit.corner.y), Float(since), flash)
-        // the trail: up to 4 ghosts, ~half a logo height apart at any speed
+        // the trail: up to 4 faint ghosts, ~two thirds of a logo height apart at any speed
         let ghosts = trail > 0.01 ? 4 : 0
         u.scene.4 = SIMD4(hue(t), Float(ghosts), e.inset.x, e.inset.y)
-        let dt = 0.45 / max(speed, 0.05)
+        let dt = 0.6 / max(speed, 0.05)
         withUnsafeMutableBytes(of: &u.scene) { raw in
             let s = raw.bindMemory(to: SIMD4<Float>.self)
             for k in 0..<4 {
                 guard k < ghosts else { s[5 + 2 * k] = .zero; s[6 + 2 * k] = .zero; continue }
                 let tg = t - Double(k + 1) * dt
                 let g = pose(m, at: tg)
-                let w = Float(trail * 0.5 * (1 - Double(k + 1) / 5))
+                let w = Float(trail * 0.3 * (1 - Double(k + 1) / 5))
                 let gc = tint(g.bounces)
                 s[5 + 2 * k] = SIMD4(Float(g.center.x), Float(g.center.y), w, hue(tg))
                 s[6 + 2 * k] = SIMD4(gc.x, gc.y, gc.z, 0)
