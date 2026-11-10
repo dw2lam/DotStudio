@@ -22,6 +22,7 @@ struct DotStudioMenu: View {
     @EnvironmentObject var updates: UpdateController
 
     var body: some View {
+        let _ = Perf.body("DotStudioMenu")
         MenuBarMusicSlot()      // the track + Play/Pause, Previous, Next while a song shows (MusicSlots.swift)
         ScreensaverMenu()
         Divider()
@@ -54,6 +55,7 @@ struct ScreensaverMenu: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
+        let _ = Perf.body("ScreensaverMenu")
         switch model.setupStatus {
         case .ready:
             let lineup = model.screensaverLineup
@@ -114,6 +116,7 @@ struct DotStudioMenuLabel: View {
     @ObservedObject private var wallpaper = WallpaperController.shared
 
     var body: some View {
+        let _ = Perf.body("DotStudioMenuLabel")
         let live = wallpaper.isActive && !wallpaper.userPaused
         Image(systemName: live ? "circle.grid.3x3.fill" : "circle.grid.3x3")
             .accessibilityLabel("DotStudio")

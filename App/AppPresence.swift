@@ -439,6 +439,7 @@ final class AppPresence: NSObject, ObservableObject {
         accessoryWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.hasAppWindows() else { return }
+            self.model?.releaseThumbnails()   // no window shows a still any more
             if NSApp.activationPolicy() != .accessory {
                 NSApp.setActivationPolicy(.accessory)
                 self.log("policy accessory")

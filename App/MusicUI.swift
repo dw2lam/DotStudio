@@ -49,6 +49,7 @@ final class MusicLifecycle {
     }
 
     private func reevaluate() {
+        Perf.count("MusicLifecycle.reevaluate")
         guard let model else { return }
         let spec = model.library.musicSettings
         let styles = Self.stylesNeedMusic(model)
