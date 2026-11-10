@@ -14,7 +14,7 @@ OPT=(-O)
 [[ -n "$PERF_DEBUG" ]] && OPT=(-Onone)
 if [[ -z "$PERF_SKIP_BUILD" ]]; then
   xcrun -sdk macosx metal -w -O2 -ffast-math -I "$ROOT/Shared" -o "$BIN/default.metallib" \
-    "$ROOT/Shared/Shaders.metal" "$ROOT/Shared/Weather/Weather.metal"
+    "$ROOT/Shared/Shaders.metal" "$ROOT/Shared/SceneEntries.metal" "$ROOT/Shared/Weather/Weather.metal"
   cp "$ROOT"/Shared/PlanetTextures/*.jpg "$BIN/" 2>/dev/null || true
   rm -rf "$BIN/Photos" && mkdir -p "$BIN/Photos"
   cp "$ROOT"/Shared/Photos/*.jpg "$BIN/Photos/" 2>/dev/null || true

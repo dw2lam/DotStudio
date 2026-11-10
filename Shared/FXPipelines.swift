@@ -14,10 +14,13 @@
 //    black, then fades its view in on the first frame).
 //  - Pipelines nothing has needed yet (the music veil, the error-diffusion kernels) are built
 //    on first use rather than at init.
+//  - The heavy scenes also have pipelines of their own (ScenePipelines, below), started when a
+//    style is applied; fx_fragment stands in for one until it's built.
 //
 //  (Specializing fx_fragment per effect with a function constant compiles in 20–200 ms, but the
 //  backend optimizes the smaller function differently under fast math: up to 6 levels off on a
-//  few pixels. Not the same frame, so not used.)
+//  few pixels. Not the same frame, so not used. The scenes' own functions are specialized in the
+//  source instead — the id a literal, folded by the front end — and do draw the same frame.)
 //
 //  A blocking host (the app, the tools) draws exactly what it always did.
 
@@ -153,6 +156,25 @@ final class FXPipelines {
         render(FXPipelines.veilFunctions[down ? 0 : 1], wait: wait)
     }
 
+    /// Effect `id`'s own pipeline (ScenePipelines), or nil: it has none, it isn't built yet
+    /// (`wait: false` starts the build — from the archive at once, else in the background), or
+    /// it failed. fx_fragment draws the same frame meanwhile.
+    func scene(_ id: Int32, wait: Bool) -> MTLRenderPipelineState? {
+        guard let name = ScenePipelines.functionName(id) else { return nil }
+        return render(name, wait: wait)
+    }
+
+    func sceneState(_ id: Int32) -> State {
+        guard let name = ScenePipelines.functionName(id) else { return .failed }
+        return state(name)
+    }
+
+    /// Starts building, off the calling thread, the own pipelines of `ids` (a style just
+    /// applied), so its frames draw with them as soon as possible and never wait for one.
+    func prewarmScenes(_ ids: [Int32]) {
+        for id in ids { _ = scene(id, wait: false) }
+    }
+
     func compute(_ name: String, wait: Bool) -> MTLComputePipelineState? {
         if let p = ready(name) as? MTLComputePipelineState { return p }
         return get(name, wait: wait) { [library, device, archive] archiveOnly in
@@ -231,6 +253,58 @@ final class FXPipelines {
         }
         DispatchQueue.global(qos: .userInitiated).async { finish(build(false)) }
         return nil
+    }
+}
+
+/// The effects and scenes drawn with a fragment function of their own, fx_scene_<id>
+/// (SceneEntries.metal: fx_fragment's body with the id a literal, so the function holds that
+/// one case), instead of the über-shader.
+///
+/// Why: fx_fragment is allocated registers — and so occupancy — for its heaviest case, and every
+/// effect pays for it. The list is chosen by measurement — tools/gallery --pipebench, at
+/// 5120×2880, 3 interleaved rounds against a reference — keeping the ids whose own function is
+/// meaningfully (≥ 10 %) faster with none of their presets slower. That came out as every id
+/// measured (scenes 10–70 %, one-tap passes ~0.6 → ~0.2 ms at 5K; Grain Wash's Soft Focus only
+/// 3 %, but its other presets ~23 %). Re-measure when a scene's code changes much.
+///
+/// A scene's own function draws the über-shader's frame (≤ 1 level on a few pixels: compiled
+/// apart). fx_fragment keeps every case, so it stands in whenever the own pipeline isn't built
+/// yet or failed: the renderer never waits for one mid-animation (MetalRenderer.scenePipeline).
+/// Ocean Horizon (59) and Shallows (67) have theirs through WeatherLink (Weather_fragment.h).
+enum ScenePipelines {
+    /// Every id with an fx_scene_<id> in SceneEntries.metal. Keep the two lists the same.
+    /// 0 / 1: the source passes (photo or video; the gradient behind a scene); 38: the
+    /// error-diffusion dithers' upscale; 41: the style crossfade; the rest: effects and scenes.
+    static let ids: [Int32] = Array(0...58) + Array(60...66) + Array(68...72)
+
+    /// By id (dense: ids are small), so a pass's lookup is an index, not a hash or a new string.
+    private static let names: [String?] = {
+        var t = [String?](repeating: nil, count: 128)
+        for id in ids where id >= 0 && Int(id) < t.count { t[Int(id)] = "fx_scene_\(id)" }
+        return t
+    }()
+
+    /// The fragment function effect `id` draws with when its pipeline is ready, or nil (fx_fragment).
+    @inline(__always)
+    static func functionName(_ id: Int32) -> String? {
+        id >= 0 && Int(id) < names.count ? names[Int(id)] : nil
+    }
+
+    /// Every such function (PipelineArchive harvests them all).
+    static var functionNames: [String] { ids.compactMap(functionName) }
+
+    /// The ids among `preset`'s passes that have a function of their own: its enabled effects
+    /// (and a dither's upscale, 38), its source pass (0: a photo or video; 1: the gradient behind
+    /// a scene) and the crossfade into the next style (41).
+    static func ids(for preset: Preset) -> [Int32] {
+        var out: [Int32] = []
+        func add(_ id: Int32) { if functionName(id) != nil, !out.contains(id) { out.append(id) } }
+        for inst in preset.effects where inst.enabled {
+            add(inst.kind.shaderID)
+            if inst.kind == .dither { add(38) }
+        }
+        add(0); add(1); add(41)
+        return out
     }
 }
 

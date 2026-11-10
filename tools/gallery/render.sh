@@ -8,7 +8,7 @@ ROOT="${0:A:h:h:h}"
 BIN="${GALLERY_BUILD:-$ROOT/.dd/gallery}"
 mkdir -p "$BIN"
 xcrun -sdk macosx metal -O2 -ffast-math -I "$ROOT/Shared" -o "$BIN/default.metallib" \
-  "$ROOT/Shared/Shaders.metal" "$ROOT/Shared/Weather/Weather.metal"
+  "$ROOT/Shared/Shaders.metal" "$ROOT/Shared/SceneEntries.metal" "$ROOT/Shared/Weather/Weather.metal"
 cp "$ROOT"/Shared/PlanetTextures/*.jpg "$BIN/" 2>/dev/null || true
 # Built-in slideshow photos (the default Looks canvas), found via Bundle.main/Photos.
 rm -rf "$BIN/Photos" && mkdir -p "$BIN/Photos"

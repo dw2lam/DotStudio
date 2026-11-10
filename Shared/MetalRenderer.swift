@@ -278,7 +278,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     func apply(_ preset: Preset, source: SourceSpec) {
         let sourceChanged = (self.source != source)
         pendingTransition = nil                    // this supersedes a switch still waiting
-        if preset != self.preset { WeatherLink.prewarm(for: preset, device: device, format: pixelFormat) }
+        if preset != self.preset {
+            WeatherLink.prewarm(for: preset, device: device, format: pixelFormat)
+            pipelines.prewarmScenes(ScenePipelines.ids(for: preset))
+        }
         self.preset = preset
         self.source = source
         // Pack static uniforms (effect id, params, palette) once per preset change
@@ -307,6 +310,28 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         return uberPSO
     }
     private var uberPSO: MTLRenderPipelineState?
+
+    /// The pipeline a pass of effect `id` draws with: its own (ScenePipelines: fx_scene_<id>,
+    /// compiled for that scene alone) once built, else the über-shader, which draws the same
+    /// frame. Never waits for a compile (apply() starts it) unless `waitsForScenePipelines`.
+    private func passPipeline(_ id: Int32) -> MTLRenderPipelineState? {
+        if ScenePipelines.functionName(id) != nil {
+            if let p = scenePSO[id] { return p }
+            if let p = pipelines.scene(id, wait: waitsForScenePipelines) {
+                scenePSO[id] = p
+                return p
+            }
+            if pipelines.sceneState(id) == .failed, let fx = fxPipeline {
+                scenePSO[id] = fx                  // (it won't come: stop asking every frame)
+                return fx
+            }
+        }
+        return fxPipeline
+    }
+    private var scenePSO: [Int32: MTLRenderPipelineState] = [:]
+    /// Tools (gallery renders, parity checks): every pass draws with its own pipeline when it has
+    /// one, built on the spot if need be — never the über-shader's stand-in.
+    var waitsForScenePipelines = false
 
     /// The music veil's passes and the error-diffusion kernels: built on first use (a fastStart
     /// renderer has them before it draws a frame that uses them: framePipelinesReady).
@@ -362,6 +387,14 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
         for p in presets where !WeatherLink.pipelinesReady(for: p, device: device, format: pixelFormat) {
             ready = false
+        }
+        // The style's own scene pipelines (ScenePipelines): the first frame waits for them, so the
+        // saver starts on them. Later, a pass draws with fx_fragment until its own is built (the
+        // same frame, ±1 level): a style change mid-animation never waits on one.
+        if !drewOnce {
+            for id in ScenePipelines.ids(for: preset) where pipelines.scene(id, wait: false) == nil {
+                if pipelines.sceneState(id) != .failed { ready = false }
+            }
         }
         if ready { readyConfig = pipelineConfig }
         return ready
@@ -732,6 +765,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         if let out = outgoing, out.preset == current, now - transitionBegan < transitionDuration {
             pendingTransition = (preset, source, duration)
             pipelineConfig &+= 1
+            pipelines.prewarmScenes(ScenePipelines.ids(for: preset))   // built by the time it starts
             return
         }
         beginFade(now: now, duration: duration, wallSlides: timeBase == .wallClock)
@@ -1126,7 +1160,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private func encodeBlend(_ cmd: MTLCommandBuffer, final: PassTarget,
                              newTex: MTLTexture, oldTex: MTLTexture,
                              progress: Float, size: CGSize) {
-        guard let pso = fxPipeline, let enc = makeEncoder(cmd, final) else { return }
+        guard let pso = passPipeline(41), let enc = makeEncoder(cmd, final) else { return }
         enc.setRenderPipelineState(pso)
         var u = FXUniforms()
         u.resolution = simd_float2(Float(size.width), Float(size.height))
@@ -1180,7 +1214,11 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
             let target: PassTarget = isLast ? final : .texture(i % 2 == 0 ? pingA : pingB)
 
-            guard let pso = fxPipeline, let enc = makeEncoder(cmd, target) else { continue }
+            // The pass's effect id (as packed below): its own pipeline if it has one, else the
+            // über-shader. (Ocean Horizon and Shallows: WeatherLink.fill binds theirs.)
+            let effectID: Int32 = i == 0 ? (useGradient ? 1 : 0) : serialBlit ? 38
+                : packed?.count == effects.count ? packed![i - 1].effect : inst!.kind.shaderID
+            guard let pso = passPipeline(effectID), let enc = makeEncoder(cmd, target) else { continue }
             enc.setRenderPipelineState(pso)
 
             // Start from the pre-packed uniforms (effect id, params, palette) when the
