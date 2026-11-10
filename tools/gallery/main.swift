@@ -450,7 +450,59 @@ func liveChecks() -> Bool {
     }
     return ok
 }
-if runChecks { exit(liveChecks() ? 0 : 1) }
+/// Library format checks: forward compatibility with a library written by a newer DotStudio.
+func formatChecks() -> Bool {
+    var ok = true
+    func check(_ pass: Bool, _ what: String) {
+        print("\(pass ? "PASS" : "FAIL")  \(what)")
+        if !pass { ok = false }
+    }
+    // The shipping library, plus what a newer build could write: an effect of an unknown kind
+    // in the middle of a style's stack, and a style made only of unknown kinds.
+    let enc = JSONEncoder()
+    enc.outputFormatting = [.sortedKeys]
+    let base = DefaultPresets.makeLibrary()
+    guard let data = try? enc.encode(base),
+          var obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+          var presets = obj["presets"] as? [[String: Any]],
+          let host = presets.firstIndex(where: { (($0["effects"] as? [Any])?.count ?? 0) >= 1 }) else {
+        check(false, "forward compatibility: couldn't build the fixture"); return false
+    }
+    let future: [String: Any] = ["id": UUID().uuidString, "kind": "kindFromTheFuture", "enabled": true,
+                                 "params": ["speed": 1.5], "newField": ["nested": [1, "two", NSNull(), false]]]
+    var effects = presets[host]["effects"] as! [Any]
+    effects.insert(future, at: 1)
+    presets[host]["effects"] = effects
+    presets.insert(["id": UUID().uuidString, "name": "Future Style", "fps": 30,
+                    "effects": [future, future.merging(["kind": "anotherNewKind"]) { $1 }]], at: 3)
+    obj["presets"] = presets
+    guard let fixture = try? JSONSerialization.data(withJSONObject: obj) else { return false }
+    do {
+        let lib = try JSONDecoder().decode(Library.self, from: fixture)
+        check(lib.presets.map(\.id) == base.presets.map(\.id) && lib.presets.map(\.effects) == base.presets.map(\.effects)
+              && lib.presets[host].unknownEffects.map(\.index) == [1] && lib.unknownPresets.map(\.index) == [3]
+              && lib.unknownCounts == (1, 1),
+              "a library with unknown effect kinds decodes: the styles it can draw intact, 1 unknown effect and 1 unknown style kept aside")
+        let again = try enc.encode(lib)
+        // (Compared as parsed JSON values: JSONSerialization keeps each number's decimal text.)
+        let a = try JSONDecoder().decode(JSONValue.self, from: fixture)
+        let b = try JSONDecoder().decode(JSONValue.self, from: again)
+        check(a == b, "…and it saves back exactly what it read (unknown effects and styles in place)")
+        var edited = lib
+        edited.presets[host].effects.removeAll()
+        edited.presets.removeLast()
+        let reread = try JSONDecoder().decode(Library.self, from: try enc.encode(edited))
+        check(reread.unknownCounts == (0, 2) && reread.presets.count == lib.presets.count - 2,
+              "…edited (a style's known effects removed, another style deleted), still nothing unknown is lost")
+    } catch {
+        check(false, "a library with unknown effect kinds decodes (\(error))")
+    }
+    return ok
+}
+if runChecks {
+    let live = liveChecks(), format = formatChecks()
+    exit(live && format ? 0 : 1)
+}
 
 if let tzArg, let tz = TimeZone(identifier: tzArg) { NSTimeZone.default = tz }
 /// Local wall time HH:MM on --date (or today) in the --tz zone.
