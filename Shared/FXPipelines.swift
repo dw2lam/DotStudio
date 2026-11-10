@@ -294,8 +294,8 @@ enum ScenePipelines {
     static var functionNames: [String] { ids.compactMap(functionName) }
 
     /// The ids among `preset`'s passes that have a function of their own: its enabled effects
-    /// (and a dither's upscale, 38), its source pass (0: a photo or video; 1: the gradient behind
-    /// a scene) and the crossfade into the next style (41).
+    /// (and a dither's upscale, 38), a Look's source pass (0: a photo or video; 1: the gradient —
+    /// a scene has none: MetalRenderer.encodePasses) and the crossfade into the next style (41).
     static func ids(for preset: Preset) -> [Int32] {
         var out: [Int32] = []
         func add(_ id: Int32) { if functionName(id) != nil, !out.contains(id) { out.append(id) } }
@@ -303,7 +303,8 @@ enum ScenePipelines {
             add(inst.kind.shaderID)
             if inst.kind == .dither { add(38) }
         }
-        add(0); add(1); add(41)
+        if !preset.isScene { add(0); add(1) }
+        add(41)
         return out
     }
 }
