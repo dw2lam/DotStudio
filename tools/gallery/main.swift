@@ -591,6 +591,10 @@ func bounceChecks() -> Bool {
     check(periods.allSatisfy { $0 > 100 && $0 < 220 },
           String(format: "Bounce: a corner every %.0f–%.0f s at speed 1 (any screen, any logo shape)",
                  periods.min() ?? 0, periods.max() ?? 0))
+    let md = URL(fileURLWithPath: "/tmp/media")
+    check(BounceLogo.fileURL("A1.png", mediaDir: md)?.path == "/tmp/media/A1.png"
+          && ["../library.json", "/etc/hosts", "sub/a.png", ".hidden", "", nil].allSatisfy { BounceLogo.fileURL($0, mediaDir: md) == nil },
+          "Bounce: an Image logo only ever reads a plain file name inside the media folder")
     // Stateless: two renderers on the wall-clock time base draw the same frame (made and warmed
     // first, then drawn back to back: the logo moves ~0.1 px between the two reads of the clock).
     let p = Preset(name: "Bounce", effects: [EffectInstance(.bounce)])

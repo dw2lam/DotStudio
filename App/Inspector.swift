@@ -721,8 +721,8 @@ struct BounceLogoSection: View {
 
     /// The chosen image, small, off the main thread.
     private func loadThumb() async {
-        guard let name = effect.logoFile else { thumb = nil; return }
-        let url = model.store.mediaURL(name)
+        guard let name = effect.logoFile,
+              let url = BounceLogo.fileURL(name, mediaDir: model.store.mediaDir) else { thumb = nil; return }
         let img = await Task.detached(priority: .userInitiated) { () -> NSImage? in
             guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
                   let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [
