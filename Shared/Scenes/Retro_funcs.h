@@ -733,5 +733,7 @@ static inline float3 retro_bounce(float2 px, float2 res, constant FXUniforms& u,
         float3 ink = retro_bounceInk(c, x01, t, mode, lo, hi, hue) * (1.0 + 0.3 * fl);
         col = col * (1.0 - c.a) + ink;
     }
-    return col + bandDither(px) * 1.5;
+    // (clamped: the flourish's boost over a white logo would otherwise reach past 1 on an
+    // extended-range target)
+    return saturate(col + bandDither(px) * 1.5);
 }
