@@ -369,17 +369,72 @@ enum UIShots {
         s.append(Screen(name: "onboarding-2-create", frame: .fixed(sheet), view: { _ in
             AnyView(OnboardingView(initialStep: .pick, pickMode: .create, livePreview: false))
         }))
-        for (status, tag) in [(Installer.Status.notInstalled, "not-installed"), (.notChosen, "not-chosen"), (.ready, "ready")] {
+        // "Turn It On" = the guided setup: pinned checklist states (SetupDemo), the
+        // walkthrough held on a step (the third, mid-scroll, unless the screen says otherwise)
+        for (state, tag, step) in [(SetupDemo.notInstalled, "not-installed", 0), (.notChosen, "not-chosen", 2),
+                                   (.chosen, "ready", 3), (.notChosen, "step1", 0), (.notChosen, "step2", 1),
+                                   (.notChosen, "step3", 2), (.notChosen, "step4", 3)] {
             s.append(Screen(name: "onboarding-3-enable-\(tag)", frame: .fixed(sheet), view: { _ in
-                AnyView(OnboardingView(initialStep: .enable, livePreview: false, statusOverride: status))
+                AnyView(OnboardingView(initialStep: .enable, livePreview: false, statusOverride: state.snapshot.status,
+                                       guide: state.guide, walkthroughStep: step))
             }))
         }
+        s.append(Screen(name: "onboarding-3-enable-still", frame: .fixed(sheet), view: { _ in
+            AnyView(OnboardingView(initialStep: .enable, livePreview: false, statusOverride: .notChosen,
+                                   guide: SetupDemo.notChosen.guide, stillWalkthrough: true))
+        }))
         s.append(Screen(name: "onboarding-4-done", frame: .fixed(sheet), view: { _ in
             AnyView(OnboardingView(initialStep: .done, livePreview: false, statusOverride: .ready))
         }))
         s.append(Screen(name: "onboarding-4-done-skipped", frame: .fixed(sheet), view: { _ in
             AnyView(OnboardingView(initialStep: .done, livePreview: false, statusOverride: .notInstalled))
         }))
+
+        // The guided setup on its own (SetupGuidePanelView — the floating panel's content, which
+        // can be dragged to any size): rendered like a window so it shows at 880x600 (stacked)
+        // and 1440x900 (side by side). The walkthrough held on each step, its Reduce Motion still
+        // cards, and the checklist in each state that matters.
+        for step in 0..<4 {
+            s.append(Screen(name: "setup-step\(step + 1)", frame: .window, view: { _ in
+                AnyView(SetupGuidePanelView(guide: SetupDemo.notChosen.guide, frozenStep: step))
+            }))
+        }
+        s.append(Screen(name: "setup-still", frame: .window, view: { _ in
+            AnyView(SetupGuidePanelView(guide: SetupDemo.notChosen.guide, forceStill: true))
+        }))
+        for (state, tag) in [(SetupDemo.notInstalled, "notinstalled"), (.chosen, "chosen"), (.partial, "partial"),
+                             (.idleNever, "idle-never"), (.sleepWarning, "sleep-warning"),
+                             (.loginApproval, "login-approval"), (.unknownChoice, "unknown")] {
+            s.append(Screen(name: "setup-\(tag)", frame: .window, view: { _ in
+                AnyView(SetupGuidePanelView(guide: state.guide, frozenStep: 3))
+            }))
+        }
+        // Music display on: the permission line before macOS asks, and after it was refused
+        for (scenario, tag) in [(MusicDemo.Scenario.ask, "ask"), (.denied, "denied")] {
+            s.append(Screen(name: "setup-music-\(tag)", frame: .window, prepare: { _ in MusicDemo.apply(scenario) },
+                            view: { _ in AnyView(SetupGuidePanelView(guide: SetupDemo.chosen.guide, frozenStep: 3)) }))
+        }
+        // The floating panel at the size it opens at
+        s.append(Screen(name: "setup-panel", frame: .fixed(SetupGuidePanel.size), view: { _ in
+            AnyView(SetupGuidePanelView(guide: SetupDemo.notChosen.guide, frozenStep: 0))
+        }))
+        // The one-time "start at login" suggestion: on the Wallpaper card after turning it on,
+        // on the Screensaver card after turning music on, and in Settings › General
+        s.append(Screen(name: "setup-nudge-wallpaper", frame: .window, prepare: { st in
+            WallpaperSlot.shared.set(st.wallpaper)
+            LoginNudge.shared.setDemo(.wallpaper)
+        }, view: main))
+        s.append(Screen(name: "setup-nudge-music", frame: .window,
+                        prepare: { _ in LoginNudge.shared.setDemo(.music) }, view: main))
+        s.append(Screen(name: "setup-nudge-settings", frame: .fit(width: 460, minHeight: 160),
+                        prepare: { _ in LoginNudge.shared.setDemo(.wallpaper) },
+                        view: { _ in AnyView(SettingsSectionPreview { GeneralSettingsSection() }) }))
+        // The Screensaver card's setup strip with its "Show Me How" link into the guide
+        s.append(Screen(name: "setup-card-notchosen", frame: .window,
+                        prepare: { $0.setup(.notChosen) }, view: main))
+        s.append(Screen(name: "setup-settings-approval", frame: .fit(width: 460, minHeight: 160),
+                        prepare: { _ in LoginItem.demoStatus = .requiresApproval },
+                        view: { _ in AnyView(SettingsSectionPreview { GeneralSettingsSection() }) }))
 
         // Settings: every section (General, Screensaver, Live Wallpaper, Transitions, Performance, Updates)
         s.append(Screen(name: "settings", frame: .fit(width: 460, minHeight: 600),
@@ -518,6 +573,8 @@ enum UIShots {
             MusicDemo.apply(.idle)   // watching, nothing playing (music screens set their own)
             if WallpaperController.shared.userPaused { WallpaperController.shared.togglePause() }
             AppPresence.shared.menuBarMode = true   // the default (prefs are in-memory here)
+            LoginItem.demoStatus = .off             // never SMAppService here (SetupGuide.swift)
+            LoginNudge.shared.setDemo(nil)
             lineup([hero])
         }
 
@@ -765,6 +822,34 @@ enum UIShots {
             html += "</div>"
         }
         try? html.write(to: dir.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+    }
+}
+
+/// The guided setup's checklist states for UI shots (SetupGuide.swift): pinned snapshots,
+/// never read from this Mac.
+enum SetupDemo {
+    case notInstalled, notChosen, chosen, partial, idleNever, sleepWarning, loginApproval, unknownChoice
+
+    var snapshot: SetupSnapshot {
+        var s = SetupSnapshot(installed: true, choice: .chosen(on: 1, of: 1), idleSeconds: 300,
+                              displaySleep: DisplaySleepTimers(battery: 10, ac: 10), login: .off)
+        switch self {
+        case .notInstalled: s.installed = false; s.choice = .chosen(on: 0, of: 1)
+        case .notChosen: s.choice = .chosen(on: 0, of: 1)
+        case .chosen: s.login = .enabled
+        case .partial: s.choice = .chosen(on: 1, of: 2)
+        case .idleNever: s.idleSeconds = 0
+        case .sleepWarning: s.displaySleep = DisplaySleepTimers(battery: 2, ac: 10)
+        case .loginApproval: s.login = .requiresApproval
+        case .unknownChoice: s.choice = .unknown; s.idleSeconds = nil
+        }
+        return s
+    }
+
+    /// A pinned guide (never polls, never commits). Shots run on the main thread.
+    var guide: SetupGuideModel {
+        let s = snapshot
+        return MainActor.assumeIsolated { SetupGuideModel(demo: s, wantsLogin: true) }
     }
 }
 

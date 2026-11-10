@@ -538,6 +538,7 @@ struct ScreensaverCard: View {
                     .padding(.top, layout.itemGap)
                     .transition(.reveal(reduceMotion: reduceMotion, edge: .bottom))
             }
+            LoginNudgeBanner(kind: .music)   // once, after turning the music display on (SetupGuide.swift)
         }
         .motion(Motion.smooth, value: lineup)
         .motion(Motion.smooth, value: model.setupStatus)
@@ -1381,15 +1382,21 @@ struct SetupStrip: View {
     }
 
     private var button: some View {
-        Group {
-            if status == .notInstalled {
-                Button { model.installScreensaver() } label: { Text("Install").textRole(.body) }
-            } else {
-                Button { Installer.openScreenSaverSettings() } label: { Text("Open Settings").textRole(.body) }
+        HStack(spacing: layout.controlGap) {
+            // The guided setup (SetupGuide.swift): the illustrated walkthrough + live checklist.
+            Button { SetupGuidePanel.shared.show(model: model) } label: { Text("Show Me How").textRole(.body) }
+                .buttonStyle(.link)
+                .help("A step-by-step guide to choosing DotStudio in System Settings")
+            Group {
+                if status == .notInstalled {
+                    Button { model.installScreensaver() } label: { Text("Install").textRole(.body) }
+                } else {
+                    Button { Installer.openScreenSaverSettings() } label: { Text("Open Settings").textRole(.body) }
+                }
             }
+            .glassButton(.prominent)
+            .adaptiveControlSize()
         }
-        .glassButton(.prominent)
-        .adaptiveControlSize()
         .fixedSize()
     }
 }
@@ -1530,7 +1537,7 @@ struct WallpaperCard: View {
         } aside: {
             WallpaperTransport(mode: mode) { select($0) }
         } banner: {
-            EmptyView()
+            LoginNudgeBanner(kind: .wallpaper)   // once, after turning it on (SetupGuide.swift)
         }
         .motion(Motion.smooth, value: slot.styleID)
         .motion(Motion.snappy, value: mode)
