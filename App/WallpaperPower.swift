@@ -82,11 +82,19 @@ struct WallpaperSettings: Codable, Equatable {
     /// rotation, night style) on the shared wall-clock time base, instead
     /// of `presetID`. See WallpaperController.setFollowsScreensaver(_:).
     var followsScreensaver = false
+    /// "Use as lock & login screen picture" (opt-in): a still of the wallpaper becomes the
+    /// desktop picture macOS shows there (LockScreenPicture).
+    var lockScreen = false
+    /// Each screen's own desktop picture from before DotStudio set one (keyed by display UUID),
+    /// put back when the lock-screen picture turns off or the wallpaper stops. Empty while
+    /// nothing of DotStudio's is set.
+    var savedDesktopPictures: [String: SavedDesktopPicture] = [:]
 
     init() {}
 
     private enum CodingKeys: String, CodingKey {
         case enabled, presetID, frameRate, quality, batteryMode, followsScreensaver
+        case lockScreen, savedDesktopPictures
         /// The 1.4 on/off "Freeze on battery": read when `batteryMode` is missing (on → Still,
         /// off → Efficient), and still written (on ⇔ Still) so an older build reading this
         /// file keeps holding a frame for someone who asked for that.
@@ -107,6 +115,8 @@ struct WallpaperSettings: Codable, Equatable {
             batteryMode = froze ? .still : .efficient
         }
         followsScreensaver = (try? c.decode(Bool.self, forKey: .followsScreensaver)) ?? false
+        lockScreen = (try? c.decode(Bool.self, forKey: .lockScreen)) ?? false
+        savedDesktopPictures = (try? c.decode([String: SavedDesktopPicture].self, forKey: .savedDesktopPictures)) ?? [:]
     }
 
     func encode(to encoder: Encoder) throws {
@@ -118,6 +128,8 @@ struct WallpaperSettings: Codable, Equatable {
         try c.encode(batteryMode, forKey: .batteryMode)
         try c.encode(batteryMode == .still, forKey: .freezeOnBattery)
         try c.encode(followsScreensaver, forKey: .followsScreensaver)
+        try c.encode(lockScreen, forKey: .lockScreen)
+        if !savedDesktopPictures.isEmpty { try c.encode(savedDesktopPictures, forKey: .savedDesktopPictures) }
     }
 
     static func load(from url: URL) -> WallpaperSettings {
@@ -131,6 +143,17 @@ struct WallpaperSettings: Codable, Equatable {
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         if let data = try? enc.encode(self) { try? data.write(to: url, options: .atomic) }
     }
+}
+
+/// A screen's desktop picture as macOS had it (NSWorkspace.desktopImageURL + desktopImageOptions).
+struct SavedDesktopPicture: Codable, Equatable {
+    /// The file URL (absoluteString).
+    var url: String
+    /// NSImageScaling raw value.
+    var scaling: Int?
+    var allowClipping: Bool?
+    /// sRGB red, green, blue, alpha.
+    var fillColor: [Double]?
 }
 
 // MARK: - System conditions
@@ -339,6 +362,26 @@ enum WallpaperPacing {
             if still { return .after(untilBoundary(period >= 60 ? 60 : 1)) }
             if burst > 0, wall.truncatingRemainder(dividingBy: period) < burst { return .continuous(fps: fps) }
             return .after(untilBoundary(1))
+        }
+    }
+
+    /// Whether a still of the style goes stale with the time of day: a clock, the live weather,
+    /// or a scene following the real sun (MetalRenderer.fillLiveSky). The lock-screen picture
+    /// re-renders these every 15 minutes; anything else only when it changes.
+    static func changesWithTimeOfDay(_ preset: Preset) -> Bool {
+        if WeatherLink.followsLive(preset) { return true }
+        return preset.effects.contains { inst in
+            guard inst.enabled else { return false }
+            switch inst.kind {
+            case .flipClock, .typeClock, .wordClock, .dialClock, .standbyClock, .minimalClock, .watchClock:
+                return true
+            case .oceanHorizon, .shallows, .pleats, .dichroic, .sandGarden:
+                return (inst.params["live"] ?? 0) > 0.5
+            case .windowLight:
+                return (inst.params["follow"] ?? 1) > 0.5
+            default:
+                return false
+            }
         }
     }
 
