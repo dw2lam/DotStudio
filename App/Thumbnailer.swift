@@ -416,8 +416,9 @@ final class Thumbnailer {
     }
 
     /// Once a still shows music (a Now Playing tile, the Screensaver card's hero), follow the
-    /// feed and repaint those stills (only) when its key changes — only while an app window is up: with every window closed (menu-bar mode) the
-    /// subscription drops itself, and the next gallery render subscribes again.
+    /// feed and repaint those stills (only) when its key changes — only while an app window is
+    /// up: with every window closed (menu-bar mode) the subscription drops itself, and the next
+    /// gallery render subscribes again.
     private func watchMusic() {
         guard musicToken == nil else { return }
         musicToken = MusicFeedHub.shared.subscribe(store: store) { [weak self] snap, _ in
