@@ -792,6 +792,7 @@ private struct BounceLogoShot: View {
             EffectRow(effect: $model.library.presets[i].effects[0], isExpanded: $open, isFirst: true,
                       onDuplicate: {}, onRemove: {}, model: model)
                 .padding(Space.m)
+                .background(.regularMaterial)    // the inspector's ground (dark shots read on it)
         }
     }
 }
