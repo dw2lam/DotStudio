@@ -33,7 +33,7 @@ struct studio2_Acc {
     half T; half2 gT;                // transmittance and its gradient
     half H; half2 gH;                // composited height and its gradient
     half4 top;                       // the most visible layer: (weight, d, light across, height)
-    half fresh;                      // how much of what shows the rake has just drawn (fading over ~8 cm)
+    half fresh;                      // how much of what shows the rake has just drawn (fading over ~6 cm)
 };
 
 // ---------------------------------------------------------------- small helpers
@@ -170,7 +170,7 @@ static inline void studio2_flush(thread studio2_Acc& A, thread studio2_Run& R, f
             studio2_layer(A, half(sg * d), half2(sg * R.v / max(d, 1e-4)), half(cov), G, Lh);
             // freshly raked: how much of what shows the rake drew in the last few cm
             float age = sNow - R.sF;
-            if (age < 40.0) A.fresh += (T0 - A.T) * half(exp(-age * 0.125));
+            if (age < 36.0) A.fresh += (T0 - A.T) * half(exp(-age * (1.0 / 6.0)));
         }
     }
     R.open = false; R.best = 1e9; R.head = false;
@@ -393,11 +393,11 @@ static inline float2 studio2_plough(thread const studio2_Cart& c, float2 x, floa
     float dn = 1.0 - c.lift, ay = abs(r.y);
     float front = 1.0 - smoothstep(hw - 0.3, hw + 0.5, ay);
     float nz = studio2_vnoise(x * 1.7).x;
-    float kf = dn * front * smoothstep(-0.12, 0.04, r.x) * (1.0 - smoothstep(1.0, 2.4, r.x));
+    float kf = dn * front * smoothstep(-0.12, 0.04, r.x) * (1.0 - smoothstep(0.9, 2.0, r.x));
     float cs = cos(STUDIO2_PI * (r.y + hw) / sp);
-    float rx = max(r.x - 0.25, 0.0);
-    float hb = dn * (0.5 * D / c.s + 0.1);
-    float berm = hb * rx * exp(1.0 - rx) * front * (0.6 + 0.8 * (1.0 - cs * cs)) * (0.8 + 0.4 * nz);
+    float rx = max(r.x - 0.3, 0.0) * (1.0 / 0.75);
+    float hb = dn * (0.55 * D / c.s + 0.12);
+    float berm = hb * rx * exp(1.0 - rx) * front * (0.55 + 0.9 * (1.0 - cs * cs)) * (0.75 + 0.5 * nz);
     float e = ay - hw - 0.45;
     berm += hb * 0.8 * exp(-e * e * 8.0) * smoothstep(-3.0, -0.3, r.x) * (1.0 - smoothstep(0.8, 2.2, r.x)) * (0.85 + 0.3 * nz);
     float dy = abs(b.y) - 2.95;
@@ -405,8 +405,8 @@ static inline float2 studio2_plough(thread const studio2_Cart& c, float2 x, floa
                 * (1.0 - dn * front * (1.0 - smoothstep(-0.25, 0.05, r.x)));
     float kr = 0.85 * along * exp(-dy * dy * 8.0);
     float ld = abs(dy) - 0.55;
-    float lips = 0.05 * along * exp(-ld * ld * 33.0);
-    return float2((1.0 - 0.92 * kf) * (1.0 - kr), (berm + lips - 0.15 * kr) * c.s);
+    float lips = 0.07 * along * exp(-ld * ld * 33.0);
+    return float2((1.0 - 0.92 * kf) * (1.0 - kr), (berm + lips - 0.2 * kr) * c.s);
 }
 
 // Signed distance (approximately: the largest separating gap) from p to the shadow that the
@@ -803,7 +803,7 @@ static inline float4 studio2_scene(float2 uv, float2 res, float2 px, float t, co
         gt *= mix(1.0, tone, inG * (o == 0 ? 1.0 : 0.6));
         gb += gv / max(gr, 0.03) * (0.4 * inG);
     }
-    gb *= 1.0 + 0.4 * fresh;                                     // freshly raked: a touch rougher…
+    gb *= 1.0 + 0.5 * fresh;                                     // freshly raked: a touch rougher…
     // loose grains the tines kick up ahead of them, shoved along as the bar comes on, then
     // buried in the bow wave (one jittered grain per cell, where a cell's hash says)
     if (cartR2 < reachC * reachC && C.lift < 0.99) {
@@ -827,7 +827,7 @@ static inline float4 studio2_scene(float2 uv, float2 res, float2 px, float t, co
     float m1 = abs(fract(x.x * 0.031 + x.y * 0.012 + 0.35 * abs(fract(x.y * 0.0071 - x.x * 0.0043) - 0.5)) - 0.5) * 4.0 - 1.0;
     float m2 = abs(fract(x.y * 0.043 - x.x * 0.017 + 0.3 * m1) - 0.5) * 4.0 - 1.0;
     float3 alb = sandLin * (1.0 + 0.025 * m1 + 0.02 * m2) * gt;
-    alb *= 1.0 - 0.17 * fresh;                                   // …and damper, darker
+    alb *= 1.0 - 0.22 * fresh;                                   // …and damper, darker
 
 
     // ---- shadows on the gravel: the frame (the low light clips over it), the stones, the cart
