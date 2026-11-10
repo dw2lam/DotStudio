@@ -36,57 +36,82 @@ static inline float clockkit_handD(float2 p, float a, float4 K, float collar, fl
     return min(clockkit_kite(q, K), length(q) - collar) * R;
 }
 
+/// The studio polished metal mirrors: a dome (domeLo at the horizon, + domeHi overhead), the big
+/// warm softbox (the key) and a cool strip light 90° round (the fill), in linear HDR.
+struct ClockKitStudio { float3 domeLo, domeHi; float key, fill; };
+/// Dial Clock's studio: a pale grey room.
+static inline ClockKitStudio clockkit_dialStudio() {
+    ClockKitStudio S;
+    S.domeLo = float3(0.050, 0.052, 0.058); S.domeHi = float3(0.20, 0.21, 0.23);
+    S.key = 3.4; S.fill = 0.55;
+    return S;
+}
+
 /// The studio as polished metal mirrors it (linear HDR; r = reflected ray). A dome that is dim at
 /// the horizon and brighter overhead, the big warm softbox (the key, along L) and a cool strip
 /// light 90° round (Lf). The softbox edge is widened by `lw` (how fast r turns across a pixel).
-static inline float3 clockkit_env(float3 r, float3 L, float3 Lf, float lw) {
+static inline float3 clockkit_env(float3 r, float3 L, float3 Lf, float lw, ClockKitStudio S) {
     float up = saturate(r.z);
-    float3 dome = float3(0.050, 0.052, 0.058) + float3(0.20, 0.21, 0.23) * up;
+    float3 dome = S.domeLo + S.domeHi * up;
     float key = smoothstep(0.80 - lw, 0.95 + lw, dot(r, L));
     float fill = smoothstep(0.90 - lw, 0.985 + lw, dot(r, Lf));
-    return dome + float3(1.0, 0.95, 0.88) * 3.4 * key + float3(0.80, 0.88, 1.0) * 0.55 * fill;
+    return dome + float3(1.0, 0.95, 0.88) * S.key * key + float3(0.80, 0.88, 1.0) * S.fill * fill;
+}
+static inline float3 clockkit_env(float3 r, float3 L, float3 Lf, float lw) {
+    return clockkit_env(r, L, Lf, lw, clockkit_dialStudio());
 }
 
 /// Polished metal with reflectance F0 (Schlick) at normal n.
-static inline float3 clockkit_metal(float3 n, float3 V, float3 L, float3 Lf, float3 F0) {
+static inline float3 clockkit_metal(float3 n, float3 V, float3 L, float3 Lf, float3 F0, ClockKitStudio S) {
     float c = saturate(dot(n, V));
     float3 F = F0 + (1.0 - F0) * pow(1.0 - c, 5.0);
-    return F * clockkit_env(reflect(-V, n), L, Lf, 0.0);
+    return F * clockkit_env(reflect(-V, n), L, Lf, 0.0, S);
+}
+static inline float3 clockkit_metal(float3 n, float3 V, float3 L, float3 Lf, float3 F0) {
+    return clockkit_metal(n, V, L, Lf, F0, clockkit_dialStudio());
 }
 
 /// The brightest glint a rounded ridge (or edge) along `along` can throw: of the normals its
 /// curve holds (tilted across it by up to ±slope), the one nearest the key's half-vector.
-static inline float3 clockkit_ridge(float2 along, float slope, float3 V, float3 L, float3 Lf, float3 F0) {
+static inline float3 clockkit_ridge(float2 along, float slope, float3 V, float3 L, float3 Lf, float3 F0,
+                                    ClockKitStudio S) {
     float2 across = float2(-along.y, along.x);
     float3 H = normalize(L + V);
     float k = clamp(dot(H.xy, across) / max(H.z, 1e-3), -slope, slope);
-    return clockkit_metal(normalize(float3(across * k, 1.0)), V, L, Lf, F0);
+    return clockkit_metal(normalize(float3(across * k, 1.0)), V, L, Lf, F0, S);
+}
+static inline float3 clockkit_ridge(float2 along, float slope, float3 V, float3 L, float3 Lf, float3 F0) {
+    return clockkit_ridge(along, slope, V, L, Lf, F0, clockkit_dialStudio());
 }
 
 /// A polished two-facet hand (q local in R units, y across): facets tilted ±across, falling a
 /// touch toward the tip, a bright line on the ridge, and its round boss.
 static inline float3 clockkit_handShade(float2 q, float a, float collar, float fpR,
-                                       float3 V, float3 L, float3 Lf, float3 F0) {
+                                       float3 V, float3 L, float3 Lf, float3 F0, ClockKitStudio S) {
     float2 dir = clockkit_dir(a), perp = float2(cos(a), sin(a));
     const float sl = 0.42;
     float tl = sl * (0.80 + 0.45 * saturate(abs(q.y) / 0.045));         // facets a touch convex
     float3 nA = normalize(float3(perp * tl - dir * 0.05, 1.0));
     float3 nB = normalize(float3(-perp * tl - dir * 0.05, 1.0));
-    float3 c = mix(clockkit_metal(nB, V, L, Lf, F0), clockkit_metal(nA, V, L, Lf, F0), saturate(0.5 + q.y / fpR));
+    float3 c = mix(clockkit_metal(nB, V, L, Lf, F0, S), clockkit_metal(nA, V, L, Lf, F0, S), saturate(0.5 + q.y / fpR));
     float rw = max(0.0035, 0.8 * fpR);                                   // ridge: ~0.35 % of R, ≥ a pixel
     float ridge = exp(-(q.y * q.y) / (rw * rw)) * smoothstep(0.0, 0.06, q.x);
-    c = mix(c, clockkit_ridge(dir, sl, V, L, Lf, F0), 0.55 * ridge);
+    c = mix(c, clockkit_ridge(dir, sl, V, L, Lf, F0, S), 0.55 * ridge);
     // the boss: a polished dome ring round the arbor, on top of the blade
     float rq = length(q);
     float inC = saturate(0.5 + (collar - rq) / fpR);
     if (inC > 0.0) {
         float2 g = q.x * dir + q.y * perp;                               // back to screen orientation
         float3 n = normalize(float3(g / max(rq, 1e-4) * (0.08 + 0.50 * rq / collar), 1.0));
-        float3 cc = clockkit_metal(n, V, L, Lf, F0);
+        float3 cc = clockkit_metal(n, V, L, Lf, F0, S);
         cc *= 1.0 - 0.25 * smoothstep(0.80, 1.0, rq / collar);           // its rim rolls away
         c = mix(c, cc, inC);
     }
     return c;
+}
+static inline float3 clockkit_handShade(float2 q, float a, float collar, float fpR,
+                                       float3 V, float3 L, float3 Lf, float3 F0) {
+    return clockkit_handShade(q, a, collar, fpR, V, L, Lf, F0, clockkit_dialStudio());
 }
 
 /// Day count of the month before (year y, month m 1–12).
