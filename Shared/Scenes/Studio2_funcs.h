@@ -15,7 +15,8 @@
 //  tests the light's ray against the crest on the light's side; the stones' shadows and the
 //  gravel's darkening round them are baked on the CPU for the light (rows 258…, sampled
 //  bilinearly, and flagging where a pixel need look for stones at all); the cart casts its
-//  own by a short march. The light itself is worked out on the CPU too (u.scene[12…15]).
+//  own exactly (its parts as boxes swept down the light) and works the gravel round it (see
+//  "the cart"). The light itself is worked out on the CPU too (u.scene[12…15]).
 //  Lengths in cm; linear light, tone-mapped once.
 
 constant float STUDIO2_PI = 3.14159265;
@@ -365,7 +366,7 @@ static inline float2 studio2_cartAt(float2 b, float2 r, float2 pc, float wr, flo
     float2 res = float2(0.0);
     float up = 0.9 * lift, hw = 0.5 * wr;
     if (r.x > 0.0 && r.x < 0.56 && abs(r.y) < hw && studio2_tineY(r.y, wr) < 0.13) res = float2(r.x * 1.45 + up, 6.0);
-    float2 rb = abs(r - float2(0.78, 0.0)) - float2(0.28, hw + 0.25);
+    float2 rb = abs(r - float2(0.78, 0.0)) - float2(0.28, hw - 0.1);
     if (max(rb.x, rb.y) < 0.0) res = float2(0.85 + up, 4.0);
     // the tow pole, from the body's back to the bar's middle
     float2 pa = float2(-3.1, 0.0), pd = pc - pa;
@@ -442,7 +443,7 @@ static inline float studio2_cartShadow(thread const studio2_Cart& c, float2 x, f
         vis = min(vis, smoothstep(-pen0, pen0 + pk * za, studio2_shadowBox(qp, Lp, tb, float2(0.0), float2(0.5 * pl, 0.15), za, zb)));
     }
     float zb0 = max(0.55 + up - h0, 0.0), zb1 = 0.85 + up - h0;
-    vis = min(vis, smoothstep(-pen0, pen0 + pk * zb0, studio2_shadowBox(r, Lr, tb, float2(0.78, 0.0), float2(0.28, hw + 0.25), zb0, zb1)));
+    vis = min(vis, smoothstep(-pen0, pen0 + pk * zb0, studio2_shadowBox(r, Lr, tb, float2(0.78, 0.0), float2(0.28, hw - 0.1), zb0, zb1)));
     {                                                            // the tines: a comb
         float zt0 = max(up - h0, 0.0), zt1 = 0.8 + up - h0;
         float sd = studio2_shadowBox(r, Lr, tb, float2(0.28, 0.0), float2(0.28, hw), zt0, zt1);
@@ -465,7 +466,7 @@ static inline float studio2_cartAO(thread const studio2_Cart& c, float2 x) {
     float ty = studio2_tineY(r.y, c.wru);
     float tin = dn * (1.0 - smoothstep(hw - 0.05, hw + 0.2, abs(r.y)));
     ao *= 1.0 - 0.6 * tin * exp(-(r.x * r.x + ty * ty) * 20.0);
-    float2 rq = abs(r - float2(0.78, 0.0)) - float2(0.28, hw + 0.25);
+    float2 rq = abs(r - float2(0.78, 0.0)) - float2(0.28, hw - 0.1);
     float dr = length(max(rq, 0.0)) + min(max(rq.x, rq.y), 0.0);
     ao *= 1.0 - (0.32 - 0.22 * c.lift) * exp(-max(dr, 0.0) * 2.2);
     return ao;
