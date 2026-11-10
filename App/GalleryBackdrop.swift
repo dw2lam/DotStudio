@@ -1,7 +1,8 @@
 //  GalleryBackdrop.swift — the blurred, colour-washed backdrop behind the gallery and the
-//  editor (AmbientBackdrop's look), with the blur baked into a bitmap once per still and
-//  window size instead of a live 70-pt blur filter: the window server re-ran that full-window
-//  blur for every frame the page above it changed — every frame of a scroll.
+//  editor (the look of SwiftUI's `blur(radius: 70, opaque: true)` over the still), with the
+//  blur baked into a bitmap once per still and window size instead of a live blur filter: the
+//  window server re-ran that full-window blur for every frame the page above it changed —
+//  every frame of a scroll.
 
 import SwiftUI
 import CoreImage
@@ -10,7 +11,7 @@ struct GalleryBackdrop: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.colorScheme) private var scheme
     let presetID: UUID?
-    /// The blur AmbientBackdrop applied on screen, in points.
+    /// The blur, in points of the window.
     static let radius: CGFloat = 70
 
     var body: some View {
@@ -76,7 +77,7 @@ final class BlurCache {
         let fillScale = max(size.width / w, size.height / h)
         let r = radius * Self.sigmaPerRadius / fillScale
         let input = CIImage(cgImage: cg)
-        // Edges extended, then cropped back: AmbientBackdrop's blur(opaque: true).
+        // Edges extended, then cropped back: as SwiftUI's blur(opaque: true).
         guard let blur = CIFilter(name: "CIGaussianBlur", parameters: [
             kCIInputImageKey: input.clampedToExtent(), kCIInputRadiusKey: r,
         ])?.outputImage?.cropped(to: input.extent),

@@ -451,8 +451,8 @@ enum PerfProbe {
 
     /// DOTSTUDIO_PERF_PROBE=backdrop DOTSTUDIO_PERF_OUT=<dir>: renders the pre-blurred
     /// GalleryBackdrop with SwiftUI's own renderer (ImageRenderer draws blur filters; offscreen
-    /// window captures don't) for a look check. (The live-blur AmbientBackdrop it was checked
-    /// against is gone; its look: the still, `blur(radius: GalleryBackdrop.radius, opaque: true)`.)
+    /// window captures don't) for a look check: it should match the still under
+    /// `blur(radius: GalleryBackdrop.radius, opaque: true)`.
     @MainActor private static func runBackdrop() {
         let (model, _) = bootServices()
         let out = env["DOTSTUDIO_PERF_OUT"] ?? NSTemporaryDirectory()

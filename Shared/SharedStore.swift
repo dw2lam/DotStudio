@@ -13,6 +13,7 @@
 //  saver and a one-time migration source for the app.
 
 import Foundation
+import QuartzCore
 
 enum StoreRole { case app, saver }
 
@@ -187,6 +188,13 @@ final class SharedStore {
         } else {
             try? line.data(using: .utf8)?.write(to: url)
         }
+    }
+
+    /// A debug line tagged and time-stamped, `[tag 1234.567] message`; nothing is built while
+    /// debug logging is off.
+    func debug(_ tag: String, _ message: @autoclosure () -> String) {
+        guard debugEnabled else { return }
+        debug("[\(tag) \(String(format: "%.3f", CACurrentMediaTime()))] \(message())")
     }
 
     // MARK: Media
