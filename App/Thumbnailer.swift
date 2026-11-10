@@ -119,6 +119,7 @@ final class Thumbnailer {
     }
 
     deinit {
+        Perf.count("Thumbnailer.deinit")
         if let occlusion { NotificationCenter.default.removeObserver(occlusion) }
         tick?.invalidate()
     }
