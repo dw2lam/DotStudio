@@ -12,7 +12,8 @@
 //                  Apple Events and artwork lookups are off).
 //          window  the same, plus the main window's content (ContentView at 1440x900) hosted
 //                  in a borderless window parked far off screen and never ordered in (as
-//                  UIShots does). Then scripted events — a thumbnail landing, a song
+//                  UIShots does), which the stills treat as on screen (they follow the music
+//                  and the clock as they do in a real window). Then scripted events — a thumbnail landing, a song
 //                  starting, pausing, changing, starting and stopping, a selection, an edit —
 //                  each reported as the SwiftUI bodies it re-evaluated.
 //          scroll  the gallery scrolled top → bottom → top in that window, a frame at a time
@@ -314,6 +315,7 @@ enum PerfProbe {
         win.isReleasedWhenClosed = false
         win.contentView = host
         host.frame = CGRect(origin: .zero, size: size)
+        Thumbnailer.assumesWindowOnScreen = true
         host.layoutSubtreeIfNeeded()
         spin(2)
         guard let scroll = scrollView(in: host), let doc = scroll.documentView else {
@@ -371,6 +373,7 @@ enum PerfProbe {
         win.contentView = host
         host?.frame = CGRect(origin: .zero, size: size)
         say("perf probe: window (ContentView 1440x900, offscreen, never shown) — \(Int(seconds)) s quiet phases")
+        Thumbnailer.assumesWindowOnScreen = true   // the stills follow the music and the clock, as on screen
 
         phase("first-render") { host?.layoutSubtreeIfNeeded(); spin(4); return 4 }
         phase("window-quiet") { spin(seconds); return seconds }
@@ -434,6 +437,7 @@ enum PerfProbe {
         // Close it, as the user does: the app goes back to menu-bar idle.
         win.contentView = nil
         win.close()
+        Thumbnailer.assumesWindowOnScreen = false
         host = nil                  // the window's view graph goes, as when SwiftUI closes it
         }
         if env["DOTSTUDIO_PERF_KEEP_THUMBS"] == nil { model.releaseThumbnails() }   // as AppPresence does once the last window has closed
