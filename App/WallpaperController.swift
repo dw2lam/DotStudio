@@ -307,7 +307,7 @@ final class WallpaperController: ObservableObject {
         log("stop")
         renderLoop?.removeAll()
         for h in hosts.values { h.close() }
-        hosts.removeAll()
+        hosts.removeAll(); hiddenSince.removeAll()
         applied = nil
         musicToken = nil
         musicSnapshot = .empty
@@ -340,7 +340,18 @@ final class WallpaperController: ObservableObject {
                                         object: nil, queue: .main) { [weak self] note in
             guard let self, let win = note.object as? WallpaperWindow else { return }
             if let h = self.hosts.values.first(where: { $0.window === win }) {
-                self.log("display \(h.displayID) occlusion visible=\(win.occlusionState.contains(.visible))")
+                let visible = win.occlusionState.contains(.visible)
+                self.log("display \(h.displayID) occlusion visible=\(visible)")
+                if visible {
+                    self.hiddenSince[h.displayID] = nil
+                } else if self.hiddenSince[h.displayID] == nil {
+                    // Switching Spaces reports the desktop hidden for 0.1–1 s; keep drawing
+                    // through that and only pause once it has stayed covered.
+                    self.hiddenSince[h.displayID] = Date()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + Self.coverGrace + 0.05) { [weak self] in
+                        self?.reevaluate()
+                    }
+                }
             }
             self.reevaluate()
         })
@@ -554,8 +565,17 @@ final class WallpaperController: ObservableObject {
         WallpaperBudget.fps(settings, presetFPS: currentPreset?.fps ?? 0, onBattery: power.state.onBattery)
     }
 
+    /// How long a desktop must stay covered before the wallpaper pauses: Space switches and
+    /// Mission Control report it hidden for well under this, and pausing for them shows as a
+    /// cut-out mid-swipe. A real cover (a full-screen app, a maximised window) pauses after it.
+    static let coverGrace: TimeInterval = 1.5
+    /// When each display's wallpaper window last went from visible to hidden.
+    private var hiddenSince: [CGDirectDisplayID: Date] = [:]
+
     private func isVisible(_ h: WallpaperHost) -> Bool {
-        ignoreOcclusion || h.window.occlusionState.contains(.visible)
+        if ignoreOcclusion || h.window.occlusionState.contains(.visible) { return true }
+        guard let since = hiddenSince[h.displayID] else { return false }
+        return Date().timeIntervalSince(since) < Self.coverGrace
     }
 
     /// Re-decide what runs, and hand the decision to the render thread as one snapshot.
