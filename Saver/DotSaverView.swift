@@ -197,6 +197,7 @@ final class DotSaverView: ScreenSaverView {
         // display: freed once the last live one goes (a view still drawing would rebuild them).
         if !DotSaverView.instances.allObjects.contains(where: { $0 !== self && $0.metalView != nil }) {
             TextAtlas.purge()
+            BounceLogo.purge()
             WeatherLink.purge()
             FXPipelines.purge()
         }
