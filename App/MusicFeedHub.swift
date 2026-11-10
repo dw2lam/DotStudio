@@ -82,6 +82,7 @@ final class MusicFeedHub {
     }
 
     private func tick() {
+        Perf.count("tick:MusicFeedHub")
         poll()
         let snap = current
         // Compare revisions rather than trusting this poll: a `snapshot(store:)` call between

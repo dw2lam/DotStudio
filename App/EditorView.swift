@@ -21,6 +21,7 @@ struct EditorView: View {
     }
 
     var body: some View {
+        let _ = Perf.body("EditorView")
         let binding = model.presetBinding(id)
         let preset = binding.wrappedValue
         // Two columns, one margin on every side and between them (20 · 32 · 48 by width): the
@@ -208,6 +209,7 @@ private struct DestinationBar: View {
     let id: UUID
 
     var body: some View {
+        let _ = Perf.body("DestinationBar")
         let lineup = model.screensaverLineup
         let only = lineup.playlist == [id]
         let inPlaylist = lineup.playlist.contains(id)

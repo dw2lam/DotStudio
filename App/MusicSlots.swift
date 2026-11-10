@@ -29,6 +29,7 @@ struct MenuBarMusicSlot: View {
     @ObservedObject private var now = MusicNow.shared
 
     var body: some View {
+        let _ = Perf.body("MenuBarMusicSlot")
         if now.isVisible(model.library.musicSettings) {
             Label {
                 Text(menuTrackLine(title: now.title, artist: now.artist))
