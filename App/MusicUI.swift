@@ -162,8 +162,6 @@ final class MusicNow: ObservableObject {
     var canControl: Bool { player?.canControl ?? false }
     /// The shown track's player refused Automation: controls are off until it's allowed.
     var needsAutomationFix: Bool { player?.needsAutomationFix ?? false }
-    /// A running player that refused Automation (even with nothing playing).
-    var deniedPlayer: MusicPlayerStatus? { players.first { $0.needsAutomationFix } }
 
     // MARK: Actions
 

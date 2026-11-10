@@ -128,12 +128,6 @@ extension View {
         }
     }
 
-    /// Lets an edge-to-edge image bleed softly under adjacent glass (macOS 26).
-    @ViewBuilder
-    func extendsUnderGlass() -> some View {
-        if #available(macOS 26, *) { self.backgroundExtensionEffect() } else { self }
-    }
-
     /// Softens where scrolling content meets the toolbar (macOS 26).
     @ViewBuilder
     func softScrollEdges() -> some View {
@@ -145,24 +139,6 @@ extension View {
     @ViewBuilder
     func noScrollEdgeEffects() -> some View {
         if #available(macOS 26, *) { self.scrollEdgeEffectHidden(true, for: .all) } else { self }
-    }
-}
-
-/// A plain, borderless icon button sized for glass bars.
-struct GlassIconButtonStyle: ButtonStyle {
-    var size: CGFloat = 28
-    @State private var hovering = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12.5, weight: .semibold))
-            .frame(width: size, height: size)
-            .contentShape(Circle())
-            .background(Circle().fill(Color.white.opacity(hovering ? 0.22 : 0)))
-            .scaleEffect(configuration.isPressed ? 0.9 : 1)
-            .animation(Motion.snappy, value: configuration.isPressed)
-            .animation(Motion.snappy, value: hovering)
-            .onHover { hovering = $0 }
     }
 }
 
