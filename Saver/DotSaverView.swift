@@ -304,23 +304,83 @@ final class DotSaverView: ScreenSaverView {
 
     // MARK: Frame pacing (preview + power aware)
 
+    /// What power allows the saver right now (re-read ~1 Hz from animateOneFrame).
+    struct PowerBudget: Equatable {
+        /// Most frames per second (the preset's own fps can be lower).
+        var maxFPS: Double
+        /// Most rendered pixels per native pixel, per axis; the user's Quality can be lower.
+        var maxScale: CGFloat
+
+        /// Plugged in: the preset's fps at the user's Quality.
+        static let ac = PowerBudget(maxFPS: .infinity, maxScale: 1)
+        /// On battery: 24 fps (an exact 5 refreshes on 120 Hz ProMotion; 20 on a 60 Hz panel —
+        /// see divisorFPS) at 0.6× native.
+        static let battery = PowerBudget(maxFPS: 24, maxScale: 0.6)
+        /// Low Power Mode: 15 fps at half resolution (a crisp 2× nearest-neighbour upscale).
+        static let lowPower = PowerBudget(maxFPS: 15, maxScale: 0.5)
+        /// The System Settings thumbnail: 10 fps, small fixed scale — it's a few hundred points.
+        static let preview = PowerBudget(maxFPS: 10, maxScale: 0.35)
+    }
+
+    /// The budget in force, set by updateInterval (the drawable follows on the next frame).
+    private var budget = PowerBudget.ac
+
+    private func currentBudget() -> PowerBudget {
+        if isPreview { return .preview }
+        if DotSaverView.lowPowerMode() { return .lowPower }
+        if DotSaverView.onBattery() { return .battery }
+        return .ac
+    }
+
     /// Set only on a change: the host re-reads it (and may re-arm its timer) on every set.
+    /// Also re-reads the power budget, so plugging in or unplugging mid-run takes effect
+    /// within a second (fps here, resolution in syncDrawableSize on the next frame).
     private func updateInterval() {
+        let b = currentBudget()
+        if b != budget {
+            store.debug("[\(logID)] power budget fps≤\(b.maxFPS) scale≤\(b.maxScale)")
+            budget = b
+        }
         let iv = effectiveInterval()
         if iv != animationTimeInterval { animationTimeInterval = iv }
     }
 
     /// The preset's fps, clamped for the Settings thumbnail and for battery power.
     private func effectiveInterval() -> TimeInterval {
-        var fps = max(presetFPS, 1)
-        if isPreview {
-            fps = min(fps, 10)                       // Settings thumbnail
-        } else if ProcessInfo.processInfo.isLowPowerModeEnabled {
-            fps = min(fps, 15)
-        } else if DotSaverView.onBattery() {
-            fps = min(fps, 30)                       // 15 read as laggy; 30 stays smooth
+        var fps = Double(max(presetFPS, 1))
+        if budget.maxFPS < fps {
+            fps = DotSaverView.divisorFPS(target: budget.maxFPS, refresh: refreshRate)
         }
-        return 1.0 / Double(fps)
+        return 1.0 / fps
+    }
+
+    /// The display's refresh rate (120 on ProMotion, 60 on most externals).
+    private var refreshRate: Double {
+        Double((window?.screen ?? NSScreen.main)?.maximumFramesPerSecond ?? 60)
+    }
+
+    /// The exact divisor of `refresh` nearest `target`, never above it: every frame is held for
+    /// the same number of refreshes (24 on 120 Hz, 20 on 60 Hz — 24 there would alternate 2 and
+    /// 3 refreshes, a visible judder). Same rule as the live wallpaper's WallpaperPacing.
+    static func divisorFPS(target: Double, refresh: Double) -> Double {
+        guard refresh > 0, target > 0, target < refresh else { return target }
+        let n = max((refresh / target).rounded(.up), 1)
+        return refresh / n
+    }
+
+    /// DEV/perf only: DOTSTUDIO_SAVER_FORCE=battery|lowpower|ac pins the power state, to
+    /// measure the battery budget on a Mac that's plugged in (tools/perf/run.sh saver).
+    private static let forced: String? = {
+#if DOTSTUDIO_PERF || DEBUG
+        return ProcessInfo.processInfo.environment["DOTSTUDIO_SAVER_FORCE"]?.lowercased()
+#else
+        return nil
+#endif
+    }()
+
+    private static func lowPowerMode() -> Bool {
+        if let f = forced { return f == "lowpower" }
+        return ProcessInfo.processInfo.isLowPowerModeEnabled
     }
 
     /// The power-source change notification, checked with notify_check (a read of shared
@@ -334,6 +394,7 @@ final class DotSaverView: ScreenSaverView {
 
     /// True when running on battery. Defensive: any failure reads as AC power.
     private static func onBattery() -> Bool {
+        if let f = forced { return f == "battery" }
         if powerToken >= 0, let last = lastOnBattery {
             var changed: Int32 = 0
             if notify_check(powerToken, &changed) == NOTIFY_STATUS_OK, changed == 0 { return last }
@@ -416,19 +477,27 @@ final class DotSaverView: ScreenSaverView {
     /// Manually size the drawable: native pixels × renderScale. With
     /// autoResizeDrawable off this is the single source of truth, and lets the
     /// Quality setting cut VRAM/bandwidth 4× at 0.5 on Retina displays.
+    /// The power budget caps it (battery 0.6, Low Power 0.5, the Settings thumbnail 0.35) but
+    /// never raises it above the user's own Quality.
     private func syncDrawableSize() {
         guard let mv = metalView, bounds.width > 0, bounds.height > 0 else { return }
         let backing = window?.backingScaleFactor ?? 2
-        let target = CGSize(width: max((bounds.width * backing * renderScale).rounded(), 1),
-                            height: max((bounds.height * backing * renderScale).rounded(), 1))
+        let capped = budget.maxScale < renderScale
+        let scale = capped ? budget.maxScale : renderScale
+        let target = CGSize(width: max((bounds.width * backing * scale).rounded(), 1),
+                            height: max((bounds.height * backing * scale).rounded(), 1))
         // MTKView applies its drawableSize to the layer only when it hands out a drawable
         // itself; frames go straight to the layer, so it's sized here too.
         if mv.drawableSize != target || (metalLayer.map { $0.drawableSize != target } ?? false) {
             mv.drawableSize = target
             metalLayer?.drawableSize = target
             if let layer = mv.layer as? CAMetalLayer {
-                // Keep the dot aesthetic crisp when upscaling a reduced render.
-                layer.magnificationFilter = renderScale < 1 ? .nearest : .linear
+                // Keep the dot aesthetic crisp when upscaling the user's reduced Quality. A power
+                // cap upscales by a whole factor (Low Power's 2×) with nearest too; a fractional
+                // one (battery's 1.67×) with linear, which never doubles every other pixel.
+                let factor = 1 / scale
+                let whole = abs(factor - factor.rounded()) < 0.01
+                layer.magnificationFilter = scale < 1 && (!capped || whole) ? .nearest : .linear
             }
         }
     }

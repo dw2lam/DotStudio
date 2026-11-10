@@ -81,6 +81,9 @@ final class WallpaperController: ObservableObject {
     private var openMainWindowAction: (() -> Void)?
     private var nextToken: UInt64 = 0
     private var lastLoggedState = ""
+    /// The multiplier on Quality's pixels per point the drawables are sized with
+    /// (WallpaperBudget.renderScale; reevaluate resizes them when it changes).
+    private var renderScale: CGFloat = 1
 
     /// The render thread, started the first time a wallpaper turns on, then kept
     /// (an idle run loop costs nothing).
@@ -130,6 +133,8 @@ final class WallpaperController: ObservableObject {
         applyDevOverrides()
         syncLibraryTimeBase()
         if settings.enabled { start() }
+        // A lock-screen picture left set (or left to restore) by the last run.
+        syncLockPicture("launch", after: 3)
     }
 
     /// The SwiftUI hook that opens the main window (captured from a view's environment).
@@ -221,6 +226,10 @@ final class WallpaperController: ObservableObject {
         settings = s
         if let url = settingsURL { s.save(to: url) }
         syncLibraryTimeBase()
+        if s.lockScreen != old.lockScreen || s.enabled != old.enabled || s.presetID != old.presetID
+            || s.followsScreensaver != old.followsScreensaver {
+            syncLockPicture("settings", after: s.lockScreen != old.lockScreen || !s.enabled ? 0 : 1)
+        }
         guard s.enabled, !hosts.isEmpty else { return }
         if s.followsScreensaver != old.followsScreensaver {
             applyTimeBase()
@@ -264,10 +273,15 @@ final class WallpaperController: ObservableObject {
         if !running {
             running = true
             power.onChange = { [weak self] state in
-                self?.log("power \(state)")
-                self?.reevaluate()
+                guard let self else { return }
+                self.log("power \(state)")
+                let locking = state.screenLocked && !self.wasLocked
+                self.wasLocked = state.screenLocked
+                self.reevaluate()
+                if locking { self.syncLockPicture("lock") }
             }
             power.start()
+            wasLocked = power.state.screenLocked
             observe()
             log("start style=\(currentPreset?.name ?? "?") fps=\(settings.frameRate.rawValue) quality=\(settings.quality.rawValue)")
         }
@@ -320,6 +334,7 @@ final class WallpaperController: ObservableObject {
             self.rebuildHosts(store: model.store)
             self.applyStyle()
             self.reevaluate(forceDraw: true)
+            self.syncLockPicture("screens", after: 1)
         })
         observers.append(nc.addObserver(forName: NSWindow.didChangeOcclusionStateNotification,
                                         object: nil, queue: .main) { [weak self] note in
@@ -367,7 +382,7 @@ final class WallpaperController: ObservableObject {
             let link = h.view.displayLink(target: WallpaperRenderLoop.linkTarget(loop, display: id),
                                           selector: WallpaperRenderLoop.linkSelector)
             loop.addDisplay(id, token: h.token, layer: h.metalLayer, link: link, device: device,
-                            config: h.surfaceConfig(quality: settings.quality))
+                            config: h.surfaceConfig(quality: settings.quality, scale: renderScale))
         }
         for (id, h) in hosts where !seen.contains(id) {
             loop.removeDisplay(id)
@@ -379,7 +394,7 @@ final class WallpaperController: ObservableObject {
 
     /// Hand a display's current drawable size and refresh rate to the render thread.
     private func configure(_ h: WallpaperHost) {
-        renderLoop?.configure(h.displayID, h.surfaceConfig(quality: settings.quality))
+        renderLoop?.configure(h.displayID, h.surfaceConfig(quality: settings.quality, scale: renderScale))
     }
 
     // MARK: Style
@@ -420,6 +435,7 @@ final class WallpaperController: ObservableObject {
         applied = (preset, source, location)
         profile = newProfile
         if styleChanged { log("style \(preset.name) profile=\(profile)\(seconds > 0 ? " fade=\(seconds)" : "")") }
+        syncLockPicture("style", after: 2)    // edits come in bursts: the last one wins
         reevaluate(forceDraw: true)   // an edit shows even when holding a still
         updateMusicOverlays(animated: true)
     }
@@ -528,22 +544,14 @@ final class WallpaperController: ObservableObject {
         return nil
     }
 
-    /// Holds: keep the last frame (a clock still turns over once a minute).
-    private var stillReason: String? {
-        let s = power.state
-        if s.thermalHot { return "Still — Mac is running hot" }
-        if s.onBattery && settings.freezeOnBattery { return "Still — on battery" }
-        return nil
-    }
+    /// Holds: keep the last frame (a clock still turns over once a minute) — hot Mac, or
+    /// On Battery: Still.
+    private var stillReason: String? { WallpaperBudget.stillReason(settings, power.state) }
 
-    /// Frames per second asked of the display links: 30 (Balanced, or anything on
-    /// battery; less only if the style itself asks for fewer) or each display's own
-    /// refresh (Smooth: 120 on ProMotion, 60 on most externals — divisorRate clamps it).
+    /// Frames per second asked of the display links (WallpaperBudget.fps: 30, Smooth's display
+    /// rate, 30 / 20 on battery; less only if the style itself asks for fewer).
     private var targetFPS: Double {
-        if settings.frameRate == .smooth && !power.state.onBattery { return 120 }
-        var fps = 30.0
-        if let p = currentPreset, p.fps > 0, p.fps < 30 { fps = Double(p.fps) }
-        return fps
+        WallpaperBudget.fps(settings, presetFPS: currentPreset?.fps ?? 0, onBattery: power.state.onBattery)
     }
 
     private func isVisible(_ h: WallpaperHost) -> Bool {
@@ -556,29 +564,143 @@ final class WallpaperController: ObservableObject {
         let hard = hardPauseReason
         let visible = Set(hosts.values.filter(isVisible).map(\.displayID))
         let still = stillReason
+        let onBattery = power.state.onBattery
 
         var status: String?
         if let hard { status = hard }
         else if visible.isEmpty { status = "Paused — desktop covered" }
         else if let still { status = still }
-        else if power.state.onBattery && settings.frameRate == .smooth { status = "30 fps — on battery" }
+        else { status = WallpaperBudget.batteryStatus(settings, onBattery: onBattery) }
         if status != statusText { statusText = status }
 
-        let stateLine = "hard=\(hard ?? "-") visible=\(visible.count)/\(hosts.count) still=\(still ?? "-") fps=\(targetFPS)"
+        // Efficient on battery draws fewer pixels: resize the drawables (the next frame — forced,
+        // so a held frame redraws at the new size too — fills them).
+        var force = forceDraw
+        let scale = WallpaperBudget.renderScale(settings, onBattery: onBattery, profile: profile)
+        if scale != renderScale {
+            renderScale = scale
+            hosts.values.forEach { configure($0) }
+            force = true
+        }
+
+        let stateLine = "hard=\(hard ?? "-") visible=\(visible.count)/\(hosts.count) still=\(still ?? "-") fps=\(targetFPS) scale=\(renderScale)"
         if stateLine != lastLoggedState { lastLoggedState = stateLine; log("state \(stateLine)") }
 
         renderLoop?.update(WallpaperFrameState(canDraw: hard == nil, visible: visible, profile: profile,
                                                fps: targetFPS, still: still != nil),
-                           forceDraw: forceDraw)
+                           forceDraw: force)
         updateMusicSubscription()
+    }
+
+    // MARK: Lock screen picture
+
+    /// "Use as lock & login screen picture": a still of the wallpaper as each screen's desktop
+    /// picture (LockScreenPicture), refreshed when the Mac locks, when the style changes, on screen
+    /// changes, and every 15 minutes for a style that follows the time of day. Never while the
+    /// display sleeps; one render each time (≈ a few hundred ms of work, off the main thread).
+    /// Turning it off, or stopping the wallpaper, puts the user's own pictures back.
+    func setLockScreen(_ on: Bool) {
+        update { $0.lockScreen = on }
+    }
+
+    private lazy var lockPicture = LockScreenPicture(
+        dir: (model?.store.baseDir ?? FileManager.default.temporaryDirectory).appendingPathComponent("lockscreen"),
+        desktop: WorkspaceDesktopPictures())
+    private let lockQueue = DispatchQueue(label: "DotStudio Lock Screen Picture", qos: .utility)
+    private var lockWork: DispatchWorkItem?
+    private var lockTimer: Timer?
+    /// Bumped by every render and every restore: a render that finishes after either is dropped.
+    private var lockGeneration = 0
+    /// The power monitor's last lock state (a lock refreshes the picture once, as it starts).
+    private var wasLocked = false
+    /// Offscreen renders and demos never touch the real desktop picture.
+    private static let lockPictureAllowed = !DemoHooks.isActive && !OffscreenCapture.isActive
+        && ProcessInfo.processInfo.environment["DOTSTUDIO_SHOTS"] == nil
+
+    /// Bring the lock-screen picture in line with the settings, now or after `delay` (coalescing
+    /// bursts: a later call replaces a pending one).
+    private func syncLockPicture(_ reason: String, after delay: TimeInterval = 0) {
+        guard Self.lockPictureAllowed, model != nil else { return }
+        lockWork?.cancel()
+        lockWork = nil
+        guard delay > 0 else { lockPictureNow(reason); return }
+        let w = DispatchWorkItem { [weak self] in
+            self?.lockWork = nil
+            self?.lockPictureNow(reason)
+        }
+        lockWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: w)
+    }
+
+    private func lockPictureNow(_ reason: String) {
+        guard let model else { return }
+        let pic = lockPicture
+        guard settings.lockScreen, settings.enabled, let preset = currentPreset else {
+            lockTimer?.invalidate()
+            lockTimer = nil
+            lockGeneration += 1
+            guard !settings.savedDesktopPictures.isEmpty else { return }
+            var saved = settings.savedDesktopPictures
+            pic.restore(&saved)
+            log("lock picture: restored (\(reason))" + (saved.isEmpty ? "" : "; \(saved.count) screen(s) not connected, later"))
+            update { $0.savedDesktopPictures = saved }
+            return
+        }
+        scheduleLockTimer(preset)
+        let s = power.state
+        if running, s.displayAsleep || s.systemAsleep { log("lock picture: skipped (\(reason)) — display asleep"); return }
+        // Low Power Mode: still one frame at each lock and change, but no clock-driven refreshes.
+        if reason == "timer", s.lowPowerMode { return }
+        var saved = settings.savedDesktopPictures
+        if pic.saveOriginals(into: &saved) { update { $0.savedDesktopPictures = saved } }
+        // Only screens whose own picture is on record: one that can't be put back is never replaced.
+        let screens = pic.desktop.screens().filter { saved[$0.key] != nil }
+        guard !screens.isEmpty else { log("lock picture: no screen with a picture on record"); return }
+        lockGeneration += 1
+        let gen = lockGeneration
+        let library = model.library, store = model.store
+        let time = Float(MetalRenderer.wallPhase(Date().timeIntervalSince1970))   // the shared wall-clock frame
+        let t0 = CACurrentMediaTime()
+        lockQueue.async { [weak self] in
+            let prepared = autoreleasepool {
+                pic.prepare(screens: screens) { w, h in
+                    Exporter.renderImage(preset: preset, library: library, store: store, width: w, height: h, time: time)
+                }
+            }
+            DispatchQueue.main.async {
+                guard let self, gen == self.lockGeneration, self.settings.lockScreen, self.settings.enabled else { return }
+                let done = pic.set(prepared)
+                self.log(String(format: "lock picture: %@ — %@ on %d screen(s) in %.0f ms", reason, preset.name,
+                                done.count, (CACurrentMediaTime() - t0) * 1000))
+            }
+        }
+    }
+
+    /// Every 15 minutes while the style follows the time of day (a clock, the live weather, the
+    /// real sun); no timer otherwise.
+    private func scheduleLockTimer(_ preset: Preset) {
+        guard WallpaperPacing.changesWithTimeOfDay(preset) else {
+            lockTimer?.invalidate()
+            lockTimer = nil
+            return
+        }
+        guard lockTimer == nil else { return }
+        let t = Timer(timeInterval: 15 * 60, repeats: true) { [weak self] _ in
+            guard let self, !self.power.state.screenLocked else { return }   // the lock already drew it
+            self.syncLockPicture("timer")
+        }
+        t.tolerance = 60
+        RunLoop.main.add(t, forMode: .common)
+        lockTimer = t
     }
 
     // MARK: Dev hooks + logging
 
     /// DOTSTUDIO_DEMO_WALLPAPER=<style name> turns the wallpaper on at launch;
     /// DOTSTUDIO_WALLPAPER_FPS=30|120 (120 = Smooth), DOTSTUDIO_WALLPAPER_QUALITY=efficient|balanced|full
-    /// and DOTSTUDIO_WALLPAPER_FREEZE_ON_BATTERY=0|1 override settings (persisted, so
-    /// pair them with DOTSTUDIO_STORE_DIR).
+    /// and DOTSTUDIO_WALLPAPER_ON_BATTERY=full|efficient|still override settings (persisted, so
+    /// pair them with DOTSTUDIO_STORE_DIR); the old DOTSTUDIO_WALLPAPER_FREEZE_ON_BATTERY=1|0
+    /// still works (Still / Efficient). Power itself: DOTSTUDIO_WALLPAPER_FORCE (WallpaperPowerMonitor).
     private func applyDevOverrides() {
         let env = ProcessInfo.processInfo.environment
         if let name = env["DOTSTUDIO_DEMO_WALLPAPER"],
@@ -592,7 +714,10 @@ final class WallpaperController: ObservableObject {
             update { $0.quality = q }
         }
         if let b = env["DOTSTUDIO_WALLPAPER_FREEZE_ON_BATTERY"] {
-            update { $0.freezeOnBattery = (b == "1") }
+            update { $0.batteryMode = b == "1" ? .still : .efficient }
+        }
+        if let m = env["DOTSTUDIO_WALLPAPER_ON_BATTERY"].flatMap(WallpaperSettings.BatteryMode.init) {
+            update { $0.batteryMode = m }
         }
     }
 
@@ -742,11 +867,12 @@ final class WallpaperHost {
                                         bottom: max(v.minY - f.minY, 0), right: max(f.maxX - v.maxX, 0))
     }
 
-    /// Drawable = display points × Quality's pixel density; the compositor upscales it.
+    /// Drawable = display points × Quality's pixel density × `scale` (WallpaperBudget.renderScale:
+    /// 0.6 for Efficient on battery); the compositor upscales it.
     /// Also sets the layer's upscale filter (a compositing property, owned here).
-    func surfaceConfig(quality: WallpaperSettings.Quality) -> WallpaperSurfaceConfig {
+    func surfaceConfig(quality: WallpaperSettings.Quality, scale: CGFloat = 1) -> WallpaperSurfaceConfig {
         let backing = window.screen?.backingScaleFactor ?? window.backingScaleFactor
-        let ppp = quality.pixelsPerPoint(backing: backing)
+        let ppp = quality.pixelsPerPoint(backing: backing) * scale
         let size = window.frame.size
         let target = CGSize(width: max((size.width * ppp).rounded(), 1),
                             height: max((size.height * ppp).rounded(), 1))

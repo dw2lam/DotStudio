@@ -30,6 +30,11 @@ var fpsList: [Double] = [30, 120]
 var seconds = 4.0
 var only: [String] = []
 var W = 3024, H = 1964
+/// --power ac|battery|lowpower: run the real power policy instead of --fps. saver: pins the saver's
+/// power state (DOTSTUDIO_SAVER_FORCE) and paces frames at the interval it then asks for, at the
+/// drawable it sizes. wallpaper: WallpaperBudget with default settings (Balanced, Quality Balanced =
+/// 0.75 of --size, On Battery Efficient) picks fps and drawable; Low Power is a hard pause.
+var power: String?
 while !args.isEmpty {
     let a = args.removeFirst()
     switch a {
@@ -39,9 +44,12 @@ while !args.isEmpty {
     case "--size":
         let p = args.removeFirst().split(separator: "x").compactMap { Int($0) }
         if p.count == 2 { W = p[0]; H = p[1] }
+    case "--power": power = args.removeFirst().lowercased()
     default: print("unknown \(a)"); exit(2)
     }
 }
+
+if let power, mode == "saver" { setenv("DOTSTUDIO_SAVER_FORCE", power, 1) }   // before any DotSaverView
 
 guard let storeDir = ProcessInfo.processInfo.environment["DOTSTUDIO_STORE_DIR"] else {
     print("set DOTSTUDIO_STORE_DIR to a temp dir"); exit(2)
@@ -144,6 +152,8 @@ var scenarios: [Scenario] = [
     Scenario(name: "Tidewater (live wx)", preset: preset("Tidewater"), weather: true),
     Scenario(name: "Zen Garden", preset: preset("Zen Garden")),
     Scenario(name: "Flip Clock", preset: preset("Flip Clock")),
+    Scenario(name: "Chronometer", preset: preset("Chronometer")),
+    Scenario(name: "StandBy", preset: preset("StandBy")),
     Scenario(name: "Look: Film slideshow", preset: preset("Film"), source: .builtInPhotos),
     Scenario(name: "Music corner", preset: preset("Liquid Chrome"), music: musicSpec(full: nil)),
     Scenario(name: "Music full (veil)", preset: preset("Liquid Chrome"), music: musicSpec(full: .screensaver)),
@@ -303,6 +313,9 @@ func runSaver(_ s: Scenario, fps: Double) -> Row {
     }
     for _ in 0..<15 { v.animateOneFrame(); runLoop(until: CACurrentMediaTime() + 1 / 30) }
     runLoop(until: CACurrentMediaTime() + 1.2)                     // let the overlay's fade settle
+    // --power: the rate the saver asks the host for under that budget (and the drawable it sized).
+    let fps = power != nil ? 1 / v.animationTimeInterval : fps
+    let ds = (v.subviews.first as? MTKView)?.drawableSize ?? .zero
     let frames = Int(fps * seconds)
     let dt = 1 / fps
     var call = 0.0, callAllocs: UInt64 = 0
@@ -329,7 +342,7 @@ func runSaver(_ s: Scenario, fps: Double) -> Row {
                proc: (b.proc - a.proc) / n * 1000, callAllocs: Double(callAllocs) / n,
                procAllocs: Double(b.allocs - a.allocs) / n, stats: Double(b.stats - a.stats) / span,
                opens: Double(b.opens - a.opens) / span, wk: Double(b.wk - a.wk) / span,
-               extra: drawn ? "" : "(never drew)")
+               extra: String(format: "[%.0fx%.0f]", ds.width, ds.height) + (drawn ? "" : " (never drew)"))
 }
 
 // MARK: Wallpaper loop
@@ -339,7 +352,7 @@ final class WallpaperRig {
     let layer = CAMetalLayer()
     let id: CGDirectDisplayID
     let screen: NSScreen
-    init(_ s: Scenario) {
+    init(_ s: Scenario, drawable: CGSize = CGSize(width: W, height: H)) {
         screen = NSScreen.main!
         id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? CGMainDisplayID()
         loop = WallpaperRenderLoop(store: store)
@@ -352,14 +365,14 @@ final class WallpaperRig {
         let link = screen.displayLink(target: WallpaperRenderLoop.linkTarget(loop, display: id),
                                       selector: WallpaperRenderLoop.linkSelector)
         loop.addDisplay(id, token: 1, layer: layer, link: link, device: device,
-                        config: WallpaperSurfaceConfig(drawableSize: CGSize(width: W, height: H),
+                        config: WallpaperSurfaceConfig(drawableSize: drawable,
                                                        refreshRate: Double(screen.maximumFramesPerSecond)))
         loop.setStyle(s.preset, source: s.source, location: nil)
     }
-    func state(_ s: Scenario, fps: Double, canDraw: Bool = true, visible: Bool = true) {
+    func state(_ s: Scenario, fps: Double, canDraw: Bool = true, visible: Bool = true, still: Bool = false) {
         loop.update(WallpaperFrameState(canDraw: canDraw, visible: visible ? [id] : [],
                                         profile: WallpaperPacing.profile(for: s.preset, source: s.source),
-                                        fps: fps, still: false), forceDraw: true)
+                                        fps: fps, still: still), forceDraw: true)
     }
 }
 
@@ -386,6 +399,30 @@ case "renderer":
 case "saver":
     print("saver: DotSaverView.animateOneFrame at \(W)x\(H) px  [call = the whole tick on the main thread]")
     for s in scenarios { for fps in fpsList { report(runSaver(s, fps: fps)) } }
+case "wallpaper" where power != nil:
+    // The controller's policy (WallpaperBudget) with default settings, on a --size native screen.
+    var settings = WallpaperSettings()
+    if let m = ProcessInfo.processInfo.environment["PERF_ON_BATTERY"].flatMap(WallpaperSettings.BatteryMode.init) {
+        settings.batteryMode = m
+    }
+    var st = WallpaperPowerMonitor.State()
+    st.onBattery = power == "battery"
+    st.lowPowerMode = power == "lowpower"
+    let ppp = settings.quality.pixelsPerPoint(backing: 2) / 2          // of native pixels
+    print("wallpaper --power \(power!): WallpaperBudget, quality \(settings.quality.rawValue), on battery \(settings.batteryMode.rawValue), native \(W)x\(H)  [call = render thread CPU per frame]")
+    for s in scenarios where s.music == nil {
+        let profile = WallpaperPacing.profile(for: s.preset, source: s.source)
+        let scale = ppp * WallpaperBudget.renderScale(settings, onBattery: st.onBattery, profile: profile)
+        let ds = CGSize(width: (CGFloat(W) * scale).rounded(), height: (CGFloat(H) * scale).rounded())
+        let fps = WallpaperBudget.fps(settings, presetFPS: s.preset.fps, onBattery: st.onBattery)
+        let still = WallpaperBudget.stillReason(settings, st) != nil
+        let rig = WallpaperRig(s, drawable: ds)
+        rig.state(s, fps: fps, canDraw: !st.lowPowerMode, still: still)   // Low Power: a hard pause
+        runLoop(until: CACurrentMediaTime() + 1.0)
+        report(measureLoop(rig, name: s.name, fps: fps, extra: String(format: "[%.0fx%.0f]", ds.width, ds.height)))
+        rig.loop.removeAll()
+        runLoop(until: CACurrentMediaTime() + 0.3)
+    }
 case "wallpaper":
     print("wallpaper: WallpaperRenderLoop + display link at \(W)x\(H)  [call = render thread CPU per frame]")
     for s in scenarios where s.music == nil {
