@@ -41,7 +41,7 @@ enum StyleTag: String, CaseIterable, Identifiable, Hashable {
     static func tags(for preset: Preset) -> Set<StyleTag> {
         guard let kind = preset.leadKind else { return [] }
         var tags: Set<StyleTag> = []
-        if SceneCatalog.clocks[kind] != nil { tags.insert(.clocks) }
+        if SceneCatalog.clocks[kind] != nil || SceneCatalog.standby[kind] != nil { tags.insert(.clocks) }
         if SceneCatalog.nature[kind] != nil || natureKinds.contains(kind) { tags.insert(.nature) }
         if SceneCatalog.flowing[kind] != nil { tags.insert(.flowing) }
         if SceneCatalog.retro[kind] != nil { tags.insert(.retro) }

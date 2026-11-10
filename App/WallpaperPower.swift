@@ -269,6 +269,13 @@ enum WallpaperPacing {
         case .wordClock:  return .clock(period: 60, burst: 0)                     // no transition animation
         // the seconds hand sweeps; without it the hands and the light creep slowly enough for 1 fps
         case .dialClock:  return on("seconds") ? .motion : .clock(period: 1, burst: 0)
+        // StandBy: a changing figure rolls for 0.6 s (eased out: done to the eye by ~0.45 s); its
+        // seconds line eases for 0.35 s each second. The burn-in drift is slow enough for 1 fps.
+        case .standbyClock: return .clock(period: on("seconds") ? 1 : 60, burst: on("seconds") ? 0.45 : 0.65)
+        // Minimal: the minute cross-fades for 1.1 s; small seconds fade for 0.35 s
+        case .minimalClock: return .clock(period: on("seconds") ? 1 : 60, burst: on("seconds") ? 0.4 : 1.15)
+        // Chronometer: the seconds hand sweeps (Seconds: 0 Sweep, 1 Off); without it, 1 fps
+        case .watchClock: return (first.params["seconds"] ?? 0) < 0.5 ? .motion : .clock(period: 1, burst: 0)
         default: break
         }
         if first.kind.isScene { return .motion }

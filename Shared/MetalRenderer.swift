@@ -1358,7 +1358,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         return asin(max(-1, min(1, s)))
     }
 
-    // MARK: Live sky ("Follow the Sun": Ocean Horizon, Shallows, Pleats, Dichroic, Zen Garden; Window Light)
+    // MARK: Live sky ("Follow the Sun": Ocean Horizon, Shallows, Pleats, Dichroic, Zen Garden; Window Light;
+    // StandBy's Auto night mode, Chronometer's Auto lume)
 
     /// Fills u.sun / u.moon / u.sky for a scene following the real sun (Ocean Horizon, Shallows,
     /// Pleats, Dichroic, Zen Garden in "Follow the Sun", Window Light following the sun); leaves
@@ -1370,6 +1371,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         switch inst.kind {                       // (a switch: no array built every pass)
         case .oceanHorizon, .shallows, .pleats, .dichroic, .sandGarden: live = (inst.params["live"] ?? 0) > 0.5
         case .windowLight: live = (inst.params["follow"] ?? 1) > 0.5
+        case .standbyClock: live = Int((inst.params["night"] ?? 0).rounded()) == 0   // Night Mode: Auto
+        case .watchClock: live = (inst.params["lume"] ?? 0) < 0.5                     // Lume: Auto
         default: live = false
         }
         guard live else { return }
