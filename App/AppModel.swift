@@ -58,7 +58,13 @@ final class AppModel: ObservableObject {
     init() {
         switch store.loadLibrary() {
         case .loaded(let loaded):
-            library = AppModel.migrate(loaded)
+            let (migrated, retirement) = AppModel.migrateReporting(loaded)
+            library = migrated
+            // The wallpaper's own pick (wallpaper.json, read by WallpaperController.attach
+            // after this) follows a style the 1.4.2 retirement removed.
+            if let retirement {
+                WallpaperController.followRetirement(storeDir: store.baseDir, retirement.replacements)
+            }
         case .missing:
             library = DefaultPresets.makeLibrary()
         case .corrupt(let backup):
@@ -156,7 +162,10 @@ final class AppModel: ObservableObject {
     }
 
     /// Bring a library written by an older build up to date (every launch; idempotent).
-    static func migrate(_ lib: Library) -> Library {
+    static func migrate(_ lib: Library) -> Library { migrateReporting(lib).library }
+
+    /// migrate, plus what the 1.4.2 retirement did (nil: it had already run on this library).
+    static func migrateReporting(_ lib: Library) -> (library: Library, retirement: DefaultPresets.Retirement?) {
         var lib = lib
         if lib.version < 2 {
             // Prefer the active style's old source, else the first non-gradient one.
@@ -198,8 +207,24 @@ final class AppModel: ObservableObject {
             }
         }
         lib = offerNewBuiltIns(lib)
+        // 1.4.2, once per library (after offerNewBuiltIns, so the new clocks are in): untouched
+        // copies of the retired styles leave and their references move (DefaultPresets
+        // .retireUntouched). And Zen Garden comes to a library that never got it: a 1.3 library
+        // had it marked seen on its first 1.4 launch without adding it (it wasn't promoted then).
+        var retirement: DefaultPresets.Retirement?
+        if !(lib.seenBuiltIns ?? []).contains(DefaultPresets.retirementMarker) {
+            let have = Set(lib.presets.map(\.name) + lib.unknownPresets.map(\.preset.name))
+            if !have.contains("Zen Garden"),
+               let zen = DefaultPresets.offeredBuiltIns().first(where: { $0.name == "Zen Garden" }) {
+                insertBuiltIn(zen, into: &lib.presets)
+            }
+            let (retired, report) = DefaultPresets.retireUntouched(lib)
+            lib = retired
+            retirement = report
+            lib.seenBuiltIns = (lib.seenBuiltIns ?? []) + [DefaultPresets.retirementMarker]
+        }
         if lib.version < 4 { lib.version = 4 }
-        return lib
+        return (lib, retirement)
     }
 
     // MARK: Built-ins (library migration v4)
@@ -207,9 +232,11 @@ final class AppModel: ObservableObject {
     /// Featured built-ins every library gets once, even one from before seenBuiltIns existed.
     /// (Now Playing was one until music became a presentation over any style — it's retired:
     /// never added, and a library that has it keeps it.)
-    // The 1.4 highlights 1.3 users get once on upgrade, and Bounce (new after 1.4; a 1.4 library
-    // gets it as a new featured built-in).
-    static let promotedBuiltIns = ["Tidewater", "Sunray", "Shallows", "Bounce"]
+    // The 1.4 highlights 1.3 users get once on upgrade (Zen Garden, Tidewater, Shallows), Bounce
+    // (new after 1.4) and the 1.4.2 clocks (a 1.4 library gets those as new featured built-ins).
+    // Sunray was one until 1.4.2 retired it (DefaultPresets.retiredStyles).
+    static let promotedBuiltIns = ["Zen Garden", "Tidewater", "Shallows", "Bounce",
+                                   "StandBy", "Minimal", "Chronometer"]
 
     /// New built-in styles reach existing libraries exactly once (runs on every launch):
     ///  • no `seenBuiltIns` (a library from before 1.4): everything shipping now counts as
@@ -261,11 +288,25 @@ final class AppModel: ObservableObject {
         let result: Library
         switch store.loadLibrary() {
         case .loaded(let before):
-            result = migrate(before)
+            let (migrated, retirement) = migrateReporting(before)
+            result = migrated
             let old = Set(before.presets.map(\.name))
             out += "version: \(before.version) → \(result.version)\n"
             out += "seenBuiltIns: \(before.seenBuiltIns.map { String($0.count) } ?? "none") → \(result.seenBuiltIns?.count ?? 0)\n"
             out += "added: \(result.presets.map(\.name).filter { !old.contains($0) })\n"
+            if let retirement {
+                out += "retired: \(retirement.removed)\n"
+                out += "kept (edited): \(retirement.kept)\n"
+                out += "remapped: \(retirement.remapped)\n"
+                if let w = WallpaperController.followRetirement(storeDir: store.baseDir, retirement.replacements) {
+                    func name(_ id: UUID?, in lib: Library) -> String {
+                        id.flatMap { i in lib.presets.first { $0.id == i }?.name } ?? "none"
+                    }
+                    out += "wallpaper: \(name(w.old, in: before)) → \(name(w.new, in: result))\n"
+                }
+            } else {
+                out += "retirement: already done\n"
+            }
             let unknown = before.unknownCounts
             if unknown.effects + unknown.presets > 0 {
                 out += "kept for a newer build: \(unknown.effects) unknown effect(s) in shown styles, \(unknown.presets) style(s) of unknown effects only: \(before.unknownPresets.map(\.preset.name))\n"

@@ -25,14 +25,18 @@ const PACKS: Pack[] = [
   {
     name: "Clocks",
     line: "The time, set beautifully, and always right.",
-    scenes: ["Sunray", "Flip Clock", "Word Clock", "Window Light"],
+    scenes: ["StandBy", "Minimal", "Chronometer", "Flip Clock", "Word Clock", "Window Light"],
+    // Four 16:10 stills in a 16:10 frame: each shows whole, uncropped.
     media: (
       <div className="grid h-full grid-cols-2 grid-rows-2 gap-1.5">
-        <div className="col-span-2 min-h-0 overflow-hidden rounded-lg">
-          <Still wide name="flip-clock" alt="Flip Clock: split-flap digits that really fall" />
+        <div className="min-h-0 overflow-hidden rounded-lg">
+          <Still name="standby" alt="StandBy: the time in huge, bold rounded digits, readable across the room" />
         </div>
         <div className="min-h-0 overflow-hidden rounded-lg">
-          <Still name="sunray" alt="Sunray: a watch dial with a sunray finish and a sweeping seconds hand" />
+          <Still name="chronometer" alt="Chronometer: a sunburst watch dial with polished indices, a sweeping seconds hand and a date window" />
+        </div>
+        <div className="min-h-0 overflow-hidden rounded-lg">
+          <Still name="minimal" alt="Minimal: thin, quiet time with the weekday and date beneath" />
         </div>
         <div className="min-h-0 overflow-hidden rounded-lg">
           <Still name="window-light" alt="Window Light: sun through a window drifting across a wall" />
@@ -43,7 +47,7 @@ const PACKS: Pack[] = [
   {
     name: "Flowing",
     line: "Slow, warm motion to stare into.",
-    scenes: ["Lava Lamp", "Currents", "Fireflies"],
+    scenes: ["Lava Lamp", "Currents"],
     media: (
       <div className="h-full overflow-hidden rounded-lg">
         <LoopVideo name="lava" alt="Lava Lamp, rendered live by DotStudio" className="h-full w-full object-cover" />
@@ -63,7 +67,7 @@ const PACKS: Pack[] = [
   {
     name: "Retro",
     line: "Classic screensaver genres, re-rendered.",
-    scenes: ["Neon Horizon", "Pipeworks", "Light Tunnel", "Light Ribbons"],
+    scenes: ["Neon Horizon", "Light Ribbons", "Bounce"],
     media: (
       <div className="h-full overflow-hidden rounded-lg">
         <LoopVideo name="neon" alt="Neon Horizon, rendered live by DotStudio" className="h-full w-full object-cover" />

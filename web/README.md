@@ -23,7 +23,7 @@ scale/fade entrances).
 | `Showcase` | "The best of the library": the owner's favourites only: Liquid Chrome (silent render loop), Zen Garden, Tidewater (four renders of its live sky cross-fading: dusk, night, morning, snow), Topography, Universe |
 | `NowPlaying` | New in 1.4: what's playing (Spotify / Apple Music) over any screensaver; Album / Stage / Cover / Corner switcher (images load on demand, fictional demo track) |
 | `Studio` | The app itself: the gallery with Screensaver + Wallpaper cards joined by SYNC, Playlist / Night / Wallpaper, a details strip (live weather, 120 fps, menu bar, instant start), and the editor |
-| `Packs` | Clocks (Sunray, Flip Clock, Window Light), Flowing (Lava loop), Water & Sky (Shallows), Retro (Neon Horizon loop); no style repeated from Showcase |
+| `Packs` | Clocks (2×2 uncropped 16:10 stills: StandBy, Chronometer, Minimal, Window Light), Flowing (Lava loop), Water & Sky (Shallows), Retro (Neon Horizon loop); scene lists = the default library's styles of each pack; no style repeated from Showcase |
 | `Looks` | One built-in photo, six Looks, switchable in place (images load on demand) |
 | `Steps` | Install: DMG → Open Anyway in Privacy & Security → welcome guide; auto-updates + library location |
 | `Download` | Centered `#101010` CTA card: icon, "Get DotStudio", cream pill download button, release meta |
@@ -70,7 +70,9 @@ All renders come from the app's own offscreen renderer (`tools/gallery/render.sh
 always with `DOTSTUDIO_STORE_DIR=$(mktemp -d)`); app shots are the offscreen UIShots renders
 (`DOTSTUDIO_UI_SHOTS`, dark, 1440x900 window) framed as a window in CSS. Nothing is a screen capture.
 
-- `scenes/*.webp`: 1600 px stills (1280 for the small tiles; Tidewater = `--weather` × `--clock` renders)
+- `scenes/*.webp`: 1600 px stills (1280 for the small tiles; Tidewater = `--weather` × `--clock` renders;
+  the clocks = `--clock` renders at a set time). Retired styles' stills are deleted with them (1.4.2:
+  `sunray`, and `flip-clock` once the Clocks card moved to the new clocks)
 - `loops/*.{webm,mp4,webp}`: 1280x800 silent loops + posters; lazy, play only in view. Liquid Chrome
   is 300 frames rendered on an eased there-and-back time path, so it loops without a seam or ghosting
 - `music/*.webp`: `--full art --layout album|stage|cover` and `--card bottomLeft`, fed a fictional
