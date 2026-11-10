@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.4.0 — What's playing, live skies, and a wallpaper in sync
+
+### New
+- **What's playing.** Spotify or Apple Music over any screensaver — in a corner, or
+  full screen in Album, Stage or Cover layouts over the album's living art. Play,
+  pause and skip from the app or the menu bar.
+- **Live wallpaper with SYNC.** Any style behind your windows, or press SYNC and the
+  desktop follows the screensaver in step.
+- **Live skies.** Tidewater follows the real sun and moon; the sea scenes follow your
+  local weather — cloud, rain, storms, fog and snow.
+- **New scenes.** Zen Garden, Tidewater, Shallows, Sunray, Pleats, Dichroic and more,
+  plus a fidelity pass across the library. Glass Clock is retired (Sunray replaces it).
+- **A new home.** Redesigned gallery and cards, an editor that scales to any window,
+  a menu-bar app, and a new icon.
+
+### Faster
+- The screensaver appears almost instantly (pipelines precompiled per Mac).
+- Every scene draws with its own GPU pipeline — 20–80% less GPU per frame.
+- Smoother scrolling, far fewer redraws, and a near-idle menu-bar app.
+- Signed with a stable identity, so privacy permissions survive updates.
+
 ## 1.3.0 — A new DotStudio: gallery, scenes, and making your own
 
 ### New
