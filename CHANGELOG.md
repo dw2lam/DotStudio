@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.4.2 — Three new clocks
+
+### New
+- **StandBy.** The time in huge, bold rounded digits, readable from across the room,
+  with an optional deep-red night mode.
+- **Minimal.** Thin, quiet time with the weekday and date set beneath it.
+- **Chronometer.** A classic wristwatch dial: sunburst finish, polished indices,
+  a sweeping seconds hand and a date window.
+
+### Retired
+- Sunray, Opaline, Pipeworks, Brass Pipes, Light Tunnel, Hex Tunnel, Fireflies and
+  Blue Hour. They're removed from your library unless you edited them — an edited copy
+  stays and keeps working. Anything that pointed at a removed style (your current
+  style, night style, rotation or wallpaper) moves to another one; Sunray and Opaline
+  hand over to Chronometer.
+
+### Fixed
+- Zen Garden now reaches libraries that came from 1.3 and never got it.
+
 ## 1.4.1 — Bounce
 
 ### New

@@ -509,8 +509,12 @@ enum EffectKind: String, Codable, CaseIterable {
              .truchet,                    // novelty tile maze
              .toon,                       // dated cel-shade filter
              .fisheye, .swirl, .ripple,   // Photo Booth-era warps; Glass replaces them
-             .nowPlaying:                 // music is a presentation over any style now
+             .nowPlaying,                 // music is a presentation over any style now
                                           // (MusicPresentation); 66 lives on as Album Art
+             .dialClock,                  // Sunray / Opaline: superseded by the Standby clocks (1.4.2)
+             .pipes, .demoTunnel,         // Pipeworks, Light Tunnel: dated, glossy "Vista" look (1.4.2)
+             .fireflies:                  // Fireflies / Blue Hour (1.4.2)
+                                          // (DefaultPresets.retiredStyles: an edited copy keeps working)
             return true
         default: return false
         }

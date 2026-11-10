@@ -111,6 +111,20 @@ final class WallpaperController: ObservableObject {
         }
     }
 
+    /// 1.4.2 retirement (DefaultPresets.retireUntouched, run by AppModel.migrate before `attach`):
+    /// a wallpaper showing a removed style moves to its replacement. Rewrites wallpaper.json in
+    /// `storeDir` only when its pick was removed; returns that move.
+    @discardableResult
+    static func followRetirement(storeDir: URL, _ replacements: [UUID: UUID?]) -> (old: UUID, new: UUID?)? {
+        let url = storeDir.appendingPathComponent("wallpaper.json")
+        guard !replacements.isEmpty, FileManager.default.fileExists(atPath: url.path) else { return nil }
+        var s = WallpaperSettings.load(from: url)
+        guard let old = s.presetID, let new = replacements[old] else { return nil }
+        s.presetID = new
+        s.save(to: url)
+        return (old, new)
+    }
+
     /// Bring back the wallpaper the user left on (applicationDidFinishLaunching).
     func restore() {
         applyDevOverrides()
