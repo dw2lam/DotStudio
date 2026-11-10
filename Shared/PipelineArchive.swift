@@ -16,7 +16,7 @@ import CryptoKit
 
 enum PipelineArchive {
     /// Bump when the archived pipeline set or its descriptors change: every archive is rebuilt.
-    static let version = 1
+    static let version = 2
     /// The saver's drawable format (DotSaverView: MTKView.colorPixelFormat).
     static let saverFormat: MTLPixelFormat = .bgra8Unorm
 
@@ -123,11 +123,12 @@ enum PipelineArchive {
         }
     }
 
-    /// Every pipeline a saver may build before it has drawn a while: the über-shader, the music
-    /// veil, the error-diffusion kernels and the weather skies — with the descriptors FXPipelines
-    /// and WeatherLink build, so each one is a hit.
+    /// Every pipeline a saver may build before it has drawn a while: the über-shader, the scenes'
+    /// own (ScenePipelines), the music veil, the error-diffusion kernels and the weather skies —
+    /// with the descriptors FXPipelines and WeatherLink build, so each one is a hit.
     static func harvest(into archive: MTLBinaryArchive, library: MTLLibrary, format: MTLPixelFormat) throws {
-        let fragments = [FXPipelines.uberFunction] + FXPipelines.veilFunctions + WeatherLink.functionNames
+        let fragments = [FXPipelines.uberFunction] + ScenePipelines.functionNames + FXPipelines.veilFunctions
+            + WeatherLink.functionNames
         for name in fragments {
             guard let d = FXPipelines.renderDescriptor(library, fragment: name,
                                                        format: format, archive: nil) else { continue }
