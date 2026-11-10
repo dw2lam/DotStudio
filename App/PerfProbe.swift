@@ -353,7 +353,10 @@ enum PerfProbe {
         let (model, updates) = bootServices()
         DemoHooks.stillPreviews = env["DOTSTUDIO_PERF_LIVE"] == nil
         let size = CGSize(width: 1440, height: 900)
-        let host = NSHostingView(rootView: ContentView()
+        // Its own pool: no event loop drains autoreleased objects here, and the window's view
+        // graph must really go when it closes (see UIShots' render).
+        autoreleasepool {
+        var host: NSView? = NSHostingView(rootView: ContentView()
             .frame(width: size.width, height: size.height)
             .environmentObject(model)
             .environmentObject(updates))
@@ -361,10 +364,10 @@ enum PerfProbe {
                            styleMask: [.borderless], backing: .buffered, defer: false)
         win.isReleasedWhenClosed = false
         win.contentView = host
-        host.frame = CGRect(origin: .zero, size: size)
+        host?.frame = CGRect(origin: .zero, size: size)
         say("perf probe: window (ContentView 1440x900, offscreen, never shown) — \(Int(seconds)) s quiet phases")
 
-        phase("first-render") { host.layoutSubtreeIfNeeded(); spin(4); return 4 }
+        phase("first-render") { host?.layoutSubtreeIfNeeded(); spin(4); return 4 }
         phase("window-quiet") { spin(seconds); return seconds }
 
         phase("thumbnail-lands x5") {
@@ -405,7 +408,11 @@ enum PerfProbe {
         // Close it, as the user does: the app goes back to menu-bar idle.
         win.contentView = nil
         win.close()
-        model.releaseThumbnails()   // what AppPresence does once the last window has closed
+        host = nil                  // the window's view graph goes, as when SwiftUI closes it
+        }
+        if env["DOTSTUDIO_PERF_KEEP_THUMBS"] == nil { model.releaseThumbnails() }   // as AppPresence does once the last window has closed
+        spin(0.5)
+        say("thumbnailer freed: \((Perf.take()["Thumbnailer.deinit"] ?? 0) > 0 ? "yes" : "NO")")
         phase("closed-settle") { spin(3); return 3 }
         phase("closed-quiet") { spin(seconds); return seconds }
     }
