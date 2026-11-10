@@ -25,25 +25,53 @@ enum Installer {
         return isChosenInSystemSettings ? .ready : .notChosen
     }
 
-    /// macOS 14+ keeps the screen-saver pick per display/space in the wallpaper
-    /// store; each Idle choice holds a nested plist whose `module` URL names the
-    /// .saver. True if any of them points at ours. (Read-only; best effort.)
+    /// True when DotStudio is the screensaver on at least one connected display. (Read-only;
+    /// best effort: when the store can't be read it says yes, so nothing nags.)
     static var isChosenInSystemSettings: Bool {
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store/Index.plist")
-        guard let data = try? Data(contentsOf: url),
-              let root = try? PropertyListSerialization.propertyList(from: data, format: nil)
-        else { return true }   // can't tell: don't nag
-        let needle = Data(saverName.utf8)
-        func scan(_ o: Any, idle: Bool) -> Bool {
-            if let d = o as? [String: Any] {
-                return d.contains { k, v in scan(v, idle: idle || k == "Idle") }
+        if case .chosen(let on, _) = screensaverChoice() { return on > 0 }
+        return true   // can't tell: don't nag
+    }
+
+    /// Which connected displays show DotStudio as their screensaver. macOS 14+ keeps the pick
+    /// per Space and display in the wallpaper store (WallpaperStoreReader); only each display's
+    /// CURRENT Space counts — the store remembers every Space it has ever seen. Falls back to
+    /// the legacy `com.apple.screensaver` moduleDict (-currentHost) when there's no store.
+    /// Read-only; safe off the main thread.
+    static func screensaverChoice() -> SetupSnapshot.Choice {
+        let displays = connectedDisplays()
+        if let data = try? Data(contentsOf: WallpaperStoreReader.indexURL) {
+            if let r = WallpaperStoreReader.resolve(indexData: data, displays: displays) {
+                return .chosen(on: r.chosen, of: r.total)
             }
-            if let a = o as? [Any] { return a.contains { scan($0, idle: idle) } }
-            if idle, let d = o as? Data { return d.range(of: needle) != nil }
-            return false
+            if let any = WallpaperStoreReader.mentionsSaver(indexData: data) {
+                return .chosen(on: any ? 1 : 0, of: max(displays.count, 1))
+            }
         }
-        return scan(root, idle: false)
+        let app = "com.apple.screensaver" as CFString
+        if let dict = CFPreferencesCopyValue("moduleDict" as CFString, app, kCFPreferencesCurrentUser,
+                                             kCFPreferencesCurrentHost) as? [String: Any] {
+            let path = (dict["path"] as? String ?? "") + (dict["moduleName"] as? String ?? "")
+            let ours = path.contains(saverName) || (dict["moduleName"] as? String) == "DotStudio"
+            return .chosen(on: ours ? max(displays.count, 1) : 0, of: max(displays.count, 1))
+        }
+        return .unknown
+    }
+
+    /// Connected displays (mirrors once), each with the Space it shows now (com.apple.spaces).
+    static func connectedDisplays() -> [WallpaperStoreReader.Display] {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        var n: UInt32 = 0
+        guard CGGetActiveDisplayList(UInt32(ids.count), &ids, &n) == .success else { return [] }
+        let spaces = WallpaperStoreReader.currentSpaces(
+            spacesConfiguration: CFPreferencesCopyAppValue("SpacesDisplayConfiguration" as CFString,
+                                                           "com.apple.spaces" as CFString))
+        return ids.prefix(Int(n)).compactMap { id in
+            guard CGDisplayMirrorsDisplay(id) == kCGNullDirectDisplay,
+                  let uuid = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue(),
+                  let s = CFUUIDCreateString(nil, uuid) as String? else { return nil }
+            return WallpaperStoreReader.Display(uuid: s, isMain: CGDisplayIsMain(id) != 0,
+                                                currentSpace: WallpaperStoreReader.space(for: s, in: spaces))
+        }
     }
 
     /// Returns the .saver bundled inside the app (embedded at build time).
@@ -106,7 +134,9 @@ enum Installer {
     }
 
     static func openScreenSaverSettings() {
-        // On modern macOS the screen-saver picker lives on the Wallpaper page.
+        // macOS 14+: the screen-saver picker is the Wallpaper page's "Screen Saver…" button
+        // (macOS 26/27 have no separate Screen Saver page; verified: the Wallpaper settings
+        // extension is com.apple.Wallpaper-Settings.extension and allows this URL scheme).
         let candidates = [
             "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension",
             "x-apple.systempreferences:com.apple.ScreenSaver-Settings.extension"

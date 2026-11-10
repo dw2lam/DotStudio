@@ -226,25 +226,40 @@ struct SettingsView: View {
 
 /// How DotStudio runs: in the menu bar when its window is closed (menu-bar mode, on by
 /// default — AppPresence), and whether it opens at login (quietly in the menu bar in
-/// menu-bar mode, else with its window — the footer says which).
+/// menu-bar mode, else with its window — the footer says which). Also the way back into the
+/// guided setup ("Run Setup Again"), and the one-time "start at login" suggestion when the
+/// wallpaper or music display was just turned on (SetupGuide.swift).
 struct GeneralSettingsSection: View {
+    @EnvironmentObject var model: AppModel
     @ObservedObject private var presence = AppPresence.shared
-    @State private var loginStatus = SMAppService.mainApp.status
+    @ObservedObject private var nudge = LoginNudge.shared
+    /// Read through LoginItem (pinned in UI shots; never SMAppService there).
+    @State private var loginStatus = LoginItem.status()
     @State private var loginError: String?
 
-    private var opensAtLogin: Bool { loginStatus == .enabled || loginStatus == .requiresApproval }
+    private var opensAtLogin: Bool { loginStatus != .off }
 
     var body: some View {
         Section {
+            if nudge.pending != nil { LoginNudgeBanner(topPadding: 0) }
             Toggle("Keep running in the menu bar", isOn: $presence.menuBarMode)
                 .formSwitchSize()
             Toggle("Open DotStudio at login", isOn: Binding(get: { opensAtLogin }, set: setOpenAtLogin))
                 .formSwitchSize()
             if loginStatus == .requiresApproval {
-                Text("Allow DotStudio in System Settings › General › Login Items.")
-                    .textRole(.caption).foregroundStyle(.orange).wrapping()
+                HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
+                    Text("Allow DotStudio in System Settings › General › Login Items.")
+                        .textRole(.caption).foregroundStyle(.orange).wrapping()
+                    Spacer(minLength: 0)
+                    Button(scaled: "Open Login Items\u{2026}") { LoginItem.openLoginItemsSettings() }
+                        .buttonStyle(.link)
+                }
             } else if let loginError {
                 Text(loginError).textRole(.caption).foregroundStyle(.orange).wrapping()
+            }
+            LabeledContent("Screensaver setup") {
+                Button(scaled: "Run Setup Again\u{2026}") { SetupGuidePanel.shared.show(model: model) }
+                    .help("The step-by-step guide: install, choose DotStudio in System Settings, and check the settings that keep it working")
             }
         } header: {
             SettingsHeader("General")
@@ -261,17 +276,14 @@ struct GeneralSettingsSection: View {
                 }
             }
         }
-        .onAppear { loginStatus = SMAppService.mainApp.status }
+        .onAppear { loginStatus = LoginItem.status() }
+        // The nudge's Turn On, or the guide, may have changed it.
+        .onChange(of: nudge.pending) { loginStatus = LoginItem.status() }
     }
 
     private func setOpenAtLogin(_ on: Bool) {
-        loginError = nil
-        do {
-            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
-        } catch {
-            loginError = "Couldn't change the login item: \(error.localizedDescription)"
-        }
-        loginStatus = SMAppService.mainApp.status
+        loginError = LoginItem.set(on)
+        loginStatus = LoginItem.status()
     }
 }
 
