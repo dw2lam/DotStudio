@@ -3,7 +3,7 @@
 //    DOTSTUDIO_PERF=1   count SwiftUI body evaluations and background work (Perf.count) in
 //                       a normal run; nothing is printed unless a probe runs.
 //
-//    DOTSTUDIO_PERF_PROBE=idle|window  (ALWAYS with DOTSTUDIO_STORE_DIR=<fresh temp dir>)
+//    DOTSTUDIO_PERF_PROBE=idle|window|scroll|backdrop  (ALWAYS with DOTSTUDIO_STORE_DIR=<fresh temp dir>)
 //        Runs the app's background services headlessly — activation policy .prohibited, no
 //        Dock icon, no menu-bar item, never a window on screen — and prints what they cost:
 //          idle    menu-bar mode with every window closed: the model, music watching,
@@ -13,9 +13,13 @@
 //          window  the same, plus the main window's content (ContentView at 1440x900) hosted
 //                  in a borderless window parked far off screen and never ordered in (as
 //                  UIShots does). Then scripted events — a thumbnail landing, a song
-//                  changing, a selection, an edit — each reported as the SwiftUI bodies it
-//                  re-evaluated.
+//                  starting, pausing, changing, starting and stopping, a selection, an edit —
+//                  each reported as the SwiftUI bodies it re-evaluated.
+//          scroll  the gallery scrolled top → bottom → top in that window, a frame at a time
+//          backdrop  renders GalleryBackdrop for a look check (see runBackdrop)
 //        DOTSTUDIO_PERF_SECONDS=<n>   length of each measured quiet phase (default 30)
+//        DOTSTUDIO_PERF_BURST=<n>     (window) also n track changes and n selections 0.25 s
+//                                     apart — long enough for `sample` to attach to
 //
 //  Per phase: main run-loop wake-ups, process wake-ups (idle + interrupt), CPU time, memory
 //  footprint, and the Perf counters (body:<View>, and named background events).
@@ -216,12 +220,13 @@ enum PerfProbe {
     // MARK: Synthetic music (private notification names; no player involved)
 
     private static var trackNo = 0
-    private static func postSpotify(playing: Bool, newTrack: Bool) {
+    /// `playing` nil: the player stopped (the song goes away at once, no linger).
+    private static func postSpotify(playing: Bool?, newTrack: Bool) {
         if newTrack { trackNo += 1 }
         let info: [String: Any] = [
             "Track ID": "spotify:track:perfprobe\(trackNo)",
             "Name": "Probe Song \(trackNo)", "Artist": "The Probes", "Album": "Measurements",
-            "Player State": playing ? "Playing" : "Paused",
+            "Player State": playing.map { $0 ? "Playing" : "Paused" } ?? "Stopped",
             "Duration": 215_000, "Playback Position": 12.0,
         ]
         DistributedNotificationCenter.default().postNotificationName(
@@ -384,6 +389,27 @@ enum PerfProbe {
             for _ in 0..<3 { postSpotify(playing: true, newTrack: true); spin(2) }
             return 6
         }
+        // The song line coming and going (a song starting after silence, then stopping):
+        // its insertion and removal, each with whatever animates with it.
+        phase("song-start/stop x3") {
+            for _ in 0..<3 {
+                postSpotify(playing: true, newTrack: true); spin(1.5)
+                postSpotify(playing: nil, newTrack: false); spin(1.5)
+            }
+            return 9
+        }
+        // DOTSTUDIO_PERF_BURST=<n>: n track changes 0.25 s apart, for a sampler to attach to.
+        if let n = env["DOTSTUDIO_PERF_BURST"].flatMap(Int.init) {
+            phase("next-track burst x\(n)") {
+                for _ in 0..<n { postSpotify(playing: true, newTrack: true); spin(0.25) }
+                return Double(n) * 0.25
+            }
+            phase("select burst x\(n)") {
+                let ids = model.library.presets.map(\.id)
+                for i in 0..<n { model.selectedID = ids[(i * 3) % ids.count]; spin(0.25) }
+                return Double(n) * 0.25
+            }
+        }
         let ids = model.library.presets.map(\.id)
         phase("select x5") {
             for i in 0..<5 { model.selectedID = ids[(i * 3) % ids.count]; spin(0.5) }
@@ -419,9 +445,10 @@ enum PerfProbe {
 
     // MARK: Backdrop (look check)
 
-    /// DOTSTUDIO_PERF_PROBE=backdrop DOTSTUDIO_PERF_OUT=<dir>: renders the live-blur
-    /// AmbientBackdrop and the pre-blurred GalleryBackdrop with SwiftUI's own renderer
-    /// (ImageRenderer draws blur filters; offscreen window captures don't) for comparison.
+    /// DOTSTUDIO_PERF_PROBE=backdrop DOTSTUDIO_PERF_OUT=<dir>: renders the pre-blurred
+    /// GalleryBackdrop with SwiftUI's own renderer (ImageRenderer draws blur filters; offscreen
+    /// window captures don't) for a look check. (The live-blur AmbientBackdrop it was checked
+    /// against is gone; its look: the still, `blur(radius: GalleryBackdrop.radius, opaque: true)`.)
     @MainActor private static func runBackdrop() {
         let (model, _) = bootServices()
         let out = env["DOTSTUDIO_PERF_OUT"] ?? NSTemporaryDirectory()
@@ -440,7 +467,6 @@ enum PerfProbe {
                 }
                 _ = model.thumbnailer.image(for: model.preset(id!)!, source: model.library.source,
                                             music: model.library.musicSettings)
-                shot(AmbientBackdrop(presetID: id), "old")
                 shot(GalleryBackdrop(presetID: id), "new")
             }
         }
