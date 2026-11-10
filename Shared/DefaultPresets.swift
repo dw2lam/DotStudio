@@ -227,7 +227,9 @@ enum DefaultPresets {
         func id(named n: String) -> UUID? { lib.presets.first { $0.name == n }?.id }
         let fallback = featured.lazy.compactMap { id(named: $0) }.first ?? lib.presets.first?.id
         for (old, name) in removedIDs {
-            r.replacements[old] = (retiredStyles[name] ?? nil).flatMap { id(named: $0) } ?? fallback
+            let preferred: String? = retiredStyles[name] ?? nil
+            let new: UUID? = preferred.flatMap { id(named: $0) } ?? fallback
+            r.replacements.updateValue(new, forKey: old)   // (a subscript set of nil would drop the key)
         }
         func label(_ id: UUID?) -> String { id.flatMap { i in lib.presets.first { $0.id == i }?.name } ?? "none" }
         func remap(_ id: UUID?, _ what: String) -> UUID? {
