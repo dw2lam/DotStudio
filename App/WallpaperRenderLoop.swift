@@ -198,6 +198,8 @@ final class WallpaperRenderLoop {
     private var mediaPaused = false
     private var activity: NSObjectProtocol?
     private var framesDrawn = 0
+    /// Frames drawn since creation (tools/perf reads it; never reset).
+    private(set) var framesDrawnTotal = 0
     private var statsSince = CACurrentMediaTime()
     private var loggedThread = false
     private var clockTicks = 0
@@ -392,6 +394,7 @@ final class WallpaperRenderLoop {
         guard drawn else { return }
         s.warming = false
         framesDrawn += 1
+        framesDrawnTotal += 1
         guard !s.hasDrawn else { return }
         s.hasDrawn = true
         let id = s.id, token = s.token

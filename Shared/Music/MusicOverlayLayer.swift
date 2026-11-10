@@ -159,6 +159,9 @@ final class MusicOverlayLayer: CALayer {
         let cardSize = settings.cardSizePreference
         let key = display.map { GroupKey($0, size: bounds.size, scale: contentsScale, insets: safeInsets,
                                          cardSize: cardSize) }
+        // Nothing showing and nothing to show (a host's 1 Hz tick while music is off): no
+        // transaction at all. (An unanimated update still sweeps leftovers below.)
+        if display == nil, group == nil, groupKey == nil, animated || (sublayers?.isEmpty ?? true) { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
@@ -245,7 +248,6 @@ struct MusicDisplay {
     var mode: MusicOverlayLayer.Mode
     var state: MusicState?
     var art: CGImage?
-    var palette: [RGBA]
     var title: String
     var artist: String
     var album: String
@@ -255,12 +257,15 @@ struct MusicDisplay {
         self.mode = mode
         state = music.state
         art = music.artwork
-        palette = music.palette
         title = state?.title ?? ""
         artist = state?.artist ?? ""
         album = state?.album ?? ""
         playing = state?.isPlaying ?? false
     }
+
+    /// The artwork palette, worked out only where a placeholder needs it: without the writer's,
+    /// it's extracted by drawing the artwork, and a display is made every second.
+    var palette: [RGBA] { MusicSnapshot(state: state, artwork: art).palette }
 
     var trackKey: String { state?.trackID ?? "\(title)\u{1F}\(artist)\u{1F}\(album)" }
 
