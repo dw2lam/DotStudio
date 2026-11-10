@@ -9,9 +9,29 @@ import Foundation
 import CoreGraphics
 import ImageIO
 
+/// A file's identity for change polling, from one stat(2): modification time (ns), size, inode.
+/// The feeds (and the saver's library poll) used to read FileManager.attributesOfItem — a
+/// dictionary of every attribute and an xattr listing — once a second per host just for the mtime.
+/// nil = no such file. An atomic rewrite (a new inode) or any write changes it.
+struct FileStamp: Equatable {
+    let sec: Int
+    let nsec: Int
+    let size: Int64
+    let inode: UInt64
+
+    /// `path`: a file-system path (URL.path) — kept by the poller, so a poll allocates nothing.
+    init?(path: String) {
+        var st = stat()
+        guard stat(path, &st) == 0 else { return nil }
+        sec = Int(st.st_mtimespec.tv_sec); nsec = Int(st.st_mtimespec.tv_nsec)
+        size = Int64(st.st_size); inode = UInt64(st.st_ino)
+    }
+}
+
 final class MusicFeed {
     let fileURL: URL
     let artDir: URL
+    private let filePath: String
 
     private(set) var state: MusicState?
     /// Decoded artwork (sRGB, long edge ≤ `maxArtPixels`), or nil (draw a placeholder).
@@ -20,7 +40,7 @@ final class MusicFeed {
     private(set) var revision = 0
 
     var maxArtPixels = 1400
-    private var lastModified: Date?
+    private var lastModified: FileStamp?
     private var artName: String?
 
     init(baseDir: URL) {
@@ -31,12 +51,13 @@ final class MusicFeed {
             fileURL = baseDir.appendingPathComponent(MusicState.fileName)
             artDir = baseDir.appendingPathComponent(MusicState.artDirName, isDirectory: true)
         }
+        filePath = fileURL.path
     }
 
     /// Re-reads music.json if its mtime changed. Returns true when state or artwork changed.
     @discardableResult
     func poll() -> Bool {
-        let mod = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.modificationDate]) as? Date
+        let mod = FileStamp(path: filePath)
         guard mod != lastModified else { return false }
         lastModified = mod
         let new: MusicState? = mod == nil ? nil
