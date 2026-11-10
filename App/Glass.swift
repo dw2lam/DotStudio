@@ -89,6 +89,8 @@ enum PanelInk {
     static let tertiary = Color.primary.opacity(0.45)
     /// The indicator lights' "on" color (the SYNC key, the panel keys).
     static let led = Color.green
+    /// A standby light: the wallpaper's Off key while it's off (amber, as on a TV's power button).
+    static let standby = Color.orange
 }
 
 /// Groups glass shapes so they render together and morph into each other (macOS 26).
