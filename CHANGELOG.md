@@ -4,7 +4,7 @@
 
 ### New
 - **StandBy.** The time in huge, bold rounded digits, readable from across the room,
-  with an optional deep-red night mode.
+  turning deep red after sunset.
 - **Minimal.** Thin, quiet time with the weekday and date set beneath it.
 - **Chronometer.** A classic wristwatch dial: sunburst finish, polished indices,
   a sweeping seconds hand and a date window.
@@ -17,6 +17,9 @@
   hand over to Chronometer.
 
 ### Fixed
+- **Zen Garden.** The rake cart now ploughs the gravel instead of floating over it — its tines
+  sit in the furrows, the new pattern starts right at the tines, gravel heaps in front of the
+  rake and the wheels leave ruts.
 - Zen Garden now reaches libraries that came from 1.3 and never got it.
 
 ## 1.4.1 — Bounce
