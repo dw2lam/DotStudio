@@ -5,8 +5,10 @@
 //  razor sharp at any size, from a 60 px date line to a 1500 px clock face at 5K, and the
 //  shaders get bevels, soft shadows and glows from the same field for free.
 //
-//  Texture (r16Unorm, bound at fragment slot 6 only while a Clocks scene or Dial Clock draws). Faces:
+//  Texture (r16Unorm, bound at fragment slot 6 only while a Clocks scene, Dial Clock or a StandBy-pack
+//  clock draws). Faces:
 //      0 = SF Pro Light   1 = SF Pro Bold   2 = New York   3 = SF Pro Rounded Medium
+//      4 = SF Pro Rounded Heavy (StandBy's big figures; addressed by index, not by `fw` — see below)
 //  Only the faces a scene draws with are built (`faces(for:)`), one plane each, stacked
 //  vertically; a plane holds every glyph cell, packed in rows of variable-width cells:
 //      glyphs  0–10   "0123456789:"                     big cells (bigH texels tall)
@@ -16,11 +18,15 @@
 //  columns 2q, 2q+1; gather order x = bottom-left, y = bottom-right, z = top-right, w = top-left):
 //      quad g        (cellX, cellY, cellW, originX)       texels, cellY inside a plane
 //      quad 128 + g  advance of each face (0, 1, 2, 3)    caps × 8192
-//      quad 255      plane top row of each face           a face that isn't built points at one that is
+//      quad 255      plane top row of each face (0–3)     a face that isn't built points at one that is
+//      quad 254      (plane top row of face 4, 0, 0, 0)
+//      quad 256 + g  (advance of face 4, 0, 0, 0)          caps × 8192
+//  (Faces 0–3 are picked in the shaders by a one-hot float4 `fw`; face 4 sits outside it so the
+//  first four's metrics — and every scene that reads them — stay exactly as they were.)
 //  In every cell the baseline sits at `baseFrac` of the cell height from its top and caps are
 //  `capFrac` of the cell height tall (each face is sized to that cap height). A texel's value
 //  v encodes distance d (cell heights, positive outside) as v = 0.5 − d / (2·spreadFrac).
-//  These constants are mirrored in Scenes/Clocks_funcs.h.
+//  These constants are mirrored in Scenes/Clocks_funcs.h (face 4: Scenes/ClockKit_funcs.h).
 //
 //  Memory: one plane is ~6 MB; a screensaver showing one clock holds one or two. The build
 //  works through a few glyphs at a time in mmap'd scratch that goes straight back to the
@@ -38,14 +44,17 @@ enum TextAtlas {
     static let capFrac: CGFloat = 0.5
     static let baseFrac: CGFloat = 0.72
     static let advScale: CGFloat = 8192            // advances are stored in caps × advScale
-    static let allFaces: UInt8 = 0b1111
+    static let allFaces: UInt8 = 0b11111
+    static let faceCount = 5
 
     static let bigGlyphs = Array("0123456789:")
     static let smallGlyphs = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789,.\u{2019}\u{00B7}-/&abcdefghijklmnopqrstuvwxyz")
 
-    /// Shader ids of the scenes that read the atlas (the Clocks pack, and Dial Clock in slot 6).
+    /// Shader ids of the scenes that read the atlas (the Clocks pack, Dial Clock in slot 6 and the
+    /// StandBy pack's clocks).
     private static let users: Set<Int32> = Set(SceneCatalog.clocks.values.map(\.shaderID)
-        + SceneCatalog.studio6.values.map(\.shaderID))
+        + SceneCatalog.studio6.values.map(\.shaderID)
+        + SceneCatalog.standby.values.map(\.shaderID))
 
     // Per GPU (keyed by registryID): a texture only belongs to its own device, and on a
     // multi-GPU Mac (Mac Pro, eGPU) a wallpaper may draw on the GPU driving its display
@@ -136,6 +145,10 @@ enum TextAtlas {
             }
         case 72:                                                     // Dial Clock: date + 24-hour figures
             return 1 << 0                                            // SF Pro Light
+        case 75:                                                     // StandBy: the big rounded figures
+            return 1 << 4                                            // SF Pro Rounded Heavy
+        case 76, 77:                                                 // Minimal (time + date), Chronometer (date)
+            return 1 << 0                                            // SF Pro Light
         default:
             return allFaces
         }
@@ -163,6 +176,7 @@ enum TextAtlas {
             sized { NSFont.systemFont(ofSize: $0, weight: .bold) },
             sized(design(.serif, .regular)),
             sized(design(.rounded, .medium)),
+            sized(design(.rounded, .heavy)),
         ]
     }
 
@@ -191,7 +205,7 @@ enum TextAtlas {
     /// build replaces — same layout) are copied rather than recomputed.
     static func build(device: MTLDevice, faces mask: UInt8,
                       reuse: (faces: UInt8, tex: MTLTexture)? = nil) -> MTLTexture? {
-        let planes = (0..<4).filter { mask & (1 << $0) != 0 }
+        let planes = (0..<faceCount).filter { mask & (1 << $0) != 0 }
         guard !planes.isEmpty else { return nil }
         let groups: [(chars: [Character], h: Int)] = [(bigGlyphs, bigH), (smallGlyphs, smallH)]
         let fontSets = groups.map { faceFonts(capPx: CGFloat($0.h) * capFrac) }
@@ -252,7 +266,7 @@ enum TextAtlas {
         var todo = Array(planes.indices)
         if let reuse, reuse.tex.width == width, reuse.tex.pixelFormat == .r16Unorm,
            let rows = Scratch(bytes: width * planeH * 2) {
-            let oldPlanes = (0..<4).filter { reuse.faces & (1 << $0) != 0 }
+            let oldPlanes = (0..<faceCount).filter { reuse.faces & (1 << $0) != 0 }
             if reuse.tex.height == oldPlanes.count * planeH + 2 {
                 todo = []
                 for (pi, face) in planes.enumerated() {
@@ -334,9 +348,13 @@ enum TextAtlas {
             let c = cells[g]
             quad(g, [c.x, c.y, c.w, c.originX])
             let tpc = CGFloat(c.h) * capFrac
-            quad(128 + g, advances[g].map { Int(($0 / tpc * advScale).rounded()) })
+            let adv = advances[g].map { Int(($0 / tpc * advScale).rounded()) }
+            quad(128 + g, Array(adv[0..<4]))
+            quad(256 + g, [adv[4], 0, 0, 0])
         }
-        quad(255, (0..<4).map { face in (planes.firstIndex(of: face) ?? 0) * planeH })
+        func planeTop(_ face: Int) -> Int { (planes.firstIndex(of: face) ?? 0) * planeH }
+        quad(255, (0..<4).map(planeTop))
+        quad(254, [planeTop(4), 0, 0, 0])
         metrics.withUnsafeBytes { raw in
             tex.replace(region: MTLRegionMake2D(0, height - 2, width, 2), mipmapLevel: 0,
                         withBytes: raw.baseAddress!, bytesPerRow: width * 2)
