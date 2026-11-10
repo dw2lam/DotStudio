@@ -118,16 +118,20 @@ struct WallpaperSettingsSection: View {
                     options: WallpaperSettings.Quality.allCases.map { ($0.title, $0) },
                     fills: true)
             }
-            Toggle("Freeze on battery", isOn: Binding(
-                get: { wallpaper.settings.freezeOnBattery },
-                set: { v in wallpaper.update { $0.freezeOnBattery = v } }))
-                .formSwitchSize()
+            // What it does unplugged (WallpaperBudget): Efficient by default.
+            SettingsValueRow("On Battery", valueWidth: segmentWidth) {
+                ScaledSegmentedPicker(title: "On Battery", selection: Binding(
+                    get: { wallpaper.settings.batteryMode },
+                    set: { v in wallpaper.update { $0.batteryMode = v } }),
+                    options: WallpaperSettings.BatteryMode.allCases.map { ($0.title, $0) },
+                    fills: true)
+            }
         } header: {
             SettingsHeader("Live Wallpaper")
         } footer: {
             // Under the card rather than a row in it; two short paragraphs, not one wall.
             VStack(alignment: .leading, spacing: Space.xs) {
-                SettingsNote("The wallpaper plays while DotStudio is open — closing the window keeps it running from the menu bar. On battery it plays at 30 fps, or holds a still frame if Freeze on battery is on.")
+                SettingsNote("The wallpaper plays while DotStudio is open — closing the window keeps it running from the menu bar. On battery, Efficient plays at 20 fps and a lower resolution, Full plays as when plugged in (up to 30 fps), and Still holds a frame.")
                 SettingsNote("Same as Screensaver plays whatever the screensaver shows — same playlist and night style — in step, so the screensaver starts right where your desktop was.")
                 SettingsNote("It pauses whenever windows cover the desktop, the screen locks or sleeps, the screensaver starts, or Low Power Mode is on, and holds still when your Mac runs hot. Balanced quality renders at three-quarter resolution on Retina displays.")
             }

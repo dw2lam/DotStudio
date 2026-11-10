@@ -5,15 +5,18 @@
 //    • Pacing   — frames come from the display link at an exact divisor of the
 //                 screen's refresh (30 fps by default; Smooth = the display's own rate,
 //                 up to 120 Hz on ProMotion), so every frame
-//                 lasts the same time; uneven rates like 20 on 60/120 Hz read as lag.
-//                 Clocks tick once a second and only animate around a change.
+//                 lasts the same time; a rate that isn't a divisor (24 on 60 Hz) reads
+//                 as judder. Clocks tick once a second and only animate around a change.
 //    • Scale    — rendering at reduced resolution (Balanced: 1.5 px/pt, 0.75 on Retina).
+//    • Battery  — Settings › On Battery (BatteryMode): Efficient, the default, plays
+//                 motion at 20 fps (an exact divisor of 60/120 Hz) at 0.6× the pixels per
+//                 point Quality picks; Full plays as on power but at most 30 fps; Still
+//                 holds a frame. See WallpaperBudget.
 //    • Pausing  — no draws and no wake-ups at all while nobody can see it (covered,
 //                 locked, display or system asleep, screensaver running), in Low Power
 //                 Mode, or when paused from the menu bar.
-//    • Stilling — a hot Mac (and battery, if opted in) holds the last frame; a clock
-//                 still turns over once a minute so it never lies. On battery it plays
-//                 at 30 fps.
+//    • Stilling — a hot Mac (and battery, set to Still) holds the last frame; a clock
+//                 still turns over once a minute so it never lies.
 //    • Threads  — every frame is built off the main thread, on a render thread at
 //                 user-initiated QoS while animating, utility for clock ticks and idle
 //                 (see WallpaperRenderLoop), on the GPU that
@@ -57,18 +60,38 @@ struct WallpaperSettings: Codable, Equatable {
         }
     }
 
+    /// What the wallpaper does while the Mac runs on battery (Settings › Live Wallpaper › On Battery).
+    enum BatteryMode: String, Codable, CaseIterable, Identifiable {
+        /// As on power, but never above 30 fps.
+        case full
+        /// 20 fps (or the style's own lower rate) at 0.6× the resolution Quality picks.
+        case efficient
+        /// Hold a still frame; a clock still turns over each minute.
+        case still
+        var id: String { rawValue }
+        var title: String { rawValue.capitalized }
+    }
+
     var enabled = false
     var presetID: UUID?
     var frameRate: FrameRate = .balanced
     var quality: Quality = .balanced
-    /// On battery: freeze on a still frame (opt-in). Otherwise it plays at 30 fps.
-    var freezeOnBattery = false
+    /// On battery: Efficient unless the user picks Full or Still.
+    var batteryMode: BatteryMode = .efficient
     /// "Match Screensaver": show whatever the screensaver would (Playback.effectivePreset —
     /// rotation, night style) on the shared wall-clock time base, instead
     /// of `presetID`. See WallpaperController.setFollowsScreensaver(_:).
     var followsScreensaver = false
 
     init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled, presetID, frameRate, quality, batteryMode, followsScreensaver
+        /// The 1.4 on/off "Freeze on battery": read when `batteryMode` is missing (on → Still,
+        /// off → Efficient), and still written (on ⇔ Still) so an older build reading this
+        /// file keeps holding a frame for someone who asked for that.
+        case freezeOnBattery
+    }
 
     // Tolerant decoding: a field added later must not reset the user's choice.
     init(from decoder: Decoder) throws {
@@ -77,8 +100,24 @@ struct WallpaperSettings: Codable, Equatable {
         presetID = try? c.decode(UUID.self, forKey: .presetID)
         frameRate = (try? c.decode(FrameRate.self, forKey: .frameRate)) ?? .balanced
         quality = (try? c.decode(Quality.self, forKey: .quality)) ?? .balanced
-        freezeOnBattery = (try? c.decode(Bool.self, forKey: .freezeOnBattery)) ?? false
+        if let mode = try? c.decode(BatteryMode.self, forKey: .batteryMode) {
+            batteryMode = mode
+        } else {
+            let froze = (try? c.decode(Bool.self, forKey: .freezeOnBattery)) ?? false
+            batteryMode = froze ? .still : .efficient
+        }
         followsScreensaver = (try? c.decode(Bool.self, forKey: .followsScreensaver)) ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(enabled, forKey: .enabled)
+        try c.encodeIfPresent(presetID, forKey: .presetID)
+        try c.encode(frameRate, forKey: .frameRate)
+        try c.encode(quality, forKey: .quality)
+        try c.encode(batteryMode, forKey: .batteryMode)
+        try c.encode(batteryMode == .still, forKey: .freezeOnBattery)
+        try c.encode(followsScreensaver, forKey: .followsScreensaver)
     }
 
     static func load(from url: URL) -> WallpaperSettings {
@@ -309,6 +348,59 @@ enum WallpaperPacing {
         guard refresh > 0 else { return target }
         let n = max((refresh / max(target, 1)).rounded(), 1)
         return refresh / n
+    }
+}
+
+// MARK: - Battery budget
+
+/// What power allows the frame loop, beyond the hard pauses: frame rate, resolution and
+/// whether motion holds. Pure functions of (settings, power, style), so tools/perf measures
+/// exactly the policy the controller runs.
+enum WallpaperBudget {
+    /// Efficient on battery: frames per second for continuous motion — an exact divisor of
+    /// 60 and 120 Hz (every frame held for 3 or 6 refreshes), two-thirds of Balanced's 30.
+    static let efficientFPS = 20.0
+    /// Efficient on battery: the fraction of Quality's pixels per point drawn (0.36× the
+    /// pixels). The compositor upscales it; the dot styles size their patterns by frame
+    /// height, so nothing changes scale — it only softens.
+    static let efficientScale: CGFloat = 0.6
+    /// Full on battery: never above this, whatever Frame Rate says.
+    static let batteryMaxFPS = 30.0
+
+    /// Frames per second asked of the display links: Balanced 30, Smooth each display's own
+    /// refresh (120 on ProMotion, 60 on most externals — divisorRate clamps it); on battery 30
+    /// (Full) or 20 (Efficient). Less only if the style itself asks for fewer.
+    static func fps(_ settings: WallpaperSettings, presetFPS: Int, onBattery: Bool) -> Double {
+        if !onBattery, settings.frameRate == .smooth { return 120 }
+        var fps = onBattery && settings.batteryMode == .efficient ? efficientFPS
+                : onBattery ? batteryMaxFPS : 30
+        if presetFPS > 0 { fps = min(fps, Double(presetFPS)) }
+        return fps
+    }
+
+    /// Multiplier on Quality's pixels per point. Below 1 only for Efficient on battery, and only
+    /// while the style moves continuously: a clock that draws once a second keeps crisp
+    /// figures (its few frames cost next to nothing either way).
+    static func renderScale(_ settings: WallpaperSettings, onBattery: Bool, profile: WallpaperPacing.Profile) -> CGFloat {
+        guard onBattery, settings.batteryMode == .efficient, profile == .motion else { return 1 }
+        return efficientScale
+    }
+
+    /// Why motion holds on its last frame (a clock still turns over once a minute).
+    static func stillReason(_ settings: WallpaperSettings, _ s: WallpaperPowerMonitor.State) -> String? {
+        if s.thermalHot { return "Still — Mac is running hot" }
+        if s.onBattery && settings.batteryMode == .still { return "Still — on battery" }
+        return nil
+    }
+
+    /// A note for the menu and the Wallpaper card while it plays reduced on battery.
+    static func batteryStatus(_ settings: WallpaperSettings, onBattery: Bool) -> String? {
+        guard onBattery else { return nil }
+        switch settings.batteryMode {
+        case .efficient: return "Efficient — on battery"
+        case .full: return settings.frameRate == .smooth ? "30 fps — on battery" : nil
+        case .still: return nil      // stillReason says it
+        }
     }
 }
 
