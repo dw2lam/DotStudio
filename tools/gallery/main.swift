@@ -591,24 +591,28 @@ func bounceChecks() -> Bool {
     check(periods.allSatisfy { $0 > 100 && $0 < 220 },
           String(format: "Bounce: a corner every %.0f–%.0f s at speed 1 (any screen, any logo shape)",
                  periods.min() ?? 0, periods.max() ?? 0))
-    // Stateless: two renderers on the wall-clock time base draw the same frame.
+    // Stateless: two renderers on the wall-clock time base draw the same frame (made and warmed
+    // first, then drawn back to back: the logo moves ~0.1 px between the two reads of the clock).
     let p = Preset(name: "Bounce", effects: [EffectInstance(.bounce)])
-    func frame() -> CGImage? {
+    let rs = (0..<2).map { _ -> MetalRenderer in
         let r = MetalRenderer(pixelFormat: .bgra8Unorm, store: store)!
         r.timeBase = .wallClock
         r.apply(p, source: SourceSpec())
-        return r.renderFrame(width: 320, height: 200)
+        for _ in 0..<3 { _ = r.renderFrame(width: 320, height: 200, settled: true) }
+        return r
     }
-    let a = frame(), b = frame()
-    var same = false
-    if let a, let b, let da = a.dataProvider?.data, let db = b.dataProvider?.data {
+    let a = rs[0].renderFrame(width: 320, height: 200, settled: true)
+    let b = rs[1].renderFrame(width: 320, height: 200, settled: true)
+    var diff = Double.infinity, lit = 0.0
+    if let a, let b, let da = a.dataProvider?.data, let db = b.dataProvider?.data, CFDataGetLength(da) == CFDataGetLength(db) {
         let n = CFDataGetLength(da)
         let pa = CFDataGetBytePtr(da)!, pb = CFDataGetBytePtr(db)!
-        var diff = 0
-        for i in 0..<n { diff += abs(Int(pa[i]) - Int(pb[i])) }
-        same = Double(diff) / Double(n) < 0.5
+        var d = 0, l = 0
+        for i in 0..<n { d += abs(Int(pa[i]) - Int(pb[i])); if i % 4 != 3, pa[i] > 60 { l += 1 } }
+        diff = Double(d) / Double(n); lit = Double(l) / Double(n / 4 * 3)
     }
-    check(same, "Bounce: two wall-clock renderers draw the same frame")
+    check(diff < 0.5 && lit > 0.005,
+          String(format: "Bounce: two wall-clock renderers draw the same frame (mean |Δ| %.3f, logo lights %.1f%% of the colour channels)", diff, lit * 100))
     return ok
 }
 if runChecks {
