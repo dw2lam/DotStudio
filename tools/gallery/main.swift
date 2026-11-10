@@ -7,7 +7,12 @@
 //  --set overrides params on each preset's first effect (e.g. --set tilt=70,scale=1.4).
 //  --gpubench times just the first effect's fragment pass with GPU timestamps (--benchtime T: every
 //  sample at scene time T, e.g. inside a lightning flash)
-//  (no alloc/readback, immune to CPU load): the number to compare shader costs by.
+//  (no alloc/readback, immune to CPU load): the number to compare shader costs by. It binds the
+//  pipeline the renderer would (a scene's own fx_scene_<id> when ScenePipelines lists it, Ocean
+//  Horizon's and Shallows' weather copies); --uber binds fx_fragment for every pass instead.
+//  --pipebench times every preset's first effect (and the source and crossfade passes) both in
+//  fx_fragment and in its own fx_scene_<id>, 3 interleaved rounds against a reference: how
+//  ScenePipelines' list is chosen (add the ids to measure to SceneEntries.metal first).
 //  --solo keeps only each preset's first effect (benchmark one shader, not its post chain).
 //  --slides renders one frame per built-in slideshow photo; --looks skips the Scenes.
 //  Weather (Ocean Horizon, Shallows): --weather rain[,thunderstorm,…] renders each preset under each
@@ -51,6 +56,8 @@ var bench = false
 var overrides: [String: Double] = [:]
 var solo = false
 var gpuBench = false
+var pipeBench = false
+var uberOnly = false
 var looksOnly = false
 var W = 1600, H = 1000
 var clocks: [String] = []
@@ -88,6 +95,8 @@ while !args.isEmpty {
     case "--bench": bench = true
     case "--solo": solo = true
     case "--gpubench": gpuBench = true
+    case "--pipebench": gpuBench = true; pipeBench = true
+    case "--uber": uberOnly = true
     case "--looks": looksOnly = true
     case "--slides":
         // One frame per built-in photo, mid-hold (the slideshow is a pure function of time).
@@ -153,6 +162,7 @@ if let w = weathers.first { WeatherLink.forced = weatherMix(w) }
 let store = SharedStore(role: .app)
 guard let renderer = MetalRenderer(pixelFormat: .bgra8Unorm, store: store) else { print("no renderer"); exit(1) }
 renderer.location = loc
+renderer.waitsForScenePipelines = true          // render what the scenes' own pipelines draw, never the stand-in
 let musicFeed = MusicFeed(baseDir: store.baseDir)
 musicFeed.poll()
 renderer.setMusic(musicFeed.snapshot)
@@ -495,10 +505,8 @@ if gpuBench {
         artTex = t
     }
     let pal = musicFeed.snapshot.palette
-    for wname in (weathers.isEmpty ? [nil] : weathers.map { Optional($0) }) {
-    if let wname { WeatherLink.forced = weatherMix(wname) }
-    for p in presets {
-        guard let inst = p.effects.first(where: { $0.enabled }) else { continue }
+    /// The uniforms a pass of `inst` draws with (as the renderer packs them), at scene time 0.
+    func benchUniforms(_ inst: EffectInstance) -> (FXUniforms, Date) {
         var u = FXUniforms()
         inst.pack(into: &u)
         u.resolution = simd_float2(Float(W), Float(H))
@@ -526,6 +534,11 @@ if gpuBench {
                                         size: CGSize(width: W, height: H), options: MusicSceneOptions(inst))
             u.musicRect = simd_float4(r.x, r.y, r.w, r.h)
         }
+        return (u, wall)
+    }
+    /// GPU ms per pass of `pso` with these uniforms: (min, median) over 12 command buffers of 3.
+    func benchPass(_ uIn: FXUniforms, kind: EffectKind?, wall: Date, pso: MTLRenderPipelineState) -> (Double, Double) {
+        var u = uIn
         var samples: [Double] = []
         let sand = SandGarden.Cache()
         for rep in 0..<14 {
@@ -533,16 +546,13 @@ if gpuBench {
             for f in 0..<3 {
                 u.time = benchTime.map { $0 + Float(f) * 0.004 } ?? (Float(rep * 3 + f) * 1.7 + benchT0)
                 var sceneData: MTLTexture?
-                if inst.kind == .sandGarden { sceneData = sand.prepare(&u, wall: wall, device: dev) }
+                if kind == .sandGarden { sceneData = sand.prepare(&u, wall: wall, device: dev) }
                 let rpd = MTLRenderPassDescriptor()
                 rpd.colorAttachments[0].texture = target
                 rpd.colorAttachments[0].loadAction = .dontCare
                 rpd.colorAttachments[0].storeAction = .store
                 let enc = cmd.makeRenderCommandEncoder(descriptor: rpd)!
-                // (Ocean Horizon, Shallows: the scene's own pipeline — clear or weather, fixed or
-                // live — as WeatherLink binds it in the renderer.)
-                enc.setRenderPipelineState(WeatherLink.pipeline(for: inst.kind, uniforms: u, device: dev,
-                                                                format: .bgra8Unorm) ?? pso)
+                enc.setRenderPipelineState(pso)
                 enc.setFragmentBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
                 enc.setFragmentTexture(input, index: 0)
                 enc.setFragmentTexture(input, index: 1)
@@ -561,7 +571,103 @@ if gpuBench {
             if rep >= 2 { samples.append((cmd.gpuEndTime - cmd.gpuStartTime) * 1000 / 3) }
         }
         samples.sort()
-        print(String(format: "%6.2f ms GPU  (median %5.2f)  %@ [%@]%@", samples[0], samples[samples.count / 2],
+        return (samples[0], samples[samples.count / 2])
+    }
+    /// A pipeline of fx_vertex + `fragment` from the bench's metallib (nil: no such function).
+    var built: [String: MTLRenderPipelineState] = [:]
+    func benchPipeline(_ fragment: String) -> MTLRenderPipelineState? {
+        if let p = built[fragment] { return p }
+        let p = FXPipelines.renderDescriptor(lib, fragment: fragment, format: .bgra8Unorm, archive: nil)
+            .flatMap { FXPipelines.makeRender($0, device: dev) }
+        built[fragment] = p
+        return p
+    }
+    /// What the renderer binds for a pass of `inst`: Ocean Horizon's and Shallows' own (clear or
+    /// weather, fixed or live: WeatherLink), a scene's own (ScenePipelines), else fx_fragment.
+    func rendererPipeline(_ inst: EffectInstance, _ u: FXUniforms) -> MTLRenderPipelineState {
+        if let w = WeatherLink.pipeline(for: inst.kind, uniforms: u, device: dev, format: .bgra8Unorm) { return w }
+        if let n = ScenePipelines.functionName(u.effect), let p = benchPipeline(n) { return p }
+        return pso
+    }
+
+    if pipeBench {
+        // Every preset's first effect in fx_fragment and in its own function fx_scene_<id> (when the
+        // metallib has one, whether or not ScenePipelines lists it), plus the passes that aren't a
+        // style's: the slideshow source (0), the gradient behind every scene (1) and the style
+        // crossfade (41). 3 interleaved rounds, each also timing a reference (the first preset in
+        // fx_fragment) so a clock or thermal drift shows; per entry the best of the rounds.
+        struct Entry { let name: String; let id: Int32; let kind: EffectKind?; let u: FXUniforms; let wall: Date }
+        var entries: [Entry] = []
+        var srcU = FXUniforms()
+        srcU.resolution = simd_float2(Float(W), Float(H))
+        srcU.effect = 0; srcU.fillMode = 3; srcU.srcSize = simd_float2(Float(W), Float(H))
+        srcU.p0 = simd_float4(1.12, 0.3, 0.7, 0.5); srcU.p1 = simd_float4(1.08, 0.6, 0.2, 0)
+        srcU.p2 = simd_float4(Float(W), Float(H), 0, 0)
+        entries.append(Entry(name: "(slideshow source)", id: 0, kind: nil, u: srcU, wall: Date()))
+        var gradU = FXUniforms()
+        gradU.resolution = simd_float2(Float(W), Float(H)); gradU.effect = 1
+        gradU.p0 = simd_float4(0.6, 1, 0, 0)
+        entries.append(Entry(name: "(gradient source)", id: 1, kind: nil, u: gradU, wall: Date()))
+        var fadeU = FXUniforms()
+        fadeU.resolution = simd_float2(Float(W), Float(H)); fadeU.effect = 41
+        fadeU.p0 = simd_float4(0.5, 0, 0, 0); fadeU.srcSize = simd_float2(Float(W), Float(H))
+        entries.append(Entry(name: "(style crossfade)", id: 41, kind: nil, u: fadeU, wall: Date()))
+        for p in presets {
+            guard let inst = p.effects.first(where: { $0.enabled }) else { continue }
+            let (u, wall) = benchUniforms(inst)
+            entries.append(Entry(name: p.name, id: u.effect, kind: inst.kind, u: u, wall: wall))
+        }
+        // Every effect a library can hold (retired ones too), at its defaults, as "[name]": the ids
+        // no preset leads with (--only "[" benches just these).
+        for kind in EffectKind.allCases {
+            let name = "[\(kind.displayName)]"
+            if let only, !name.lowercased().contains(only) { continue }
+            let (u, wall) = benchUniforms(EffectInstance(kind))
+            entries.append(Entry(name: name, id: u.effect, kind: kind, u: u, wall: wall))
+        }
+        if only == nil || only == "[" {
+            var blitU = FXUniforms()                 // the error-diffusion dithers' upscale pass
+            blitU.resolution = simd_float2(Float(W), Float(H)); blitU.effect = 38
+            blitU.p0 = simd_float4(Float(W / 2), Float(H / 2), 2, 0); blitU.srcSize = simd_float2(Float(W), Float(H))
+            entries.append(Entry(name: "(dither upscale)", id: 38, kind: nil, u: blitU, wall: Date()))
+        }
+        guard let ref = entries.first(where: { $0.kind != nil }) else { exit(1) }
+        var uber = [Double](repeating: .infinity, count: entries.count)
+        var own = [Double](repeating: .infinity, count: entries.count)
+        for round in 0..<3 {
+            var refs: [Double] = []
+            for (i, e) in entries.enumerated() {
+                refs.append(benchPass(ref.u, kind: ref.kind, wall: ref.wall, pso: pso).0)
+                let a = benchPass(e.u, kind: e.kind, wall: e.wall, pso: pso).0
+                uber[i] = min(uber[i], a)
+                if let sp = benchPipeline("fx_scene_\(e.id)") {
+                    own[i] = min(own[i], benchPass(e.u, kind: e.kind, wall: e.wall, pso: sp).0)
+                }
+            }
+            refs.sort()
+            print(String(format: "round %d: reference %@ min %.2f  median %.2f  max %.2f ms", round + 1, ref.name,
+                         refs[0], refs[refs.count / 2], refs[refs.count - 1]))
+        }
+        print("id\tüber ms\town ms\town/über\tlisted\tname")
+        for (i, e) in entries.enumerated() {
+            let listed = ScenePipelines.functionName(e.id) != nil ? "yes" : "-"
+            if own[i].isFinite {
+                print(String(format: "%d\t%.2f\t%.2f\t%.3f\t%@\t%@", e.id, uber[i], own[i], own[i] / uber[i], listed, e.name))
+            } else {
+                print(String(format: "%d\t%.2f\t-\t-\t%@\t%@", e.id, uber[i], listed, e.name))
+            }
+        }
+        exit(0)
+    }
+
+    for wname in (weathers.isEmpty ? [nil] : weathers.map { Optional($0) }) {
+    if let wname { WeatherLink.forced = weatherMix(wname) }
+    for p in presets {
+        guard let inst = p.effects.first(where: { $0.enabled }) else { continue }
+        let (u, wall) = benchUniforms(inst)
+        // The pipeline the renderer binds (rendererPipeline); --uber: fx_fragment, always.
+        let (lo, med) = benchPass(u, kind: inst.kind, wall: wall, pso: uberOnly ? pso : rendererPipeline(inst, u))
+        print(String(format: "%6.2f ms GPU  (median %5.2f)  %@ [%@]%@", lo, med,
                      p.name, inst.kind.displayName, wname.map { " @" + $0 } ?? ""))
     }
     }
@@ -571,6 +677,7 @@ if gpuBench {
 if frameBench {
     for p in presets {
         guard let r = MetalRenderer(pixelFormat: .bgra8Unorm, store: store) else { continue }
+        r.waitsForScenePipelines = true
         r.apply(p, source: source)
         for _ in 0..<6 { _ = r.renderFrame(width: W, height: H); Thread.sleep(forTimeInterval: 0.05) }
         r.measuresGPUTime = true
@@ -611,6 +718,7 @@ if veilBench {
     for p in presets where !p.isMusicScene {
         guard let r = MetalRenderer(pixelFormat: .bgra8Unorm, store: store) else { continue }
         r.location = loc
+        r.waitsForScenePipelines = true
         r.setMusic(musicFeed.snapshot)
         r.measuresGPUTime = true
         r.apply(p, source: source)
