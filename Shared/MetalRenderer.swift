@@ -91,7 +91,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private var drewOnce = false
 
     // Cap frames-in-flight so drawables/IOSurfaces are recycled rather than queued up.
-    private let inFlight = DispatchSemaphore(value: 2)
+    private let inFlight: DispatchSemaphore
+    /// Every frame's completion block, made once (init): it releases the frame's in-flight slot.
+    private let signalInFlight: MTLCommandBufferHandler
     /// Zen Garden's planned cart paths and data textures, per configuration on screen (SandGarden in Studio2.swift).
     let sandGardens = SandGarden.Cache()
 
@@ -117,6 +119,16 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     // Per-effect uniforms packed once at apply(); per frame only the dynamic
     // fields (time/resolution/srcSize/astro) are overwritten on a copy.
     private var packedUniforms: [FXUniforms] = []
+    /// The current preset's enabled effects (the chain packedUniforms belongs to), from apply().
+    private var enabledEffects: [EffectInstance] = []
+
+    static func pack(_ effects: [EffectInstance]) -> [FXUniforms] {
+        effects.map { inst in
+            var u = FXUniforms()
+            inst.pack(into: &u)
+            return u
+        }
+    }
 
     // astro() only changes at wall-clock resolution — recompute at most 1×/sec.
     private var astroCached: (at: CFTimeInterval, value: (sun: simd_float3, userLon: Float, userLat: Float, hasLoc: Bool))?
@@ -125,6 +137,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     // new → drawable via blend pass 41) until progress reaches 1.
     private struct Outgoing {
         let preset: Preset
+        let effects: [EffectInstance]
         let packed: [FXUniforms]
         /// The outgoing chain's own time origin (a wall-clock wrap keeps counting past it).
         let startTime: CFTimeInterval
@@ -144,8 +157,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// crossfade from it; whatever is drawn next is a new chain.
     private func beginFade(now: CFTimeInterval, duration: Double, wallSlides: Bool) {
         guard let p = preset else { return }
-        outgoing = Outgoing(preset: p, packed: packedUniforms, startTime: startTime, slideOrigin: slideOrigin,
-                            wallSlides: wallSlides, chain: chainID)
+        outgoing = Outgoing(preset: p, effects: enabledEffects, packed: packedUniforms, startTime: startTime,
+                            slideOrigin: slideOrigin, wallSlides: wallSlides, chain: chainID)
+        pipelineConfig &+= 1
         chainID &+= 1
         transitionBegan = now
         transitionDuration = duration
@@ -252,6 +266,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         dd.usage = [.shaderRead, .renderTarget]
         dummy = device.makeTexture(descriptor: dd)!
 
+        let sem = DispatchSemaphore(value: 2)
+        inFlight = sem
+        signalInFlight = { _ in sem.signal() }
+
         super.init()
     }
 
@@ -265,11 +283,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         self.source = source
         // Pack static uniforms (effect id, params, palette) once per preset change
         // instead of re-reading the params dictionary every pass every frame.
-        packedUniforms = preset.effects.filter { $0.enabled }.map { inst in
-            var u = FXUniforms()
-            inst.pack(into: &u)
-            return u
-        }
+        enabledEffects = preset.effects.filter { $0.enabled }
+        packedUniforms = MetalRenderer.pack(enabledEffects)
+        pipelineConfig &+= 1
         if sourceChanged {
             if timeBase == .instance { startTime = CACurrentMediaTime(); slideOrigin = startTime }
             loadMedia(for: source)
@@ -283,17 +299,32 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// The über-shader every fx pass draws with. Blocking hosts built it at init; a fastStart
     /// renderer draws only once framePipelinesReady() says it's there (renderThumbnail, which
     /// the saver never calls, would wait for it).
-    private var fxPipeline: MTLRenderPipelineState? { pipelines.uber(wait: true) }
+    /// Kept here once built: a frame asks for it every pass, and FXPipelines' shared table takes
+    /// a lock and a lookup (the renderer outlives no purge: the saver frees both together).
+    private var fxPipeline: MTLRenderPipelineState? {
+        if let p = uberPSO { return p }
+        uberPSO = pipelines.uber(wait: true)
+        return uberPSO
+    }
+    private var uberPSO: MTLRenderPipelineState?
 
     /// The music veil's passes and the error-diffusion kernels: built on first use (a fastStart
     /// renderer has them before it draws a frame that uses them: framePipelinesReady).
     private func veilPipeline(down: Bool) -> MTLRenderPipelineState? {
-        pipelines.veil(down: down, wait: true)
+        if let p = veilPSO[down ? 0 : 1] { return p }
+        let p = pipelines.veil(down: down, wait: true)
+        veilPSO[down ? 0 : 1] = p
+        return p
     }
+    private var veilPSO: [MTLRenderPipelineState?] = [nil, nil]
 
     private func ditherPipeline(_ name: String) -> MTLComputePipelineState? {
-        pipelines.compute(name, wait: true)
+        if let p = ditherPSO[name] { return p }
+        let p = pipelines.compute(name, wait: true)
+        ditherPSO[name] = p
+        return p
     }
+    private var ditherPSO: [String: MTLComputePipelineState] = [:]
 
     /// Whether the music veil can draw.
     private var veilAvailable: Bool { veilPipeline(down: true) != nil && veilPipeline(down: false) != nil }
@@ -305,6 +336,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// A blocking renderer builds on demand: always true.
     func framePipelinesReady() -> Bool {
         guard pipelineMode == .fastStart, let preset else { return true }
+        // Everything this configuration needs was there: nothing has changed since (a new style,
+        // fade or backdrop bumps `pipelineConfig`), and a built pipeline never goes away under a
+        // live renderer. Saves the per-frame walk (and its arrays) on every saver frame.
+        if readyConfig == pipelineConfig { return true }
         var ready = true
         // No über-shader, no frame (if it failed to compile: black, as when init used to fail).
         // The rest: a failure is as ready as it gets — those passes are left out, as before.
@@ -328,8 +363,13 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         for p in presets where !WeatherLink.pipelinesReady(for: p, device: device, format: pixelFormat) {
             ready = false
         }
+        if ready { readyConfig = pipelineConfig }
         return ready
     }
+    /// What framePipelinesReady() checks: bumped whenever the set of styles or backdrops a frame
+    /// may draw changes; `readyConfig` = the last one found complete.
+    private var pipelineConfig = 0
+    private var readyConfig = -1
 
     /// Whether this renderer has drawn a frame (the saver fades its view in from black on it).
     var hasDrawnFrame: Bool { drewOnce }
@@ -535,6 +575,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let current = musicBackdropAmount(at: now)
         musicBackdropTarget = b
         if b != .none { musicBackdropKind = b }
+        pipelineConfig &+= 1
         musicBackdropTo = b == .none ? 0 : 1
         musicBackdropFrom = animated ? current : musicBackdropTo
         musicBackdropBegan = animated ? now : -.infinity
@@ -558,6 +599,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// The pyramid for a `w`×`h` frame, levels 1…n (reused while the size holds).
     private func veilPyramid(_ w: Int, _ h: Int, levels n: Int, format: MTLPixelFormat,
                              reuse: [MTLTexture]) -> [MTLTexture] {
+        // The steady state (fully in, or the same depth as last frame): the same array, not a new one a frame.
+        if reuse.count == max(n, 1), reuse.indices.allSatisfy({ i in
+            let k = i + 1
+            return reuse[i].width == max((w + (1 << k) - 1) >> k, 1) && reuse[i].height == max((h + (1 << k) - 1) >> k, 1)
+                && reuse[i].pixelFormat == format
+        }) { return reuse }
         var out: [MTLTexture] = []
         for k in 1...max(n, 1) {
             let lw = max((w + (1 << k) - 1) >> k, 1), lh = max((h + (1 << k) - 1) >> k, 1)
@@ -575,11 +622,11 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     }
 
     /// One internal pass (73, the music veil: its own fragment functions) into `target`.
-    private func encodeVeilPass(_ cmd: MTLCommandBuffer, target: MTLRenderPassDescriptor, size: CGSize,
+    private func encodeVeilPass(_ cmd: MTLCommandBuffer, target: PassTarget, size: CGSize,
                                 u inU: FXUniforms, src: MTLTexture, next: MTLTexture?, art: MTLTexture?) {
         let down = inU.p0.w > 0.5
         guard let pso = veilPipeline(down: down),
-              let enc = cmd.makeRenderCommandEncoder(descriptor: target) else { return }
+              let enc = makeEncoder(cmd, target) else { return }
         var u = inU
         u.effect = 73
         u.resolution = simd_float2(Float(size.width), Float(size.height))
@@ -599,7 +646,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// levels (progressive blur while it eases in), dims in linear light with a soft
     /// highlight compression (a bright Look lands as low as a dark scene), vignettes, and —
     /// for Album Art — cross-fades into `art`.
-    private func encodeVeil(_ cmd: MTLCommandBuffer, style: MTLTexture, final: MTLRenderPassDescriptor,
+    private func encodeVeil(_ cmd: MTLCommandBuffer, style: MTLTexture, final: PassTarget,
                             size: CGSize, amount: Double, art: MTLTexture?, pyramid: inout [MTLTexture]) {
         let w = Int(size.width), h = Int(size.height)
         let blur = amount * Self.veilBlurLevels(height: h)
@@ -614,7 +661,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         for k in 0..<levels {
             let src = k == 0 ? style : pyramid[k - 1]
             let dst = pyramid[k]
-            encodeVeilPass(cmd, target: offscreenDescriptor(dst),
+            encodeVeilPass(cmd, target: .texture(dst),
                            size: CGSize(width: dst.width, height: dst.height), u: down, src: src, next: nil, art: nil)
         }
         // Composite: blend level ⌊blur⌋ (0 = the sharp frame) with the next.
@@ -647,9 +694,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             guard let cmd = queue.makeCommandBuffer() else { return -1 }
             for _ in 0..<reps {
                 if reference {
-                    encodeBlend(cmd, final: offscreenDescriptor(dst), newTex: src, oldTex: src, progress: 0.5, size: size)
+                    encodeBlend(cmd, final: .texture(dst), newTex: src, oldTex: src, progress: 0.5, size: size)
                 } else {
-                    encodeVeil(cmd, style: src, final: offscreenDescriptor(dst), size: size, amount: amount, art: nil,
+                    encodeVeil(cmd, style: src, final: .texture(dst), size: size, amount: amount, art: nil,
                                pyramid: &pyramid)
                 }
             }
@@ -684,6 +731,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         // away the one mostly on screen. Let it finish; this switch starts when it ends.
         if let out = outgoing, out.preset == current, now - transitionBegan < transitionDuration {
             pendingTransition = (preset, source, duration)
+            pipelineConfig &+= 1
             return
         }
         beginFade(now: now, duration: duration, wallSlides: timeBase == .wallClock)
@@ -778,7 +826,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             guard preset != nil, framePipelinesReady(),
                   let final = view.currentRenderPassDescriptor,
                   let drawable = view.currentDrawable else { return }
-            encodeFrame(final: final, drawable: drawable, size: ds, format: view.colorPixelFormat)
+            encodeFrame(final: .descriptor(final), drawable: drawable, size: ds, format: view.colorPixelFormat)
         }
     }
 
@@ -792,20 +840,17 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     func draw(to layer: CAMetalLayer, settled: Bool = false) -> Bool {
         autoreleasepool {
             let ds = layer.drawableSize
-            guard preset != nil, ds.width > 0, ds.height > 0 else { return false }
+            // fastStart (the saver): nothing, not even a drawable, until this frame's pipelines exist.
+            guard preset != nil, ds.width > 0, ds.height > 0, framePipelinesReady() else { return false }
             if texA == nil || texB == nil || drawableSize != ds {
                 drawableSize = ds
                 (texA, texB) = makeOffscreen(width: Int(ds.width), height: Int(ds.height), format: layer.pixelFormat)
             }
             guard let drawable = layer.nextDrawable() else { return false }
             // Every pass writes every pixel (fullscreen triangle, no blending), so the old
-            // contents never need loading or clearing.
-            let final = MTLRenderPassDescriptor()
-            final.colorAttachments[0].texture = drawable.texture
-            final.colorAttachments[0].loadAction = .dontCare
-            final.colorAttachments[0].storeAction = .store
-            return encodeFrame(final: final, drawable: drawable, size: ds, format: layer.pixelFormat,
-                               settled: settled) != nil
+            // contents never need loading or clearing (a `.texture` target's actions).
+            return encodeFrame(final: .texture(drawable.texture), drawable: drawable, size: ds,
+                               format: layer.pixelFormat, settled: settled) != nil
         }
     }
 
@@ -824,8 +869,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         fd.usage = [.shaderRead, .renderTarget]
         fd.storageMode = .shared
         guard let out = device.makeTexture(descriptor: fd) else { return nil }
-        let final = offscreenDescriptor(out)
-        guard let cmd = encodeFrame(final: final, drawable: nil, size: ds, format: fmt, settled: settled) else { return nil }
+        guard let cmd = encodeFrame(final: .texture(out), drawable: nil, size: ds, format: fmt, settled: settled) else { return nil }
         cmd.waitUntilCompleted()
         return readBack(out)
     }
@@ -833,7 +877,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// Encode and commit one frame of the current preset into `final` (presenting
     /// `drawable` when there is one). Returns the committed command buffer.
     @discardableResult
-    private func encodeFrame(final: MTLRenderPassDescriptor, drawable: MTLDrawable?,
+    private func encodeFrame(final: PassTarget, drawable: MTLDrawable?,
                              size ds: CGSize, format: MTLPixelFormat, settled: Bool = false) -> MTLCommandBuffer? {
         guard framePipelinesReady() else { return nil }
         startPendingTransition(CACurrentMediaTime(), settled: settled)
@@ -842,16 +886,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         // Throttle frames-in-flight; released in the command buffer's completion handler.
         inFlight.wait()
         guard let cmd = queue.makeCommandBuffer() else { inFlight.signal(); return nil }
-        cmd.addCompletedHandler { [inFlight] _ in inFlight.signal() }
-        if measuresGPUTime {
-            cmd.addCompletedHandler { [weak self] cb in
-                let dt = max(cb.gpuEndTime - cb.gpuStartTime, 0)
-                guard let self else { return }
-                self.gpuLock.lock(); self.gpuAccum += dt; self.gpuLock.unlock()
-            }
-        }
+        // (blocks made once: a Swift closure handed to addCompletedHandler is a new block per frame)
+        cmd.addCompletedHandler(signalInFlight)
+        if measuresGPUTime { cmd.addCompletedHandler(accumulateGPUTime) }
 
         let now = CACurrentMediaTime()
+        let wall = clockOverride ?? Date()          // one wall-clock reading for every pass of the frame
         if settled, outgoing != nil {
             outgoing = nil                       // a held frame shows where the fade ends
             fadeOld = nil; fadeNew = nil
@@ -872,15 +912,17 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             veilArt = nil
         }
         var artPreset: Preset?
+        var artLayout = MusicLayoutKind.album
         if backdrop > 0, case .albumArt(let layout) = musicBackdropKind {
             artPreset = MusicPresentation.albumArtPreset(layout)
+            artLayout = layout
         }
         // Album Art fading out after the music stopped keeps the cover it had.
         musicArtHeld = artPreset != nil && musicBackdropTo <= 0
         // Now Playing (a style, or the Album Art backdrop): poll / upload artwork before any
         // pass samples it.
         if preset.isMusicScene || (outgoing?.preset.isMusicScene ?? false) || artPreset != nil {
-            prepareMusic(cmd, now: now, wall: clockOverride ?? Date(), fade: !settled)
+            prepareMusic(cmd, now: now, wall: wall, fade: !settled)
         } else {
             releaseMusic()
         }
@@ -892,8 +934,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 outgoing = nil                   // a style change behind the art finished unseen
                 fadeOld = nil; fadeNew = nil
             }
-            encodePasses(cmd, finalDescriptor: final, pingA: texA, pingB: texB, size: drawableSize, time: t,
-                         preset: art, source: SourceSpec(), sourceTex: nil)
+            let chain = MetalRenderer.artChain(artLayout, art)
+            encodePasses(cmd, final: final, pingA: texA, pingB: texB, size: drawableSize, time: t,
+                         preset: art, source: MetalRenderer.noSource, sourceTex: nil, effects: chain.effects,
+                         packedUniforms: chain.packed, wall: wall)
             if let drawable {
                 if let onPresented { drawable.addPresentedHandler { onPresented($0.presentedTime) } }
                 cmd.present(drawable)
@@ -906,8 +950,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         var artTex: MTLTexture?
         if let art = artPreset,
            let tex = ensureVeilArt(width: Int(ds.width), height: Int(ds.height), format: format) {
-            encodePasses(cmd, finalDescriptor: offscreenDescriptor(tex), pingA: texA, pingB: texB,
-                         size: drawableSize, time: t, preset: art, source: SourceSpec(), sourceTex: nil)
+            let chain = MetalRenderer.artChain(artLayout, art)
+            encodePasses(cmd, final: .texture(tex), pingA: texA, pingB: texB,
+                         size: drawableSize, time: t, preset: art, source: MetalRenderer.noSource, sourceTex: nil,
+                         effects: chain.effects, packedUniforms: chain.packed, wall: wall)
             artTex = tex
         } else {
             veilArt = nil
@@ -926,7 +972,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 let f = c.frames(at: [inClock, outClock], sync: false)
                 slides = f[0]; outSlides = f[1]
             } else {
-                slides = c.frames(at: [inClock], sync: false)[0]
+                slides = c.frame(clock: inClock, sync: false)    // the usual single clock: no arrays
                 outSlides = slides
             }
         }
@@ -940,7 +986,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         // own last pass doesn't read — and the veil composites it into `final`.
         let veiled = backdrop > 0 && veilAvailable
         // encodePasses: pass i < last writes pong[i % 2], the last (i = effects) reads pong[(i − 1) % 2].
-        let chainOut = preset.effects.filter(\.enabled).count % 2 == 0 ? texA : texB
+        let chainOut = enabledEffects.count % 2 == 0 ? texA : texB
         var styleTex: MTLTexture = chainOut
         var blended = false
         if let out = outgoing {
@@ -953,18 +999,20 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                                    format: format)
                 if let fo = fadeOld, let fn = fadeNew {
                     // Outgoing chain → fadeOld (its own time base keeps its motion coherent).
-                    encodePasses(cmd, finalDescriptor: offscreenDescriptor(fo), pingA: texA, pingB: texB,
+                    encodePasses(cmd, final: .texture(fo), pingA: texA, pingB: texB,
                                  size: drawableSize, time: Float(now - out.startTime),
                                  preset: out.preset, source: source,
                                  sourceTex: media?.currentTexture() ?? outSlides?.texA,
-                                 slides: outSlides, packedUniforms: out.packed, chain: out.chain)
+                                 slides: outSlides, effects: out.effects, packedUniforms: out.packed,
+                                 chain: out.chain, wall: wall)
                     // Incoming chain → fadeNew. The shared ping-pong is safe: the chains
                     // encode sequentially and each result is parked before the next starts.
-                    encodePasses(cmd, finalDescriptor: offscreenDescriptor(fn), pingA: texA, pingB: texB,
+                    encodePasses(cmd, final: .texture(fn), pingA: texA, pingB: texB,
                                  size: drawableSize, time: t, preset: preset, source: source,
-                                 sourceTex: sTex, slides: slides, packedUniforms: packedUniforms, chain: chainID)
+                                 sourceTex: sTex, slides: slides, effects: enabledEffects,
+                                 packedUniforms: packedUniforms, chain: chainID, wall: wall)
                     // Both chains are parked: texA is free for the blend when veiled.
-                    encodeBlend(cmd, final: veiled ? offscreenDescriptor(texA) : final, newTex: fn, oldTex: fo,
+                    encodeBlend(cmd, final: veiled ? .texture(texA) : final, newTex: fn, oldTex: fo,
                                 progress: Float(progress), size: drawableSize)
                     styleTex = texA
                     blended = true
@@ -972,9 +1020,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             }
         }
         if !blended {
-            encodePasses(cmd, finalDescriptor: veiled ? offscreenDescriptor(chainOut) : final, pingA: texA, pingB: texB,
+            encodePasses(cmd, final: veiled ? .texture(chainOut) : final, pingA: texA, pingB: texB,
                          size: drawableSize, time: t, preset: preset, source: source,
-                         sourceTex: sTex, slides: slides, packedUniforms: packedUniforms, chain: chainID)
+                         sourceTex: sTex, slides: slides, effects: enabledEffects,
+                         packedUniforms: packedUniforms, chain: chainID, wall: wall)
         }
         if veiled {
             encodeVeil(cmd, style: styleTex, final: final, size: drawableSize, amount: backdrop,
@@ -1001,20 +1050,83 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         fadeNew = device.makeTexture(descriptor: d)
     }
 
-    private func offscreenDescriptor(_ tex: MTLTexture) -> MTLRenderPassDescriptor {
-        let rpd = MTLRenderPassDescriptor()
-        rpd.colorAttachments[0].texture = tex
-        rpd.colorAttachments[0].loadAction = .dontCare
-        rpd.colorAttachments[0].storeAction = .store
-        return rpd
+    /// Where a pass draws: a caller's descriptor (MTKView's, a thumbnail's clearing one), or a
+    /// texture the pass writes every pixel of (no load, store): the ping-pong targets, the fade
+    /// and veil textures, a drawable.
+    private enum PassTarget {
+        case descriptor(MTLRenderPassDescriptor)
+        case texture(MTLTexture)
+
+        var pixelFormat: MTLPixelFormat? {
+            switch self {
+            case .descriptor(let d): return d.colorAttachments[0].texture?.pixelFormat
+            case .texture(let t): return t.pixelFormat
+            }
+        }
     }
+
+    /// The one descriptor every `.texture` pass is encoded from. The encoder copies it, so it is
+    /// pointed at the pass's texture only for the call (it holds none between passes) — instead
+    /// of a new descriptor (four allocations) per pass per frame. Used on the drawing thread only.
+    private let passDescriptor: MTLRenderPassDescriptor = {
+        let d = MTLRenderPassDescriptor()
+        d.colorAttachments[0].loadAction = .dontCare
+        d.colorAttachments[0].storeAction = .store
+        return d
+    }()
+    private lazy var passAttachment: MTLRenderPassColorAttachmentDescriptor = passDescriptor.colorAttachments[0]
+
+    private func makeEncoder(_ cmd: MTLCommandBuffer, _ target: PassTarget) -> MTLRenderCommandEncoder? {
+        switch target {
+        case .descriptor(let d):
+            return cmd.makeRenderCommandEncoder(descriptor: d)
+        case .texture(let t):
+            passAttachment.texture = t
+            defer { passAttachment.texture = nil }
+            return cmd.makeRenderCommandEncoder(descriptor: passDescriptor)
+        }
+    }
+
+    /// The Album Art backdrop's chain for a layout (its preset is fixed), filtered and packed once.
+    private static func artChain(_ layout: MusicLayoutKind, _ art: Preset) -> (effects: [EffectInstance], packed: [FXUniforms]) {
+        if let c = artChains[layout] { return c }
+        let e = art.effects.filter { $0.enabled }
+        return (e, pack(e))
+    }
+    private static let artChains: [MusicLayoutKind: (effects: [EffectInstance], packed: [FXUniforms])] = {
+        var d: [MusicLayoutKind: (effects: [EffectInstance], packed: [FXUniforms])] = [:]
+        for l in [MusicLayoutKind.album, .stage, .cover] {
+            let e = MusicPresentation.albumArtPreset(l).effects.filter { $0.enabled }
+            d[l] = (e, pack(e))
+        }
+        return d
+    }()
+    private static let noSource = SourceSpec()
+
+    /// The GPU-time completion block (opt-in accounting), made once.
+    private lazy var accumulateGPUTime: MTLCommandBufferHandler = { [weak self] cb in
+        let dt = max(cb.gpuEndTime - cb.gpuStartTime, 0)
+        guard let self else { return }
+        self.gpuLock.lock(); self.gpuAccum += dt; self.gpuLock.unlock()
+    }
+
+    /// FXUniforms.clock / .date for `wall`: computed once per reading (every pass of both chains
+    /// of a frame shares one), the day of the year once per day.
+    private func wallClockUniforms(_ wall: Date) -> (simd_float4, simd_float4) {
+        if let c = clockCache, c.wall == wall { return (c.clock, c.date) }
+        let v = MetalRenderer.wallClock(wall, day: &dayCache)
+        clockCache = (wall, v.0, v.1)
+        return v
+    }
+    private var clockCache: (wall: Date, clock: simd_float4, date: simd_float4)?
+    private var dayCache: DayOfYear?
 
     /// Final pass of a transition frame: mix(fadeOld, fadeNew, smoothstep(progress))
     /// straight into the drawable, via internal shader effect 41.
-    private func encodeBlend(_ cmd: MTLCommandBuffer, final: MTLRenderPassDescriptor,
+    private func encodeBlend(_ cmd: MTLCommandBuffer, final: PassTarget,
                              newTex: MTLTexture, oldTex: MTLTexture,
                              progress: Float, size: CGSize) {
-        guard let pso = fxPipeline, let enc = cmd.makeRenderCommandEncoder(descriptor: final) else { return }
+        guard let pso = fxPipeline, let enc = makeEncoder(cmd, final) else { return }
         enc.setRenderPipelineState(pso)
         var u = FXUniforms()
         u.resolution = simd_float2(Float(size.width), Float(size.height))
@@ -1037,21 +1149,24 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         enc.endEncoding()
     }
 
-    /// Encode the full source→effects pass chain. Last pass writes into `finalDescriptor`.
-    private func encodePasses(_ cmd: MTLCommandBuffer, finalDescriptor: MTLRenderPassDescriptor,
+    /// Encode the full source→effects pass chain. Last pass writes into `final`.
+    /// - effects: the preset's enabled effects, when the caller keeps them (the live chains), with
+    ///   packedUniforms their packed uniforms; wall: the frame's wall-clock reading.
+    private func encodePasses(_ cmd: MTLCommandBuffer, final: PassTarget,
                               pingA: MTLTexture, pingB: MTLTexture, size: CGSize, time: Float,
                               preset: Preset, source: SourceSpec, sourceTex: MTLTexture?,
-                              slides: SlideFrame? = nil,
-                              packedUniforms packed: [FXUniforms]? = nil, chain: Int = -1) {
+                              slides: SlideFrame? = nil, effects inEffects: [EffectInstance]? = nil,
+                              packedUniforms packed: [FXUniforms]? = nil, chain: Int = -1, wall inWall: Date? = nil) {
         let res = simd_float2(Float(size.width), Float(size.height))
         let useGradient = (source.kind == .gradient) || (sourceTex == nil)
-        let effects = preset.effects.filter { $0.enabled }
+        let effects = inEffects ?? preset.effects.filter { $0.enabled }
         let passCount = 1 + effects.count
-        let pong = [pingA, pingB]
+        let wall = inWall ?? clockOverride ?? Date()
+        let (clock, date) = wallClockUniforms(wall)
 
         for i in 0..<passCount {
             let isLast = (i == passCount - 1)
-            let input: MTLTexture = (i == 0) ? (sourceTex ?? dummy) : pong[(i - 1) % 2]
+            let input: MTLTexture = (i == 0) ? (sourceTex ?? dummy) : ((i - 1) % 2 == 0 ? pingA : pingB)
             let inst: EffectInstance? = (i == 0) ? nil : effects[i - 1]
 
             // Serial dither (error diffusion / Riemersma) runs a compute pass first,
@@ -1063,17 +1178,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 if let g = gridTex { fragInput = g; serialBlit = true }
             }
 
-            let rpd: MTLRenderPassDescriptor
-            if isLast {
-                rpd = finalDescriptor
-            } else {
-                rpd = MTLRenderPassDescriptor()
-                rpd.colorAttachments[0].texture = pong[i % 2]
-                rpd.colorAttachments[0].loadAction = .dontCare
-                rpd.colorAttachments[0].storeAction = .store
-            }
+            let target: PassTarget = isLast ? final : .texture(i % 2 == 0 ? pingA : pingB)
 
-            guard let pso = fxPipeline, let enc = cmd.makeRenderCommandEncoder(descriptor: rpd) else { continue }
+            guard let pso = fxPipeline, let enc = makeEncoder(cmd, target) else { continue }
             enc.setRenderPipelineState(pso)
 
             // Start from the pre-packed uniforms (effect id, params, palette) when the
@@ -1083,8 +1190,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             u.resolution = res
             u.time = time
             u.glyphCount = Int32(GlyphAtlas.count)
-            let wall = clockOverride ?? Date()
-            (u.clock, u.date) = MetalRenderer.wallClock(wall)
+            u.clock = clock; u.date = date
             u.srcSize = simd_float2(Float(fragInput.width), Float(fragInput.height))
             u.fillMode = Int32(source.fillMode)
             var sceneData: MTLTexture?           // a scene's own data in slot 6 (Zen Garden's track and stones)
@@ -1122,7 +1228,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 }
                 MetalRenderer.fillLiveSky(&u, inst: inst!, now: wall, time: time, location: location)
                 weatherLink.fill(&u, inst: inst!, time: time, wall: wall, chain: chain,
-                                 encoder: enc, format: rpd.colorAttachments[0].texture?.pixelFormat)
+                                 encoder: enc, format: target.pixelFormat)
                 if inst!.kind == .sandGarden { sceneData = sandGardens.prepare(&u, wall: wall, device: device) }
                 if inst!.kind == .nowPlaying {
                     fillMusic(&u, options: MusicSceneOptions(inst!), size: size, now: CACurrentMediaTime(), wall: wall)
@@ -1153,14 +1259,29 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
     /// Local wall-clock time + date for clock/time-aware scenes (see FXUniforms.clock/.date).
     static func wallClock(_ now: Date = Date()) -> (simd_float4, simd_float4) {
+        var day: DayOfYear?
+        return wallClock(now, day: &day)
+    }
+
+    /// A calendar day and its day of the year (what `ordinality` gave for it).
+    struct DayOfYear { var year: Int, month: Int, day: Int, doy: Float }
+    private static let wallComponents: Set<Calendar.Component> = [.year, .month, .day, .hour, .minute, .second, .nanosecond, .weekday]
+
+    /// wallClock, reusing `day`'s day of the year while `now` falls on that calendar day.
+    static func wallClock(_ now: Date, day: inout DayOfYear?) -> (simd_float4, simd_float4) {
         let cal = Calendar.current
-        let c = cal.dateComponents([.year, .month, .day, .hour, .minute, .second, .nanosecond, .weekday], from: now)
+        let c = cal.dateComponents(wallComponents, from: now)
         let sec = Float(c.second ?? 0) + Float(c.nanosecond ?? 0) / 1e9
         let min = Float(c.minute ?? 0) + sec / 60
         let hour = Float(c.hour ?? 0) + min / 60
-        let doy = Float(cal.ordinality(of: .day, in: .year, for: now) ?? 1)
+        let y = c.year ?? 2026, mo = c.month ?? 1, d = c.day ?? 1
+        let doy: Float
+        if let k = day, k.year == y, k.month == mo, k.day == d { doy = k.doy } else {
+            doy = Float(cal.ordinality(of: .day, in: .year, for: now) ?? 1)
+            day = DayOfYear(year: y, month: mo, day: d, doy: doy)
+        }
         return (simd_float4(hour, min, sec, Float(c.weekday ?? 1)),
-                simd_float4(Float(c.year ?? 2026), Float(c.month ?? 1), Float(c.day ?? 1), doy))
+                simd_float4(Float(y), Float(mo), Float(d), doy))
     }
 
     /// Live sun direction (view space) + the user's longitude, from the wall clock and
@@ -1200,8 +1321,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// clock forward from `now` by the scene's own time.
     static func fillLiveSky(_ u: inout FXUniforms, inst: EffectInstance, now: Date, time: Float,
                             location: (lat: Double, lon: Double)?) {
-        let live = ([.oceanHorizon, .shallows, .pleats, .dichroic, .sandGarden].contains(inst.kind) && (inst.params["live"] ?? 0) > 0.5)
-            || (inst.kind == .windowLight && (inst.params["follow"] ?? 1) > 0.5)
+        let live: Bool
+        switch inst.kind {                       // (a switch: no array built every pass)
+        case .oceanHorizon, .shallows, .pleats, .dichroic, .sandGarden: live = (inst.params["live"] ?? 0) > 0.5
+        case .windowLight: live = (inst.params["follow"] ?? 1) > 0.5
+        default: live = false
+        }
         guard live else { return }
         let lapse = inst.params["lapse"] ?? 0
         let rate = lapse > 0.05 ? 1440.0 / lapse : 1.0           // simulated s per real s
@@ -1415,18 +1540,18 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 d.usage = [.shaderRead, .renderTarget]
                 d.storageMode = .private
                 if let t = device.makeTexture(descriptor: d) {
-                    encodePasses(cmd, finalDescriptor: offscreenDescriptor(t), pingA: pingA, pingB: pingB, size: size,
+                    encodePasses(cmd, final: .texture(t), pingA: pingA, pingB: pingB, size: size,
                                  time: time, preset: art, source: SourceSpec(), sourceTex: nil)
                     artTex = t
                 }
             }
             let out = preset.effects.filter(\.enabled).count % 2 == 0 ? pingA : pingB
-            encodePasses(cmd, finalDescriptor: offscreenDescriptor(out), pingA: pingA, pingB: pingB,
+            encodePasses(cmd, final: .texture(out), pingA: pingA, pingB: pingB,
                          size: size, time: time, preset: preset, source: source, sourceTex: thumbTex, slides: slides)
             var pyramid: [MTLTexture] = []
-            encodeVeil(cmd, style: out, final: desc, size: size, amount: amount, art: artTex, pyramid: &pyramid)
+            encodeVeil(cmd, style: out, final: .descriptor(desc), size: size, amount: amount, art: artTex, pyramid: &pyramid)
         } else {
-            encodePasses(cmd, finalDescriptor: desc, pingA: pingA, pingB: pingB, size: size, time: time,
+            encodePasses(cmd, final: .descriptor(desc), pingA: pingA, pingB: pingB, size: size, time: time,
                          preset: preset, source: source, sourceTex: thumbTex, slides: slides)
         }
         cmd.commit()
