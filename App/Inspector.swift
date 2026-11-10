@@ -655,44 +655,61 @@ struct BounceLogoSection: View {
     }
 
     private var imageControls: some View {
-        let shape = RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
         let has = effect.logoFile != nil
         return VStack(alignment: .leading, spacing: layout.inspectorRowGap) {
             InspectorRow(label: "Image") {
-                HStack(spacing: layout.controlGap) {
-                    ZStack {
-                        shape.fill(Color.primary.opacity(0.06))
-                        if let thumb {
-                            Image(nsImage: thumb)
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .padding(Space.xs)
-                        } else {
-                            Image(systemName: "photo")
-                                .textRole(.body)
-                                .foregroundStyle(.secondary)
-                        }
+                // The thumbnail beside its buttons; where they'd be cut off (a narrow inspector,
+                // large text), the buttons go under it instead.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: layout.controlGap) {
+                        thumbnail(has)
+                        VStack(alignment: .leading, spacing: layout.labelGap) { imageButtons(has) }
                     }
-                    .frame(width: thumbHeight * 1.6, height: thumbHeight)
-                    .overlay(shape.strokeBorder(Color.primary.opacity(0.1)))
-                    .accessibilityLabel(has ? "Logo image" : "No logo image")
                     VStack(alignment: .leading, spacing: layout.labelGap) {
-                        Button { choosing = true } label: {
-                            ScaledControlLabel(title: has ? "Replace…" : "Choose Image…", role: .inspectorSmallControl)
-                        }
-                        .help("Choose a logo image (PNG with transparency works best, or JPEG, HEIC, SVG, PDF)")
-                        if has {
-                            Button { effect.logoFile = nil } label: {
-                                ScaledControlLabel(title: "Remove", role: .inspectorSmallControl)
-                            }
-                            .help("Remove the image (the DotStudio mark bounces until you choose another)")
-                        }
+                        thumbnail(has)
+                        HStack(spacing: layout.controlGap) { imageButtons(has) }
                     }
-                    .adaptiveControlSize(.small)
                 }
             }
             note(has ? "Transparent images bounce off their visible edges; opaque ones show as a card."
                      : "Choose an image — until then the DotStudio mark bounces.")
+        }
+    }
+
+    private func thumbnail(_ has: Bool) -> some View {
+        let shape = RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
+        return ZStack {
+            shape.fill(Color.primary.opacity(0.06))
+            if let thumb {
+                Image(nsImage: thumb)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .padding(Space.xs)
+            } else {
+                Image(systemName: "photo")
+                    .textRole(.body)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: thumbHeight * 1.4, height: thumbHeight)
+        .overlay(shape.strokeBorder(Color.primary.opacity(0.1)))
+        .accessibilityLabel(has ? "Logo image" : "No logo image")
+    }
+
+    @ViewBuilder private func imageButtons(_ has: Bool) -> some View {
+        Button { choosing = true } label: {
+            ScaledControlLabel(title: has ? "Replace…" : "Choose Image…", role: .inspectorSmallControl)
+        }
+        .help("Choose a logo image (PNG with transparency works best, or JPEG, HEIC, SVG, PDF)")
+        .adaptiveControlSize(.small)
+        .fixedSize()
+        if has {
+            Button { effect.logoFile = nil } label: {
+                ScaledControlLabel(title: "Remove", role: .inspectorSmallControl)
+            }
+            .help("Remove the image (the DotStudio mark bounces until you choose another)")
+            .adaptiveControlSize(.small)
+            .fixedSize()
         }
     }
 
