@@ -248,9 +248,17 @@ enum BounceLogo {
             let word = text.trimmingCharacters(in: .whitespacesAndNewlines)
             return word.isEmpty ? nil : wordImage(String(word.prefix(48)))
         case .image:
-            guard !file.isEmpty else { return nil }
-            return loadImage(mediaDir.appendingPathComponent(file))
+            return fileURL(file, mediaDir: mediaDir).flatMap(loadImage)
         }
+    }
+
+    /// The Image logo's file: a plain name inside the media folder (a shared or hand-edited
+    /// library can't point it anywhere else); nil for none.
+    static func fileURL(_ file: String?, mediaDir: URL) -> URL? {
+        guard let file else { return nil }
+        let name = (file as NSString).lastPathComponent
+        guard !name.isEmpty, !name.hasPrefix("."), name == file else { return nil }
+        return mediaDir.appendingPathComponent(name)
     }
 
     // MARK: Building
