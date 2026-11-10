@@ -12,6 +12,7 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+import ImageIO
 
 // MARK: - Shared metrics
 
@@ -338,7 +339,8 @@ struct EffectStackView: View {
                           isExpanded: expandedBinding(effect.id),
                           isFirst: preset.effects.first?.id == effect.id,
                           onDuplicate: { duplicate(effect.id) },
-                          onRemove: { remove(effect.id) })
+                          onRemove: { remove(effect.id) },
+                          model: model)
                     .listRowInsets(rowInsets(vertical: layout.labelGap))
                     // The separator under each effect spans the content edges, edge A to
                     // edge A, like the header divider above the list.
@@ -458,6 +460,8 @@ struct EffectRow: View {
     let isFirst: Bool
     let onDuplicate: () -> Void
     let onRemove: () -> Void
+    /// For a Bounce layer's Logo section (importing an image into the shared media folder).
+    var model: AppModel? = nil
     @Environment(\.layout) private var layout
     @ScaledLength(relativeTo: .body) private var eyeColumn: CGFloat = InspectorMetrics.eyeColumn
     @ScaledLength(relativeTo: .body) private var glyphColumn: CGFloat = InspectorMetrics.glyphColumn
@@ -473,6 +477,9 @@ struct EffectRow: View {
                     }
                     if effect.kind.usesColors {
                         ColorWellsRow(wells: wells)
+                    }
+                    if effect.kind == .bounce, let model {
+                        BounceLogoSection(effect: $effect, model: model)
                     }
                 }
                 .padding(.leading, eyeColumn + layout.iconGap)
@@ -573,12 +580,14 @@ struct EffectRow: View {
         effect.params == effect.kind.defaultParams
             && effect.colorA == effect.kind.defaultColorA
             && effect.colorB == effect.kind.defaultColorB
+            && effect.logoKind == nil && effect.logoText == nil && effect.logoFile == nil
     }
 
     private func reset() {
         effect.params = effect.kind.defaultParams
         effect.colorA = effect.kind.defaultColorA
         effect.colorB = effect.kind.defaultColorB
+        effect.logoKind = nil; effect.logoText = nil; effect.logoFile = nil
     }
 
     private func paramBinding(_ spec: ParamSpec) -> Binding<Double> {
@@ -593,6 +602,120 @@ struct EffectRow: View {
                 return Color(c ?? .black)
             },
             set: { if isA { effect.colorA = RGBA($0) } else { effect.colorB = RGBA($0) } })
+    }
+}
+
+/// Bounce's logo: the built-in DotStudio mark, a word the user types (their name), or an image
+/// of theirs — copied into the shared media folder, where the sandboxed screensaver can read it.
+/// The choice lives on the effect (EffectInstance.logoKind / logoText / logoFile); the word and
+/// the image are both kept while another kind is picked, so switching back restores them.
+struct BounceLogoSection: View {
+    @Binding var effect: EffectInstance
+    @ObservedObject var model: AppModel
+    @Environment(\.layout) private var layout
+    @ScaledLength(relativeTo: .callout) private var thumbHeight: CGFloat = 64
+    @State private var choosing = false
+    @State private var thumb: NSImage?
+
+    private var kind: BounceLogoKind { effect.logoKind ?? .builtIn }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: layout.inspectorRowGap) {
+            InspectorRow(label: "Logo") {
+                SegmentedChoice(title: "Logo",
+                                selection: Binding(get: { kind }, set: { effect.logoKind = $0 == .builtIn ? nil : $0 }),
+                                options: [("Built-in", .builtIn), ("Text", .text), ("Image", .image)])
+            }
+            switch kind {
+            case .builtIn:
+                note("The DotStudio mark.")
+            case .text:
+                InspectorRow(label: "Text") {
+                    TextField("Your name", text: Binding(get: { effect.logoText ?? "" },
+                                                         set: { effect.logoText = $0.isEmpty ? nil : String($0.prefix(48)) }))
+                        .textFieldStyle(.roundedBorder)
+                        .textRole(.body)
+                        .accessibilityLabel("Logo text")
+                }
+                if (effect.logoText ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
+                    note("Type a word — until then the DotStudio mark bounces.")
+                }
+            case .image:
+                imageControls
+            }
+        }
+        .fileImporter(isPresented: $choosing, allowedContentTypes: [.png, .jpeg, .heic, .svg, .pdf, .image]) { result in
+            guard case .success(let url) = result else { return }
+            if let name = model.importLogo(url) {
+                effect.logoFile = name
+                effect.logoKind = .image
+            }
+        }
+        .task(id: effect.logoFile) { await loadThumb() }
+    }
+
+    private var imageControls: some View {
+        let shape = RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
+        let has = effect.logoFile != nil
+        return VStack(alignment: .leading, spacing: layout.inspectorRowGap) {
+            InspectorRow(label: "Image") {
+                HStack(spacing: layout.controlGap) {
+                    ZStack {
+                        shape.fill(Color.primary.opacity(0.06))
+                        if let thumb {
+                            Image(nsImage: thumb)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .padding(Space.xs)
+                        } else {
+                            Image(systemName: "photo")
+                                .textRole(.body)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(width: thumbHeight * 1.6, height: thumbHeight)
+                    .overlay(shape.strokeBorder(Color.primary.opacity(0.1)))
+                    .accessibilityLabel(has ? "Logo image" : "No logo image")
+                    VStack(alignment: .leading, spacing: layout.labelGap) {
+                        Button { choosing = true } label: {
+                            ScaledControlLabel(title: has ? "Replace…" : "Choose Image…", role: .inspectorSmallControl)
+                        }
+                        .help("Choose a logo image (PNG with transparency works best, or JPEG, HEIC, SVG, PDF)")
+                        if has {
+                            Button { effect.logoFile = nil } label: {
+                                ScaledControlLabel(title: "Remove", role: .inspectorSmallControl)
+                            }
+                            .help("Remove the image (the DotStudio mark bounces until you choose another)")
+                        }
+                    }
+                    .adaptiveControlSize(.small)
+                }
+            }
+            note(has ? "Transparent images bounce off their visible edges; opaque ones show as a card."
+                     : "Choose an image — until then the DotStudio mark bounces.")
+        }
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .textRole(.caption).foregroundStyle(.secondary)
+            .wrapping()
+    }
+
+    /// The chosen image, small, off the main thread.
+    private func loadThumb() async {
+        guard let name = effect.logoFile else { thumb = nil; return }
+        let url = model.store.mediaURL(name)
+        let img = await Task.detached(priority: .userInitiated) { () -> NSImage? in
+            guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 256] as CFDictionary)
+            else { return NSImage(contentsOf: url) }
+            return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+        }.value
+        if effect.logoFile == name { thumb = img }
     }
 }
 

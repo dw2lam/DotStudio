@@ -1,8 +1,9 @@
-//  Retro.swift — the Retro scene pack (shader ids 62–65). See SceneCatalog.swift.
+//  Retro.swift — the Retro scene pack (shader ids 62–65, 74). See SceneCatalog.swift.
 //
 //  Classic screensaver genres, re-rendered: a neon horizon drive, glossy pipes growing
-//  through a dark room, luminous polygon ribbons, and a demoscene light tunnel.
-//  Shaders: Retro_funcs.h (helpers) + Retro_cases.h (ids 62–65).
+//  through a dark room, luminous polygon ribbons, a demoscene light tunnel, and the bouncing
+//  logo (Bounce: its motion and logos are in Bounce.swift).
+//  Shaders: Retro_funcs.h (helpers) + Retro_cases.h (ids 62–65, 74).
 
 import Foundation
 
@@ -60,6 +61,19 @@ extension SceneCatalog {
                      ParamSpec("gloss", "Gloss", 0, 1, def: 0.75)],
             colorA: RGBA(0.62, 0.66, 0.74), colorB: RGBA(0.20, 0.85, 1.0),
             colorALabel: "Metal", colorBLabel: "Neon"),
+        // The logo itself (built-in mark, a word, or an image) is EffectInstance.logoKind /
+        // logoText / logoFile, edited in the Inspector's Logo section (BounceLogoSection).
+        .bounce: SceneSpec(
+            name: "Bounce",
+            blurb: "A logo glides from edge to edge, changing color at every bounce — wait for the perfect corner.",
+            shaderID: 74,
+            params: [ParamSpec("speed", "Speed", 0.2, 3, def: 1),
+                     ParamSpec("size", "Logo Size", 0.08, 0.5, def: 0.24),
+                     ParamSpec(menu: "color", "Color", ["Shift on Bounce", "Rainbow", "Fixed", "Original Colors"], def: 0),
+                     ParamSpec("flourish", "Corner Flourish", 0, 1, def: 1, toggle: true),
+                     ParamSpec("trail", "Trail", 0, 1, def: 0)],
+            colorA: RGBA(0, 0, 0), colorB: RGBA(0.36, 0.62, 1.0),
+            colorALabel: "Background", colorBLabel: "Fixed Color"),
     ]
 
     private static func retroFx(_ kind: EffectKind, _ params: [String: Double],
@@ -95,6 +109,9 @@ extension SceneCatalog {
             Preset(name: "Light Tunnel",
                    effects: [retroFx(.demoTunnel, ["speed": 1, "shape": 0, "twist": 0.7, "panels": 1, "lights": 1, "gloss": 0.75],
                                      a: RGBA(0.62, 0.66, 0.74), b: RGBA(0.20, 0.85, 1.0))]),
+            Preset(name: "Bounce",
+                   effects: [retroFx(.bounce, ["speed": 1, "size": 0.24, "color": 0, "flourish": 1, "trail": 0],
+                                     a: RGBA(0, 0, 0), b: RGBA(0.36, 0.62, 1.0))]),
             Preset(name: "Hex Tunnel",
                    effects: [retroFx(.demoTunnel, ["speed": 1.4, "shape": 2, "twist": 1.2, "panels": 1.2, "lights": 1.3, "gloss": 0.9],
                                      a: RGBA(0.45, 0.41, 0.50), b: RGBA(1.0, 0.30, 0.62))]),

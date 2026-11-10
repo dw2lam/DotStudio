@@ -315,6 +315,21 @@ enum UIShots {
             st.edit(st.look)
         }, view: main))
 
+        // Bounce: the editor with each kind of logo (text: a long name; image: a test badge
+        // written into the throwaway store's media folder), and the Logo section on its own.
+        for kind in BounceLogoKind.allCases {
+            s.append(Screen(name: "editor-bounce-\(kind.rawValue)", frame: .window, prepare: { st in
+                guard let id = st.bounce(kind) else { return }
+                st.lineup([id])
+                st.edit(id)
+            }, view: main))
+            s.append(Screen(name: "bounce-logo-\(kind.rawValue)", frame: .fit(width: 320), prepare: { st in
+                _ = st.bounce(kind)
+            }, view: { st in
+                AnyView(BounceLogoShot(model: st.model, id: st.library.presets.first { $0.name == "Bounce" }?.id))
+            }))
+        }
+
         // Popover contents
         s.append(Screen(name: "add-effect", frame: .fixed(CGSize(width: 430, height: 500)), view: { st in
             AnyView(AddEffectPicker(source: st.model.library.source, thumbnailer: st.model.thumbnailer,
@@ -510,6 +525,24 @@ enum UIShots {
             model.editingID = id
         }
 
+        /// The Bounce style set to show a logo of `kind` (the text and the image under stress are
+        /// long); its id.
+        func bounce(_ kind: BounceLogoKind) -> UUID? {
+            guard let i = model.library.presets.firstIndex(where: { $0.effects.first?.kind == .bounce }) else { return nil }
+            var e = model.library.presets[i].effects[0]
+            e.logoKind = kind == .builtIn ? nil : kind
+            e.logoText = kind == .text ? (stress ? "Supercalifragilistic Studios International" : "David") : nil
+            e.logoFile = nil
+            if kind == .image {
+                let name = "uishots-logo-badge.png"
+                let url = model.store.mediaURL(name)
+                if !FileManager.default.fileExists(atPath: url.path) { UIShots.writeTestLogo(to: url) }
+                e.logoFile = name
+            }
+            model.library.presets[i].effects[0] = e
+            return model.library.presets[i].id
+        }
+
         func emptyLibrary() {
             model.library.presets = []
             model.selectedID = nil
@@ -532,6 +565,26 @@ enum UIShots {
             }
             return s
         }
+    }
+
+    /// A made-up logo (a star in a ring, transparent around it) for the Bounce screens.
+    static func writeTestLogo(to url: URL) {
+        let W = 400, H = 400
+        guard let c = CGContext(data: nil, width: W, height: H, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        c.setFillColor(CGColor(srgbRed: 0.10, green: 0.20, blue: 0.55, alpha: 1))
+        c.fillEllipse(in: CGRect(x: 60, y: 60, width: 280, height: 280))
+        c.setFillColor(CGColor(srgbRed: 1.0, green: 0.62, blue: 0.10, alpha: 1))
+        c.move(to: CGPoint(x: 200, y: 320))
+        for i in 1..<10 {
+            let a = Double(i) * .pi / 5 + .pi / 2, r = i % 2 == 0 ? 120.0 : 50.0
+            c.addLine(to: CGPoint(x: 200 + r * cos(a), y: 200 + r * sin(a)))
+        }
+        c.closePath(); c.fillPath()
+        guard let cg = c.makeImage(),
+              let data = NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]) else { return }
+        try? data.write(to: url)
     }
 
     // MARK: Stress data
@@ -725,5 +778,20 @@ private struct SettingsSectionPreview<Content: View>: View {
             .textRole(.body)
             .formControlSize()
             .scrollDisabled(true)
+    }
+}
+
+/// The Bounce effect's row, expanded, editing the library's Bounce style (UI shots).
+private struct BounceLogoShot: View {
+    @ObservedObject var model: AppModel
+    let id: UUID?
+    @State private var open = true
+
+    var body: some View {
+        if let id, let i = model.library.presets.firstIndex(where: { $0.id == id }) {
+            EffectRow(effect: $model.library.presets[i].effects[0], isExpanded: $open, isFirst: true,
+                      onDuplicate: {}, onRemove: {}, model: model)
+                .padding(Space.m)
+        }
     }
 }

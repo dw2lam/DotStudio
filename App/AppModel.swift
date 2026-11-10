@@ -207,8 +207,9 @@ final class AppModel: ObservableObject {
     /// Featured built-ins every library gets once, even one from before seenBuiltIns existed.
     /// (Now Playing was one until music became a presentation over any style — it's retired:
     /// never added, and a library that has it keeps it.)
-    // The 1.4 highlights 1.3 users get once on upgrade.
-    static let promotedBuiltIns = ["Tidewater", "Sunray", "Shallows"]
+    // The 1.4 highlights 1.3 users get once on upgrade, and Bounce (new after 1.4; a 1.4 library
+    // gets it as a new featured built-in).
+    static let promotedBuiltIns = ["Tidewater", "Sunray", "Shallows", "Bounce"]
 
     /// New built-in styles reach existing libraries exactly once (runs on every launch):
     ///  • no `seenBuiltIns` (a library from before 1.4): everything shipping now counts as
@@ -581,6 +582,21 @@ final class AppModel: ObservableObject {
             storeAlert = StoreAlert(
                 title: "Couldn't Import \(failures.count == 1 ? "a Photo" : "\(failures.count) Photos")",
                 message: failures.joined(separator: ", ") + " couldn't be copied into your library.")
+        }
+    }
+
+    /// A Bounce logo image, copied into the shared media folder (where the screensaver can read
+    /// it): its stored name, or nil after telling the user why not.
+    func importLogo(_ url: URL) -> String? {
+        let ok = url.startAccessingSecurityScopedResource()
+        defer { if ok { url.stopAccessingSecurityScopedResource() } }
+        do {
+            return try store.importMedia(from: url)
+        } catch {
+            storeAlert = StoreAlert(
+                title: "Couldn't Import Logo",
+                message: "“\(url.lastPathComponent)” couldn't be copied into your library: \(error.localizedDescription)")
+            return nil
         }
     }
 

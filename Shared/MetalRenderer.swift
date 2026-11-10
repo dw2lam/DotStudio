@@ -1235,7 +1235,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             u.clock = clock; u.date = date
             u.srcSize = simd_float2(Float(fragInput.width), Float(fragInput.height))
             u.fillMode = Int32(source.fillMode)
-            var sceneData: MTLTexture?           // a scene's own data in slot 6 (Zen Garden's track and stones)
+            var sceneData: MTLTexture?           // a scene's own data in slot 6 (Zen Garden's track and stones, Bounce's logo)
 
             if i == 0 {
                 if useGradient {
@@ -1272,6 +1272,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 weatherLink.fill(&u, inst: inst!, time: time, wall: wall, chain: chain,
                                  encoder: enc, format: target.pixelFormat)
                 if inst!.kind == .sandGarden { sceneData = sandGardens.prepare(&u, wall: wall, device: device) }
+                if inst!.kind == .bounce {          // the logo (cached per logo) + this frame's pose
+                    sceneData = BounceLogo.prepare(&u, inst: inst!, mediaDir: store.mediaDir, device: device)
+                }
                 if inst!.kind == .nowPlaying {
                     fillMusic(&u, options: MusicSceneOptions(inst!), size: size, now: CACurrentMediaTime(), wall: wall)
                 }
