@@ -5,15 +5,26 @@ import ScreenSaver
 import MetalKit
 import QuartzCore
 import IOKit.ps
+import notify
 
 @objc(DotSaverView)
 final class DotSaverView: ScreenSaverView {
+#if DOTSTUDIO_PERF
+    private let store = SharedStore(role: .app)      // tools/perf: its temp DOTSTUDIO_STORE_DIR
+#else
     private let store = SharedStore(role: .saver)
+#endif
     private var metalView: MTKView?
+    /// The view's CAMetalLayer: each frame draws straight into it (MetalRenderer.draw(to:)).
+    private var metalLayer: CAMetalLayer?
     private var renderer: MetalRenderer?
     private var activeID: UUID?
-    private var lastModified: Date?
-    private var frameTick = 0
+    private var lastModified: FileStamp?
+    /// library.json as last decoded, by its stamp: reload() runs every second (rotation and
+    /// schedule follow the clock) but decodes only when the file changed.
+    private var libraryCache: (stamp: FileStamp, load: SharedStore.LibraryLoad)?
+    private lazy var libraryPath = store.libraryURL.path
+    private var lastReload: CFTimeInterval = 0
     private var renderScale: CGFloat = 1   // Library.renderScale (1 = full Retina)
     private var presetFPS = 30             // active preset's fps, before power clamps
     private var lastFrameAt = CACurrentMediaTime()
@@ -112,6 +123,7 @@ final class DotSaverView: ScreenSaverView {
         // 2 we allow in flight (see MetalRenderer.inFlight), without over-allocating.
         if let metalLayer = view.layer as? CAMetalLayer {
             metalLayer.maximumDrawableCount = 3
+            self.metalLayer = metalLayer
         }
         // fastStart: the renderer never waits on a shader compile (the first start after an
         // update used to sit ~3.5 s on the desktop while fx_fragment compiled, before this view
@@ -171,7 +183,9 @@ final class DotSaverView: ScreenSaverView {
         metalView?.releaseDrawables()      // force the CAMetalLayer pool free NOW
         metalView?.removeFromSuperview()
         metalView = nil
+        metalLayer = nil
         renderer = nil
+        libraryCache = nil
         // The overlay holds artwork bitmaps and the feed a decoded cover: a leaked husk keeps neither.
         musicOverlay?.removeFromSuperview()
         musicOverlay = nil
@@ -189,17 +203,29 @@ final class DotSaverView: ScreenSaverView {
         shownPreset = nil
         activeID = nil
         lastModified = nil
-        frameTick = 0
         // The leaked window is hidden, so nothing else commits our layer removal
         // to the render server — without a flush WindowServer keeps the drawable
         // IOSurfaces pinned in this process forever.
         CATransaction.flush()
     }
 
+    /// library.json: one stat, and a decode only when it changed since the last read.
+    private func readLibrary() -> (FileStamp?, SharedStore.LibraryLoad) {
+        guard let stamp = FileStamp(path: libraryPath) else {
+            libraryCache = nil
+            return (nil, store.loadLibrary())          // .missing (or a file that just appeared)
+        }
+        if let c = libraryCache, c.stamp == stamp { return (stamp, c.load) }
+        let load = store.loadLibrary()
+        libraryCache = (stamp, load)
+        return (stamp, load)
+    }
+
     private func reload(force: Bool) {
-        let mod = store.libraryModified()
+        lastReload = CACurrentMediaTime()
+        let (mod, load) = readLibrary()
         let lib: Library
-        switch store.loadLibrary() {
+        switch load {
         case .loaded(let l) where !l.presets.isEmpty:
             lib = l
         case .corrupt:
@@ -241,7 +267,7 @@ final class DotSaverView: ScreenSaverView {
                 renderer?.apply(target, source: lib.source)
             }
             presetFPS = target.fps
-            animationTimeInterval = effectiveInterval()
+            updateInterval()
             shownPreset = target
             // A new style or a library edit (Show music, corner, backdrop, linger): re-present.
             updateMusic(animated: !force)
@@ -277,6 +303,12 @@ final class DotSaverView: ScreenSaverView {
 
     // MARK: Frame pacing (preview + power aware)
 
+    /// Set only on a change: the host re-reads it (and may re-arm its timer) on every set.
+    private func updateInterval() {
+        let iv = effectiveInterval()
+        if iv != animationTimeInterval { animationTimeInterval = iv }
+    }
+
     /// The preset's fps, clamped for the Settings thumbnail and for battery power.
     private func effectiveInterval() -> TimeInterval {
         var fps = max(presetFPS, 1)
@@ -290,8 +322,27 @@ final class DotSaverView: ScreenSaverView {
         return 1.0 / Double(fps)
     }
 
+    /// The power-source change notification, checked with notify_check (a read of shared
+    /// memory) so the 1 Hz power check asks IOKit (an IPC to powerd) only after a change.
+    /// -1 = registration failed: ask every time, as before.
+    private static let powerToken: Int32 = {
+        var t: Int32 = 0
+        return notify_register_check(kIOPSNotifyPowerSource, &t) == NOTIFY_STATUS_OK ? t : -1
+    }()
+    private static var lastOnBattery: Bool?
+
     /// True when running on battery. Defensive: any failure reads as AC power.
     private static func onBattery() -> Bool {
+        if powerToken >= 0, let last = lastOnBattery {
+            var changed: Int32 = 0
+            if notify_check(powerToken, &changed) == NOTIFY_STATUS_OK, changed == 0 { return last }
+        }
+        let v = readOnBattery()
+        lastOnBattery = v
+        return v
+    }
+
+    private static func readOnBattery() -> Bool {
         guard let snapshot = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
               let sources = IOPSCopyPowerSourcesList(snapshot)?.takeRetainedValue() as? [CFTypeRef]
         else { return false }
@@ -321,16 +372,19 @@ final class DotSaverView: ScreenSaverView {
             if mv.frame.size != bounds.size { mv.frame = bounds }   // catch up if we started 0×0
             if let ov = musicOverlay, ov.frame.size != bounds.size { ov.frame = bounds }
             syncDrawableSize()
-            frameTick += 1
             if lastFrameAt - lastMusicTick >= 1 {
                 lastMusicTick = lastFrameAt
                 musicTick()                                         // music.json ~1×/sec (a stat)
             }
-            if frameTick % 30 == 0 {
-                reload(force: false)                                // poll for edits ~1×/sec
-                animationTimeInterval = effectiveInterval()         // track battery/power changes
+            // ~1×/sec whatever the frame rate (it was every 30th frame: 4×/sec at 120 fps):
+            // a stat of library.json, a decode only after an edit, the rotation/schedule clock.
+            if lastFrameAt - lastReload >= 1 {
+                reload(force: false)
+                updateInterval()                                    // track battery/power changes
             }
-            mv.draw()
+            // Straight into the layer: the same frame MTKView.draw() → draw(in:) made, without
+            // its render pass descriptor and drawable bookkeeping every frame.
+            if let layer = metalLayer, let r = renderer { r.draw(to: layer) } else { mv.draw() }
             fadeInIfDrawn()
         }
     }
@@ -366,8 +420,11 @@ final class DotSaverView: ScreenSaverView {
         let backing = window?.backingScaleFactor ?? 2
         let target = CGSize(width: max((bounds.width * backing * renderScale).rounded(), 1),
                             height: max((bounds.height * backing * renderScale).rounded(), 1))
-        if mv.drawableSize != target {
+        // MTKView applies its drawableSize to the layer only when it hands out a drawable
+        // itself; frames go straight to the layer, so it's sized here too.
+        if mv.drawableSize != target || (metalLayer.map { $0.drawableSize != target } ?? false) {
             mv.drawableSize = target
+            metalLayer?.drawableSize = target
             if let layer = mv.layer as? CAMetalLayer {
                 // Keep the dot aesthetic crisp when upscaling a reduced render.
                 layer.magnificationFilter = renderScale < 1 ? .nearest : .linear

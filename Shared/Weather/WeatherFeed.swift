@@ -16,10 +16,11 @@ import simd
 
 final class WeatherFeed {
     let fileURL: URL
+    private let filePath: String
     private(set) var state: WeatherState?
     /// Bumps whenever `state` changes.
     private(set) var revision = 0
-    private var lastModified: Date?
+    private var lastModified: FileStamp?
     private var checked = false
 
     init(baseDir: URL) {
@@ -28,12 +29,13 @@ final class WeatherFeed {
         } else {
             fileURL = baseDir.appendingPathComponent(WeatherState.fileName)
         }
+        filePath = fileURL.path
     }
 
     /// Re-reads weather.json if its mtime changed. Returns true when the state changed.
     @discardableResult
     func poll() -> Bool {
-        let mod = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.modificationDate]) as? Date
+        let mod = FileStamp(path: filePath)
         guard !checked || mod != lastModified else { return false }
         checked = true
         lastModified = mod
@@ -113,8 +115,7 @@ final class WeatherLink {
         guard WeatherLink.usesWeather(inst.kind) else { return }
         defer {
             if u.weather2.w > 0.5, let encoder, let format,
-               let pso = WeatherLink.pipeline(for: inst.kind, device: encoder.device, format: format,
-                                              cumulus: WeatherLink.cumulus(u)) {
+               let pso = pipeline(for: inst.kind, device: encoder.device, format: format, cumulus: WeatherLink.cumulus(u)) {
                 encoder.setRenderPipelineState(pso)
             }
         }
@@ -134,6 +135,22 @@ final class WeatherLink {
     }
 
     // MARK: Pipelines
+
+    /// This link's pipelines once built (one renderer draws on one GPU, in one format): the shared
+    /// table below keys them by a string made per lookup, which every weather frame would pay.
+    private var built: [Int: MTLRenderPipelineState] = [:]
+
+    private func pipeline(for kind: EffectKind, device: MTLDevice, format: MTLPixelFormat,
+                          cumulus: Bool) -> MTLRenderPipelineState? {
+        let key = (kind == .shallows ? 2 : (cumulus ? 1 : 0)) | Int(format.rawValue) << 2
+        lock.lock()
+        let hit = built[key]
+        lock.unlock()
+        if let hit { return hit }
+        guard let p = WeatherLink.pipeline(for: kind, device: device, format: format, cumulus: cumulus) else { return nil }
+        lock.lock(); built[key] = p; lock.unlock()
+        return p
+    }
 
     // Per GPU and format, process-wide (a saver host keeps them past its views: see purge()).
     // The lock guards the tables only, never a compile: a pipeline is built outside it, and a

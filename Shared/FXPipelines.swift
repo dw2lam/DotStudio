@@ -141,12 +141,21 @@ final class FXPipelines {
         render(FXPipelines.uberFunction, wait: wait)
     }
 
+    /// A pipeline already built (or nil): just the table lookup, no build closure made — the
+    /// path every call takes once a pipeline exists.
+    private func ready(_ key: String) -> AnyObject? {
+        lock.lock(); defer { lock.unlock() }
+        if case .ready(let p)? = slots[key] { return p }
+        return nil
+    }
+
     func veil(down: Bool, wait: Bool) -> MTLRenderPipelineState? {
         render(FXPipelines.veilFunctions[down ? 0 : 1], wait: wait)
     }
 
     func compute(_ name: String, wait: Bool) -> MTLComputePipelineState? {
-        get(name, wait: wait) { [library, device, archive] archiveOnly in
+        if let p = ready(name) as? MTLComputePipelineState { return p }
+        return get(name, wait: wait) { [library, device, archive] archiveOnly in
             FXPipelines.computeDescriptor(library, name: name, archive: archive)
                 .flatMap { FXPipelines.makeCompute($0, device: device, archiveOnly: archiveOnly) }
         } as? MTLComputePipelineState
@@ -169,7 +178,8 @@ final class FXPipelines {
     }
 
     private func render(_ name: String, wait: Bool) -> MTLRenderPipelineState? {
-        get(name, wait: wait) { [library, device, format, archive] archiveOnly in
+        if let p = ready(name) as? MTLRenderPipelineState { return p }
+        return get(name, wait: wait) { [library, device, format, archive] archiveOnly in
             FXPipelines.renderDescriptor(library, fragment: name, format: format, archive: archive)
                 .flatMap { FXPipelines.makeRender($0, device: device, archiveOnly: archiveOnly) }
         } as? MTLRenderPipelineState

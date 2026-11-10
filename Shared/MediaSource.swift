@@ -189,21 +189,62 @@ final class CollectionSource {
     /// (thumbnails/export); otherwise they load in the background and the frame shows
     /// whatever is ready. `seed` fixes the photo order (nil = this source's own start).
     func frame(at t: Double, sync: Bool, seed: Int? = nil) -> SlideFrame? {
-        frames(at: [SlideClock(t: t, seed: seed)], sync: sync)[0]
+        frame(clock: SlideClock(t: t, seed: seed), sync: sync)
+    }
+
+    /// One timeline (every frame but a time-base crossfade's): `frames(at:)` without the arrays,
+    /// sets and dictionary copies a frame would otherwise allocate.
+    func frame(clock c: SlideClock, sync: Bool) -> SlideFrame? {
+        let s = step(c)
+        if evicts {
+            let keep = (index(s.k - 1, s.seed), index(s.k, s.seed), index(s.k + 1, s.seed))
+            lock.lock()
+            // only rebuild the cache when it holds a slide this frame doesn't need (a slide change)
+            if cache.keys.contains(where: { $0 != keep.0 && $0 != keep.1 && $0 != keep.2 }) {
+                cache = cache.filter { $0.key == keep.0 || $0.key == keep.1 || $0.key == keep.2 }
+            }
+            lock.unlock()
+            _ = texture(keep.2, sync: false)                 // prefetch the next photo
+        }
+        return frame(s, sync: sync)
+    }
+
+    private typealias Step = (k: Int, local: Double, m: Float, seed: Int)
+
+    private func step(_ c: SlideClock) -> Step {
+        let F = fade
+        let tt = max(c.t, 0) + F                     // t = 0 opens fully on the first photo
+        let k = Int(floor(tt / interval))
+        let local = tt - Double(k) * interval
+        let x = min(max(local / F, 0), 1)
+        return (k, local, Float(x * x * (3 - 2 * x)), c.seed ?? offset)
+    }
+
+    private func frame(_ s: Step, sync: Bool) -> SlideFrame? {
+        let iPrev = index(s.k - 1, s.seed), iCur = index(s.k, s.seed)
+        var cur = texture(iCur, sync: sync)
+        let prev = (s.m < 1) ? texture(iPrev, sync: sync) : nil
+        if cur == nil && prev == nil { cur = texture(iCur, sync: true) }   // first frame
+        let kbCur = kenBurns(slide: s.k, localTime: s.local, seed: s.seed)
+        let kbPrev = kenBurns(slide: s.k - 1, localTime: s.local + interval, seed: s.seed)
+
+        switch (prev, cur) {
+        case let (p?, c?) where s.m < 1:
+            return SlideFrame(texA: p, kbA: kbPrev, texB: c, kbB: kbCur, mix: s.m)
+        case let (_, c?):
+            return SlideFrame(texA: c, kbA: kbCur, texB: nil, kbB: kbCur, mix: 0)
+        case let (p?, nil):
+            return SlideFrame(texA: p, kbA: kbPrev, texB: nil, kbB: kbPrev, mix: 0)
+        default:
+            return nil
+        }
     }
 
     /// Several timelines at once — the two chains of a crossfade between clocks (a renderer
     /// switching time base). Evicts only photos none of them needs, so the two never take
     /// turns throwing out each other's slides.
     func frames(at clocks: [SlideClock], sync: Bool) -> [SlideFrame?] {
-        let F = fade
-        let steps: [(k: Int, local: Double, m: Float, seed: Int)] = clocks.map { c in
-            let tt = max(c.t, 0) + F                     // t = 0 opens fully on the first photo
-            let k = Int(floor(tt / interval))
-            let local = tt - Double(k) * interval
-            let x = min(max(local / F, 0), 1)
-            return (k, local, Float(x * x * (3 - 2 * x)), c.seed ?? offset)
-        }
+        let steps = clocks.map(step)
         if evicts {
             var keep = Set<Int>()
             for s in steps { keep.formUnion([index(s.k - 1, s.seed), index(s.k, s.seed), index(s.k + 1, s.seed)]) }
@@ -212,25 +253,7 @@ final class CollectionSource {
             lock.unlock()
             for s in steps { _ = texture(index(s.k + 1, s.seed), sync: false) }   // prefetch the next photo
         }
-        return steps.map { s in
-            let iPrev = index(s.k - 1, s.seed), iCur = index(s.k, s.seed)
-            var cur = texture(iCur, sync: sync)
-            let prev = (s.m < 1) ? texture(iPrev, sync: sync) : nil
-            if cur == nil && prev == nil { cur = texture(iCur, sync: true) }   // first frame
-            let kbCur = kenBurns(slide: s.k, localTime: s.local, seed: s.seed)
-            let kbPrev = kenBurns(slide: s.k - 1, localTime: s.local + interval, seed: s.seed)
-
-            switch (prev, cur) {
-            case let (p?, c?) where s.m < 1:
-                return SlideFrame(texA: p, kbA: kbPrev, texB: c, kbB: kbCur, mix: s.m)
-            case let (_, c?):
-                return SlideFrame(texA: c, kbA: kbCur, texB: nil, kbB: kbCur, mix: 0)
-            case let (p?, nil):
-                return SlideFrame(texA: p, kbA: kbPrev, texB: nil, kbB: kbPrev, mix: 0)
-            default:
-                return nil
-            }
-        }
+        return steps.map { frame($0, sync: sync) }
     }
 
     private func index(_ slide: Int, _ seed: Int) -> Int {
