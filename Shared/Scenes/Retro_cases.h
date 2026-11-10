@@ -595,3 +595,10 @@
         col += filmGrain(px, t) * 0.0025;
         return float4(retro_out(col, px), 1.0);
     }
+
+    case 74: { // BOUNCE — the bouncing logo: it glides corner to corner and takes a new colour at
+               // every bounce. The CPU poses it (BounceLogo.prepare, Bounce.swift: u.scene); the
+               // logo texture is slot 6. p0 = (speed, size, colour mode, flourish), p1 = (trail);
+               // A background, B fixed colour.
+        return float4(retro_bounce(px, res, u, textAtlas, samp), 1.0);
+    }

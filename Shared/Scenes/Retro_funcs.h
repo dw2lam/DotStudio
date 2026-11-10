@@ -626,3 +626,112 @@ static inline float3 retro_rbPatch(float2 q, float2 a0, float2 b0, float2 a1, fl
     }
     return c;
 }
+
+// ---------------------------------------------------------------- 74 Bounce
+//
+// The logo, its trail and the corner flourish over a flat background. Everything that moves is
+// worked out on the CPU once a frame (BounceLogo.prepare in Bounce.swift, layout of u.scene
+// there); per pixel this is a box test and one texture tap per drawn copy of the logo.
+
+// A full hue (turns) as display sRGB, a touch softened so no channel reads as neon-clipped.
+static inline float3 retro_rainbow(float h) {
+    float3 k = clamp(abs(fract(h + float3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
+    return mix(float3(1.0), k, 0.86);
+}
+
+// Where px falls on the logo texture, for a logo centred at rect.xy with half size rect.zw
+// (the texture holds it inside a clear margin of `inset` uv).
+static inline float2 retro_bounceUV(float2 px, float4 rect, float2 inset) {
+    return inset + ((px - rect.xy) / (2.0 * rect.zw) + 0.5) * (1.0 - 2.0 * inset);
+}
+
+// The logo's texel under px (premultiplied); 0 outside its rectangle. cardR > 0: an opaque
+// image, clipped to a rounded card of that radius.
+static inline float4 retro_bounceTap(texture2d<float> logo, sampler s, float2 px, float4 rect,
+                                     float2 inset, float lod, float cardR) {
+    float2 q = px - rect.xy;
+    if (any(abs(q) > rect.zw + 1.0)) return float4(0.0);
+    float4 c = logo.sample(s, retro_bounceUV(px, rect, inset), level(lod));
+    if (cardR > 0.0) {
+        float2 e = abs(q) - (rect.zw - cardR);
+        float d = length(max(e, 0.0)) + min(max(e.x, e.y), 0.0) - cardR;
+        c = float4(c.rgb / max(c.a, 1e-4), 1.0) * saturate(0.5 - d);
+    }
+    return c;
+}
+
+// What a logo texel paints (premultiplied): its own colours (mode 3), or a fill of `tint` (the
+// rainbow's hue across it in mode 1) shaded by its normalised luma — flat for a one-tone logo
+// (hi < 0), so a white or a black logo both take the colour whole.
+static inline float3 retro_bounceInk(float4 c, float x01, float3 tint, int mode, float lo, float hi, float hue) {
+    if (mode == 3) return c.rgb;
+    float3 st = c.rgb / max(c.a, 1e-4);
+    float shade = hi < 0.0 ? 1.0 : mix(0.22, 1.0, saturate((luma(st) - lo) / max(hi - lo, 1e-3)));
+    float3 t = mode == 1 ? retro_rainbow(hue + x01 * 0.35) : tint;
+    return t * shade * c.a;
+}
+
+static inline float3 retro_bounce(float2 px, float2 res, constant FXUniforms& u,
+                                  texture2d<float> logo, sampler s) {
+    float3 col = u.colorA.rgb;
+    float4 R = u.scene[0];
+    if (R.z <= 0.0) return col;
+    float3 tint = u.scene[1].xyz;
+    int mode = int(u.scene[1].w + 0.5);
+    float lo = u.scene[2].x, hi = u.scene[2].y, cardR = u.scene[2].z, lod = u.scene[2].w;
+    float4 C = u.scene[3];
+    float hue = u.scene[4].x;
+    int ghosts = int(u.scene[4].y + 0.5);
+    float2 inset = u.scene[4].zw;
+    float H = res.y;
+
+    // Corner flourish: for ~2 s after a perfect corner, a ring of light spreads from that corner
+    // of the screen, the logo glows, and its colour runs once through the spectrum.
+    float since = max(C.z, 0.0);
+    float fl = C.w * exp(-1.7 * since);
+    float cyc = C.w * (1.0 - smoothstep(0.8, 2.0, since));
+    float3 glowTint = mode == 3 ? float3(1.0) : mode == 1 ? retro_rainbow(hue) : tint;
+    if (fl > 0.003) {
+        float dc = length(px - C.xy);
+        float ringR = since * 0.8 * H;
+        float ring = exp(-pow((dc - ringR) / (0.012 * H + 0.05 * ringR), 2.0));
+        float bloom = exp(-dc / (0.2 * H));
+        float3 fc = mix(glowTint, retro_rainbow(since * 0.7 + dc / H * 0.4), cyc * 0.6);
+        col += fc * (0.30 * ring + 0.28 * bloom) * fl;
+    }
+
+    // The trail: earlier poses, oldest first, each a fainter copy.
+    for (int k = ghosts - 1; k >= 0; --k) {
+        float4 g = u.scene[5 + 2 * k];
+        float4 c = retro_bounceTap(logo, s, px, float4(g.xy, R.zw), inset, lod, cardR);
+        if (c.a > 0.0) {
+            float x01 = (px.x - g.x) / (2.0 * R.z) + 0.5;
+            float3 ink = retro_bounceInk(c, x01, u.scene[6 + 2 * k].xyz, mode, lo, hi, g.w);
+            col = col * (1.0 - c.a * g.z) + ink * g.z;
+        }
+    }
+
+    // The glow: the logo's own shape from a blurry mip, spilling into the texture's clear margin.
+    if (fl > 0.003) {
+        float2 uv = retro_bounceUV(px, R, inset);
+        float2 edge = min(uv, 1.0 - uv);
+        if (all(edge > 0.0)) {
+            float gl = lod + 3.5;
+            float2 o = exp2(gl) * 0.7 / float2(logo.get_width(), logo.get_height());
+            float a = logo.sample(s, uv, level(gl)).a * 0.4
+                    + (logo.sample(s, uv + float2(o.x, o.y), level(gl)).a + logo.sample(s, uv - float2(o.x, o.y), level(gl)).a
+                     + logo.sample(s, uv + float2(o.x, -o.y), level(gl)).a + logo.sample(s, uv - float2(o.x, -o.y), level(gl)).a) * 0.15;
+            float2 w = smoothstep(float2(0.0), inset * 0.6, edge);
+            col += glowTint * a * w.x * w.y * fl * 0.9;
+        }
+    }
+
+    float4 c = retro_bounceTap(logo, s, px, R, inset, lod, cardR);
+    if (c.a > 0.0) {
+        float x01 = (px.x - R.x) / (2.0 * R.z) + 0.5;
+        float3 t = mode == 0 || mode == 2 ? mix(tint, retro_rainbow(since * 0.9 + x01 * 0.5), cyc * 0.8) : tint;
+        float3 ink = retro_bounceInk(c, x01, t, mode, lo, hi, hue) * (1.0 + 0.3 * fl);
+        col = col * (1.0 - c.a) + ink;
+    }
+    return col + bandDither(px) * 1.5;
+}
