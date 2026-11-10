@@ -1460,6 +1460,7 @@
 #include "Scenes/Studio4_cases.h"
 #include "Scenes/Studio5_cases.h"
 #include "Scenes/Studio6_cases.h"
+#include "Scenes/Standby_cases.h"
 
     case 41: { // INTERNAL crossfade — set by the renderer during preset rotation,
                // never by an EffectInstance. src = incoming frame, fadePrev = outgoing.
