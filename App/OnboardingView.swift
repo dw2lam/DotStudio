@@ -1,8 +1,10 @@
 //  OnboardingView.swift — first-launch welcome sheet (also Help ▸ Welcome to DotStudio…).
 //
 //  Four short steps: what DotStudio is, pick a preset or create your own, turn the
-//  screensaver on in System Settings, and where to go to keep creating. ContentView presents it and records
-//  completion (`hasCompletedOnboarding`) when the sheet goes away, however that happens.
+//  screensaver on in System Settings (the guided setup: an illustrated walkthrough of System
+//  Settings beside a live checklist — SetupGuide*.swift), and where to go to keep creating.
+//  ContentView presents it and records completion (`hasCompletedOnboarding`) when the sheet
+//  goes away, however that happens.
 
 import SwiftUI
 
@@ -32,6 +34,11 @@ struct OnboardingView: View {
     private let livePreview: Bool
     /// Pins the setup status (UI shots only — the real status comes from the model).
     private let statusOverride: Installer.Status?
+    /// The guided setup's state: the shared, live one — or a pinned one (UI shots).
+    @ObservedObject private var guide: SetupGuideModel
+    /// UI shots: the walkthrough held on this step; or its Reduce Motion still cards.
+    private let walkthroughStep: Int?
+    private let stillWalkthrough: Bool
 
     /// The sheet at the default text size — and its minimum (UIShots renders it at this size).
     static let size = CGSize(width: 760, height: 600)
@@ -54,11 +61,15 @@ struct OnboardingView: View {
     }
 
     init(initialStep: Step = .welcome, pickMode: PickMode = .presets,
-         livePreview: Bool = true, statusOverride: Installer.Status? = nil) {
+         livePreview: Bool = true, statusOverride: Installer.Status? = nil,
+         guide: SetupGuideModel? = nil, walkthroughStep: Int? = nil, stillWalkthrough: Bool = false) {
         _step = State(initialValue: initialStep)
         _pickMode = State(initialValue: pickMode)
         self.livePreview = livePreview
         self.statusOverride = statusOverride
+        _guide = ObservedObject(wrappedValue: guide ?? SetupGuideModel.shared)
+        self.walkthroughStep = walkthroughStep
+        self.stillWalkthrough = stillWalkthrough
     }
 
     private var status: Installer.Status { statusOverride ?? model.setupStatus }
@@ -101,7 +112,7 @@ struct OnboardingView: View {
         switch step {
         case .welcome: WelcomePage(livePreview: livePreview)
         case .pick: PickPage(mode: $pickMode, draft: $draft, nameEdited: $nameEdited, livePreview: livePreview)
-        case .enable: EnablePage(status: status, polling: statusOverride == nil)
+        case .enable: EnablePage(guide: guide, frozenStep: walkthroughStep, forceStill: stillWalkthrough)
         case .done: DonePage(status: status, createdName: createdName, onCreate: openEditor)
         }
     }
@@ -114,7 +125,7 @@ struct OnboardingView: View {
             Spacer(minLength: layout.itemGap)
             if step == .enable && status != .ready {
                 // A link sits apart from the push buttons: two control gaps.
-                Button(scaled: "Skip for Now") { go(to: .done) }
+                Button(scaled: "Skip for Now") { guide.commit(); go(to: .done) }
                     .buttonStyle(.link)
                     .padding(.trailing, layout.controlGap)
             }
@@ -149,10 +160,10 @@ struct OnboardingView: View {
         case .enable:
             // Until it's on, the step's own Install / Open button holds the Return key.
             if status == .ready {
-                Button(scaled: "Continue") { go(to: .done) }
+                Button(scaled: "Continue") { guide.commit(); go(to: .done) }
                     .defaultPrimary()
             } else {
-                Button(scaled: "Continue") { go(to: .done) }
+                Button(scaled: "Continue") { guide.commit(); go(to: .done) }
                     .adaptiveControlSize(.large)
                     .disabled(true)
                     .help("Turn on the screensaver above, or skip for now")
@@ -646,206 +657,37 @@ private struct PickTile: View {
     }
 }
 
-// MARK: - 3. Turn it on
+// MARK: - 3. Turn it on (the guided setup)
 
+/// The guided setup: the System Settings walkthrough with its "Open System Settings" button,
+/// beside the live checklist (SetupGuideChecklist.swift). Polls ~1 s while on screen.
 private struct EnablePage: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.layout) private var layout
-    let status: Installer.Status
-    /// Poll System Settings' choice while this step is visible (off for UI shots).
-    let polling: Bool
+    @ObservedObject var guide: SetupGuideModel
+    let frozenStep: Int?
+    let forceStill: Bool
 
     var body: some View {
         PageScroll {
             VStack(spacing: layout.sectionGap) {
                 PageHeader(title: "Turn It On",
-                           subtitle: "macOS lets only you choose the screensaver. It takes a moment, once.")
-
-                VStack(spacing: 0) {
-                    SetupRow(number: 1,
-                             title: "Install the screensaver",
-                             detail: "Adds DotStudio to your Mac's screen savers, then opens Wallpaper settings for you.",
-                             done: status != .notInstalled) {
-                        if status == .notInstalled {
-                            // installScreensaver() opens Wallpaper settings itself when needed.
-                            Button(scaled: "Install") { model.installScreensaver() }
-                                .buttonStyle(.borderedProminent)
-                                .keyboardShortcut(.defaultAction)
-                        }
-                    }
-                    SetupRow(number: 2,
-                             title: "Choose DotStudio",
-                             detail: nil,
-                             done: status == .ready) {
-                        if status == .notChosen {
-                            Button(scaled: "Open Wallpaper Settings") { Installer.openScreenSaverSettings() }
-                                .buttonStyle(.borderedProminent)
-                                .keyboardShortcut(.defaultAction)
-                        }
-                    } extra: {
-                        SettingsPath(items: ["System\u{00A0}Settings", "Wallpaper", "Screen\u{00A0}Saver", "DotStudio"])
-                            .opacity(status == .notInstalled ? 0.55 : 1)
-                    }
-                }
-                .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(.background.secondary))
-                .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).strokeBorder(Color.primary.opacity(0.07)))
-
-                statusLine
-            }
-            // The status flips live on the poll. Row layout keeps the card's height (the
-            // button-height strut); stacked, a finished step's button row goes away, so the
-            // card and the status line under it ease into place instead of snapping.
-            .animation(.easeOut(duration: 0.2), value: status)
-        }
-        // ~1s poll while this step is on screen; cancelled when it goes away.
-        // (ContentView also refreshes whenever the app becomes active.)
-        .task {
-            guard polling else { return }
-            while !Task.isCancelled {
-                model.refreshSetupStatus()
-                try? await Task.sleep(for: .seconds(1))
-            }
-        }
-    }
-
-    /// One text role in every state; the colour and the icon carry the state.
-    @ViewBuilder private var statusLine: some View {
-        switch status {
-        case .ready:
-            Label("DotStudio is your screensaver.", systemImage: "checkmark.circle.fill")
-                .textRole(.calloutEmphasis)
-                .foregroundStyle(.green)
-                .wrapping(.center)
-                .transition(.scale(scale: 0.9).combined(with: .opacity))
-        case .notChosen:
-            HStack(spacing: layout.iconGap) {
-                ProgressView().adaptiveControlSize(.small)
-                Text("Waiting for you to choose DotStudio in System Settings…")
-                    .textRole(.callout)
-                    .foregroundStyle(.secondary)
-                    .wrapping(.center)
-            }
-        case .notInstalled:
-            Label("Not installed yet", systemImage: "circle.dashed")
-                .textRole(.callout)
-                .foregroundStyle(.secondary)
-                .wrapping(.center)
-        }
-    }
-}
-
-/// One numbered step in the "Turn It On" card. The badge centres on the TITLE line (detail
-/// and extra run full width under the title column), the title row is always as tall as the
-/// action button so the card doesn't shift when a button comes and goes, and at large text
-/// the button moves under the text instead of squeezing it.
-private struct SetupRow<Action: View, Extra: View>: View {
-    @Environment(\.layout) private var layout
-    @ScaledLength(relativeTo: .headline) private var badgeSize: CGFloat = Space.l
-    let number: Int
-    let title: String
-    let detail: String?
-    let done: Bool
-    @ViewBuilder var action: () -> Action
-    @ViewBuilder var extra: () -> Extra
-
-    init(number: Int, title: String, detail: String?, done: Bool,
-         @ViewBuilder action: @escaping () -> Action,
-         @ViewBuilder extra: @escaping () -> Extra = { EmptyView() }) {
-        self.number = number; self.title = title; self.detail = detail; self.done = done
-        self.action = action; self.extra = extra
-    }
-
-    /// From the badge's leading edge to the title column's.
-    private var textIndent: CGFloat { badgeSize + layout.itemGap }
-
-    var body: some View {
-        let stacked = layout.prefersStacking
-        VStack(alignment: .leading, spacing: layout.labelGap) {
-            HStack(alignment: .center, spacing: layout.itemGap) {
-                ZStack {
-                    if !stacked { buttonHeightStrut }
-                    badge
-                }
-                Text(title)
-                    .textRole(.headline)
-                    .wrapping()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                if !stacked {
-                    action().adaptiveControlSize(.large)
+                           subtitle: "macOS lets only you choose the screensaver. Here's exactly where — it takes a minute, once.")
+                SetupGuideContent(guide: guide, sideBySide: !layout.prefersStacking,
+                                  commitPhrase: "when you continue",
+                                  frozenStep: frozenStep, forceStill: forceStill) {
+                    // The floating guide keeps the steps beside System Settings; it opens
+                    // first so System Settings comes up in front of everything else.
+                    SetupGuidePanel.shared.show(model: model)
+                    guide.openSystemSettings()
                 }
             }
-            VStack(alignment: .leading, spacing: layout.itemGap) {
-                if let detail {
-                    Text(detail)
-                        .textRole(.callout)
-                        .foregroundStyle(.secondary)
-                        .wrapping()
-                }
-                extra()
-                if stacked {
-                    action().adaptiveControlSize(.large)
-                }
-            }
-            .padding(.leading, textIndent)
         }
-        .padding(layout.cardPadding)
-        .overlay(alignment: .top) {
-            // Inset divider from the step above, starting exactly at the text column.
-            if number > 1 { Divider().padding(.leading, layout.cardPadding + textIndent) }
+        .onAppear {
+            guide.onStatusChange = { [weak model] _ in model?.refreshSetupStatus() }
+            guide.begin()
         }
-    }
-
-    /// Zero-width, invisible stand-in for the action button: keeps the title row as tall as a
-    /// button whether or not this step shows one right now (the status flips live).
-    private var buttonHeightStrut: some View {
-        Button(scaled: " ") {}
-            .buttonStyle(.borderedProminent)
-            .adaptiveControlSize(.large)
-            .frame(width: 0)
-            .hidden()
-            .disabled(true)
-            .accessibilityHidden(true)
-    }
-
-    private var badge: some View {
-        ZStack {
-            Circle()
-                .fill(done ? Color.green : Color.accentColor.opacity(0.14))
-            if done {
-                Image(systemName: "checkmark")
-                    .scaledFont { .scaled(points: 12, $0, weight: .bold) }
-                    .foregroundStyle(.white)
-                    .transition(.scale.combined(with: .opacity))
-            } else {
-                Text("\(number)")
-                    .scaledFont { .scaled(points: 13, $0, weight: .semibold, design: .rounded) }
-                    .foregroundStyle(Color.accentColor)
-            }
-        }
-        .frame(width: badgeSize, height: badgeSize)
-        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: done)
-    }
-}
-
-/// "⚙ System Settings › Wallpaper › Screen Saver › DotStudio" as one wrapping line.
-private struct SettingsPath: View {
-    @Environment(\.dynamicTypeSize) private var typeSize
-    let items: [String]
-
-    var body: some View {
-        items.enumerated().reduce(Text(Image(systemName: "gearshape.fill")).foregroundColor(.secondary)) { line, pair in
-            let (i, item) = pair
-            let last = i == items.count - 1
-            let word = last ? Text(item).fontWeight(.semibold).foregroundColor(.primary)
-                            : Text(item).foregroundColor(.secondary)
-            let sep = i == 0 ? Text(" ")
-                : Text("  ") + Text(Image(systemName: "chevron.right")).font(.scaled(.caption2, typeSize, weight: .bold))
-                    .foregroundColor(Color(nsColor: .tertiaryLabelColor)) + Text("  ")
-            return line + sep + word
-        }
-        .textRole(.callout)
-        .wrapping()
-        .accessibilityLabel("System Settings, Wallpaper, Screen Saver, DotStudio")
+        .onDisappear { guide.end() }
     }
 }
 

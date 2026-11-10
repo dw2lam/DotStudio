@@ -52,6 +52,8 @@ struct DotStudioApp: App {
         MusicLifecycle.shared.attach(model: model)        // started in applicationDidFinishLaunching
         WeatherService.shared.attach(model: model)        // started in applicationDidFinishLaunching
         AppPresence.shared.attach(model: model)
+        SetupGuidePanel.shared.attach(model: model)        // Help ▸ Set Up Screensaver… (SetupGuide.swift)
+        LoginNudge.shared.attach(model: model)             // started in applicationDidFinishLaunching
         // After an app update, silently refresh the installed .saver so the
         // screensaver actually gets the new code (takes effect next start).
         Installer.reinstallIfOutdated()
@@ -114,6 +116,7 @@ struct DotStudioApp: App {
             }
             CommandGroup(before: .help) {
                 Button("Welcome to DotStudio…") { model.showOnboarding = true }
+                Button("Set Up Screensaver…") { SetupGuidePanel.shared.show(model: model) }
             }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { updates.primaryAction() }
@@ -150,6 +153,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MusicLifecycle.shared.start()
         WeatherService.shared.start()             // live weather for the sea scenes (App/Weather)
         AppPresence.shared.didFinishLaunching()   // login launch → menu bar; else a regular Dock app
+        // "Start at login?" once, when the wallpaper or music display is turned on (after the
+        // restore above, so restoring never counts as turning on).
+        LoginNudge.shared.start()
         // The installed saver's pipelines, precompiled for this saver build / macOS / GPU (a few
         // seconds of background work after an update; otherwise a quick check). Delayed so it
         // never competes with the launch itself.
