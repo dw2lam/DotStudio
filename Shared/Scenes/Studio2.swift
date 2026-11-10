@@ -495,6 +495,7 @@ enum SandGarden {
                                                         // segment from it is raked, bit 1 = the one into it
         var vertCount = 0, inserted = 0, start = 0      // `start`: this composition's first vertex
         var time: [Float] = []                          // drive time to each vertex of this composition
+        var heading: [Double] = [], headingInt: [Double] = []   // see rebuild
         var gridN = SIMD2<Int>(1, 1), origin = SIMD2<Float>(0, 0), cell: Float = 2
         var hw: Float = 4.5, solid: Float = 3.5
         var rowVer: [Int], ver = 1
@@ -626,6 +627,21 @@ enum SandGarden {
                 let l = simd_length(SIMD2(p.x - q.x, p.y - q.y))
                 time.append(time.last! + l / (pen(i - 1) & 1 == 1 ? 1 : 1.8))
             }
+            // the track's heading, unwound (each segment's turn from the last added on, so it
+            // never wraps), and its running integral over s, for headings averaged along it
+            heading = [Double](repeating: 0, count: max(vertCount, 1))
+            headingInt = [Double](repeating: 0, count: max(vertCount, 1))
+            var prev = SIMD2<Double>(1, 0)
+            for k in 0..<max(vertCount - 1, 0) {
+                let p = vert(k), q = vert(k + 1)
+                var d = SIMD2<Double>(Double(q.x - p.x), Double(q.y - p.y))
+                let l = simd_length(d)
+                d = l > 1e-9 ? d / l : prev
+                heading[k] = k == 0 ? atan2(d.y, d.x) : heading[k - 1] + atan2(prev.x * d.y - prev.y * d.x, simd_dot(prev, d))
+                headingInt[k + 1] = headingInt[k] + heading[k] * Double(q.z - p.z)
+                prev = d
+            }
+            if vertCount > 1 { heading[vertCount - 1] = heading[vertCount - 2] }
             inserted = 0
             // the last composition is all on the table already
             while inserted < start { insertIfRaked(inserted); inserted += 1 }
@@ -739,55 +755,60 @@ enum SandGarden {
             return tex
         }
 
-        /// The point `ds` cm on along the track from vertex i + fraction f (clamped to the end).
-        func ahead(_ i: Int, _ f: Float, _ ds: Float) -> SIMD2<Float> {
+        /// ∫ heading ds from the track's start to s, looking for s's segment from vertex i.
+        func headingIntegral(_ s: Double, near i: Int) -> Double {
+            let (k, sc) = segment(s, near: i)
+            return headingInt[k] + heading[k] * (sc - Double(vert(k).z))
+        }
+        /// The segment s lies on (looked for from vertex i), and s clamped to the track.
+        func segment(_ s: Double, near i: Int) -> (Int, Double) {
+            let n = max(vertCount - 1, 1)
+            let sc = min(max(s, Double(vert(0).z)), Double(vert(vertCount - 1).z))
+            var k = min(max(i, 0), n - 1)
+            while k > 0 && Double(vert(k).z) > sc { k -= 1 }
+            while k + 1 < n && Double(vert(k + 1).z) <= sc { k += 1 }
+            return (k, sc)
+        }
+        /// The track's mean heading (unwound) over [s0, s1].
+        func meanHeading(_ s0: Double, _ s1: Double, near i: Int) -> Double {
+            let (k0, a) = segment(s0, near: i), (_, b) = segment(s1, near: i)
+            if b - a < 1e-4 { return heading[k0] }
+            return (headingIntegral(b, near: i) - headingIntegral(a, near: i)) / (b - a)
+        }
+
+        /// The headings (unwound angles) with the rake at vertex i + fraction f: the rake's,
+        /// and the track's ahead (its mean over the next `tow` cm — where the body would sit
+        /// on it; on a bend, the chord). The rake pivots on the end of the cart's tow pole and
+        /// its tines, in the gravel, keep it along the track: the bar stays square across the
+        /// furrows it draws, so they start right at its tines; round a bend it turns with the
+        /// track's mean over ~2.4 cm (the furrows' round join), but at each end of a stroke
+        /// it holds the stroke's own heading (the cut there: SandGarden's pass ends are square
+        /// to their segment). Lifted, it hangs back along the cart, swinging round from the
+        /// heading it lifted with over ~4 cm, and round to the one it drops with over the ~4 cm
+        /// before. All in unwound angles, so nothing ever flips round.
+        func headings(_ i: Int, _ f: Float, tow: Float) -> (rake: Double, ahead: Double) {
+            func ss(_ x: Double) -> Double { let t = min(max(x, 0), 1); return t * t * (3 - 2 * t) }
+            let a = vert(i), b = vert(min(i + 1, vertCount - 1))
+            let s = Double(a.z + (b.z - a.z) * f)
+            let ahead = meanHeading(s, s + Double(tow), near: i)
+            if pen(i) & 1 == 1 {
+                var w = 1.2
+                var j = i
+                while j > 0 && pen(j - 1) & 1 == 1 && s - Double(vert(j).z) < w { j -= 1 }
+                if j == 0 || pen(j - 1) & 1 == 0 { w = min(w, s - Double(vert(j).z)) }
+                var k = i + 1
+                while k < vertCount - 1 && pen(k) & 1 == 1 && Double(vert(k).z) - s < w { k += 1 }
+                if k >= vertCount - 1 || pen(k) & 1 == 0 { w = min(w, Double(vert(k).z) - s) }
+                return (w > 1e-3 ? meanHeading(s - w, s + w, near: i) : heading[i], ahead)
+            }
+            var r = ahead
             var j = i
-            let a = vert(i), b = vert(min(i + 1, vertCount - 1))
-            var target = a.z + (b.z - a.z) * f + ds
-            while j + 1 < vertCount - 1 && vert(j + 1).z < target { j += 1 }
-            let p = vert(j), q = vert(min(j + 1, vertCount - 1))
-            if q.z <= p.z { return SIMD2(q.x, q.y) }
-            target = min(target, q.z)
-            let t = (target - p.z) / (q.z - p.z)
-            return SIMD2(p.x, p.y) + (SIMD2(q.x, q.y) - SIMD2(p.x, p.y)) * min(max(t, 0), 1)
-        }
-
-        /// Segment k's direction (vertex k → k + 1).
-        func segDir(_ k: Int) -> SIMD2<Float> {
-            let a = vert(k), b = vert(min(k + 1, vertCount - 1))
-            let d = SIMD2(b.x - a.x, b.y - a.y), l = simd_length(d)
-            return l > 1e-6 ? d / l : SIMD2(1, 0)
-        }
-
-        /// The rake's heading with it at vertex i + fraction f. It pivots on the end of the
-        /// cart's tow pole and its tines, in the gravel, keep it along the track: the bar stays
-        /// square across the furrows it draws, so they start right at its tines. Round a bend
-        /// it swings from one segment's heading to the next over ~2 cm, centred on the vertex
-        /// (the furrows' round join); where the rake lifts it holds the raked heading — the
-        /// cut there (SandGarden's pass ends are square to their segment) — and swings round
-        /// once up; where it drops it has swung round to the raked heading before it touches.
-        func rakeDir(_ i: Int, _ f: Float) -> SIMD2<Float> {
-            let a = vert(i), b = vert(min(i + 1, vertCount - 1))
-            let L = simd_length(SIMD2(b.x - a.x, b.y - a.y))
-            let d = segDir(i), down = pen(i) & 1 == 1
-            func ss(_ x: Float) -> Float { let t = min(max(x, 0), 1); return t * t * (3 - 2 * t) }
-            func blend(_ p: SIMD2<Float>, _ q: SIMD2<Float>, _ t: Float) -> SIMD2<Float> {
-                let m = p + (q - p) * t, l = simd_length(m)
-                return l > 1e-4 ? m / l : (t < 0.5 ? p : q)
-            }
-            let w = min(1.2, 0.5 * L), into = f * L, left = (1 - f) * L
-            var out = d
-            if i > 0 && into < 1.5 {                                   // just past vertex i
-                let p = segDir(i - 1), was = pen(i - 1) & 1 == 1
-                if was == down { if into < w { out = blend(p, d, 0.5 + 0.5 * into / w) } }
-                else if was { out = blend(p, d, ss(into / max(min(1.5, L), 1e-3))) }
-            }
-            if i + 1 < vertCount - 1 && left < 1.5 {                   // nearing vertex i + 1
-                let q = segDir(i + 1), will = pen(i + 1) & 1 == 1
-                if will == down { if left < w { out = blend(out, q, 0.5 - 0.5 * left / w) } }
-                else if will { out = blend(out, q, ss(1 - left / max(min(1.5, L), 1e-3))) }
-            }
-            return out
+            while j > 0 && pen(j - 1) & 1 == 0 && s - Double(vert(j).z) < 4 { j -= 1 }
+            if j > 0 && pen(j - 1) & 1 == 1 { r = heading[j - 1] + (r - heading[j - 1]) * ss((s - Double(vert(j).z)) / 4) }
+            var k = i + 1
+            while k < vertCount - 1 && pen(k) & 1 == 0 && Double(vert(k).z) - s < 4 { k += 1 }
+            if k < vertCount - 1 && pen(k) & 1 == 1 { r += (heading[k] - r) * ss(1 - (Double(vert(k).z) - s) / 4) }
+            return (r, ahead)
         }
     }
 
@@ -857,17 +878,36 @@ enum SandGarden {
             let down = st.pen(i) & 1 == 1 && i + 1 < st.vertCount
             let G = st.garden!
             let cs = SandGarden.cartScale(Float(G.wr)), tow = SandGarden.tow * cs
-            let rakeDir = st.rakeDir(i, f)
             func ss(_ x: Float) -> Float { let t = min(max(x, 0), 1); return t * t * (3 - 2 * t) }
-            // How far back the rake lifted, and how far on it drops (each looked for only so far)
-            var sinceLift: Float = .infinity, untilDrop: Float = .infinity
+            // Room for the body straight on ahead of the rake at p, heading d: to the frame
+            // along the heading, past its nose, and from the stones (0…1).
+            func room(_ p: SIMD2<Float>, _ d: SIMD2<Float>) -> Float {
+                let ext = p + d * tow, bx = Float(G.bx), by = Float(G.by)
+                var tf: Float = .infinity
+                if abs(d.x) > 1e-4 { tf = min(tf, ((d.x > 0 ? bx : -bx) - ext.x) / d.x) }
+                if abs(d.y) > 1e-4 { tf = min(tf, ((d.y > 0 ? by : -by) - ext.y) / d.y) }
+                var r = ss((tf - 3.2 * cs) / 4)
+                for s in G.stones { r *= ss((simd_length(ext - SIMD2<Float>(s.c)) - Float(s.excl) - 4 * cs) / 3) }
+                return r
+            }
+            // How far back the rake lifted, and how far on it drops (each looked for only so
+            // far), and the room the body had there
+            var sinceLift: Float = .infinity, untilDrop: Float = .infinity, roomL: Float = 0, roomD: Float = 0
             if !down {
                 var j = i
-                while j > 0 && st.pen(j - 1) & 1 == 0 && sRake - st.vert(j).z < 6 { j -= 1 }
-                if j > 0 && st.pen(j - 1) & 1 == 1 { sinceLift = sRake - st.vert(j).z }
+                while j > 0 && st.pen(j - 1) & 1 == 0 && sRake - st.vert(j).z < 12 { j -= 1 }
+                if j > 0 && st.pen(j - 1) & 1 == 1 {
+                    let v = st.vert(j)
+                    sinceLift = sRake - v.z
+                    roomL = room(SIMD2(v.x, v.y), SIMD2(Float(cos(st.heading[j - 1])), Float(sin(st.heading[j - 1]))))
+                }
                 var k = i + 1
-                while k < st.vertCount - 1 && st.pen(k) & 1 == 0 && st.vert(k).z - sRake < 6 { k += 1 }
-                if k < st.vertCount - 1 && st.pen(k) & 1 == 1 { untilDrop = max(st.vert(k).z - sRake, 0) }
+                while k < st.vertCount - 1 && st.pen(k) & 1 == 0 && st.vert(k).z - sRake < 12 { k += 1 }
+                if k < st.vertCount - 1 && st.pen(k) & 1 == 1 {
+                    let v = st.vert(k)
+                    untilDrop = max(v.z - sRake, 0)
+                    roomD = room(SIMD2(v.x, v.y), SIMD2(Float(cos(st.heading[k])), Float(sin(st.heading[k]))))
+                }
             }
             // the rake rises over ~1.5 cm once it's lifted, and comes down over the ~1.5 cm
             // before it drops (its tines touch just where the furrows begin)
@@ -875,31 +915,19 @@ enum SandGarden {
             // The cart: its body `tow` cm ahead of the rake. Raking, it runs straight on ahead
             // of it (the rake trails behind on its pole, square to its furrows) — where the
             // bed has room ahead for it, before the frame or a stone; otherwise, and once the
-            // rake is up (easing over ~6 cm), its wheels keep to the track: the body `tow` cm
-            // on along it (a chord). Always rigid, rolling, never pushed aside.
-            var chord = st.ahead(i, f, tow) - rake
-            if simd_length(chord) < 0.5 {
-                let tg = SIMD2(nx.x - h.x, nx.y - h.y)
-                chord = simd_length(tg) > 1e-5 ? simd_normalize(tg) : rakeDir
-            } else { chord = simd_normalize(chord) }
-            var align: Float = down ? 1 : max(1 - ss(sinceLift / 6), 1 - ss(untilDrop / 6))
-            if align > 0 {
-                let ext = rake + rakeDir * tow
-                // room ahead: to the frame along the heading, past the body's nose; and from the stones
-                let bx = Float(G.bx), by = Float(G.by)
-                var tf: Float = .infinity
-                if abs(rakeDir.x) > 1e-4 { tf = min(tf, ((rakeDir.x > 0 ? bx : -bx) - ext.x) / rakeDir.x) }
-                if abs(rakeDir.y) > 1e-4 { tf = min(tf, ((rakeDir.y > 0 ? by : -by) - ext.y) / rakeDir.y) }
-                align *= ss((tf - 3.2 * cs) / 4)
-                for s in G.stones { align *= ss((simd_length(ext - SIMD2<Float>(s.c)) - Float(s.excl) - 4 * cs) / 3) }
-            }
-            var dir = chord
-            if align > 0 {
-                var da = atan2(rakeDir.y, rakeDir.x) - atan2(chord.y, chord.x)
-                da -= 2 * .pi * (da / (2 * .pi)).rounded()
-                let a = atan2(chord.y, chord.x) + da * align
-                dir = SIMD2(cos(a), sin(a))
-            }
+            // rake is up (easing over ~6 cm), its wheels keep to the track (its heading the
+            // track's over the next `tow` cm: on a bend, the chord). While raking it never
+            // turns more than ~75° from the rake — the pole can't swing round further — and that
+            // eases over ~12 cm either side of a lift. Rigid, rolling, never pushed aside;
+            // unwound angles, so it never flips round.
+            let hd = st.headings(i, f, tow: tow)
+            let rakeDir = SIMD2<Float>(Float(cos(hd.rake)), Float(sin(hd.rake)))
+            let align: Float = down ? room(rake, rakeDir)
+                : max((1 - ss(sinceLift / 6)) * roomL, (1 - ss(untilDrop / 6)) * roomD)
+            let held: Float = down ? 1 : max(1 - ss(sinceLift / 12), 1 - ss(untilDrop / 12))
+            let lim = 1.31 + (Double.pi - 1.31) * Double(1 - held)
+            let turn = min(max((hd.ahead - hd.rake) * Double(1 - align), -lim), lim)
+            let dir = SIMD2<Float>(Float(cos(hd.rake + turn)), Float(sin(hd.rake + turn)))
             let body = rake + dir * tow
             let L = SandGarden.light(u)
             st.bakeShadows(Lh: SIMD2(L.0.x, L.0.y), tanEl: L.0.z)
