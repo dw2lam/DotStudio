@@ -415,6 +415,39 @@ func liveChecks() -> Bool {
     let instStep = maxStep(inst, seconds: 0.6)
     check(instStep < wrapJump * 0.15, String(format: "the instance time base's hourly wrap doesn't pop (largest step %.2f)", instStep))
     check(inst.animationTime() < 10, String(format: "…and t wrapped (t %.2f s)", inst.animationTime()))
+
+    // 9. No scene reads its input (texture 0), so MetalRenderer.encodePasses draws no source pass
+    //    under one: every scene's own fragment function(s), from the pipelines' reflection. (The
+    //    über-shader stand-in runs the same case code.) fx_scene_0, the photo pass, must read it.
+    if let dev = MTLCreateSystemDefaultDevice(), let mlib = dev.makeDefaultLibrary() {
+        func readsInput(_ fn: String) -> Bool? {
+            guard let d = FXPipelines.renderDescriptor(mlib, fragment: fn, format: .bgra8Unorm, archive: nil) else { return nil }
+            var refl: MTLAutoreleasedRenderPipelineReflection?
+            guard (try? dev.makeRenderPipelineState(descriptor: d, options: [.bindingInfo], reflection: &refl)) != nil,
+                  let refl else { return nil }
+            return refl.fragmentBindings.contains { $0.type == .texture && $0.index == 0 && $0.isUsed }
+        }
+        var readers: [String] = [], unverified: [String] = []
+        var scenes = 0
+        for kind in EffectKind.allCases where kind.isScene {
+            scenes += 1
+            let fns = WeatherLink.usesWeather(kind)
+                ? WeatherLink.functionNames.filter { $0.contains(kind == .shallows ? "shallows" : "ocean") }
+                : ScenePipelines.functionName(kind.shaderID).map { [$0] } ?? []
+            if fns.isEmpty { unverified.append(kind.displayName) }
+            for fn in fns {
+                switch readsInput(fn) {
+                case true?: readers.append("\(kind.displayName) (\(fn))")
+                case nil: unverified.append("\(kind.displayName) (\(fn))")
+                default: break
+                }
+            }
+        }
+        check(readsInput("fx_scene_0") == true && readers.isEmpty && unverified.isEmpty,
+              "no scene's fragment function reads the source (\(scenes) scenes; reads it: \(readers); unverified: \(unverified))")
+    } else {
+        check(false, "no scene reads the source: no Metal library")
+    }
     return ok
 }
 if runChecks { exit(liveChecks() ? 0 : 1) }

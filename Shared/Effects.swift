@@ -488,7 +488,8 @@ enum EffectKind: String, Codable, CaseIterable {
     }
 
     /// A self-contained generative piece that ignores the source (Universe, Black Hole…).
-    /// Styles that start with one are "Scenes": ready to use, few knobs, no Source tab.
+    /// Styles that start with one are "Scenes": ready to use, few knobs, no Source tab — and no
+    /// source pass (MetalRenderer.encodePasses; gallery --checks verifies none reads it).
     var isScene: Bool {
         switch self {
         case .starfield, .universe, .blackhole,
