@@ -54,6 +54,11 @@ struct StyleTile: View, Equatable {
     @State private var pointerInside = false
     @State private var live = false
     @State private var confirmDelete = false
+    /// The selection as of the last render (a ring appearing now was just selected: it
+    /// animates in; one already selected when the tile appears just shows).
+    @State private var wasSelected: Bool
+    /// Deselected, its ring still fading out (SelectionRing removes itself when done).
+    @State private var ringFading = false
 
     init(model: AppModel, preset: Preset, badges: TileBadges, lineup: ScreensaverLineup) {
         self.model = model
@@ -67,6 +72,7 @@ struct StyleTile: View, Equatable {
         music = model.library.musicSettings
         location = model.locationTuple.map { GeoPoint(lat: $0.lat, lon: $0.lon) }
         _hovering = State(initialValue: DemoHooks.hoverName == preset.name)
+        _wasSelected = State(initialValue: model.selectedID == preset.id)
     }
 
     static func == (a: StyleTile, b: StyleTile) -> Bool {
@@ -93,7 +99,7 @@ struct StyleTile: View, Equatable {
             .clipShape(RoundedRectangle(cornerRadius: Self.radius, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: Self.radius, style: .continuous)
                 .strokeBorder(.white.opacity(0.10), lineWidth: 1))
-            .overlay(selectionRing)
+            .overlay { selectionRing }
             .shadow(color: .black.opacity(hovering ? 0.28 : 0.14),
                     radius: hovering ? 18 : 6, y: hovering ? 10 : 3)
             .scaleEffect(hovering && !reduceMotion ? 1.025 : 1)
@@ -103,7 +109,10 @@ struct StyleTile: View, Equatable {
         }
         .contentShape(Rectangle())
         .motion(Motion.snappy, value: hovering)
-        .motion(Motion.snappy, value: selected)
+        .onChange(of: selected) { _, now in
+            if !now { ringFading = true }
+            wasSelected = now
+        }
         .onHover { h in
             pointerInside = h
             // While the gallery scrolls, tiles slide under a still pointer: no lift, no action
@@ -157,13 +166,17 @@ struct StyleTile: View, Equatable {
         }
     }
 
-    private var selectionRing: some View {
-        // Sits Space.xxs outside the thumbnail, so its radius grows by the same amount.
-        RoundedRectangle(cornerRadius: Self.radius + Space.xxs, style: .continuous)
-            .strokeBorder(Color.accentColor, lineWidth: 2.5)
-            .padding(-Space.xxs)
-            .opacity(selected ? 1 : 0)
-            .scaleEffect(selected || reduceMotion ? 1 : 1.03)
+    /// Only while selected, or fading out after (SelectionRing: a Core Animation ring).
+    @ViewBuilder private var selectionRing: some View {
+        if selected || ringFading {
+            SelectionRing(selected: selected, animatesIn: selected && !wasSelected, hovering: hovering,
+                          reduceMotion: reduceMotion) { ringFading = false }
+                // The ring sits Space.xxs outside the thumbnail; the view reaches further, for
+                // its shadow.
+                .padding(-(Space.xxs + SelectionRing.margin))
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 
     private var overlays: some View {
@@ -189,6 +202,185 @@ struct StyleTile: View, Equatable {
         let names = preset.effects.filter(\.enabled).map(\.kind.displayName)
         if preset.isScene { return names.count > 1 ? names.dropFirst().joined(separator: " · ") : nil }
         return names.isEmpty ? "Source only" : names.joined(separator: " · ")
+    }
+}
+
+// MARK: - Selection ring
+
+/// The selected tile's ring: a 2.5-pt accent outline Space.xxs outside the thumbnail (its
+/// radius grown by as much), under the tile's shadow. Drawn once by AppKit and moved by Core
+/// Animation — selecting fades it in as it settles from 3% larger (Motion.snappy's spring),
+/// deselecting fades it back out; under Reduce Motion it only fades. The animation runs in
+/// the render server, so SwiftUI does nothing per frame: a SwiftUI-animated ring re-ran the
+/// window's view graph for every frame of the spring (~0.3 s of main-thread time per
+/// selection). Only the selected tile (and one fading out) has one.
+struct SelectionRing: NSViewRepresentable {
+    /// Room around the ring for its shadow.
+    static let margin: CGFloat = 32
+    static let lineWidth: CGFloat = 2.5
+    static let startScale: CGFloat = 1.03
+
+    let selected: Bool
+    /// Just selected: grow in from the deselected pose (else it shows at rest).
+    let animatesIn: Bool
+    /// The tile is lifted (hovered): its shadow is the bigger one.
+    let hovering: Bool
+    let reduceMotion: Bool
+    /// Faded out after a deselection: the tile can drop the view.
+    let onFadedOut: () -> Void
+
+    func makeNSView(context: Context) -> RingView {
+        let v = RingView()
+        v.hovering = hovering
+        v.onFadedOut = onFadedOut
+        // A ring made for a deselection (the tile was re-rendered without its ring first)
+        // fades out from the selected pose; one made for a selection fades in, or just shows.
+        v.begin(from: selected ? !animatesIn : true, to: selected, reduceMotion: reduceMotion)
+        return v
+    }
+
+    func updateNSView(_ v: RingView, context: Context) {
+        v.onFadedOut = onFadedOut
+        if v.hovering != hovering {
+            v.hovering = hovering
+            v.needsDisplay = true
+        }
+        v.move(to: selected, reduceMotion: reduceMotion)
+    }
+
+    final class RingView: NSView {
+        var hovering = false
+        var onFadedOut: (() -> Void)?
+        /// The pose it's in or heading for (true = selected: shown, at scale 1).
+        private var target = true
+        /// A move asked for before the view had a size (the scale is about its centre).
+        private var pending: (from: Bool, reduceMotion: Bool)?
+        private var observer: NSObjectProtocol?
+        /// Bumped by every fade-out, so only the latest one reports.
+        private var generation = 0
+
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            wantsLayer = true
+            layerContentsRedrawPolicy = .onSetNeedsDisplay
+            // The accent colour changed in System Settings.
+            observer = NotificationCenter.default.addObserver(
+                forName: NSColor.systemColorsDidChangeNotification, object: nil, queue: .main
+            ) { [weak self] _ in self?.needsDisplay = true }
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        deinit {
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+        }
+
+        override var isOpaque: Bool { false }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidChangeEffectiveAppearance() {
+            super.viewDidChangeEffectiveAppearance()
+            needsDisplay = true
+        }
+
+        override func layout() {
+            super.layout()
+            if let p = pending, bounds.width > 0 {
+                pending = nil
+                animate(from: p.from, reduceMotion: p.reduceMotion)
+            }
+        }
+
+        /// Shows the `from` pose, then animates to `to` (none when they're the same).
+        func begin(from: Bool, to: Bool, reduceMotion: Bool) {
+            target = to
+            guard from != to else { return }
+            if bounds.width > 0 { animate(from: from, reduceMotion: reduceMotion) } else { pending = (from, reduceMotion) }
+        }
+
+        func move(to selected: Bool, reduceMotion: Bool) {
+            guard selected != target else { return }
+            let from = target
+            target = selected
+            if bounds.width > 0 { animate(from: from, reduceMotion: reduceMotion) } else { pending = (from, reduceMotion) }
+        }
+
+        /// One spring (a fade under Reduce Motion) from where the ring is now — mid-move
+        /// included — to `target`'s pose; reports a finished fade-out.
+        private func animate(from: Bool, reduceMotion: Bool) {
+            guard let layer else { return }
+            let to = target
+            let fromOpacity = layer.presentation()?.opacity ?? (from ? 1 : 0)
+            let fromTransform = layer.presentation()?.transform ?? pose(from, reduceMotion: reduceMotion)
+            let toTransform = pose(to, reduceMotion: reduceMotion)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer.opacity = to ? 1 : 0
+            layer.transform = toTransform
+            var duration = 0.0
+            for (key, a, b) in [("opacity", fromOpacity as Any, Float(to ? 1 : 0) as Any),
+                                ("transform", NSValue(caTransform3D: fromTransform) as Any,
+                                 NSValue(caTransform3D: toTransform) as Any)] {
+                let anim: CABasicAnimation
+                if reduceMotion {
+                    anim = CABasicAnimation(keyPath: key)
+                    anim.duration = 0.18 * Motion.slow
+                    anim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                } else {
+                    // Motion.snappy: response 0.28, damping 0.82.
+                    let spring = CASpringAnimation(perceptualDuration: 0.28 * Motion.slow, bounce: 0.18)
+                    spring.duration = spring.settlingDuration
+                    anim = spring
+                }
+                anim.fromValue = a
+                anim.toValue = b
+                layer.add(anim, forKey: key)
+                duration = anim.duration
+            }
+            CATransaction.commit()
+            // Faded out: the tile drops the view. On the clock, not the animation's completion
+            // (a window that isn't on screen never runs its animations to the end).
+            if !to {
+                generation += 1
+                let g = generation
+                DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+                    guard let self, g == self.generation, !self.target, self.pending == nil else { return }
+                    Perf.count("SelectionRing.fadedOut")
+                    self.onFadedOut?()
+                }
+            }
+        }
+
+        /// The layer's transform for a pose: at rest, or 3% larger about the view's centre.
+        private func pose(_ selected: Bool, reduceMotion: Bool) -> CATransform3D {
+            guard !selected, !reduceMotion, let layer else { return CATransform3DIdentity }
+            let s = SelectionRing.startScale
+            // About the centre, whatever the layer's anchor point is.
+            let dx = (0.5 - layer.anchorPoint.x) * bounds.width
+            let dy = (0.5 - layer.anchorPoint.y) * bounds.height
+            var t = CATransform3DMakeTranslation(dx, dy, 0)
+            t = CATransform3DScale(t, s, s, 1)
+            return CATransform3DTranslate(t, -dx, -dy, 0)
+        }
+
+        override func draw(_ dirtyRect: NSRect) {
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+            let m = SelectionRing.margin
+            let lw = SelectionRing.lineWidth
+            // strokeBorder: the outline inset by half the line, its radius by as much.
+            let rect = bounds.insetBy(dx: m + lw / 2, dy: m + lw / 2)
+            let radius = max(Radius.tile + Space.xxs - lw / 2, 0)
+            let path = RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: rect).cgPath
+            ctx.saveGState()
+            // The tile's shadow (StyleTile), which the ring sat under.
+            ctx.setShadow(offset: CGSize(width: 0, height: -(hovering ? 10 : 3)), blur: hovering ? 18 : 6,
+                          color: NSColor.black.withAlphaComponent(hovering ? 0.28 : 0.14).cgColor)
+            ctx.addPath(path)
+            ctx.setLineWidth(lw)
+            ctx.setStrokeColor(NSColor(Color.accentColor).cgColor)
+            ctx.strokePath()
+            ctx.restoreGState()
+        }
     }
 }
 
@@ -486,20 +678,22 @@ struct TileMenu: View {
 
 // MARK: - Thumbnail
 
-/// A gallery tile's cached still (black until it renders) — StyleThumb without the observed
-/// model: it repaints when its own still lands (the Thumbnailer's per-style signal, read
-/// inside `image(for:)`), or when the tile's values change.
+/// A style's cached still (black until it renders) from plain values, no observed model: it
+/// repaints when its own still lands (the Thumbnailer's per-style signal, read inside
+/// `image(for:)`), or when its values change. The gallery tiles' thumbnail, and StyleThumb's.
 struct TileThumb: View {
     let thumbnailer: Thumbnailer
     let preset: Preset
     let source: SourceSpec
     let music: MusicSpec
+    /// Music presented on the still as the screensaver shows it (StyleThumb's `showsMusic`).
+    var showsMusic = false
 
     var body: some View {
         // Takes exactly the size it's offered; the image fills it and is clipped.
         Color.black
             .overlay {
-                if let img = thumbnailer.image(for: preset, source: source, music: music) {
+                if let img = thumbnailer.image(for: preset, source: source, music: music, showsMusic: showsMusic) {
                     Image(nsImage: img).resizable().scaledToFill()
                 }
             }

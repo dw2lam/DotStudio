@@ -179,6 +179,11 @@ enum Motion {
     static let hero = Animation.spring(response: 0.5 * slow, dampingFraction: 0.86)
     /// The dual-zone panel's SYNC morph: one smooth spring, no overshoot (~0.5 s).
     static let sync = Animation.spring(duration: 0.5 * slow, bounce: 0)
+    /// A short, finite reveal for something that changes on its own while the gallery is up
+    /// (the song line coming and going). Every frame of a SwiftUI animation re-renders the
+    /// whole window — a spring's long settling tail is most of its frames — so this one is
+    /// over in a quarter second.
+    static let brief = Animation.easeOut(duration: 0.25 * slow)
     /// What everything collapses to under Reduce Motion: a short cross-fade.
     static let reduced = Animation.easeInOut(duration: 0.18)
 
