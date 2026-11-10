@@ -6,7 +6,9 @@
 
 <p align="center">
   Living screensavers and wallpaper for your Mac: generative scenes, real clocks,<br>
-  live skies, and the song you're playing on top.
+  live skies, and the song you're playing on top.<br>
+  <a href="https://dotstudio.davidlam.online"><b>dotstudio.davidlam.online</b></a> ·
+  <a href="https://github.com/dw2lam/DotStudio/releases/latest/download/DotStudio.dmg">Download</a>
 </p>
 
 <p align="center">
