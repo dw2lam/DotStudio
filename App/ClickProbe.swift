@@ -1,34 +1,47 @@
 //  ClickProbe.swift — DEV-ONLY crash harness for the gallery's click paths; inert unless set.
 //
 //    DOTSTUDIO_CLICK_PROBE=1   (ALWAYS with DOTSTUDIO_STORE_DIR=<fresh temp dir>)
-//        Hosts ContentView in a borderless window parked far off screen and never ordered in
-//        (as UIShots / PerfProbe do), then for EVERY style in the Scenes and Looks sections
-//        does what a user's pointer does, through real AppKit events sent to that window
-//        (NSWindow.sendEvent — the same hit testing and SwiftUI gesture path a click takes):
-//          • moves the pointer onto the tile (hover: the lift, the action bar and, after the
-//            dwell, the tile's live Metal preview — whose frames the probe draws by hand, since
-//            an off-screen window's display link never fires),
-//          • single-clicks it (the selection and its Core Animation ring), waits ~1 s,
-//          • scrolls a little while it is selected (live-scroll notifications included),
-//          • double-clicks it (the editor, its live preview and inspector), then goes back.
-//        Prints one line per style and "click probe: PASS" at the end; a crash is the process
-//        dying (tools/click-probe/run.sh reports the signal).
+//        Hosts ContentView in a titled window (with the toolbar SwiftUI bridges into it, as the
+//        app's WindowGroup window has) parked far off screen and never ordered in, then for
+//        EVERY style in the Scenes and Looks sections does what a user does, through the tile's
+//        own handlers (TileProbe: exactly the closures its onHover / tap gestures run), each
+//        run inside the hosting view's layout pass — where SwiftUI runs a gesture's action:
+//          • the pointer enters the tile (the lift, the action bar and, after the dwell, the
+//            tile's live Metal preview — whose frames the probe draws by hand, since an
+//            off-screen window's display link never fires),
+//          • a click (the selection and its Core Animation ring), then ~1 s,
+//          • a little live scroll while it is selected,
+//          • a double-click (the editor: its zoom, live preview and inspector list), its first
+//            effect closed and opened again (the chevron), then back to the gallery;
+//        then the same window shrunk to its minimum and below. (Synthetic NSEvents never reach
+//        SwiftUI's gestures in a window that isn't on screen, hence the handlers.)
+//        It also counts every "window needs update constraints" marking AppKit gets, and those
+//        made while one of the window's own constraint/layout passes is running — the chain
+//        that macOS 26 turns into "…more Update Constraints in Window passes than there are
+//        views in the window" (an NSException → crash; macOS 27 logs and drops). Run it on
+//        macOS 26 to see the crash itself. Prints one line per style and "click probe: PASS".
 //
 //      DOTSTUDIO_CLICK_SIZE=<w>x<h>        window size (default 1440x900)
 //      DOTSTUDIO_CLICK_ONLY=<name>|<name>  only these styles
 //      DOTSTUDIO_CLICK_EDIT=0              skip the double-click → editor step
+//      DOTSTUDIO_CLICK_TIMING=runloop      run the handlers from the run loop, not in layout
+//      DOTSTUDIO_CLICK_DEBUG=1             per-phase marking counts, the views marked, frames
+//      DOTSTUDIO_CLICK_STACKS=1            (with DEBUG) the stack of a long marking chain
+//      DOTSTUDIO_CLICK_PINNED=1            pin the content to the window size (as UIShots)
+//      DOTSTUDIO_CLICK_TOOLBAR=0           a borderless window, no toolbar
 //      DOTSTUDIO_CLICK_SCENARIO=<a,b,…>    extra conditions, any of:
 //          music        music shown (Corner) with a track playing (MusicDemo: no player involved)
 //          fullscreen   music shown Full Screen with a track playing
-//          reducemotion Reduce Motion on (the SwiftUI environment and the renderers)
 //          menubar      menu-bar mode on
 //          bounceimage  Bounce set to an image logo (a temp PNG in the store)
 //          screens      a display-configuration change posted after every few styles
-//          dupes        the library given a duplicate style id and duplicate names first
-//          retired      edited copies of retired styles (Pipeworks, Sunray) added first
+//          dupes        a duplicate style id and a duplicate name added first
+//          retired      edited copies of retired styles (Pipeworks, Sunray, Light Tunnel,
+//                       Fireflies, Now Playing) added first
 //
 //  The harness never touches the real library (it refuses without DOTSTUDIO_STORE_DIR),
 //  never shows a window, never plays a sound and never reaches a real music player.
+//  tools/click-probe/run.sh runs the matrix.
 
 import AppKit
 import SwiftUI
@@ -297,8 +310,6 @@ enum ClickProbe {
         win.isReleasedWhenClosed = false
         win.acceptsMouseMovedEvents = true
         if titled { host.sceneBridgingOptions = [.toolbars, .title] }
-        if env["DSX_NOKEYLOOP"] != nil { win.autorecalculatesKeyViewLoop = false }
-        say("click probe: autorecalculatesKeyViewLoop \(win.autorecalculatesKeyViewLoop)")
         win.contentView = host
         host.frame = CGRect(origin: .zero, size: size)
         win.setFrameOrigin(CGPoint(x: -30000, y: -30000))
