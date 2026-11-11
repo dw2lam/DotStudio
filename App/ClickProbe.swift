@@ -41,6 +41,8 @@ enum TileProbe {
     static var frames: [UUID: CGRect] = [:]
     /// Each tile's own click and double-click handlers (exactly what its tap gestures run).
     static var actions: [UUID: (select: () -> Void, open: () -> Void, hover: (Bool) -> Void)] = [:]
+    /// The editor's effect list: open/close its first effect (as clicking its chevron does).
+    static var toggleEffects: (() -> Void)?
 }
 
 struct TileProbeReporter: View {
@@ -110,6 +112,7 @@ enum ConstraintPassCounter {
     }
     static var tracing = true
     static var extrema: [String] = []
+    static var lastMarked: [String] = []
     static var depth = 0
     /// Markings made inside a window pass: in this outermost pass, in all, the most in one.
     static var reentrant = 0
@@ -153,6 +156,16 @@ extension NSView {
     @objc dynamic func probe_setNeedsUpdateConstraints(_ flag: Bool) {
         if flag, ConstraintPassCounter.tracing {
             let name = String(describing: type(of: self))
+            if ConstraintPassCounter.depth > 0 {
+                var chain: [String] = []
+                var v: NSView? = self
+                while let x = v, chain.count < 14 {
+                    chain.append(String(String(describing: type(of: x)).prefix(48)))
+                    v = x.superview
+                }
+                ConstraintPassCounter.lastMarked.append(chain.joined(separator: " < "))
+                if ConstraintPassCounter.lastMarked.count > 12 { ConstraintPassCounter.lastMarked.removeFirst() }
+            }
             ConstraintPassCounter.byClass[String(name.prefix(80)), default: 0] += 1
             if ConstraintPassCounter.depth > 0, name.contains("Hosting") || name.hasPrefix("ProbeHost"),
                ConstraintPassCounter.reentrantStacks.count < 4,
@@ -196,6 +209,13 @@ extension NSWindow {
         ConstraintPassCounter.marks += 1
         ConstraintPassCounter.total += 1
         if ConstraintPassCounter.depth > 0 {
+            if ConstraintPassCounter.reentrant == 300, ProcessInfo.processInfo.environment["DOTSTUDIO_CLICK_STACKS"] != nil {
+                FileHandle.standardOutput.write(Data(("STACK at 300 markings in one pass:\n" + Thread.callStackSymbols.prefix(160).joined(separator: "\n") + "\n").utf8))
+            }
+            if ConstraintPassCounter.reentrant == 40 {
+                FileHandle.standardOutput.write(Data(("40 markings in one window pass; the last views marked:\n  "
+                    + ConstraintPassCounter.lastMarked.joined(separator: "\n  ") + "\n").utf8))
+            }
             ConstraintPassCounter.reentrant += 1
             ConstraintPassCounter.reentrantTotal += 1
         }
@@ -277,6 +297,8 @@ enum ClickProbe {
         win.isReleasedWhenClosed = false
         win.acceptsMouseMovedEvents = true
         if titled { host.sceneBridgingOptions = [.toolbars, .title] }
+        if env["DSX_NOKEYLOOP"] != nil { win.autorecalculatesKeyViewLoop = false }
+        say("click probe: autorecalculatesKeyViewLoop \(win.autorecalculatesKeyViewLoop)")
         win.contentView = host
         host.frame = CGRect(origin: .zero, size: size)
         win.setFrameOrigin(CGPoint(x: -30000, y: -30000))
@@ -382,6 +404,11 @@ enum ClickProbe {
                 }
                 else { spin(1.0, win) }
                 edited = opened ? "ok" : "NO"
+                // Close and reopen the first effect, as a click on its chevron does.
+                for _ in 0..<2 {
+                    perform(TileProbe.toggleEffects, host: host, win: win)
+                    spin(0.5, win)
+                }
                 model.closeEditor()
                 spin(0.6, win)
                 if !opened { failures.append("\(preset.name): double-click didn't open the editor") }

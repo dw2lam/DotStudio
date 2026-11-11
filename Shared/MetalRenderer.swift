@@ -258,13 +258,15 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         sd.minFilter = .linear; sd.magFilter = .linear
         sd.mipFilter = .linear   // only slideshow photos carry mips; every other texture has one level
         sd.sAddressMode = .clampToEdge; sd.tAddressMode = .clampToEdge
-        sampler = device.makeSamplerState(descriptor: sd)!
+        guard let samplerState = device.makeSamplerState(descriptor: sd) else { return nil }
+        sampler = samplerState
 
         glyphs = GlyphAtlas.make(device: device)
 
         let dd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: pixelFormat, width: 1, height: 1, mipmapped: false)
         dd.usage = [.shaderRead, .renderTarget]
-        dummy = device.makeTexture(descriptor: dd)!
+        guard let dummyTexture = device.makeTexture(descriptor: dd) else { return nil }
+        dummy = dummyTexture
 
         let sem = DispatchSemaphore(value: 2)
         inFlight = sem

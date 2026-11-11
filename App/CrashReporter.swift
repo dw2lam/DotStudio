@@ -204,6 +204,7 @@ final class CrashReporter {
                                                        pid: getpid())) {
             try? data.write(to: launchURL, options: .atomic)
         }
+        _ = exceptionURL.path.withCString { dotstudio_crash_exceptions_install($0) }
         installExceptionHooks()
         Breadcrumbs.note("launch \(Self.versionString)\(safeMode ? " (safe mode)" : "")")
     }
@@ -229,7 +230,10 @@ final class CrashReporter {
             if parts.count > 1, let sig = Int32(parts[1]) { summary = Self.signalName(sig) }
         }
         var exception: String?
-        if let ex = try? String(contentsOf: exceptionURL, encoding: .utf8), !ex.isEmpty {
+        // The exception record is the cause only when it was raised just before the crash.
+        let exceptionAt = (try? fm.attributesOfItem(atPath: exceptionURL.path)[.modificationDate] as? Date) ?? .distantPast
+        if abs(crashedAt.timeIntervalSince(exceptionAt)) < 10,
+           let ex = try? String(contentsOf: exceptionURL, encoding: .utf8), !ex.isEmpty {
             exception = ex
             if let first = ex.split(separator: "\n").first {
                 summary = String(first.prefix(160))
