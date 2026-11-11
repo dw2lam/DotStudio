@@ -492,6 +492,16 @@ enum UIShots {
         s.append(Screen(name: "menu-music-denied", frame: .fit(width: 320),
                         prepare: { _ in MusicDemo.apply(.denied) },
                         view: { _ in AnyView(MenuPreview { DotStudioMenu() }) }))
+        // After a crash: the report window (and in safe mode), and Help ▸ Report a Problem…
+        s.append(Screen(name: "crash-report", frame: .fixed(CrashReportPanel.size), view: { _ in
+            AnyView(CrashReportView(report: CrashReport.sample(safeMode: false)).background(.windowBackground))
+        }))
+        s.append(Screen(name: "crash-report-safemode", frame: .fixed(CrashReportPanel.size), view: { _ in
+            AnyView(CrashReportView(report: CrashReport.sample(safeMode: true)).background(.windowBackground))
+        }))
+        s.append(Screen(name: "report-problem", frame: .fixed(CrashReportPanel.size), view: { _ in
+            AnyView(CrashReportView(report: CrashReport.sample(safeMode: false, crash: false)).background(.windowBackground))
+        }))
         // The one-time "still running" popover (menu-bar mode off, wallpaper playing)
         s.append(Screen(name: "menu-notice", frame: .fit(width: 288, minHeight: 80), view: { _ in
             AnyView(MenuBarStayNotice(quit: {}, keepRunning: {}, turnOnMenuBarMode: {})

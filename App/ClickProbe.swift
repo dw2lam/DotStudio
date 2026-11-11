@@ -576,6 +576,8 @@ enum ClickProbe {
             }
             y += max(120, (bottom - top) * 0.6)
         }
+        setY(.greatestFiniteMagnitude)   // the very bottom (the last row)
+        spin(0.3, win)
         return TileProbe.frames[id].flatMap { $0.midY > top && $0.midY < bottom ? $0 : nil }
     }
 
