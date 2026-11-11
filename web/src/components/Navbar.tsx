@@ -3,6 +3,7 @@ const LINK_HOVER = "#E1E0CC";
 
 const ITEMS: { label: string; href: string; external?: boolean }[] = [
   { label: "Scenes", href: "#scenes" },
+  { label: "Live Sky", href: "#sky" },
   { label: "Music", href: "#music" },
   { label: "App", href: "#studio" },
   { label: "Looks", href: "#looks" },

@@ -80,7 +80,7 @@ export function Packs() {
   return (
     <section id="packs" className="relative bg-black px-4 py-20 sm:py-28 md:py-32">
       <div className="mx-auto max-w-7xl">
-        <SectionHeader eyebrow="Scene packs" title="More to play." aside="All in the default library." />
+        <SectionHeader eyebrow="Packs" title="More to play." />
 
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {PACKS.map((p, i) => (
@@ -94,7 +94,6 @@ export function Packs() {
                     </h3>
                     <span className="text-xs text-gray-500">{p.scenes.length} scenes</span>
                   </div>
-                  <p className="mt-1 text-xs text-gray-400 sm:text-sm">{p.line}</p>
                   <ul className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 sm:text-[13px]">
                     {p.scenes.map((s) => (
                       <li key={s}>

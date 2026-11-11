@@ -47,3 +47,24 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #3a3a3a;
 }
+
+/* Now Playing demo: the living album art drifts slowly, as the app's backdrop does. */
+.np-drift {
+  transform: scale(1.08);
+}
+.np-drift-on {
+  animation: np-drift 26s ease-in-out infinite alternate;
+}
+@keyframes np-drift {
+  from {
+    transform: scale(1.08) translate3d(-1.5%, -1%, 0);
+  }
+  to {
+    transform: scale(1.16) translate3d(1.5%, 1.2%, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .np-drift-on {
+    animation: none;
+  }
+}

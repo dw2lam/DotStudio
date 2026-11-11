@@ -65,10 +65,9 @@ export function Showcase() {
   return (
     <section id="scenes" className="relative bg-black px-4 py-20 sm:py-28 md:py-32">
       <div className="mx-auto max-w-7xl">
-        <SectionHeader eyebrow="The best of the library" title="Screensavers that paint themselves." aside="Every frame here is rendered by the app.">
+        <SectionHeader eyebrow="Scenes" title="Screensavers that paint themselves.">
           <p className="mt-6 max-w-2xl text-xs leading-relaxed text-primary/70 sm:text-sm md:text-base">
-            Scenes are generative pieces drawn live on your Mac's GPU: no video files, nothing
-            to set up. Pick one, or let the library rotate through your favourites.
+            Drawn live on your Mac's GPU. No video files.
           </p>
         </SectionHeader>
 
@@ -100,7 +99,6 @@ export function Showcase() {
                   <span className="block text-base font-bold sm:text-lg" style={{ color: CREAM }}>
                     {t.name}
                   </span>
-                  <span className="mt-0.5 block text-[11px] text-gray-300/80 sm:text-xs">{t.blurb}</span>
                 </figcaption>
               </figure>
             </Reveal>

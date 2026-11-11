@@ -10,7 +10,6 @@ const MODES = [
 ];
 
 const DETAILS = [
-  { name: "Live weather", body: "The sea scenes follow the real sky where you are." },
   { name: "120 fps", body: "Full ProMotion smoothness, when you want it." },
   { name: "In the menu bar", body: "Music, wallpaper and styles without opening a window." },
   { name: "Instant start", body: "The screensaver is up the moment your Mac goes idle." },
@@ -31,7 +30,7 @@ export function Studio() {
       <div className="bg-noise pointer-events-none absolute inset-0 opacity-[0.12]" aria-hidden="true" />
 
       <div className="relative mx-auto max-w-7xl">
-        <SectionHeader eyebrow="The app" title="A gallery to play from." aside="An editor to make it yours." />
+        <SectionHeader eyebrow="App" title="A gallery to play from." aside="An editor to make it yours." />
 
         {/* The gallery, screensaver and wallpaper synced */}
         <Reveal className="mb-8 sm:mb-12">
@@ -63,7 +62,7 @@ export function Studio() {
         </div>
 
         <Reveal y={10} scaleFrom={1} className="mx-auto mb-20 max-w-5xl sm:mb-28">
-          <ul className="grid grid-cols-2 gap-x-6 gap-y-4 rounded-2xl bg-white/[0.03] p-5 text-xs sm:p-6 md:grid-cols-4 sm:text-[13px]">
+          <ul className="grid grid-cols-2 gap-x-6 gap-y-4 rounded-2xl bg-white/[0.03] p-5 text-xs sm:p-6 md:grid-cols-3 sm:text-[13px]">
             {DETAILS.map((d) => (
               <li key={d.name}>
                 <span className="block text-gray-200">{d.name}</span>

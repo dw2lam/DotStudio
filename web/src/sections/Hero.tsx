@@ -1,7 +1,7 @@
 import { motion } from "framer-motion";
 import { ArrowRight } from "lucide-react";
 import { Navbar } from "../components/Navbar";
-import { EffectCanvas } from "../components/EffectCanvas";
+import { HeroReel } from "../components/HeroReel";
 import { WordsPullUp } from "../components/animations/WordsPullUp";
 
 const CREAM = "#E1E0CC";
@@ -12,10 +12,10 @@ export function Hero() {
   return (
     <section className="h-screen p-4 md:p-6">
       <div className="relative h-full w-full overflow-hidden rounded-2xl md:rounded-[2rem]">
-        {/* Live effect backdrop — DotStudio's own ASCII look, in place of stock video. */}
-        <EffectCanvas mode="ascii" cell={14} className="absolute inset-0 h-full w-full object-cover" />
+        {/* Backdrop: the app's own scenes, crossfading, with a "Now showing" caption. */}
+        <HeroReel />
 
-        {/* Film-grain + cinematic vignette over the canvas. */}
+        {/* Film-grain + cinematic vignette over the scenes. */}
         <div className="noise-overlay pointer-events-none absolute inset-0 opacity-[0.7] mix-blend-overlay" />
         {/* Uniform scrim to dim the busy ASCII backdrop a touch. */}
         <div className="pointer-events-none absolute inset-0 bg-black/35" />

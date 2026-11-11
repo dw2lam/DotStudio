@@ -33,12 +33,7 @@ export function Looks() {
   return (
     <section id="looks" className="relative bg-black px-4 py-20 sm:py-28 md:py-32">
       <div className="mx-auto max-w-7xl">
-        <SectionHeader eyebrow="Looks" title="Or restyle your own photos." aside="And video.">
-          <p className="mt-6 max-w-2xl text-xs leading-relaxed text-primary/70 sm:text-sm md:text-base">
-            Looks are effect stacks that repaint a canvas: a built-in slideshow of photos out of
-            the box, or your own photos and video. One photo, six Looks:
-          </p>
-        </SectionHeader>
+        <SectionHeader eyebrow="Looks" title="Restyle your own photos" aside="and video." />
 
         <Reveal className="mx-auto max-w-5xl">
           <figure>
@@ -79,9 +74,6 @@ export function Looks() {
                   );
                 })}
               </div>
-              <figcaption className="text-[11px] text-gray-600">
-                Photo: Wadi Rum, Peter Chisholm, CC0. One of the app's built-in slides.
-              </figcaption>
             </div>
           </figure>
         </Reveal>
