@@ -251,7 +251,8 @@ final class AppModel: ObservableObject {
     // (new after 1.4) and the 1.4.2 clocks (a 1.4 library gets those as new featured built-ins).
     // Sunray was one until 1.4.2 retired it (DefaultPresets.retiredStyles).
     static let promotedBuiltIns = ["Zen Garden", "Tidewater", "Shallows", "Bounce",
-                                   "StandBy", "Minimal", "Chronometer"]
+                                   "StandBy", "Minimal", "Chronometer",
+                                   "Blue Bloom", "Baby's Breath"]
 
     /// New built-in styles reach existing libraries exactly once (runs on every launch):
     ///  • no `seenBuiltIns` (a library from before 1.4): everything shipping now counts as

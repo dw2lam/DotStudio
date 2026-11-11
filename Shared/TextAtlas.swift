@@ -5,8 +5,8 @@
 //  razor sharp at any size, from a 60 px date line to a 1500 px clock face at 5K, and the
 //  shaders get bevels, soft shadows and glows from the same field for free.
 //
-//  Texture (r16Unorm, bound at fragment slot 6 only while a Clocks scene, Dial Clock or a StandBy-pack
-//  clock draws). Faces:
+//  Texture (r16Unorm, bound at fragment slot 6 only while a Clocks scene, Dial Clock, a StandBy-pack
+//  clock or Bloom with captions draws). Faces:
 //      0 = SF Pro Light   1 = SF Pro Bold   2 = New York   3 = SF Pro Rounded Medium
 //      4 = SF Pro Rounded Heavy (StandBy's big figures; addressed by index, not by `fw` — see below)
 //  Only the faces a scene draws with are built (`faces(for:)`), one plane each, stacked
@@ -50,11 +50,12 @@ enum TextAtlas {
     static let bigGlyphs = Array("0123456789:")
     static let smallGlyphs = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789,.\u{2019}\u{00B7}-/&abcdefghijklmnopqrstuvwxyz")
 
-    /// Shader ids of the scenes that read the atlas (the Clocks pack, Dial Clock in slot 6 and the
-    /// StandBy pack's clocks).
+    /// Shader ids of the scenes that read the atlas (the Clocks pack, Dial Clock in slot 6, the
+    /// StandBy pack's clocks and Bloom's captions — only while they are on).
     private static let users: Set<Int32> = Set(SceneCatalog.clocks.values.map(\.shaderID)
         + SceneCatalog.studio6.values.map(\.shaderID)
-        + SceneCatalog.standby.values.map(\.shaderID))
+        + SceneCatalog.standby.values.map(\.shaderID)
+        + SceneCatalog.bloomPack.values.map(\.shaderID))
 
     // Per GPU (keyed by registryID): a texture only belongs to its own device, and on a
     // multi-GPU Mac (Mac Pro, eGPU) a wallpaper may draw on the GPU driving its display
@@ -79,6 +80,7 @@ enum TextAtlas {
     /// The atlas for the scene in `u` (built on first use, then shared), else nil.
     static func texture(_ device: MTLDevice, uniforms u: FXUniforms) -> MTLTexture? {
         guard users.contains(u.effect) else { return nil }
+        if u.effect == 79, u.p1.z < 0.5 { return nil }             // Bloom: only while Captions is on
         return texture(device, faces: faces(for: u))
     }
 
@@ -147,7 +149,8 @@ enum TextAtlas {
             return 1 << 0                                            // SF Pro Light
         case 75:                                                     // StandBy: the big rounded figures
             return 1 << 4                                            // SF Pro Rounded Heavy
-        case 76, 77:                                                 // Minimal (time + date), Chronometer (date)
+        case 76, 77, 79:                                             // Minimal (time + date), Chronometer (date),
+                                                                     // Bloom's captions
             return 1 << 0                                            // SF Pro Light
         default:
             return allFaces
