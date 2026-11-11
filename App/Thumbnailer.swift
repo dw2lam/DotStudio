@@ -309,6 +309,7 @@ final class Thumbnailer {
             // MetalRenderer.fillLiveSky: these follow the real sun and moon when "live" is on.
             if [.oceanHorizon, .shallows, .pleats, .dichroic, .sandGarden].contains(e.kind),
                (e.params["live"] ?? 0) > 0.5 { take(600) }
+            if e.kind == .meadow, (e.params["live"] ?? 1) > 0.5 { take(600) }
             if WeatherLink.usesWeather(e.kind), WeatherLink.fixedCondition(e) == nil { take(300) }
         }
         return best

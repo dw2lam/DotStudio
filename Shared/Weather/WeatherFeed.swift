@@ -1,5 +1,5 @@
 //  WeatherFeed.swift — the reader side of weather.json (WeatherState.swift), and WeatherLink:
-//  what each renderer uses to put the weather into Ocean Horizon's and Shallows' uniforms.
+//  what each renderer uses to put the weather into Ocean Horizon's, Shallows' and Meadow's uniforms.
 //
 //  Every MetalRenderer owns one WeatherLink (one per host: saver, wallpaper displays, previews,
 //  thumbnails), so no host needs any weather code of its own. It stats weather.json at most every
@@ -68,7 +68,7 @@ final class WeatherLink {
     init(baseDir: URL) { feed = WeatherFeed(baseDir: baseDir) }
 
     /// Scenes with a Weather menu (param "weather": 0 = Live, else WeatherMix.menuConditions).
-    static func usesWeather(_ kind: EffectKind) -> Bool { kind == .oceanHorizon || kind == .shallows }
+    static func usesWeather(_ kind: EffectKind) -> Bool { kind == .oceanHorizon || kind == .shallows || kind == .meadow }
 
     /// The scene's fixed condition, or nil for Live.
     static func fixedCondition(_ inst: EffectInstance) -> WeatherCondition? {
@@ -169,7 +169,8 @@ final class WeatherLink {
     private static var archives: [UInt64: MTLBinaryArchive] = [:]
     /// Every function these pipelines are built from (PipelineArchive harvests them all).
     static let functionNames = ["fx_ocean", "fx_ocean_live", "fx_wx_ocean", "fx_wx_ocean_live",
-                                "fx_wx_ocean_cu", "fx_wx_ocean_cu_live", "fx_shallows", "fx_wx_shallows"]
+                                "fx_wx_ocean_cu", "fx_wx_ocean_cu_live", "fx_shallows", "fx_wx_shallows",
+                                "fx_meadow", "fx_wx_meadow"]
 
     /// The fragment function a pass of `kind` draws with, from its packed uniforms (nil: not one
     /// of these scenes — fx_fragment draws it). Weather (u.weather2.w) or the scene's clear sky;
@@ -183,6 +184,8 @@ final class WeatherLink {
             return u.p1.y > 0.5 && u.sky.y > 0.5 ? name + "_live" : name
         case .shallows:
             return wx ? "fx_wx_shallows" : "fx_shallows"
+        case .meadow:
+            return wx ? "fx_wx_meadow" : "fx_meadow"
         default:
             return nil
         }
