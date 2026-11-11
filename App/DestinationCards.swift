@@ -1342,17 +1342,11 @@ struct SetupStrip: View {
         let shape = RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
         // The button sits beside the text while the text keeps a comfortable column
         // (it wraps as needed); in a narrower strip it moves under the text.
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .center, spacing: layout.itemGap) {
-                message
-                    .frame(minWidth: layout.scaled(240), idealWidth: layout.scaled(240),
-                           maxWidth: .infinity, alignment: .leading)
-                button
-            }
-            VStack(alignment: .leading, spacing: layout.itemGap) {
-                message
-                button
-            }
+        // One layout, never a swap: the button is an AppKit control (see ReflowStack).
+        ReflowStack(rowAlignment: .center, columnAlignment: .leading, spacing: layout.itemGap) {
+            message
+                .frame(idealWidth: layout.scaled(240), maxWidth: .infinity, alignment: .leading)
+            button
         }
         .padding(.horizontal, layout.itemGap)
         .padding(.vertical, layout.itemGap)

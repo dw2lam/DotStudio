@@ -549,28 +549,128 @@ extension View {
 // MARK: - Reflow
 
 /// One horizontal row when everything fits at its natural size; otherwise a column.
-/// Decides by measuring (ViewThatFits), so it reacts to the real width and text size.
-/// Note: the two arrangements are separate view trees — keep @State out of `content`
-/// (pass bindings in) or it resets when the arrangement flips. For state-keeping
-/// switching by width class, use `AdaptiveStack`.
+/// Decides by measuring the children's ideal widths, inside one layout: the children are
+/// never rebuilt or swapped, so AppKit-backed controls (buttons, pickers, switches) stay
+/// put when it flips. (A ViewThatFits swap of AppKit controls can loop the window's
+/// constraint passes; macOS 26 and earlier throw on that — the 1.4.4 crash.)
+/// In a row, spare width goes to the flexible children (a Spacer, `.frame(maxWidth:
+/// .infinity)`), or with `spread` into the gap before the last child.
 struct ReflowStack<Content: View>: View {
     var rowAlignment: VerticalAlignment
     var columnAlignment: HorizontalAlignment
     var spacing: CGFloat?
+    var columnSpacing: CGFloat?
+    var spread: Bool
     var content: Content
 
     init(rowAlignment: VerticalAlignment = .center, columnAlignment: HorizontalAlignment = .leading,
-         spacing: CGFloat? = nil, @ViewBuilder content: () -> Content) {
+         spacing: CGFloat? = nil, columnSpacing: CGFloat? = nil, spread: Bool = false,
+         @ViewBuilder content: () -> Content) {
         self.rowAlignment = rowAlignment
         self.columnAlignment = columnAlignment
         self.spacing = spacing
+        self.columnSpacing = columnSpacing
+        self.spread = spread
         self.content = content()
     }
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: rowAlignment, spacing: spacing) { content }
-            VStack(alignment: columnAlignment, spacing: spacing) { content }
+        ReflowLayout(rowAlignment: rowAlignment, columnAlignment: columnAlignment,
+                     spacing: spacing, columnSpacing: columnSpacing ?? spacing, spread: spread) { content }
+    }
+}
+
+/// The layout behind `ReflowStack`.
+struct ReflowLayout: Layout {
+    var rowAlignment: VerticalAlignment = .center
+    var columnAlignment: HorizontalAlignment = .leading
+    var spacing: CGFloat?
+    var columnSpacing: CGFloat?
+    var spread = false
+
+    private func gaps(_ subviews: Subviews, axis: Axis, fixed: CGFloat?) -> [CGFloat] {
+        guard subviews.count > 1 else { return [] }
+        return (0..<subviews.count - 1).map { i in
+            fixed ?? subviews[i].spacing.distance(to: subviews[i + 1].spacing, along: axis)
+        }
+    }
+
+    private func idealWidths(_ subviews: Subviews) -> [CGFloat] {
+        subviews.map { $0.sizeThatFits(.unspecified).width }
+    }
+
+    /// Whether the children fit side by side in `width` (nil = unconstrained: always a row).
+    private func fitsInRow(_ width: CGFloat?, _ subviews: Subviews) -> Bool {
+        guard let width, width.isFinite else { return true }
+        let total = idealWidths(subviews).reduce(0, +)
+            + gaps(subviews, axis: .horizontal, fixed: spacing).reduce(0, +)
+        return total <= width + 0.5
+    }
+
+    /// Row widths: ideal widths, with any spare width shared by the flexible children.
+    private func rowWidths(_ width: CGFloat?, _ subviews: Subviews) -> (widths: [CGFloat], spare: CGFloat) {
+        var widths = idealWidths(subviews)
+        let used = widths.reduce(0, +) + gaps(subviews, axis: .horizontal, fixed: spacing).reduce(0, +)
+        guard let width, width.isFinite, width > used else { return (widths, 0) }
+        let spare = width - used
+        if spread { return (widths, spare) }
+        let flexible = subviews.indices.filter {
+            subviews[$0].sizeThatFits(ProposedViewSize(width: .infinity, height: nil)).width > widths[$0] + 0.5
+        }
+        guard !flexible.isEmpty else { return (widths, 0) }
+        for i in flexible { widths[i] += spare / CGFloat(flexible.count) }
+        return (widths, 0)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard !subviews.isEmpty else { return .zero }
+        if fitsInRow(proposal.width, subviews) {
+            let (widths, spare) = rowWidths(proposal.width, subviews)
+            var above: CGFloat = 0, below: CGFloat = 0
+            for (i, s) in subviews.enumerated() {
+                let d = s.dimensions(in: ProposedViewSize(width: widths[i], height: nil))
+                above = max(above, d[rowAlignment]); below = max(below, d.height - d[rowAlignment])
+            }
+            let width = widths.reduce(0, +) + spare + gaps(subviews, axis: .horizontal, fixed: spacing).reduce(0, +)
+            return CGSize(width: width, height: above + below)
+        }
+        let w = proposal.width
+        var width: CGFloat = 0, height: CGFloat = 0
+        for s in subviews {
+            let size = s.sizeThatFits(ProposedViewSize(width: w, height: nil))
+            width = max(width, size.width); height += size.height
+        }
+        height += gaps(subviews, axis: .vertical, fixed: columnSpacing).reduce(0, +)
+        return CGSize(width: min(width, w ?? width), height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard !subviews.isEmpty else { return }
+        if fitsInRow(bounds.width, subviews) {
+            let (widths, spare) = rowWidths(bounds.width, subviews)
+            let gaps = gaps(subviews, axis: .horizontal, fixed: spacing)
+            let dims = subviews.indices.map { subviews[$0].dimensions(in: ProposedViewSize(width: widths[$0], height: nil)) }
+            let above = dims.map { $0[rowAlignment] }.max() ?? 0
+            let rowHeight = above + (dims.map { $0.height - $0[rowAlignment] }.max() ?? 0)
+            let top = bounds.minY + max(0, (bounds.height - rowHeight) / 2)
+            var x = bounds.minX
+            for (i, s) in subviews.enumerated() {
+                if spread, i == subviews.count - 1 { x += spare }
+                s.place(at: CGPoint(x: x, y: top + above - dims[i][rowAlignment]), anchor: .topLeading,
+                        proposal: ProposedViewSize(width: widths[i], height: nil))
+                x += widths[i] + (i < gaps.count ? gaps[i] : 0)
+            }
+            return
+        }
+        let gaps = gaps(subviews, axis: .vertical, fixed: columnSpacing)
+        let anchor: CGFloat = columnAlignment == .trailing ? bounds.width
+            : columnAlignment == .center ? bounds.width / 2 : 0
+        var y = bounds.minY
+        for (i, s) in subviews.enumerated() {
+            let p = ProposedViewSize(width: bounds.width, height: nil)
+            let d = s.dimensions(in: p)
+            s.place(at: CGPoint(x: bounds.minX + anchor - d[columnAlignment], y: y), anchor: .topLeading, proposal: p)
+            y += d.height + (i < gaps.count ? gaps[i] : 0)
         }
     }
 }

@@ -250,16 +250,11 @@ private struct SectionHeader: View {
         let _ = Perf.body("SectionHeader")
         if section.kind == .looks {
             // The Source button sits on the title's line when it fits, else under the text.
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .firstTextBaseline, spacing: layout.controlGap) {
-                    titles
-                    Spacer(minLength: layout.itemGap)
-                    sourceButton
-                }
-                VStack(alignment: .leading, spacing: layout.itemGap) {
-                    titles
-                    sourceButton
-                }
+            ReflowStack(rowAlignment: .firstTextBaseline, columnAlignment: .leading,
+                        spacing: layout.controlGap * 2 + layout.itemGap, columnSpacing: layout.itemGap,
+                        spread: true) {
+                titles
+                sourceButton
             }
         } else {
             titles
@@ -338,6 +333,8 @@ private struct FilterBar: View {
     var searchFocused: FocusState<Bool>.Binding
     let counts: [GalleryFilter: Int]
     @Namespace private var chipNS
+    @State private var chipsWidth: CGFloat = 0
+    @State private var chipsViewport: CGFloat = 0
 
     /// Narrower in compact windows, wider in wide ones; grows with the text.
     private var searchWidth: CGFloat { layout.scaled(layout.widthClass.pick(208, 240, 288)) }
@@ -368,23 +365,24 @@ private struct FilterBar: View {
                 // Over the chips (large text), it can be as wide as a comfortable line.
                 .frame(width: layout.prefersStacking ? layout.readableWidth : searchWidth)
                 .onExitCommand { query = ""; searchFocused.wrappedValue = false }
-            ViewThatFits(in: .horizontal) {
+            // Always the same scroll view (never swapped in and out by measuring — see
+            // ReflowStack); it only scrolls, and fades its edge, when the chips overflow.
+            let overflows = chipsWidth > chipsViewport + 0.5
+            ScrollView(.horizontal, showsIndicators: false) {
                 chips
                     .fixedSize()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    chips
-                        .fixedSize()
-                        .padding(.vertical, Self.verticalInset)   // room for the hover lift
-                        .padding(.trailing, Space.l)               // the last chip clears the fade
-                }
-                .padding(.vertical, -Self.verticalInset)
-                .noScrollEdgeEffects()
-                .mask(LinearGradient(stops: [.init(color: .black, location: 0),
-                                             .init(color: .black, location: 0.9),
-                                             .init(color: .clear, location: 1)],
-                                     startPoint: .leading, endPoint: .trailing))
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { chipsWidth = $0 }
+                    .padding(.vertical, Self.verticalInset)            // room for the hover lift
+                    .padding(.trailing, overflows ? Space.l : 0)       // the last chip clears the fade
             }
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { chipsViewport = $0 }
+            .padding(.vertical, -Self.verticalInset)
+            .noScrollEdgeEffects()
+            .mask(LinearGradient(stops: [.init(color: .black, location: 0),
+                                         .init(color: .black, location: 0.9),
+                                         .init(color: overflows ? .clear : .black, location: 1)],
+                                 startPoint: .leading, endPoint: .trailing))
         }
         .pageColumn(layout)
         .padding(.vertical, Self.verticalInset)
