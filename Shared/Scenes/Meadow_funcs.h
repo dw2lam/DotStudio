@@ -1,37 +1,30 @@
-//  Meadow_funcs.h — the Meadow pack (shader id 78, Meadow.swift): summer fields in the wind.
+//  Meadow_funcs.h — the Meadow pack (shader id 78, Meadow.swift): summer hills in the wind.
 //  File-scope Metal helpers, every symbol "meadow_". Included by Shaders.metal after
 //  Nature_funcs.h, whose sky it reuses (Tidewater's: single-scattering atmosphere, twilight, the
-//  live sun and moon, stars, the weather's deck) with Shared/Weather/Weather_funcs.h (rain, snow,
-//  fog, lightning). Linear light throughout, shown through nature_display's filmic shoulder, then
-//  a soft grade and a fine ordered dither.
+//  live sun and moon, stars, the weather's cloud deck) with Shared/Weather/Weather_funcs.h (rain,
+//  snow, fog, lightning). Linear light throughout, then a film finish.
 //
-//  The view: a camera a metre up in a meadow, looking a little up across it. Front to back:
-//   • grass blades and wildflowers on vertical depth layers (0.45 … 5 m), bending in the wind —
-//     the gusts are a noise field carried downwind, so a gust is a patch of stronger bend that
-//     travels across the field, and each blade flutters on its own. A ray only meets the three
-//     or four layers where it is inside the grass (solved for, not searched). Blades thinner than a pixel
-//     are drawn energy-kept (box-filtered) and the near ones are out of focus (the lens is focused
-//     far off), so nothing shimmers and the foreground is soft;
-//   • the meadow itself (a ground plane) under them: rolling swells, tufts, light running over it
-//     where the gusts lay the grass over (its paler undersides catch the light), cloud shadows
-//     drifting across, the wildflowers' tint;
-//   • up to three hill layers drawn as silhouettes against the sky (a near rise — in Lone Tree
-//     a low rise with three trees on its shoulder — a patchwork of hedged fields, a far ridge), each lit by its slope,
-//     with the same gusts and cloud shadows, fading into the air with distance;
-//   • the sky: Tidewater's atmosphere, sun, moon, stars and clouds (Nature_funcs.h).
-//  Then the weather (deck, rain, snow, fog, lightning), fireflies on clear summer nights, the glow
-//  (bloom and halo round the light, luminous air low toward the horizon), the live camera's
-//  exposure, the display shoulder, a filmic grade (halation in the highlights, softened colour,
-//  milky shadows) and a fine ordered + grain dither.
+//  The view, front to back:
+//   • stems at the lens (wildflowers on tall stalks, seed heads), out of focus, backlit;
+//   • grass blades on vertical depth layers out to ~5 m (Meadow, Tall Grass), bending in gusts that
+//     travel across the field, each blade fluttering on its own; box-filtered and defocused up
+//     close, so nothing shimmers;
+//   • the ground: the meadow plane, or velvet ground swelling into dark hollows (Rolling Hills,
+//     Hillside), with wind streaks and the gusts' sheen;
+//   • five ridges receding to the horizon, drawn as silhouettes, each form-shaded (flanks to or
+//     from the light, the face falling toward us, a dark hollow at its foot with mist pooled in
+//     it), velvet up close, fields and hedges further off, cypresses or tree lines on a crest,
+//     going blue and soft only with real distance; in Hillside the sea and blue mountains beyond;
+//   • the sky: Tidewater's atmosphere, sun, moon and stars, big cumulus built of lit puffs (towering
+//     in Hillside), high cirrus; with the weather, Tidewater's cloud deck.
+//  Then the weather, fireflies on clear summer nights, the glow (bloom and halo round the light,
+//  luminous air at the horizon), the live camera's exposure, a film grade (rich colour, deep
+//  shadows, halation in the highlights) and grain with a fine ordered dither.
 //
-//  Cost (tools/gallery --gpubench, M5 Pro, 5120×2880): Meadow ~5.3 ms, Lone Tree ~6.2, Tall Grass
-//  ~7.9 (Tidewater 4.7; Tidewater's clouds are ~1.8 of it here — the camera looks up at more sky);
-//  at the wallpaper's Balanced scale (1920×1080 on a 5K display) 0.8–1.2.
-//  Per pixel it is plain arithmetic, a few gradient noises on a cheap hash, sines for the
-//  silhouettes, and the sky restated for a pixel's cost (meadow_atmos). Compiled twice — clear and
-//  weather — as fragment functions of their own (Weather_fragment.h), so the clear sky never pays
-//  for the weather's registers. (Watch the registers: one more full sky evaluation held through the
-//  grass once cost 6× the frame time.)
+//  Cost: see Meadow.swift's header (tools/gallery --gpubench). Compiled twice — clear and weather —
+//  as fragment functions of their own (Weather_fragment.h), so the clear sky never pays for the
+//  weather's registers. (Watch the registers: one more full sky evaluation held through the grass
+//  once cost 6× the frame time.)
 
 constant float MEADOW_F = 1.65;                              // focal length, frame half-heights
 constant float2 MEADOW_WD = float2(0.9439, 0.3304);          // the wind's heading (x right, z away)
@@ -104,63 +97,89 @@ static inline float2 meadow_ridge(float x, float seed) {
 
 // ---------------------------------------------------------------- layout
 //
-// Landscape: 0 Meadow (an open meadow, a gentle rise on the left), 1 Lone Tree (a low, broad rise
-// on the left with a cluster of three trees on its shoulder), 2 Tall Grass (low in long grass).
+// Landscape (the Landscape menu):
+//   0 Meadow        a flowery slope at the lens, rolling hills overlapping beyond with a dark hollow
+//                   between, cypresses on the far ridge, blue distance;
+//   1 Rolling Hills smooth green domes overlapping into the distance, velvet in the light;
+//   2 Tall Grass    low in long grass at golden hour, the meadow flat to the horizon;
+//   3 Hillside      a steep wind-swept slope, a shadowed ridge above it, the sea and blue
+//                   mountains beyond under a towering cloud.
 struct MeadowLayout {
     int land;
     float camH;      // eye height above the ground, m
-    float pitch;     // camera tilt up, radians
+    float pitch;     // camera tilt up, radians (down: < 0)
     float bladeH;    // tallest grass, m
     float space;     // blade spacing in the nearest layer, m
     float bladeW;    // blade half-width at its foot, m
     float aperture;  // defocus of the near grass: the blur circle, m (focused far off)
-    float d1;        // the near rise's distance, m (0: none)
     float aspect;
+    bool blades;     // individual blades at the lens (Meadow, Tall Grass); else the velvet sward
+    float stalks;    // tall stems at the lens (flowers, seed heads): how many
 };
 static inline MeadowLayout meadow_layout(int land, float aspect) {
     MeadowLayout L;
     L.land = land;
     L.aspect = aspect;
+    L.bladeH = 0.50; L.space = 0.020; L.bladeW = 0.0050; L.aperture = 0.0025;
     if (land == 1) {
-        L.camH = 1.15; L.pitch = 0.13; L.bladeH = 0.50; L.space = 0.020; L.bladeW = 0.0050;
-        L.aperture = 0.0025; L.d1 = 95.0;
+        L.camH = 36.0; L.pitch = -0.07; L.blades = false; L.stalks = 0.0;
     } else if (land == 2) {
-        L.camH = 0.80; L.pitch = 0.12; L.bladeH = 1.05; L.space = 0.024; L.bladeW = 0.0050;
-        L.aperture = 0.0040; L.d1 = 0.0;
+        L.camH = 0.80; L.pitch = 0.12; L.bladeH = 1.05; L.space = 0.024; L.aperture = 0.0040;
+        L.blades = true; L.stalks = 0.0;
+    } else if (land == 3) {
+        L.camH = 1.6; L.pitch = -0.02; L.blades = false; L.stalks = 0.0;
     } else {
-        L.camH = 1.20; L.pitch = 0.14; L.bladeH = 0.52; L.space = 0.020; L.bladeW = 0.0050;
-        L.aperture = 0.0025; L.d1 = 320.0;
+        L.camH = 1.05; L.pitch = -0.05; L.blades = true; L.stalks = 1.0;
     }
     return L;
 }
-// Silhouette heights above the horizon line (screen units, the frame is 2 tall) at screen x X,
-// with their slopes d/dX.
-static inline float2 meadow_farTop(MeadowLayout L, float X) {
-    float2 r = meadow_ridge(X * 0.8, 11.3);
-    float k = L.land == 2 ? 0.5 : 1.0;
-    float sr = sqrt(max(r.x, 0.0));
-    return k * float2(0.05 + 0.17 * r.x * sr, 0.17 * 1.5 * sr * r.y * 0.8);
+
+// The ridges: five silhouettes receding to the horizon (k = 0 nearest), each at its distance.
+constant float MEADOW_RD[4][5] = {
+    {150.0, 420.0, 1100.0, 3000.0, 9000.0},     // Meadow
+    {45.0, 120.0, 300.0, 800.0, 9000.0},        // Rolling Hills
+    {300.0, 900.0, 2400.0, 5000.0, 9000.0},     // Tall Grass
+    {1e6, 1e6, 1e6, 1e6, 14000.0},              // Hillside (the slope and the sea: meadow_scene)
+};
+// A dome on the skyline (height h, half-width w, at c) and its slope.
+static inline float2 meadow_dome(float X, float c, float w, float h) {
+    float q = (X - c) / w;
+    float e = h * exp(-q * q);
+    return float2(e, -2.0 * q / w * e);
 }
-static inline float2 meadow_midTop(MeadowLayout L, float X) {
-    float2 r = meadow_ridge(X * 1.5, 4.7);
-    float a = L.land == 2 ? 0.03 : 0.065;
-    return float2((L.land == 2 ? 0.004 : 0.010) + a * r.x, a * r.y * 1.5);
-}
-static inline float2 meadow_nearTop(MeadowLayout L, float X) {
+// Ridge k's top above the horizon line (screen units: the frame is 2 tall) at screen x X, and its
+// slope d/dX. −1: no ridge there.
+static inline float2 meadow_ridgeTop(MeadowLayout L, int k, float X) {
+    float a = L.aspect;
     if (L.land == 1) {
-        float w = 1.05 + 0.30 * L.aspect;
-        float q = (X + 0.30 * L.aspect) / w;
-        float e = 0.17 * exp(-q * q);
-        float2 r = meadow_ridge(X * 2.2, 2.2);
-        return float2(e - 0.03 + 0.012 * r.x, -2.0 * q / w * e + 0.0264 * r.y);
+        if (k == 0) return float2(-0.16, 0.0) + meadow_dome(X, -0.62 * a, 1.15, 0.40) + meadow_dome(X, 1.05 * a, 0.80, 0.17);
+        if (k == 1) return float2(-0.06, 0.0) + meadow_dome(X, 0.05 * a, 0.85, 0.34) + meadow_dome(X, 0.95 * a, 0.9, 0.16);
+        if (k == 2) return float2(-0.01, 0.0) + meadow_dome(X, 0.70 * a, 0.95, 0.28) + meadow_dome(X, -0.85 * a, 0.75, 0.18);
+        if (k == 3) { float2 r = meadow_ridge(X * 1.2, 3.3); return float2(0.03 + 0.09 * r.x, 0.108 * r.y); }
+        float2 r = meadow_ridge(X * 0.8, 11.3);
+        return float2(0.015 + 0.03 * r.x, 0.024 * r.y);
     }
-    if (L.land == 0) {
-        float q = (X + 0.62 * L.aspect) / 0.95;
-        float e = 0.11 * exp(-q * q);
-        float2 r = meadow_ridge(X * 1.7, 8.1);
-        return float2(e - 0.02 + 0.025 * r.x, -2.0 * q / 0.95 * e + 0.0425 * r.y);
+    if (L.land == 3) {
+        float t = X / a;
+        if (k == 4) {
+            float2 r = meadow_ridge(X * 1.4, 9.7);
+            float m = smoothstep(-0.25, 0.35, t);
+            return float2((0.004 + 0.045 * r.x * r.x) * m - 0.002 * (1.0 - m), 0.09 * r.x * r.y * m);
+        }
+        return float2(-1.0, 0.0);
     }
-    return float2(-1.0, 0.0);
+    float kk = L.land == 2 ? 0.35 : 1.0;
+    if (k == 0) {
+        if (L.land == 2) { float2 r = meadow_ridge(X * 1.3, 8.1); return float2(-0.004 + 0.012 * r.x, 0.0156 * r.y); }
+        float2 r = meadow_ridge(X * 2.0, 8.1);
+        return float2(-0.06, 0.0) + meadow_dome(X, 0.55 * a, 1.2, 0.30) + float2(0.015 * r.x, 0.03 * r.y);
+    }
+    if (k == 1) return kk * (float2(-0.02, 0.0) + meadow_dome(X, -0.50 * a, 0.95, 0.26) + meadow_dome(X, 0.15 * a, 0.70, 0.16));
+    if (k == 2) { float2 r = meadow_ridge(X * 1.1, 4.7); return kk * float2(0.04 + 0.07 * r.x, 0.077 * r.y); }
+    if (k == 3) { float2 r = meadow_ridge(X * 1.7, 1.9); return kk * float2(0.03 + 0.045 * r.x, 0.0765 * r.y); }
+    float2 r = meadow_ridge(X * 0.8, 11.3);
+    float sr = sqrt(max(r.x, 0.0));
+    return kk * float2(0.04 + 0.08 * r.x * sr, 0.08 * 1.5 * sr * r.y * 0.8);
 }
 
 // ---------------------------------------------------------------- wind
@@ -177,7 +196,7 @@ static inline float meadow_gust(float2 p, float tw) {
 // Cloud shadows on the ground at w (m): patches a kilometre or so across, drifting downwind,
 // cast along the sun. 0…1 = in shadow; thr from the cover (higher: fewer).
 static inline float meadow_cloudShadow(float2 w, float3 sd, float tc, float thr) {
-    float2 p = w * 0.011 + sd.xz * (12.0 / max(sd.y, 0.06)) - MEADOW_WD * (tc * 20.0) + float2(3.7, 1.9);
+    float2 p = w * 0.005 + sd.xz * (5.5 / max(sd.y, 0.06)) - MEADOW_WD * (tc * 9.0) + float2(3.7, 1.9);
     float n = meadow_gnoise(p);
     return smoothstep(thr - 0.04, thr + 0.10, n);
 }
@@ -262,8 +281,8 @@ static inline float3 meadow_sward(float3 alb, float3 n, float bend, float sh, Me
     float3 sun = L.sunE * (1.0 - L.shK * sh);
     float3 col = alb * (sun * lam * 0.32 + L.amb * (0.55 + 0.45 * n.y));
     col += alb * float3(1.25, 1.35, 0.55) * sun * (nature_hg(L.c, 0.55) * 1.6 + 0.02);
-    float3 pale = mix(alb, float3(luma(alb)) * float3(1.15, 1.12, 0.85), 0.55) * 1.9;
-    col += (pale - alb) * bend * (sun * (0.30 + 0.12 * lam) + L.amb * 0.6);
+    float3 pale = mix(alb, float3(luma(alb)) * float3(1.15, 1.12, 0.85), 0.45) * 1.6;
+    col += (pale - alb) * bend * (sun * (0.20 + 0.10 * lam) + L.amb * 0.22);
     return col;
 }
 
@@ -298,7 +317,7 @@ static inline float4 meadow_blades(float3 rd, MeadowLayout Lo, float pix, float 
     // (Each layer wanders ±9% in depth along its length — rows of grass aren't straight lines,
     // and their feet must not line up across the frame — so one more layer each side is looked at.)
     int j0 = max(0, int(ceil(log(max(zA, z0) / z0) / lrz)) - 1);
-    int j1 = min(Lo.land == 2 ? 5 : 13, int(floor(log(max(zB, 1e-3) / z0) / lrz)) + 1);
+    int j1 = min(Lo.land == 2 ? 5 : 11, int(floor(log(max(zB, 1e-3) / z0) / lrz)) + 1);
     if (rd.y > 0.0) j1 = min(j1, j0 + 3);                      // (above the horizon: the near stalks)
     if (j1 < j0) return float4(0.0);
 
@@ -340,7 +359,7 @@ static inline float4 meadow_blades(float3 rd, MeadowLayout Lo, float pix, float 
         float3 bh = float3(0.0);
         float by = 0.0, bsd = 0.0, bdh = 0.0, brh = 1.0, bcl = 0.5;
         // (Beyond ~6 m the rows fade into the meadow below them: soft, not combed.)
-        float far = smoothstep(5.2, 2.4, z);
+        float far = smoothstep(3.6, 1.8, z);
         int kind = 0;                                          // 0 blade, 1 flower stem, 2 flower head
         for (int k = 0; k <= 1; ++k) {
             float id = i0 + float(k);
@@ -351,7 +370,7 @@ static inline float4 meadow_blades(float3 rd, MeadowLayout Lo, float pix, float 
             float hb = hs * (0.5 + 0.5 * h.y) * (0.58 + 0.42 * cl);
             float y01 = Y / hb;
             // (No flowers right at the lens in tall grass: they'd be big pale blurs.)
-            bool fl = h.z < flowers * 0.045 && (Lo.land != 2 || z > 2.4);
+            bool fl = h.z < flowers * (Lo.land == 0 ? 0.10 : 0.045) && (Lo.land != 2 || z > 2.4);
             if (y01 > (fl ? 1.3 : 1.0)) continue;
             float dev = dmax * ((h.x - 0.5) * 1.1 + 0.45 * flut * nature_sinT(ts * (0.33 + 0.3 * h.x) + h.y * 6.4));
             if (!fl) {
@@ -399,8 +418,9 @@ static inline float4 meadow_blades(float3 rd, MeadowLayout Lo, float pix, float 
         } else {
             float sel = fract(bh.x * 7.31 + bh.y * 3.7);
             float3 fc = sel < 0.40 ? float3(0.92, 0.90, 0.84)                       // daisy
-                      : (sel < 0.68 ? float3(0.95, 0.70, 0.06)                      // buttercup
-                      : (sel < 0.87 ? float3(0.82, 0.36, 0.62) : float3(0.32, 0.44, 0.94)));  // clover, cornflower
+                      : (sel < 0.55 ? float3(0.95, 0.70, 0.06)                      // buttercup
+                      : (sel < 0.80 ? float3(0.82, 0.07, 0.05)                      // poppy
+                      : (sel < 0.92 ? float3(0.84, 0.24, 0.52) : float3(0.32, 0.44, 0.94))));  // campion, cornflower
             // A daisy's yellow eye, where the head is big enough to see it.
             if (sel < 0.40) fc = mix(fc, float3(0.95, 0.66, 0.08), smoothstep(brh * 0.42, brh * 0.30, bdh) * smoothstep(0.004, 0.012, brh - pw));
             cc = fc * (L.sunE * (0.20 + 0.22 * saturate(L.sd.y + 0.3)) + L.amb * 0.95 + L.sunE * fc * hgB * 0.6);
@@ -412,81 +432,198 @@ static inline float4 meadow_blades(float3 rd, MeadowLayout Lo, float pix, float 
     return float4(acc, 1.0 - keep);
 }
 
-// ---------------------------------------------------------------- the trees (Lone Tree)
+// ---------------------------------------------------------------- cumulus
 //
-// A broad summer tree (an oak or a camphor): a rounded crown of overlapping masses with a leafy,
-// broken edge, on a short trunk, swaying a little in the gusts. Drawn in its own frame q (its
-// height = 1, its foot at the origin; x right, y up; flip mirrors it, so no two look alike).
-constant float3 MEADOW_CROWN[8] = {      // (centre, radius) of the crown's masses
-    float3(0.00, 0.60, 0.31), float3(-0.32, 0.50, 0.23), float3(0.34, 0.52, 0.23),
-    float3(-0.15, 0.79, 0.22), float3(0.18, 0.80, 0.22), float3(-0.52, 0.42, 0.14),
-    float3(0.55, 0.44, 0.14), float3(0.02, 0.93, 0.15)
+// Big summer cumulus, painted on the sky in (azimuth, sine of elevation) on three rows by distance
+// (big near heaps high up, smaller ones toward the horizon). A heap is a dome on a flat base — a
+// second dome stacked on it when it towers (Hillside, a storm) — whose outline boils with billows:
+// two octaves of gradient noise displacing it (cauliflower, not circles). It is lit as the surface
+// that density describes: its gradient tips a normal toward or away from the sun (lit flanks and
+// tops, shaded creases between billows), the base sits in its own grey-blue shade, the thin outer
+// edge is silver toward the sun; far rows fade into the air. `cover` 0…1: how many heaps; `tower`
+// 0…1: how tall the near ones build. Returns (premultiplied colour, cover).
+constant float4 MEADOW_CROWS[3] = {      // (base, size, cell width in sizes, haze)
+    float4(0.150, 0.150, 3.2, 0.02), float4(0.075, 0.080, 3.0, 0.10), float4(0.030, 0.040, 2.8, 0.30)
 };
-static inline float meadow_crownD(float2 q) {
-    float d = 1e3;
-    for (int i = 0; i < 8; ++i) {
-        float di = length(q - MEADOW_CROWN[i].xy) - MEADOW_CROWN[i].z;
-        float hk = saturate(0.5 + 0.5 * (d - di) / 0.09);       // smooth union
-        d = mix(d, di, hk) - 0.09 * hk * (1.0 - hk);
+static inline float4 meadow_cumulus(float3 v, float3 sky, NatureOceanP P, float cover, float tower,
+                                    float pix, constant FXUniforms& u) {
+    float e = v.y;
+    float a = atan2(v.x, v.z);
+    float3 sunC = P.esun * nature_sunAt(P, 1.8, u);
+    float3 ambC = sky * 0.75 + P.amb * float3(0.0045, 0.0055, 0.0090);
+    float fs = nature_hg(dot(v, P.sd), 0.55);
+    float3 rgt = normalize(float3(v.z, 0.0, -v.x));
+    float keep = 1.0;
+    float3 acc = float3(0.0);
+    for (int k = 0; k < 3; ++k) {
+        float4 R = MEADOW_CROWS[k];
+        float S = R.y * (k == 0 ? 1.0 + 0.4 * tower : 1.0);
+        float b = R.x;
+        if (e < b - 0.05 * S || e > b + (1.6 + 2.0 * tower) * S) continue;
+        float x = a / S + P.tc * (1.6 - 0.4 * float(k)) / S + 17.3 * float(k);
+        float cw = R.z;
+        float c0 = floor(x / cw - 0.5);
+        float best = 0.0;
+        float3 bc = float3(0.0);
+        for (int j = 0; j < 2; ++j) {
+            float ci = c0 + float(j);
+            float3 h = meadow_rand3(uint(int(ci) + 0x4000) * 0x9E3779B1u ^ (uint(k) * 0x85EBCA77u + 0x5bd1e995u));
+            if (h.x > cover) continue;
+            float xc = (ci + 0.5 + 0.3 * (h.y - 0.5)) * cw;
+            float ws = 0.9 + 0.6 * h.z;                            // half-width, in S
+            float hs = 0.70 + 0.50 * h.y;                          // height, in S
+            float tw2 = k == 0 ? tower * step(0.4, h.z) : 0.0;     // (a tower on the bigger near ones)
+            float2 p = float2((x - xc) / ws, (e - b) / S);         // across: half-widths; up: S
+            if (abs(p.x) > 1.45 || p.y < -0.08 || p.y > hs * 1.5 + tw2 * 2.2) continue;
+            // The dome (and the tower), then the billows.
+            float2 q0 = float2(p.x, (p.y - 0.05) / hs);
+            float D0 = 1.0 - length(q0 * float2(1.0, 0.85));
+            float2 g0 = -q0 * float2(1.0, 0.72 / hs) / max(length(q0 * float2(1.0, 0.85)), 1e-3);
+            if (tw2 > 0.0) {
+                float2 qt = float2((p.x - 0.12) / 0.55, (p.y - hs * 0.7) / (1.6 * tw2 + 0.3));
+                float Dt = 1.0 - length(qt);
+                float2 gt = -qt / max(length(qt), 1e-3) * float2(1.0 / 0.55, 1.0 / (1.6 * tw2 + 0.3));
+                float wa = 1.0 / (1.0 + exp(-6.0 * (Dt - D0)));        // (smooth union)
+                D0 = max(D0, Dt) + 0.12 * wa * (1.0 - wa) * 4.0 * 0.5;
+                g0 = mix(g0, gt, wa);
+            }
+            if (D0 < -0.45) continue;
+            float2 pn = float2(p.x * ws, p.y) * 2.4 + h.yz * 40.0 + float2(P.tc * 3.0, 0.0);
+            float3 n1 = meadow_gnoised(pn);
+            float fpq = pix / S * 2.4;                             // a pixel, in noise units
+            float fine = smoothstep(0.5, 0.15, fpq * 2.4);
+            float n2 = fine > 0.0 ? meadow_gnoise(pn * 2.4 + 7.7) * fine : 0.0;
+            float D = D0 + 0.42 * n1.x + 0.16 * n2;
+            float al = smoothstep(0.0, 0.10 + fpq * 1.5, D) * smoothstep(-0.04, 0.10, p.y);   // (flat base)
+            if (al <= best) continue;
+            // Light: the density's gradient as the surface normal.
+            float2 gd = g0 + 0.20 * 2.4 * n1.yz * float2(ws, 1.0);   // (billows soften the dome's light)
+            float3 n = normalize(-rgt * gd.x - float3(0.0, gd.y, 0.0) - v * 1.6);
+            float lam = saturate(0.10 + 0.90 * dot(n, P.sd));
+            float lift = smoothstep(-0.02, 0.55, p.y);             // the base in its own shade
+            float core = saturate(D / 0.6);
+            float thin = saturate(1.0 - D / 0.2);
+            float3 col = sunC * (0.06 + 0.52 * lam) * mix(0.38, 1.0, lift) * (1.0 - 0.12 * core)
+                       + ambC * (0.48 + 0.32 * lift);
+            col += sunC * fs * thin * thin * 0.45;                  // the silver edge toward the sun
+            best = al;
+            bc = mix(col, sky, R.w);
+        }
+        if (best > 0.0) {
+            acc += keep * best * bc;
+            keep *= 1.0 - best;
+            if (keep < 0.01) break;
+        }
     }
-    return d;
+    return float4(acc, 1.0 - keep);
 }
-// Tree colour (premultiplied) and coverage at screen point sp (foot at f, height ht screen units).
-static inline float4 meadow_tree(float2 sp, float2 f, float ht, float pixS, float ts, float sway,
-                                 float3 alb, MeadowLight L, float flip) {
-    float2 q = (sp - f) / ht;
-    q.x *= flip;                                                // (mirrored: each tree its own)
-    if (q.y < -0.02 || q.y > 1.14 || abs(q.x) > 0.74) return float4(0.0);
-    float pq = pixS / ht;                                       // a pixel, in q
-    q.x -= sway * smoothstep(0.15, 1.0, q.y);
-    // Trunk and two limbs (mostly hidden in the crown).
-    float tx = 0.015 * sin(q.y * 4.0);
-    float tw = mix(0.048, 0.026, saturate(q.y / 0.5));
-    float dt = max(abs(q.x - tx) - tw, q.y - 0.62);
-    float2 b1 = q - float2(0.0, 0.30), e1 = float2(-0.26, 0.20);
-    float t1 = saturate(dot(b1, e1) / dot(e1, e1));
-    dt = min(dt, length(b1 - e1 * t1) - mix(0.022, 0.009, t1));
-    float2 e2 = float2(0.27, 0.22);
-    float t2 = saturate(dot(b1, e2) / dot(e2, e2));
-    dt = min(dt, length(b1 - e2 * t2) - mix(0.020, 0.009, t2));
-    // Crown: smooth masses with a leafy edge (two octaves of noise).
-    float dc0 = meadow_crownD(q);
-    float leaf = meadow_gnoise(q * 5.5 + 2.0) * 0.07 + meadow_gnoise(q * 13.0 + float2(ts * 0.15, 0.0)) * 0.05
-               + meadow_gnoise(q * 31.0 + 7.0) * 0.025;
-    float dc = dc0 + leaf;
-    float covC = saturate(0.5 - dc / max(pq, 0.012));            // (a soft, leafy edge)
-    float covT = saturate(0.5 - dt / pq);
-    float cov = max(covC, covT);
-    if (cov <= 0.0) return float4(0.0);
-    // Puff normal: from the crown's distance field (its slope sideways, its depth inside), with
-    // the leaf clumps' own bumps.
-    float e = 0.02;
-    float2 gr = float2(meadow_crownD(q + float2(e, 0)) - meadow_crownD(q - float2(e, 0)),
-                       meadow_crownD(q + float2(0, e)) - meadow_crownD(q - float2(0, e))) / (2.0 * e);
-    float3 cl = meadow_gnoised(q * 7.0 + 3.0);
-    float depth = saturate(-dc0 / 0.22);
-    float3 n = normalize(float3(gr * (1.0 - 0.6 * depth) + cl.yz * 0.10, 0.35 + depth));
-    float3 sdv = float3(L.sd.x * flip, L.sd.y, -L.sd.z);        // the key light in this frame
-    float lam = saturate(0.12 + 0.88 * dot(n, sdv));
-    float occ = 0.68 + 0.32 * saturate(0.5 + cl.x * 1.2);      // pockets between the clumps
-    float3 la = alb * float3(0.60, 0.78, 0.52);
-    float3 leafC = la * (L.sunE * lam * 0.42 * occ + L.amb * (0.30 + 0.40 * saturate(n.y + 0.4)) * occ);
-    // Sun through the crown's thin rim (backlit), stronger toward its edge.
-    leafC += la * float3(1.2, 1.3, 0.5) * L.sunE * nature_hg(L.c, 0.5) * (0.20 + 1.6 * (1.0 - depth) * (1.0 - depth));
-    float3 barkC = float3(0.085, 0.072, 0.06) * (L.sunE * 0.14 * saturate(sdv.x * sign(q.x - tx) + 0.4) + L.amb * 0.45);
-    float3 col = covC >= covT ? leafC : barkC;
-    return float4(col * cov, cov);
+// High cirrus: faint streaks along the wind, far above the heaps (one noise).
+static inline float4 meadow_cirrus(float3 v, float3 sky, NatureOceanP P, float amount, constant FXUniforms& u) {
+    if (v.y < 0.12 || amount <= 0.0) return float4(0.0);
+    float2 qq = v.xz * (8.0 / v.y);
+    float2 qs = float2(qq.x * 0.6 + qq.y * 0.25, qq.y * 0.08 - qq.x * 0.1) * 0.22 + float2(P.tc * 0.25, 0.0);
+    float ci = 0.55 * meadow_gnoise(qs) + 0.35;
+    float al = smoothstep(0.32, 0.85, ci) * amount * 0.4 * smoothstep(0.12, 0.3, v.y);
+    float3 col = P.esun * nature_sunAt(P, 8.0, u) * (0.10 + 1.6 * nature_hg(dot(v, P.sd), 0.7)) * 0.12 + sky * 0.75;
+    return float4(col * al, al);
+}
+
+// ---------------------------------------------------------------- stems at the lens
+//
+// A few tall stems right in front of the lens (0.3–0.7 m away): wildflowers on long stalks —
+// poppies, pink campion, daisies, buttercups — and grass seed heads, rising into the lower frame
+// out of focus, swaying in the gusts, lit through from behind when they face the sun (a glowing
+// rim). Two sparse rows; few and large, so cheap. Returns premultiplied colour, coverage.
+static inline float4 meadow_stalks(float3 rd, MeadowLayout Lo, float pix, float ts, float tw, float wind,
+                                   float flowers, float3 alb, MeadowLight L) {
+    float iz = 1.0 / max(rd.z, 1e-3);
+    float3 acc = float3(0.0);
+    float keep = 1.0;
+    float hgB = nature_hg(L.c, 0.35);
+    float3 sunS = L.sunE * (0.16 + 0.30 * saturate(L.sd.y + 0.25)) + L.amb * 0.85;
+    float3 trans = L.sunE * float3(1.3, 1.25, 0.55) * (hgB * 3.0);
+    float hTop = Lo.land == 0 ? 0.95 : 0.85;                    // the tallest stem
+    if (Lo.camH + rd.y * 0.45 * iz > hTop) return float4(0.0);  // (above them all)
+    float g = 0.5 + 0.5 * nature_sinT(rd.x * iz * 0.9 - tw * 0.03);   // (the gust, here: one look)
+    for (int j = 0; j < 2; ++j) {
+        float z = j == 0 ? 0.45 : 0.75;
+        float tz = z * iz;
+        float Y = Lo.camH + rd.y * tz;
+        if (Y < 0.0 || Y > hTop) continue;
+        float X = rd.x * tz;
+        const float s = 0.09;
+        float pw = tz * pix + (j == 0 ? 0.006 : 0.0035);        // softly out of focus
+        float lean0 = wind * (0.05 + 0.6 * g * g);
+        float Y2 = Y * Y / 0.9;
+        float i0 = floor((X - lean0 * Y2) / s - 0.5);
+        float best = 0.0, by = 0.0, bk = 0.0, brim = 0.0;
+        float3 bh = float3(0.0);
+        for (int k = 0; k <= 1; ++k) {
+            float id = i0 + float(k);
+            float3 h = meadow_rand3(uint(int(id) + 0x40000) * 0x9E3779B1u ^ (uint(j) * 0x27d4eb2du + 0x165667b1u));
+            if (h.z > 0.35 + 0.35 * Lo.stalks) continue;           // sparse
+            float hb = (hTop - 0.03) * (0.45 + 0.55 * h.y);
+            float y01 = Y / hb;
+            if (y01 > 1.12) continue;
+            float flut = 0.04 * nature_sinT(ts * (0.28 + 0.22 * h.x) + h.y * 5.0) * saturate(wind * 1.5 + 0.2);
+            float x0 = (id + 0.3 + 0.4 * h.x) * s;
+            float cx = x0 + (lean0 + flut) * Y2;
+            float sel = fract(h.x * 5.31 + h.z * 2.17);
+            bool isFlower = sel < flowers * 0.75 && j == 1;           // (none right at the lens)
+            float hw = 0.0018 * (1.0 - 0.5 * min(y01, 1.0));
+            // (A soft, tapering band, not a box: the stem is well out of focus.)
+            float cov = y01 < 1.0 ? saturate(2.6 * hw / pw) * smoothstep(0.5 * pw + hw, 0.0, abs(X - cx))
+                                    * smoothstep(1.0, 0.8, y01) : 0.0;
+            float kind = 0.0;
+            float rim = 0.0;
+            if (isFlower) {
+                // A flower head: a disc at the top, petals ruffled.
+                float2 dv = float2(X - (x0 + (lean0 + flut) * hb * hb / 0.9), (Y - hb) * 1.25);
+                float rh = 0.010 + 0.007 * fract(h.y * 9.1);
+                float dh = length(dv);
+                float hd = saturate((rh - dh) / pw + 0.5);
+                if (hd > cov) { cov = hd; kind = 1.0 + floor(fract(h.y * 3.7 + h.x) * 4.0); rim = saturate(dh / rh); }
+            } else if (y01 > 0.70 && Lo.land != 0) {
+                // A seed head: a soft spindle.
+                float sd = saturate((y01 - 0.70) / 0.30);
+                float hs = 0.0055 * sqrt(sin(3.14159 * sd));
+                float c2 = saturate((min(cx + hs, X + 0.5 * pw) - max(cx - hs, X - 0.5 * pw)) / pw) * 0.9;
+                if (c2 > cov) { cov = c2; kind = 6.0; rim = saturate(abs(X - cx) / max(hs, 1e-4)); }
+            }
+            cov *= smoothstep(0.0, 0.25, y01);
+            if (cov > best) { best = cov; by = y01; bk = kind; bh = h; brim = rim; }
+        }
+        if (best <= 0.0) continue;
+        float3 col;
+        if (bk < 0.5) {
+            float3 a = alb * float3(1.10, 1.05, 0.75);
+            col = a * (sunS * (0.4 + 0.6 * by) + trans * (0.4 + 0.6 * by));
+        } else if (bk < 5.5) {
+            float3 fc = bk < 1.5 ? float3(0.85, 0.06, 0.05)               // poppy
+                      : (bk < 2.5 ? float3(0.86, 0.22, 0.48)              // campion
+                      : (bk < 3.5 ? float3(0.95, 0.94, 0.90)              // daisy
+                      : float3(0.98, 0.72, 0.05)));                       // buttercup
+            col = fc * (sunS * 1.1 + trans * fc * (0.6 + 1.2 * brim));    // (petals glow at the rim)
+        } else {
+            float3 sc = float3(0.62, 0.55, 0.36);
+            col = sc * (sunS * 0.8 + trans * (0.8 + 1.4 * brim));
+        }
+        acc += keep * best * col;
+        keep *= 1.0 - best;
+    }
+    return float4(acc, 1.0 - keep);
 }
 
 // ---------------------------------------------------------------- the scene
 // wx: the weather copy (u.weather*: Shared/Weather/Weather_funcs.h) — compiled apart from the
 // clear one (Weather_fragment.h: fx_meadow, fx_wx_meadow).
+// landC: the landscape, a constant in each copy (−1: from the uniforms — the über-shader's fallback).
 static inline float4 meadow_scene(float2 uv, float2 res, float2 px, float t, constant FXUniforms& u,
-                                  const bool wx) {
+                                  const bool wx, const int landC = -1) {
     const float F = MEADOW_F;
     float speed = u.p0.x, windP = clamp(u.p0.y, 0.0, 1.0), flowers = clamp(u.p0.z, 0.0, 1.0);
     float cloudP = clamp(u.p0.w, 0.0, 1.0);
-    int land = clamp(int(u.p2.x + 0.5), 0, 2);
+    const int land = landC >= 0 ? landC : clamp(int(u.p2.x + 0.5), 0, 3);
     float glow = clamp(u.p2.y, 0.0, 1.0), dith = clamp(u.p2.z, 0.0, 1.0);
     WxState W = wx ? wx_state(u) : WxState{};
     float ts = t * speed;
@@ -508,7 +645,7 @@ static inline float4 meadow_scene(float2 uv, float2 res, float2 px, float t, con
     // ---- the sky's light (Tidewater's live sky, Nature_funcs.h: u.sun / u.moon / u.sky are
     // always filled for this scene — the real sky, or Time of Day's: MetalRenderer.fixedSky)
     NatureOceanP P;
-    float haze = 0.30 + 0.50 * glow;                            // (the air: Glow thickens it)
+    float haze = 0.15 + 0.30 * glow;                            // (the air: Glow thickens it)
     P.live = true;
     P.se = u.sun.x;
     P.sd = nature_oceanSunDir(u, true);
@@ -545,13 +682,25 @@ static inline float4 meadow_scene(float2 uv, float2 res, float2 px, float t, con
             P.amb += 0.7 * length(P.esun);
         }
     }
+    // Facing: Tidewater looks along the sun's arc (south, here). Meadow, Rolling Hills and Hillside
+    // turn their back on it — the light comes from behind and to one side, the hills stand modelled
+    // in it, the sky is deepest blue ahead — so the whole sky (sun, moon, stars) is turned by
+    // `face` about the vertical; skyV takes a view direction into Tidewater's sky frame.
+    // As the sun gets low the view swings round to face it — golden hour and dusk are backlit, the
+    // grass glowing against the light — and stays facing the moon's arc through the night.
+    float face = (land == 2 ? 0.0 : (land == 3 ? 2.15 : 2.45)) * smoothstep(0.06, 0.32, u.sun.x);
+    float cfa, sfa = sincos(face, cfa);
+    P.sd = float3(cfa * P.sd.x + sfa * P.sd.z, P.sd.y, -sfa * P.sd.x + cfa * P.sd.z);
+    P.sh = normalize(P.sd.xz + float2(0.0, 1e-5));
     float3 Tsun = exp(-P.tauT * nature_airmass(P.se));
 
     // Clouds: the Clouds slider, then the weather's cover (Clear = the scene's own sky).
     // (Tidewater's clouds: its altocumulus deck and cirrus, nature_oceanClouds; with the weather its
     // fair-weather cumulus and overcast. Their shadows drift over the land.)
-    float thrS = mix(0.30, -0.12, cloudP);                      // (the cloud shadows)
+    float thrS = mix(0.35, -0.10, cloudP);                      // (the cloud shadows)
     float cuAmt = smoothstep(0.0, 0.12, cloudP);
+    float cuCover = mix(0.22, 0.85, cloudP);                    // (the cumulus heaps)
+    float tower = land == 3 ? 1.0 : 0.0;                        // (Hillside: a towering cloud)
     // ---- weather (all uniform): Tidewater's deck, fog and lightning, in the same terms.
     float sunVis = 1.0, fogB = 0.0, fogH = 1.0, sunT = 1.0, flashE = 0.0;
     float3 fogA = float3(0.0), ambL = float3(0.0);
@@ -559,6 +708,8 @@ static inline float4 meadow_scene(float2 uv, float2 res, float2 px, float t, con
     if (wx) {
         float cv = W.cover;
         thrS = cv < 0.25 ? mix(0.6, thrS, cv * 4.0) : mix(thrS, -0.3, smoothstep(0.25, 0.85, cv));
+        cuCover = cv < 0.25 ? cuCover * mix(0.4, 1.0, cv * 4.0) : mix(cuCover, 0.95, smoothstep(0.25, 0.7, cv));
+        tower = max(max(tower, W.storm), 0.5 * smoothstep(0.4, 0.7, cv));
         cuAmt = cv < 0.25 ? cuAmt * mix(0.4, 1.0, cv * 4.0) : max(cuAmt, smoothstep(0.25, 0.45, cv));
         cuAmt *= 1.0 - smoothstep(0.35, 0.65, W.fog);
         float c0 = P.clouds;
@@ -622,204 +773,238 @@ static inline float4 meadow_scene(float2 uv, float2 res, float2 px, float t, con
     if (wx) L.amb = mix(L.amb, ambL * 2.2, P.deck) + P.flash * 0.6;
     L.c = dot(rd, P.sd);
     L.beta = 0.00005 + 0.00020 * haze;
-    L.shK = 0.75 * cuAmt * (1.0 - P.deck);
+    L.shK = 0.85 * cuAmt * (1.0 - P.deck);
     float3 alb = srgbToLinear(u.colorA.rgb) * 0.45;            // the grass's albedo
     if (wx) alb = mix(alb, float3(luma(alb)) * float3(1.1, 1.15, 1.25) * 3.5, 0.35 * W.snow);
     float gwind = saturate(wind * 1.6);
 
-    // Pixel → which surface, front to back: the grass in front, the meadow, the near rise (and
-    // the lone tree on it), the meadow beyond, the fields, the far ridge, the sky. Silhouettes
-    // are antialiased by coverage, and what lies behind an edge is only worked out there.
+    // Pixel → which surface, front to back: the stems at the lens and the grass (Meadow, Tall
+    // Grass), then the land — the meadow plane and five ridges receding to the horizon, the first one
+    // nearer than the plane along this ray winning — then the sky. Silhouettes are antialiased by
+    // coverage; what lies behind an edge is only worked out there.
     float X = sp.x, y = sp.y;
     float3 acc = float3(0.0);
     float keep = 1.0;
     float dist = 1e5;                                           // distance of what's seen (fog)
-    {
-        float4 bl = meadow_blades(rd, Lo, pix, ts, tw, wind, flowers, alb, L);
-        acc = bl.rgb;
-        keep = 1.0 - bl.a;
-        if (bl.a > 0.5) dist = 3.0;
+    if (Lo.stalks > 0.0) {
+        float4 st = meadow_stalks(rd, Lo, pix, ts, tw, wind, flowers, alb, L);
+        acc = st.rgb;
+        keep = 1.0 - st.a;
+        if (st.a > 0.5) dist = 0.5;
     }
-    float d1 = Lo.d1;
-    const float d2 = 2200.0, d3 = 9000.0;
-    float yb1 = d1 > 0.0 ? yh - F * Lo.camH / d1 : -10.0;      // the rise's foot (the meadow at d1)
-    float yb2 = yh - F * Lo.camH / d2;
-    // The meadow: all of it in front of the rise (nothing else can show there), and beyond it
-    // wherever no hill stands.
-    float2 nT = float2(-1.0, 0.0);
-    float yN = -10.0;
-    bool low = rd.y < -1e-4 && y < (d1 > 0.0 ? yb1 : yb2) - pixS;
-    // Above every hill (and the tree) there is only sky: those pixels skip the land altogether.
-    float yTop = yh + 0.21 + 2.0 * pixS;
-    if (land == 1) yTop = max(yTop, yh + 0.36 + F * 19.0 / d1 * 1.15);
-    else if (land == 0) yTop = max(yTop, yh + 0.14);
-    bool sky = y > yTop;
-
-    if (!low && !sky && d1 > 0.0 && keep > 0.002) { nT = meadow_nearTop(Lo, X); yN = yh + nT.x; }
-    if (keep > 0.002 && rd.y < -1e-4 && (low || y > yN + pixS)) {
-        float d = Lo.camH / -rd.y;
+    if (Lo.blades && keep > 0.002) {
+        float4 bl = meadow_blades(rd, Lo, pix, ts, tw, wind, flowers, alb, L);
+        acc += keep * bl.rgb;
+        keep *= 1.0 - bl.a;
+        if (bl.a > 0.5) dist = min(dist, 3.0);
+    }
+    float3 hzFar = L.hz * float3(0.84, 0.93, 1.10);             // (distance is blue)
+    float aerB = 0.00006 + 0.00010 * haze;
+    // (Hillside: the plane is the sea, 110 m below the slope the camera stands on.)
+    const float H0 = 110.0, thS = 0.30;
+    float dpl = rd.y < -1e-4 ? (land == 3 ? H0 + Lo.camH : Lo.camH) / -rd.y : 1e9;   // the meadow plane along this ray
+    if (land == 3 && keep > 0.002) {
+        // Hillside: a long slope rising to the left (a tilted plane through the camera's feet),
+        // falling to the sea on the right, where it is cut at the water line. Long wind streaks
+        // run along it; its far reach lies under the cloud's shadow.
+        float sT, cT = cos(thS); sT = sin(thS);
+        float3 ng = float3(sT, cT, 0.0);
+        float dn = dot(rd, ng);
+        float tS = dn < -1e-5 ? Lo.camH * cT / -dn : 1e9;
+        float3 hp = rd * tS;
+        float hgt = H0 - hp.x * (sT / cT);
+        if (tS < 1e8 && hgt > 0.0) {
+            float fpx = tS * pix;
+            float sk = smoothstep(1.0, 0.2, fpx * 0.1);
+            float2 sc = float2(hp.z, -hp.x / cT);                 // along the slope, up it
+            float2 sd2 = float2(sc.x * 0.6 + sc.y * 0.8, sc.y * 0.6 - sc.x * 0.8);   // (diagonal to the slope)
+            float st = sk > 0.0 ? (meadow_gnoise(float2(sd2.x * 0.08, sd2.y * 0.9))
+                                   + 0.5 * meadow_gnoise(float2(sd2.x * 0.3, sd2.y * 3.0) + 3.0) * smoothstep(0.4, 0.1, fpx)) * sk : 0.0;
+            float sw = sin(sc.x * 0.018 + 1.5 * sin(sc.y * 0.025)), cw2 = cos(sc.x * 0.018 + 1.5 * sin(sc.y * 0.025));
+            float3 n = normalize(ng + float3(0.0, 0.0, -0.22 * cw2) + float3(0.10 * st, 0.0, 0.0));
+            float bend = meadow_gust(hp.xz, tw);
+            bend = bend * bend * gwind;
+            float3 a = alb * mix(float3(0.95, 1.0, 0.85), float3(1.22, 1.10, 0.62), saturate(0.5 + 0.4 * sw)) * (1.0 + 0.6 * st);
+            bend = saturate(bend * 1.8);
+            float sh = cuAmt > 0.0 ? meadow_cloudShadow(hp.xz, P.sd, P.tc, thrS) : 0.0;
+            sh = max(sh, smoothstep(90.0, 170.0, tS));            // (the far reach, under the cloud)
+            float3 g = meadow_sward(a, n, bend, sh, L);
+            g *= mix(0.6, 1.0, smoothstep(2.0, 25.0, tS)) * mix(1.0, 0.55, smoothstep(90.0, 170.0, tS));
+            g = mix(g, hzFar, 1.0 - exp(-max(tS - 250.0, 0.0) * aerB));
+            float cov = 1.0;
+            acc += keep * cov * g;
+            keep = 0.0;
+            dist = min(dist, tS);
+        }
+    }
+    if (keep > 0.002 && y < yh + 0.70) {
+        for (int k = 0; k < 5; ++k) {
+            float dk = MEADOW_RD[land][k];
+            if (dk > 1e5) continue;                                  // (no such ridge here)
+            if (dpl < dk || keep <= 0.002) break;
+            float2 tp = meadow_ridgeTop(Lo, k, X);
+            if (tp.x < -0.5) continue;
+            float top = yh + tp.x;
+            bool trees = (land == 0 && k == 2) || (land == 1 && k == 3);
+            float th = trees ? F * (land == 0 ? 20.0 : 12.0) / dk : 0.0;   // tree height, screen
+            if (y > top + th + 2.0 * pixS) continue;
+            float yF = yh - F * Lo.camH / dk;
+            // The air in front of it: only the far ridges go blue and soft (the near stay crisp).
+            float aer = 1.0 - exp(-max(dk - 250.0, 0.0) * aerB);
+            // Trees on the crest: cypresses (Meadow) or round crowns (Rolling Hills).
+            if (trees && y > top - th * 0.3) {
+                float cw = land == 0 ? 0.06 : 0.03;
+                float ci = floor(X / cw);
+                float tc = 0.0;
+                for (int m = -1; m <= 1; ++m) {
+                    float3 h = meadow_rand3(uint(int(ci) + m + 0x40000) * 0x9E3779B1u + uint(k) * 77u);
+                    if (h.x > (land == 0 ? 0.20 : 0.45)) continue;
+                    float cx = (ci + float(m) + 0.5 + 0.3 * (h.y - 0.5)) * cw;
+                    float base = top + tp.y * (cx - X) - 0.002;
+                    float hgt = th * (0.7 + 0.5 * h.z);
+                    if (land == 0) {
+                        float yy = (y - base) / hgt;                    // a cypress: a dark flame
+                        float wdt = hgt * 0.13 * sqrt(saturate(yy * (1.0 - yy) * 4.0)) * pow(saturate(1.0 - yy), 0.3);
+                        tc = max(tc, saturate((wdt - abs(X - cx)) / pixS + 0.5) * step(0.0, yy));
+                    } else {
+                        float r = hgt * 0.45;
+                        float2 dv = float2(X - cx, (y - base - r * 0.9) * 0.9);
+                        tc = max(tc, saturate((r - length(dv)) / pixS + 0.5));
+                    }
+                }
+                if (tc > 0.0) {
+                    float3 g = alb * float3(0.30, 0.45, 0.28) * (L.sunE * 0.10 + L.amb * 0.45);
+                    g = mix(g, hzFar, aer);
+                    acc += keep * tc * g;
+                    keep *= 1.0 - tc;
+                    dist = min(dist, dk);
+                    if (keep <= 0.002) break;
+                }
+            }
+            if (y > top + pixS) continue;
+            float cov = saturate((top - y) / pixS + 0.5);
+            float s = saturate((top - y) / max(top - yF, 1e-4));    // 0 at the crest … 1 at its foot
+            float dl = dk * (1.0 + 0.3 * (1.0 - s));
+            float2 w = float2(X / F * dl, dk + s * 0.5 * dk);
+            // Form: the silhouette's slope turns the flanks toward the light or away; below the crest
+            // the face falls toward us, then levels into the hollow at its foot.
+            float face = sin(3.14159 * sqrt(s));
+            float3 n = normalize(float3(-tp.y * 3.6, 1.0, -0.8 * face - 0.05));
+            float3 a = alb * mix(float3(0.90, 1.0, 0.95), float3(1.15, 1.06, 0.72),
+                                 0.5 + 0.5 * nature_sinT(w.x * 0.0035 + float(k) * 0.37));
+            float bend = 0.0;
+            if (k <= 1) {
+                // Velvet: wind streaks along the slope, the gusts' sheen running over it.
+                float fpx = dl * pix;
+                float sk = smoothstep(1.0, 0.25, fpx * 0.12);
+                float streak = sk > 0.0 ? meadow_gnoise(float2(w.x * 0.35 + w.y * 0.1, w.y * 0.6)) * sk : 0.0;
+                bend = meadow_gust(w, tw);
+                bend = bend * bend * gwind;
+                float gk = smoothstep(0.10, 0.03, fpx);
+                float grain = gk > 0.0 ? meadow_gnoise(w * float2(2.0, 1.4)) * gk : 0.0;
+                a *= 1.0 + (land == 1 ? 0.15 : 0.30) * streak + 0.3 * grain;
+            } else if (k <= 3 && land == 0) {
+                // A patchwork of meadows, hay and crop between hedges.
+                float2 wr = float2(w.x * 0.95 + w.y * 0.31, w.y * 0.95 - w.x * 0.31);
+                float2 cs = float2(160.0, 100.0) * (k == 3 ? 1.6 : 1.0);
+                float2 cid = floor(wr / cs), cf = wr / cs - cid;
+                float3 hc = meadow_rand3(uint(int(cid.x) + 0x4000) * 0x9E3779B1u ^ uint(int(cid.y) + 0x4000) * 0x85EBCA77u);
+                a = alb * (hc.x < 0.6 ? mix(float3(0.85, 1.0, 0.75), float3(1.15, 1.08, 0.70), hc.y)
+                                      : (hc.x < 0.85 ? float3(1.5, 1.22, 0.55) : float3(1.05, 0.92, 0.55)));
+                float fx = dl * pix * 1.2;
+                float2 ed = min(cf, 1.0 - cf) * cs;
+                float hedge = max(smoothstep(3.0 + fx, 3.0 - fx, ed.x), smoothstep(3.0 + fx * 3.0, 3.0 - fx * 3.0, ed.y));
+                a = mix(a, alb * float3(0.40, 0.58, 0.38), hedge * 0.8 * smoothstep(60.0, 8.0, fx));
+            }
+            float sh = cuAmt > 0.0 ? meadow_cloudShadow(w, P.sd, P.tc, thrS) : 0.0;
+            if (land == 3 && k == 1) sh = max(sh, 0.9);                // (the ridge under the cloud)
+            float3 g = meadow_sward(a, n, bend, sh, L);
+            // The hollow at its foot lies in shade, with a little mist pooled in it.
+            g *= mix(1.0, 0.42, smoothstep(0.5, 1.0, s) * (k == 0 ? (land == 1 ? 0.0 : 0.7) : 1.0));
+            g = mix(g, L.hz * 1.05, smoothstep(0.75, 1.0, s) * (0.08 + 0.22 * glow) * (k == 0 ? 0.3 : 1.0));
+            g = mix(g, hzFar, aer);
+            acc += keep * cov * g;
+            keep *= 1.0 - cov;
+            dist = min(dist, dl);
+        }
+    }
+    if (keep > 0.002 && dpl < 1e8) {
+        float d = dpl;
         float2 w = rd.xz * d;
-        float bend = meadow_gust(w, tw);
-        bend = bend * bend * gwind;
-        // Rolling swells (shading only: two sines and their slopes), colour drifts.
-        float2 sw1 = float2(w.x * 0.031 + w.y * 0.012, w.y * 0.027 - w.x * 0.009);
-        float c1, c2, s1 = sincos(sw1.x + 1.3 * sin(sw1.y), c1), s2 = sincos(sw1.y * 1.7 + 0.6, c2);
-        float3 gn = float3(0.25 * (s1 + s2), 0.25 * c1 * 0.031 * 18.0, 0.25 * c2 * 0.046 * 18.0);
-        // Tufts a few metres across: a bump map a low sun rakes across, and their own shade —
-        // faded to their mean where a pixel spans them.
-        float fpx = d * pix;
-        float tk = smoothstep(0.9, 0.25, fpx * 0.45);
-        float3 tn = tk > 0.0 ? meadow_gnoised(w * float2(0.45, 0.32) + 11.0) * tk : float3(0.0);
-        float3 n = normalize(float3(-gn.y * 0.55 - tn.y * 0.55, 1.0, -gn.z * 0.55 - tn.z * 0.4));
-        float patch = gn.x * 1.4 + 0.25 * sin(w.x * 0.05 + w.y * 0.11) + tn.x * 0.5;
-        float3 a = alb * mix(float3(0.74, 0.93, 0.60), float3(1.34, 1.17, 0.70), saturate(0.5 + patch));
-        // Drifts of colour tens of metres across: lush, deep green hollows and sun-bleached, golden
-        // stretches (a painter's field, not a lawn).
-        float pc = 0.5 * nature_sinT(w.x * 0.0071 + 0.35 * nature_sinT(w.y * 0.0053 + 0.2))
-                 * nature_sinT(w.y * 0.0049 - 0.3 * nature_sinT(w.x * 0.0061) + 0.6) + 0.25 * gn.x;
-        a *= mix(float3(0.80, 1.0, 0.92), float3(1.32, 1.10, 0.62), saturate(0.5 + pc * 1.5));
-        float sh = cuAmt > 0.0 ? meadow_cloudShadow(w, P.sd, P.tc, thrS) : 0.0;
-        float3 g = meadow_sward(a, n, bend, sh, L);
-        // The sward under the near blades sits deep in their shade.
-        g *= mix(0.42, 1.0, smoothstep(1.2, 8.0, d));
-        // Wildflowers too small to resolve: their tint, in drifts.
-        float fa = flowers * 0.10 * smoothstep(4.0, 12.0, d) * saturate(0.4 + 1.5 * gn.x);
-        g = mix(g, float3(0.90, 0.80, 0.55) * (L.sunE * 0.30 + L.amb * 0.9), fa);
-        g = mix(g, L.hz, 1.0 - exp(-d * L.beta));
+        float3 g;
+        if (land == 3) {
+            // The sea: dark blue water mirroring the sky at a grazing angle, a glitter path under
+            // the sun, its swell drifting.
+            float gr = -rd.y;
+            float Fr = 0.02 + 0.98 * pow(1.0 - saturate(gr * 6.0), 5.0);
+            float wv = meadow_gnoise(w * float2(0.004, 0.02) + float2(ts * 0.05, 0.0));
+            float3 water = float3(0.010, 0.028, 0.050) * (L.amb * 3.0 + L.sunE * 0.04);
+            g = mix(water, L.hz * 0.85, saturate(Fr * (0.85 + 0.3 * wv)));
+            float3 rr = float3(rd.x, -rd.y, rd.z);
+            float gl = exp(-(1.0 - dot(rr, P.sd)) * 900.0) * (0.6 + 0.8 * saturate(wv + 0.5));
+            g += L.sunE * gl * 0.08;
+            g = mix(g, hzFar, 1.0 - exp(-d * aerB * 1.2));
+        } else if (Lo.blades) {
+            // The meadow under the grass: swells, tufts, colour drifts, flowers' tint.
+            float bend = meadow_gust(w, tw);
+            bend = bend * bend * gwind;
+            float2 sw1 = float2(w.x * 0.031 + w.y * 0.012, w.y * 0.027 - w.x * 0.009);
+            float c1, c2, s1 = sincos(sw1.x + 1.3 * sin(sw1.y), c1), s2 = sincos(sw1.y * 1.7 + 0.6, c2);
+            float3 gn = float3(0.25 * (s1 + s2), 0.25 * c1 * 0.031 * 18.0, 0.25 * c2 * 0.046 * 18.0);
+            float fpx = d * pix;
+            float tk = smoothstep(0.9, 0.25, fpx * 0.45);
+            float3 tn = tk > 0.0 ? meadow_gnoised(w * float2(0.45, 0.32) + 11.0) * tk : float3(0.0);
+            float3 n = normalize(float3(-gn.y * 0.8 - tn.y * 0.55, 1.0, -gn.z * 0.8 - tn.z * 0.4));
+            float patch = gn.x * 1.4 + 0.25 * sin(w.x * 0.05 + w.y * 0.11) + tn.x * 0.5;
+            float3 a = alb * mix(float3(0.74, 0.93, 0.60), float3(1.30, 1.15, 0.70), saturate(0.5 + patch));
+            float sh = cuAmt > 0.0 ? meadow_cloudShadow(w, P.sd, P.tc, thrS) : 0.0;
+            g = meadow_sward(a, n, bend, sh, L);
+            g *= mix(0.40, 1.0, smoothstep(1.2, 8.0, d)) * mix(0.55, 1.05, saturate(0.5 + gn.x * 1.6));
+            // Wildflowers across the field: heads on cells a hand's breadth across, in rows by
+            // log-distance (so their screen size is even), out to ~60 m; past that their tint.
+            if (d < 60.0 && flowers > 0.0) {
+                const float lk = 9.0, cxw = 0.30;
+                float rowf = log(d) * lk, ri = floor(rowf);
+                float colf = w.x / cxw, cj = floor(colf);
+                float3 h = meadow_rand3(uint(int(ri) + 0x4000) * 0x85EBCA77u ^ uint(int(cj) + 0x40000) * 0x9E3779B1u);
+                if (h.x < flowers * 0.5 * saturate(0.6 + 1.2 * gn.x)) {
+                    float xc = (cj + 0.2 + 0.6 * h.y) * cxw, rc = ri + 0.2 + 0.6 * h.z;
+                    float dd2 = exp(rc / lk);                        // (the flower's own distance)
+                    float2 ds = float2((w.x / d - xc / dd2) * F, (rowf - rc) / lk * F * Lo.camH / d);
+                    float rs = F * (0.016 + 0.012 * h.y) / d;
+                    float fcov = saturate((rs - length(ds)) / pixS + 0.5) * smoothstep(60.0, 35.0, d);
+                    float sel = fract(h.y * 7.3 + h.z * 3.1);
+                    float3 fc = sel < 0.45 ? float3(0.82, 0.07, 0.05) : (sel < 0.75 ? float3(0.95, 0.93, 0.88)
+                              : (sel < 0.9 ? float3(0.95, 0.72, 0.06) : float3(0.84, 0.26, 0.55)));
+                    g = mix(g, fc * (L.sunE * 0.30 + L.amb * 0.9 + L.sunE * fc * nature_hg(L.c, 0.4) * 0.5), fcov);
+                }
+            }
+            // Wildflowers too small to resolve: their colour, in drifts (poppy red, daisy white).
+            float fa = flowers * 0.16 * smoothstep(3.0, 9.0, d) * saturate(0.3 + 1.8 * gn.x + tn.x);
+            float3 fcol = mix(float3(0.80, 0.12, 0.08), float3(0.95, 0.92, 0.85), 0.5 + 0.5 * nature_sinT(w.x * 0.013 + w.y * 0.007));
+            g = mix(g, fcol * (L.sunE * 0.30 + L.amb * 0.9), fa);
+            g = mix(g, L.hz, 1.0 - exp(-d * aerB * 0.5));
+        } else {
+            // Velvet ground: big swells with dark hollows, wind streaks, the gusts' sheen.
+            float2 sw1 = float2(w.x * 0.045 + w.y * 0.016, w.y * 0.05 - w.x * 0.012);
+            float c1, c2, s1 = sincos(sw1.x + 1.1 * sin(sw1.y), c1), s2 = sincos(sw1.y * 1.4 + 0.6, c2);
+            float3 gn = float3(0.25 * (s1 + s2), 0.25 * c1 * 0.045 * 40.0, 0.25 * c2 * 0.07 * 40.0);
+            float fpx = d * pix;
+            float sk = smoothstep(0.6, 0.12, fpx * 0.7);
+            float streak = sk > 0.0 ? meadow_gnoise(float2(w.x * 0.7 + w.y * 0.2, w.y * 1.6)) * sk : 0.0;
+            float3 n = normalize(float3(-gn.y, 1.0, -gn.z));
+            float bend = meadow_gust(w, tw);
+            bend = bend * bend * gwind;
+            float gk = smoothstep(0.08, 0.02, fpx);
+            float grain = gk > 0.0 ? meadow_gnoise(w * float2(3.0, 2.2)) * gk : 0.0;
+            float3 a = alb * mix(float3(0.88, 1.0, 0.90), float3(1.18, 1.08, 0.72), saturate(0.5 + gn.x)) * (1.0 + 0.4 * streak + 0.35 * grain);
+            float sh = cuAmt > 0.0 ? meadow_cloudShadow(w, P.sd, P.tc, thrS) : 0.0;
+            g = meadow_sward(a, n, bend, sh, L) * mix(0.55, 1.0, saturate(0.5 + gn.x * 1.4));
+            g = mix(g, L.hz, 1.0 - exp(-d * aerB * 0.5));
+        }
         acc += keep * g;
         keep = 0.0;
         dist = min(dist, d);
-    }
-    if (keep > 0.002 && !sky) {
-        // The trees, then the rise they stand on (with the big one's shadow): a broad oak on the
-        // left shoulder of the rise, two smaller ones a little further back beside it, hazier.
-        float tht = F * 19.0 / max(d1, 1.0);
-        float2 tf = float2(-0.40 * aspect, 0.0);
-        if (land == 1) {
-            tf.y = yh + meadow_nearTop(Lo, tf.x).x - 0.006;
-            float sway = 0.010 * wind * (0.5 + meadow_gust(float2(tf.x / F * d1, d1), tw)) + 0.004 * sin(ts * 0.8);
-            for (int k = 0; k < 3 && keep > 0.002; ++k) {
-                float tx = k == 0 ? tf.x : (k == 1 ? -0.26 * aspect : -0.56 * aspect);
-                float dk = d1 * (k == 0 ? 1.0 : (k == 1 ? 1.3 : 1.5));
-                float hk = k == 0 ? 19.0 : (k == 1 ? 14.0 : 11.5);
-                float2 fk = float2(tx, yh + meadow_nearTop(Lo, tx).x - (k == 0 ? 0.006 : 0.003));
-                float4 tr = meadow_tree(sp, fk, F * hk / dk, pixS, ts + float(k) * 3.7, sway * (1.0 + 0.3 * float(k)),
-                                        alb, L, k == 1 ? -1.0 : 1.0);
-                if (tr.a > 0.0) {
-                    float3 c = mix(tr.rgb / tr.a, L.hz, 1.0 - exp(-dk * L.beta));
-                    acc += keep * tr.a * c;
-                    keep *= 1.0 - tr.a;
-                    dist = min(dist, dk);
-                }
-            }
-        }
-        if (keep > 0.002 && d1 > 0.0 && y >= yb1 - pixS && y < yN + pixS) {
-            float cov = saturate((yN - y) / pixS + 0.5);
-            float s = saturate((yN - y) / max(yN - yb1, 1e-4));    // 0 at the crest … 1 at the foot
-            float dl = d1 * (1.15 - 0.3 * s);
-            float2 w = float2(X / F * dl, dl + s * 0.9 * d1);
-            float3 tn = meadow_gnoised(w * float2(0.06, 0.035) + 2.0);
-            float3 n = normalize(float3(-nT.y * 1.6 - tn.y * 0.5, 1.0, -0.75 * sin(3.14159 * s) - 0.1 - tn.z * 0.3));
-            float bend = meadow_gust(w, tw);
-            bend = bend * bend * gwind;
-            float patch = tn.x * 1.2;
-            float3 a = alb * mix(float3(0.80, 0.97, 0.64), float3(1.28, 1.14, 0.74), saturate(0.5 + patch));
-            float sh = cuAmt > 0.0 ? meadow_cloudShadow(w, P.sd, P.tc, thrS) : 0.0;
-            float3 g = meadow_sward(a, n, bend, sh, L);
-            if (land == 1) {
-                float2 o = (sp - tf) / tht;
-                float2 dir = normalize(float2(-P.sd.x, -0.10 * P.sd.z - 0.02));
-                float len = clamp(0.5 / max(tan(max(P.se, 0.02)), 0.4), 0.3, 1.6);
-                float2 o2 = float2(o.x, o.y * 4.0);           // (the ground is seen edge-on)
-                float2 e2 = float2(dir.x, dir.y * 4.0) * len;
-                float ts2 = saturate(dot(o2, e2) / dot(e2, e2));
-                float rr = mix(0.30, 0.18, ts2);
-                float tsh = smoothstep(rr * 1.3, rr * 0.5, length(o2 - e2 * ts2 - float2(0.0, 0.02))) * sunUp;
-                g = mix(g, a * L.amb * (0.55 + 0.45 * n.y) * 0.9, tsh * 0.8);
-            }
-            g = mix(g, float3(0.90, 0.82, 0.58) * (L.sunE * 0.30 + L.amb * 0.9), flowers * 0.07);
-            g = mix(g, L.hz, 1.0 - exp(-dl * L.beta));
-            acc += keep * cov * g;
-            keep *= 1.0 - cov;
-            dist = min(dist, dl);
-        }
-        // The meadow beyond the rise, out to the fields (the rise's antialiased edge).
-        if (keep > 0.002 && rd.y < -1e-4 && y < yb2) {
-            float d = Lo.camH / -rd.y;
-            float2 w = rd.xz * d;
-            float3 a = alb * mix(float3(0.85, 0.97, 0.66), float3(1.2, 1.1, 0.75), saturate(0.5 + meadow_gnoise(w * 0.01)));
-            float3 g = meadow_sward(a, float3(0, 1, 0), 0.3 * gwind * meadow_gust(w, tw), 0.0, L);
-            g = mix(g, L.hz, 1.0 - exp(-d * L.beta));
-            acc += keep * g;
-            keep = 0.0;
-            dist = min(dist, d);
-        }
-        float2 mT = float2(0.0), fT = float2(0.0);
-        if (keep > 0.002) { mT = meadow_midTop(Lo, X); fT = meadow_farTop(Lo, X); }
-        float yM = yh + mT.x, yF = yh + fT.x;
-        // The fields: a patchwork of meadows, hay and crops between hedgerows.
-        if (keep > 0.002 && y < yM + 2.0 * pixS) {
-            float cov = saturate((yM - y) / pixS + 0.5);
-            float s = saturate((yM - y) / max(yM - yb2, 1e-4));
-            float dl = d2 * (1.1 - 0.25 * s);
-            float2 w = float2(X / F * dl, s * 1400.0);
-            float2 wr = float2(w.x * 0.95 + w.y * 0.31, w.y * 0.95 - w.x * 0.31);
-            float2 cs = float2(150.0, 95.0);
-            float2 cid = floor(wr / cs), cf = wr / cs - cid;
-            float3 hc = meadow_rand3(uint(int(cid.x) + 0x4000) * 0x9E3779B1u ^ uint(int(cid.y) + 0x4000) * 0x85EBCA77u);
-            float3 a = alb * (hc.x < 0.55 ? mix(float3(0.85, 1.0, 0.70), float3(1.15, 1.08, 0.70), hc.y)
-                                          : (hc.x < 0.8 ? float3(1.55, 1.25, 0.55) : float3(1.05, 0.92, 0.55)));
-            // Hedges: dark lines on the field edges (filtered by the pixel's footprint there).
-            float fx = dl * pix * 1.2;
-            float2 ed = min(cf, 1.0 - cf) * cs;
-            float hw = 2.5;
-            float hedge = max(smoothstep(hw + fx, hw - fx, ed.x), smoothstep(hw + fx * 3.0, hw - fx * 3.0, ed.y));
-            hedge *= 0.75 * smoothstep(60.0, 8.0, fx);
-            a = mix(a, alb * float3(0.45, 0.62, 0.40), hedge);
-            float3 n = normalize(float3(-mT.y * 1.6, 1.0, -0.6 * sin(3.14159 * s) - 0.1));
-            float sh = cuAmt > 0.0 ? meadow_cloudShadow(w + float2(0.0, d2), P.sd, P.tc, thrS) : 0.0;
-            float3 g = meadow_sward(a, n, 0.12 * gwind, sh, L);
-            g = mix(g, L.hz, 1.0 - exp(-dl * L.beta));
-            acc += keep * cov * g;
-            keep *= 1.0 - cov;
-            dist = min(dist, dl);
-        }
-        // Hedgerow trees along the fields' crest: round crowns standing on the skyline.
-        if (keep > 0.002 && land != 2 && y < yM + 0.03 && y > yM - 0.01) {
-            float cw = 0.022;
-            float ci = floor(X / cw);
-            float tc = 0.0;
-            for (int k = -1; k <= 1; ++k) {
-                float3 h = meadow_rand3(uint(int(ci) + k + 0x40000) * 0x9E3779B1u + 77u);
-                if (h.x > 0.45) continue;
-                float cx = (ci + float(k) + 0.5 + 0.3 * (h.y - 0.5)) * cw;
-                float r = 0.0045 + 0.006 * h.z;
-                float base = yM + mT.y * (cx - X);
-                float2 dv = float2(X - cx, (y - base - r * 0.9) * 0.9);
-                tc = max(tc, saturate((r - length(dv)) / pixS + 0.5));
-            }
-            if (tc > 0.0) {
-                float3 g = alb * float3(0.45, 0.62, 0.40) * (L.sunE * 0.12 + L.amb * 0.6);
-                g = mix(g, L.hz, 1.0 - exp(-d2 * L.beta));
-                acc += keep * tc * g;
-                keep *= 1.0 - tc;
-                dist = min(dist, d2);
-            }
-        }
-        // The far ridge, blue with distance.
-        if (keep > 0.002 && y < yF + 2.0 * pixS) {
-            float cov = saturate((yF - y) / pixS + 0.5);
-            float s = saturate((yF - y) / max(yF - yh, 1e-4));
-            float3 n = normalize(float3(-fT.y * 2.5, 1.0, -0.9 * sin(3.14159 * s) - 0.1));
-            float wood = smoothstep(0.1, 0.6, nature_sinT(X * 1.9 + 0.3 * nature_sinT(X * 0.7)) * 0.5 + 0.5 - 0.5 * s);
-            float3 a = alb * mix(float3(0.78, 0.92, 0.78), float3(0.45, 0.62, 0.50), wood);
-            float3 g = meadow_sward(a, n, 0.0, 0.0, L);
-            float3 far = L.hz * float3(0.82, 0.92, 1.10);                    // (distance is blue)
-            g = mix(g, far, 0.25 + 0.75 * (1.0 - exp(-d3 * L.beta * 1.4)));
-            acc += keep * cov * g;
-            keep *= 1.0 - cov;
-            dist = min(dist, d3);
-        }
     }
     // ---- the sky
     float3 stars = float3(0.0);
@@ -828,6 +1013,10 @@ static inline float4 meadow_scene(float2 uv, float2 res, float2 px, float t, con
         v.y = max(v.y, 0.002);
         v = normalize(v);
         float3 sky = meadow_atmos(v, P, u, meadow_lTs(P, u), wx);
+        // A summer sky: deep blue overhead by day — deepest in Hillside, under the storm's edge.
+        float dayK = nature_liveDay(u) * (wx ? 1.0 - P.deck : 1.0);
+        sky *= mix(float3(1.0), land == 3 ? float3(0.45, 0.62, 1.0) : float3(0.78, 0.96, 1.05),
+                   dayK * smoothstep(0.0, 0.45, v.y) * (land == 3 ? 1.0 : 0.8));
         float3 discL = float3(0.0);
         if (!keyMoon && sunVis > 0.0) {
             float3 dv = v - P.sd;
@@ -839,11 +1028,23 @@ static inline float4 meadow_scene(float2 uv, float2 res, float2 px, float t, con
             discL = P.esun * Tsun * disc * (0.45 + 0.55 * limb) * 60.0;
         }
         if (abs(v.y - sin(0.40 * tanh(u.moon.x / 0.40))) < 0.02)
-            sky += nature_oceanMoonNear(v, u, P.tauT, pix) * (wx ? (keyMoon ? sunVis * sunT : 1.0 - P.deck) : 1.0);
+            sky += nature_oceanMoonNear(float3(cfa * v.x - sfa * v.z, v.y, sfa * v.x + cfa * v.z), u, P.tauT, pix)
+                 * (wx ? (keyMoon ? sunVis * sunT : 1.0 - P.deck) : 1.0);
         float cov = 0.0;
         // Tidewater's clouds (Nature_funcs.h): the lit altocumulus deck and cirrus; with the
         // weather, its fair-weather cumulus and the deck closing over.
-        float3 col = nature_oceanClouds(v, sky, P, 5, cov, u, 0.0, wx, wx);
+        float3 col = sky;
+        if (wx) col = nature_oceanClouds(v, sky, P, 5, cov, u, 0.0, true, false);
+        else {
+            float4 ci = meadow_cirrus(v, sky, P, cloudP, u);
+            col = col * (1.0 - ci.a) + ci.rgb;
+            cov = ci.a;
+        }
+        if (v.y > 0.004) {
+            float4 cu4 = meadow_cumulus(v, sky, P, cuCover * (wx ? 1.0 - P.deck : 1.0), tower, pix, u);
+            col = col * (1.0 - cu4.a) + cu4.rgb;
+            cov = 1.0 - (1.0 - cov) * (1.0 - cu4.a);
+        }
         if (wx) {
             float cu2 = max(W.rain, 0.8 * W.storm);
             if (cu2 > 0.45) {
@@ -866,7 +1067,8 @@ static inline float4 meadow_scene(float2 uv, float2 res, float2 px, float t, con
             col += discL * (1.0 - cov);
         }
         if (dd > 8.5 && cov < 0.9)
-            stars = nature_oceanStars(v, u, pix, t) * ((1.0 - cov) * smoothstep(0.9, 0.6, cov) * keep);
+            stars = nature_oceanStars(float3(cfa * v.x - sfa * v.z, v.y, sfa * v.x + cfa * v.z), u, pix, t)
+                  * ((1.0 - cov) * smoothstep(0.9, 0.6, cov) * keep);
         acc += keep * col;
     }
     float3 col = acc;
@@ -923,8 +1125,8 @@ static inline float4 meadow_scene(float2 uv, float2 res, float2 px, float t, con
         float3 E = P.esun * Tsun * (sunUp * sunVis * sunT);
         col += E * glow * (0.0025 * nature_hg(L.c, 0.96) + 0.012 * nature_hg(L.c, 0.85)
                            + 0.004 * nature_hg(L.c, 0.6) + 0.0015);
-        float lowK = exp(-abs(rd.y) * 8.0);
-        col = mix(col, L.hz * 1.15, glow * (0.05 + 0.24 * lowK));
+        float lowK = exp(-abs(rd.y) * 8.0) * (1.0 - exp(-dist * 0.0004));   // (the near field stays clear)
+        col = mix(col, L.hz * 1.15, glow * (0.02 + 0.22 * lowK));
     }
     // White balance toward the low sun (gold, not red), as Tidewater.
     float wbAmt = 0.12 * smoothstep(-0.07, -0.02, u.sun.x);
@@ -941,12 +1143,12 @@ static inline float4 meadow_scene(float2 uv, float2 res, float2 px, float t, con
     // Highlights bloom and halate: bright areas lift toward a warm white (a soft-focus glow).
     float hi = smoothstep(0.5, 1.0, lc);
     c += (1.0 - c) * hi * glow * float3(0.34, 0.27, 0.18);
-    // Film colour: a little less saturated, warm in the light, milky and cool in the shadows.
+    // Film colour: rich, warm in the light, deep in the shadows, a firm toe.
     lc = luma(c);
-    c = max(lc + (c - lc) * 0.86, 0.0);
+    c = max(lc + (c - lc) * 1.14, 0.0);
     c *= mix(float3(1.0), float3(1.035, 1.0, 0.94), smoothstep(0.35, 0.9, lc));
-    float sh = (1.0 - lc) * (1.0 - lc);
-    c += sh * (0.03 + 0.05 * glow) * float3(0.80, 0.88, 1.0);
+    c = mix(c, c * c * (3.0 - 2.0 * c), 0.25);
+    c += (1.0 - lc) * (1.0 - lc) * 0.008 * float3(0.80, 0.88, 1.0);
     float2 vq = (uv - 0.5) * float2(aspect / 1.6, 1.0);
     c *= 1.0 - (0.10 + 0.12 * glow) * dot(vq, vq) * 1.6;
     // Fine dither: an 8×8 Bayer threshold blended with a fixed fine grain (ordered but not
@@ -956,6 +1158,9 @@ static inline float4 meadow_scene(float2 uv, float2 res, float2 px, float t, con
     int2 ic = int2(px / cell);
     float th = bayer8[(ic.y & 7) * 8 + (ic.x & 7)];
     th = mix(th, meadow_rand3(uint(ic.x) * 0x9E3779B1u ^ uint(ic.y) * 0x85EBCA77u).x - 0.5, 0.4);
+    // Grain: fine, a little in every tone, renewed 12 times a second.
+    float grn = meadow_rand3(uint(ic.x) * 0x27d4eb2du ^ uint(ic.y) * 0x165667b1u ^ uint(floor(t * 12.0)) * 0x9E3779B1u).y - 0.5;
+    c += grn * 0.05 * dith * (0.5 + 0.5 * (1.0 - lc));
     float lv = exp2(mix(6.5, 2.6, dith)) - 1.0;
     float3 q = floor(c * lv + 0.5 + th) / lv;
     c = dith > 0.001 ? mix(c + th / 255.0, q, smoothstep(0.0, 0.08, dith)) : c + bandDither(px) * 1.5;

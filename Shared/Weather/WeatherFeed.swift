@@ -170,7 +170,11 @@ final class WeatherLink {
     /// Every function these pipelines are built from (PipelineArchive harvests them all).
     static let functionNames = ["fx_ocean", "fx_ocean_live", "fx_wx_ocean", "fx_wx_ocean_live",
                                 "fx_wx_ocean_cu", "fx_wx_ocean_cu_live", "fx_shallows", "fx_wx_shallows",
-                                "fx_meadow", "fx_wx_meadow"]
+                                "fx_meadow_0", "fx_wx_meadow_0", "fx_meadow_1", "fx_wx_meadow_1",
+                                "fx_meadow_2", "fx_wx_meadow_2", "fx_meadow_3", "fx_wx_meadow_3"]
+
+    private static let meadowClear = ["fx_meadow_0", "fx_meadow_1", "fx_meadow_2", "fx_meadow_3"]
+    private static let meadowWx = ["fx_wx_meadow_0", "fx_wx_meadow_1", "fx_wx_meadow_2", "fx_wx_meadow_3"]
 
     /// The fragment function a pass of `kind` draws with, from its packed uniforms (nil: not one
     /// of these scenes — fx_fragment draws it). Weather (u.weather2.w) or the scene's clear sky;
@@ -184,8 +188,9 @@ final class WeatherLink {
             return u.p1.y > 0.5 && u.sky.y > 0.5 ? name + "_live" : name
         case .shallows:
             return wx ? "fx_wx_shallows" : "fx_shallows"
-        case .meadow:
-            return wx ? "fx_wx_meadow" : "fx_meadow"
+        case .meadow:                                    // (one per landscape: p2.x)
+            let land = min(max(Int(u.p2.x.rounded()), 0), 3)
+            return wx ? meadowWx[land] : meadowClear[land]
         default:
             return nil
         }
