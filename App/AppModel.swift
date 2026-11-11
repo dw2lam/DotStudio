@@ -46,9 +46,24 @@ final class AppModel: ObservableObject {
         BlurCache.shared.removeAll()
     }
     @Published var library: Library
-    @Published var selectedID: UUID?
+    @Published var selectedID: UUID? {
+        didSet { if selectedID != oldValue { Breadcrumbs.note("select \(crumbName(selectedID))") } }
+    }
     /// The style open in the editor; nil = the library gallery is showing.
-    @Published var editingID: UUID?
+    @Published var editingID: UUID? {
+        didSet {
+            guard editingID != oldValue else { return }
+            Breadcrumbs.note(editingID == nil ? "close editor" : "edit \(crumbName(editingID))")
+        }
+    }
+
+    /// A style's name for the crash reporter's breadcrumbs (kind too: names are the user's).
+    func crumbName(_ id: UUID?) -> String {
+        guard let id else { return "none" }
+        guard let p = library.presets.first(where: { $0.id == id }) else { return "unknown style" }
+        let kinds = p.effects.filter(\.enabled).map { "\($0.kind)" }.joined(separator: "+")
+        return "“\(p.name)” [\(p.isScene ? "scene" : "look") \(kinds.isEmpty ? "-" : kinds)]"
+    }
     @Published var storeAlert: StoreAlert?
     /// Shows the welcome sheet (first launch, or Help ▸ Welcome to DotStudio…).
     @Published var showOnboarding = false

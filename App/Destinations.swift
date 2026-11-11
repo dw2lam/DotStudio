@@ -52,6 +52,8 @@ extension AppModel {
 
     /// Write a lineup in canonical stored form. Interval, shuffle and crossfade are kept.
     func applyLineup(_ lineup: ScreensaverLineup, persist: Bool = true) {
+        Breadcrumbs.note("screensaver lineup: \(lineup.playlist.map { crumbName($0) }.joined(separator: ", "))"
+                         + (lineup.night.map { " · night \(crumbName($0))" } ?? ""))
         guard let first = library.presets.first?.id else { return }
         let wanted = Set(lineup.playlist)
         var day = library.presets.map(\.id).filter(wanted.contains)   // library order, no strays
