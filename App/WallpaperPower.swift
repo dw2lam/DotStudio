@@ -13,9 +13,10 @@
 //                 point Quality picks; Full plays as on power but at most 30 fps; Still
 //                 holds a frame. See WallpaperBudget.
 //    • Pausing  — no draws and no wake-ups at all while nobody can see it (covered,
-//                 locked, display or system asleep, screensaver running), in Low Power
-//                 Mode, or when paused from the menu bar.
-//    • Stilling — a hot Mac (and battery, set to Still) holds the last frame; a clock
+//                 locked, display or system asleep, screensaver running), or when
+//                 paused from the menu bar.
+//    • Stilling — Low Power Mode, a hot Mac (and battery, set to Still) hold a frame —
+//                 drawn first if there isn't one yet, so it still sets the desktop; a clock
 //                 still turns over once a minute so it never lies.
 //    • Threads  — every frame is built off the main thread, on a render thread at
 //                 user-initiated QoS while animating, utility for clock ticks and idle
@@ -452,6 +453,7 @@ enum WallpaperBudget {
 
     /// Why motion holds on its last frame (a clock still turns over once a minute).
     static func stillReason(_ settings: WallpaperSettings, _ s: WallpaperPowerMonitor.State) -> String? {
+        if s.lowPowerMode { return "Still — Low Power Mode" }
         if s.thermalHot { return "Still — Mac is running hot" }
         if s.onBattery && settings.batteryMode == .still { return "Still — on battery" }
         return nil

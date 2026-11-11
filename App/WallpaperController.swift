@@ -9,8 +9,8 @@
 //  at an exact divisor of that display's refresh rate, so every frame is held for the
 //  same number of refreshes — smooth at 30. Clocks idle on a one-shot timer aligned to
 //  the second and only switch the display link on while a figure is changing. When no
-//  display can show a frame (covered, locked, asleep, screensaver, Low Power, user
-//  pause) every link and timer is parked and the process does no work at all; the last
+//  display can show a frame (covered, locked, asleep, screensaver, user pause) every
+//  link and timer is parked and the process does no work at all; the last
 //  frame stays on screen, so resuming never flashes or rebuilds anything.
 //
 //  Threads: this controller, the windows and the policy live on the main thread. All
@@ -550,7 +550,9 @@ final class WallpaperController: ObservableObject {
 
     // MARK: Policy
 
-    /// Full pauses: nobody can see it (or Low Power asked us to stop) — no work at all.
+    /// Full pauses: nobody can see it — no work at all. (Low Power Mode is NOT one: a pause
+    /// draws nothing, so a wallpaper turned on in Low Power never showed a first frame. It
+    /// holds a still instead — WallpaperBudget.stillReason.)
     private var hardPauseReason: String? {
         let s = power.state
         if userPaused { return "Paused" }
@@ -558,7 +560,6 @@ final class WallpaperController: ObservableObject {
         if s.displayAsleep { return "Paused — display asleep" }
         if s.screenLocked { return "Paused — screen locked" }
         if s.screensaverRunning { return "Paused — screensaver running" }
-        if s.lowPowerMode { return "Paused — Low Power Mode" }
         return nil
     }
 
