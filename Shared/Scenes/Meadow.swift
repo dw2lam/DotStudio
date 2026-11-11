@@ -1,10 +1,11 @@
 //  Meadow.swift — the Meadow pack: one dreamy pastoral scene (shader id 78), shown with Nature.
 //  See SceneCatalog.swift.
 //
-//  Meadow (78)  rolling summer fields under a big sky: grass and wildflowers bending in gusts
-//               that roll across the field, cumulus drifting over and their shadows sliding over
-//               the hills, soft glow, a fine ordered dither over it all. Three landscapes (the
-//               Landscape menu): the open meadow, a hill with a lone tree, tall grass.
+//  Meadow (78)  hazy, sun-drenched summer fields under a big sky: grass and wildflowers bending in
+//               gusts that roll across the field, Tidewater's clouds drifting over and their
+//               shadows sliding over the hills, bloom and halation, a fine film-like dither over it
+//               all. Three landscapes (the Landscape menu): the open meadow, a low rise with a
+//               cluster of trees, tall grass.
 //
 //  Time of day: Follow the Sun = the real sun and moon here (MetalRenderer.fillLiveSky, as
 //  Tidewater); off, the Time of Day slider picks an hour of a midsummer day (fillLiveSky works out
@@ -38,8 +39,8 @@ extension SceneCatalog {
                      ParamSpec(menu: "weather", "Weather", WeatherMix.menu, def: 0),
                      ParamSpec(menu: "landscape", "Landscape", ["Meadow", "Lone Tree", "Tall Grass"], def: 0),
                      ParamSpec("glow", "Glow", 0, 1, def: 0.5),
-                     ParamSpec("dither", "Dither", 0, 1, def: 0.35)],
-            colorA: RGBA(0.42, 0.62, 0.20), colorB: RGBA(1.0, 0.80, 0.56),
+                     ParamSpec("dither", "Dither", 0, 1, def: 0.5)],
+            colorA: RGBA(0.50, 0.62, 0.25), colorB: RGBA(1.0, 0.80, 0.56),
             colorALabel: "Grass", colorBLabel: "Sunlight"),
     ]
 
@@ -53,7 +54,7 @@ extension SceneCatalog {
         return [
             // The real day and the real weather over the open meadow.
             scene("Meadow", ["live": 1, "weather": 0, "landscape": 0]),
-            // A summer afternoon on the hill with the tree, under whatever the sky is doing here.
+            // A summer afternoon by the trees on the rise, under whatever the sky is doing here.
             scene("Lone Tree", ["live": 0, "hour": 16.25, "weather": 0, "landscape": 1, "flowers": 0.45,
                                 "clouds": 0.6]),
             // Low in tall grass at golden hour, always clear.
