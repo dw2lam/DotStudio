@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.4.4 — Stability
+
+### Fixed
+- **Crash on macOS 26 when opening a style.** Opening the editor (double-click a scene, or
+  its Edit button) could crash DotStudio on macOS 26: the colour wells in the editor kept
+  re-laying the window out. They now pick their layout without measuring mid-layout.
+- The screensaver plays black instead of crashing if the library is empty, and the renderer
+  falls back to black instead of crashing if the GPU can't create a resource.
+
+### New
+- **Crash reports.** If DotStudio ever quits unexpectedly, the next launch shows what
+  happened and offers to send a report (opens a pre-filled GitHub issue — nothing is
+  uploaded automatically). Help › Report a Problem… does the same any time.
+- **Safe mode.** After repeated crashes at launch, DotStudio starts with live previews and
+  the live wallpaper paused, with a button to start normally.
+
 ## 1.4.3 — Setup, battery and the lock screen
 
 ### New
