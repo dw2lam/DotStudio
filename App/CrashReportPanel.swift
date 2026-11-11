@@ -162,3 +162,20 @@ struct CrashReportView: View {
         return "\(report.summary).\nLast actions: \(last)"
     }
 }
+
+extension CrashReport {
+    /// A made-up report for UI shots (never this Mac's).
+    static func sample(safeMode: Bool, crash: Bool = true) -> CrashReport {
+        CrashReport(isCrash: crash, date: crash ? Date(timeIntervalSince1970: 1_794_360_000) : nil,
+                    summary: crash ? "NSGenericException: The window has been marked as needing another Update Constraints in Window pass" : "Problem report",
+                    exception: crash ? "NSGenericException: The window has been marked as needing another Update Constraints in Window pass, but it has already had more Update Constraints in Window passes than there are views in the window." : nil,
+                    breadcrumbs: ["10:41:02.118  launch 1.4.4 (240)",
+                                  "10:41:09.502  select “Aurora” [scene aurora]",
+                                  "10:41:12.871  select “Liquid Chrome” [scene liquidChrome]",
+                                  "10:41:13.233  edit “Liquid Chrome” [scene liquidChrome]"],
+                    ips: crash ? "{\"app_name\":\"DotStudio\",\"app_version\":\"1.4.4\" …}" : nil,
+                    ipsName: crash ? "DotStudio-2026-11-11-104113.ips" : nil,
+                    system: "DotStudio 1.4.4 (240)\nmacOS Version 26.6.2 (Build 25G83)\nMac: Mac15,3 · Apple M3\nGPU: Apple M3\nDisplays: 1",
+                    safeMode: safeMode)
+    }
+}

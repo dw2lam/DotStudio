@@ -471,12 +471,10 @@ enum DebugCrash {
             let a: [Int] = []
             _ = a[Int(env["DOTSTUDIO_DEBUG_CRASH_INDEX"] ?? "3") ?? 3]
         case "exception":
-            NSApplication.shared.setActivationPolicy(.prohibited)
-            // As AppKit does with an exception on the main thread: report it, then crash on it.
+            // An exception raised and never caught (the preprocessor records it as raised).
             let e = NSException(name: NSExceptionName("NSGenericException"),
                                 reason: "The window has been marked as needing another Update Constraints in Window pass, but it has already had more Update Constraints in Window passes than there are views in the window. (debug)",
                                 userInfo: nil)
-            NSApplication.shared.reportException(e)
             e.raise()
         default:
             break
