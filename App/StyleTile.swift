@@ -96,6 +96,12 @@ struct StyleTile: View, Equatable {
                 overlays
             }
             .aspectRatio(16.0 / 10.0, contentMode: .fit)
+            .background {   // DEV harness only (ClickProbe)
+                if TileProbe.enabled {
+                    TileProbeReporter(id: preset.id, select: select, open: open,
+                                      hover: { h in pointerInside = h; setHover(h) })
+                }
+            }
             .clipShape(RoundedRectangle(cornerRadius: Self.radius, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: Self.radius, style: .continuous)
                 .strokeBorder(.white.opacity(0.10), lineWidth: 1))
@@ -127,8 +133,8 @@ struct StyleTile: View, Equatable {
                 setHover(pointerInside)
             }
         }
-        .onTapGesture(count: 2) { model.edit(preset.id) }
-        .onTapGesture { model.selectedID = preset.id }
+        .onTapGesture(count: 2) { open() }
+        .onTapGesture { select() }
         .contextMenu { TileMenu(model: model, preset: preset, lineup: lineup, confirmDelete: $confirmDelete) }
         .help("\(preset.name) — double-click to edit")
         .accessibilityElement(children: .combine)
@@ -140,6 +146,12 @@ struct StyleTile: View, Equatable {
             Text("This can't be undone.")
         }
     }
+
+    /// A click: select this style.
+    private func select() { model.selectedID = preset.id }
+
+    /// A double-click: open it in the editor.
+    private func open() { model.edit(preset.id) }
 
     private func setHover(_ h: Bool) {
         hovering = h || DemoHooks.hoverName == preset.name

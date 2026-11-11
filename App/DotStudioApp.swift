@@ -34,6 +34,12 @@ struct DotStudioApp: App {
             FileHandle.standardOutput.write(Data(out.utf8))
             exit(0)
         }
+        // Crash reporting first: a crash anywhere after this is recorded (CrashReporter.swift).
+        CrashReporter.shared.start()
+        #if DEBUG
+        DebugCrash.runIfRequested()   // DOTSTUDIO_DEBUG_CRASH: the crash reporter's self-test
+        CrashSelfTest.runIfRequested()
+        #endif
         if let dir = ProcessInfo.processInfo.environment["DOTSTUDIO_SHOTS"] {
             Shots.run(outDir: dir)   // renders the gallery and exits
         }
@@ -41,6 +47,7 @@ struct DotStudioApp: App {
             UIShots.run(outDir: dir)  // renders the app's screens offscreen and exits
         }
         PerfProbe.runIfRequested()    // DOTSTUDIO_PERF_PROBE: headless cost measurements, then exits
+        ClickProbe.runIfRequested()   // DOTSTUDIO_CLICK_PROBE: the gallery's click paths, headless, then exits
         if ProcessInfo.processInfo.environment["DOTSTUDIO_MIGRATE_ONLY"] != nil {
             // Headless migration check (pair with DOTSTUDIO_STORE_DIR): migrates library.json
             // the way a launch does, saves it, prints a summary, exits.
@@ -117,6 +124,8 @@ struct DotStudioApp: App {
             CommandGroup(before: .help) {
                 Button("Welcome to DotStudio…") { model.showOnboarding = true }
                 Button("Set Up Screensaver…") { SetupGuidePanel.shared.show(model: model) }
+                Divider()
+                Button("Report a Problem…") { CrashReportPanel.shared.reportProblem() }
             }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { updates.primaryAction() }
@@ -147,7 +156,15 @@ struct DotStudioApp: App {
 /// AppPresence; the live wallpaper must outlive the main window.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        WallpaperController.shared.restore()
+        // Safe mode (two quick crashes in a row): no live wallpaper until "Start Normally".
+        if CrashReporter.shared.safeMode {
+            NotificationCenter.default.addObserver(forName: CrashReporter.safeModeChanged, object: nil,
+                                                   queue: .main) { _ in WallpaperController.shared.restore() }
+        } else {
+            WallpaperController.shared.restore()
+        }
+        // The last session crashed: offer the report once the launch has settled.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { CrashReportPanel.shared.presentPendingIfNeeded() }
         // Watch Spotify / Music while the library's music options (or a Now Playing style)
         // need it; re-applied on every library change (MusicUI.swift).
         MusicLifecycle.shared.start()
@@ -181,6 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        Breadcrumbs.note("quit")
         MusicLifecycle.shared.stop()   // clears music.json: the saver shows no stale track
         WallpaperController.shared.shutdown()
     }
