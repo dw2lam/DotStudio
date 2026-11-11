@@ -35,6 +35,11 @@ final class CrashReportPanel: NSObject, NSWindowDelegate {
         p.title = report.isCrash ? "DotStudio Quit Unexpectedly" : "Report a Problem"
         p.isReleasedWhenClosed = false
         p.hidesOnDeactivate = false
+        // Above the main window (which can open or come forward after it), and listed in the
+        // Window menu, so it's never lost behind it.
+        p.isFloatingPanel = true
+        p.isExcludedFromWindowsMenu = false
+        p.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
         p.contentViewController = NSHostingController(rootView: root)
         p.setContentSize(Self.size)
         p.contentMinSize = CGSize(width: 440, height: 360)
