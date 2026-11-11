@@ -53,6 +53,24 @@ fragment float4 fx_wx_ocean_cu_live(VOut in [[stage_in]], constant FXUniforms& u
     return nature_ocean(uv, res, px, u.time, u, true, true, true);
 }
 
+// Meadow (78): its clear sky and its weather, each a function of its own for the same reasons — and
+// one per landscape (the Landscape menu: fx_meadow_<n>, fx_wx_meadow_<n>), so each carries only its
+// own land's code and registers.
+#define MEADOW_FX(N) \
+fragment float4 fx_meadow_##N(VOut in [[stage_in]], constant FXUniforms& u [[buffer(0)]]) { \
+    float2 uv = in.uv, res = u.resolution, px = uv * res; \
+    return meadow_scene(uv, res, px, u.time, u, false, N); \
+} \
+fragment float4 fx_wx_meadow_##N(VOut in [[stage_in]], constant FXUniforms& u [[buffer(0)]]) { \
+    float2 uv = in.uv, res = u.resolution, px = uv * res; \
+    return meadow_scene(uv, res, px, u.time, u, true, N); \
+}
+MEADOW_FX(0)
+MEADOW_FX(1)
+MEADOW_FX(2)
+MEADOW_FX(3)
+#undef MEADOW_FX
+
 fragment float4 fx_wx_shallows(VOut in [[stage_in]], constant FXUniforms& u [[buffer(0)]]) {
     float2 uv = in.uv, res = u.resolution, px = uv * res;
     return studio1_shallows(uv, res, px, u.time, u, true);

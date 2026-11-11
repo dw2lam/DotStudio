@@ -270,7 +270,7 @@ final class FXPipelines {
 /// A scene's own function draws the über-shader's frame (≤ 1 level on a few pixels: compiled
 /// apart). fx_fragment keeps every case, so it stands in whenever the own pipeline isn't built
 /// yet or failed: the renderer never waits for one mid-animation (MetalRenderer.scenePipeline).
-/// Ocean Horizon (59) and Shallows (67) have theirs through WeatherLink (Weather_fragment.h).
+/// Ocean Horizon (59), Shallows (67) and Meadow (78) have theirs through WeatherLink (Weather_fragment.h).
 enum ScenePipelines {
     /// Every id with an fx_scene_<id> in SceneEntries.metal. Keep the two lists the same.
     /// 0 / 1: the source passes (photo or video; the gradient behind a scene); 38: the

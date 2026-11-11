@@ -437,7 +437,7 @@ func liveChecks() -> Bool {
         for kind in EffectKind.allCases where kind.isScene {
             scenes += 1
             let fns = WeatherLink.usesWeather(kind)
-                ? WeatherLink.functionNames.filter { $0.contains(kind == .shallows ? "shallows" : "ocean") }
+                ? WeatherLink.functionNames.filter { $0.contains(kind == .shallows ? "shallows" : kind == .meadow ? "meadow" : "ocean") }
                 : ScenePipelines.functionName(kind.shaderID).map { [$0] } ?? []
             if fns.isEmpty { unverified.append(kind.displayName) }
             for fn in fns {
