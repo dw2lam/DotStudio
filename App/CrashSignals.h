@@ -12,4 +12,9 @@ int dotstudio_crash_signals_install(const char *markerPath);
 /// Appends `text` to the marker (from ordinary code — an exception about to end the process).
 void dotstudio_crash_signals_note(const char *text);
 
+/// Records every Objective-C exception as it is raised (name, reason, raising stack) to `path`,
+/// each overwriting the last (CrashExceptions.m). AppKit traps on an exception it caught
+/// itself, which no uncaught-exception handler sees.
+void dotstudio_crash_exceptions_install(const char *path);
+
 #endif
