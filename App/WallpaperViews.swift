@@ -138,7 +138,7 @@ struct WallpaperSettingsSection: View {
             VStack(alignment: .leading, spacing: Space.xs) {
                 SettingsNote("The wallpaper plays while DotStudio is open — closing the window keeps it running from the menu bar. On battery, Efficient plays at 20 fps and a lower resolution, Full plays as when plugged in (up to 30 fps), and Still holds a frame.")
                 SettingsNote("Same as Screensaver plays whatever the screensaver shows — same playlist and night style — in step, so the screensaver starts right where your desktop was.")
-                SettingsNote("It pauses whenever windows cover the desktop, the screen locks or sleeps, the screensaver starts, or Low Power Mode is on, and holds still when your Mac runs hot. Balanced quality renders at three-quarter resolution on Retina displays.")
+                SettingsNote("It pauses whenever windows cover the desktop, the screen locks or sleeps, or the screensaver starts, and holds still in Low Power Mode or when your Mac runs hot. Balanced quality renders at three-quarter resolution on Retina displays.")
                 SettingsNote("macOS shows this picture on the lock and login screens. It updates when your Mac locks. Turning it off restores your previous picture.")
             }
         }

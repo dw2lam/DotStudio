@@ -33,7 +33,7 @@ var W = 3024, H = 1964
 /// --power ac|battery|lowpower: run the real power policy instead of --fps. saver: pins the saver's
 /// power state (DOTSTUDIO_SAVER_FORCE) and paces frames at the interval it then asks for, at the
 /// drawable it sizes. wallpaper: WallpaperBudget with default settings (Balanced, Quality Balanced =
-/// 0.75 of --size, On Battery Efficient) picks fps and drawable; Low Power is a hard pause.
+/// 0.75 of --size, On Battery Efficient) picks fps and drawable; Low Power holds a still.
 var power: String?
 while !args.isEmpty {
     let a = args.removeFirst()
@@ -417,7 +417,7 @@ case "wallpaper" where power != nil:
         let fps = WallpaperBudget.fps(settings, presetFPS: s.preset.fps, onBattery: st.onBattery)
         let still = WallpaperBudget.stillReason(settings, st) != nil
         let rig = WallpaperRig(s, drawable: ds)
-        rig.state(s, fps: fps, canDraw: !st.lowPowerMode, still: still)   // Low Power: a hard pause
+        rig.state(s, fps: fps, canDraw: true, still: still)   // Low Power: a held still (stillReason)
         runLoop(until: CACurrentMediaTime() + 1.0)
         report(measureLoop(rig, name: s.name, fps: fps, extra: String(format: "[%.0fx%.0f]", ds.width, ds.height)))
         rig.loop.removeAll()

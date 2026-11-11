@@ -25,7 +25,7 @@ import QuartzCore
 
 /// What the main thread's policy allows right now: an immutable snapshot.
 struct WallpaperFrameState: Equatable {
-    /// No hard pause (user pause, lock, sleep, screensaver, Low Power).
+    /// No hard pause (user pause, lock, sleep, screensaver).
     var canDraw = false
     /// Displays whose wallpaper someone can see.
     var visible: Set<CGDirectDisplayID> = []

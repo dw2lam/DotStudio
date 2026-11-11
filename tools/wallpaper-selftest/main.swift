@@ -75,6 +75,12 @@ do {
     check(WallpaperBudget.stillReason(s, st) == nil, "AC with Still set: plays")
     st.thermalHot = true
     check(WallpaperBudget.stillReason(WallpaperSettings(), st) == "Still — Mac is running hot", "hot Mac holds")
+    // Low Power Mode holds a still (drawn first) instead of pausing: a wallpaper turned on in
+    // Low Power used to never show a frame at all.
+    var lp = WallpaperPowerMonitor.State()
+    lp.lowPowerMode = true
+    check(WallpaperBudget.stillReason(WallpaperSettings(), lp) == "Still — Low Power Mode", "Low Power Mode holds a still")
+    check(WallpaperPacing.plan(.motion, fps: 30, still: true) == .none, "a held still runs no display link (one frame, drawn on entry)")
     check(WallpaperPacing.divisorRate(target: 20, refresh: 120) == 20 && WallpaperPacing.divisorRate(target: 20, refresh: 60) == 20,
           "20 fps is an exact divisor of 60 and 120 Hz")
     // Bloom steps its time at 24 fps: drawn at the slowest exact divisor at or above that
@@ -88,7 +94,9 @@ print("time of day")
 do {
     let lib = DefaultPresets.makeLibrary()
     func p(_ n: String) -> Preset { lib.presets.first { $0.name == n } ?? Preset(name: n) }
-    check(WallpaperPacing.changesWithTimeOfDay(p("Tidewater")), "Tidewater (live weather) follows the time of day")
+    var live = p("Golden Hour")   // Follow the Sun on (what Tidewater was until 1.4.5)
+    for i in live.effects.indices where live.effects[i].kind == .oceanHorizon { live.effects[i].params["live"] = 1 }
+    check(WallpaperPacing.changesWithTimeOfDay(live), "Golden Hour with Follow the Sun follows the time of day")
     check(WallpaperPacing.changesWithTimeOfDay(p("StandBy")) && WallpaperPacing.changesWithTimeOfDay(p("Flip Clock")),
           "clocks follow the time of day")
     check(!WallpaperPacing.changesWithTimeOfDay(p("Liquid Chrome")), "Liquid Chrome doesn't")
@@ -208,7 +216,7 @@ do {
     let lib = DefaultPresets.makeLibrary()
     let dir = tmp.appendingPathComponent("store/lockscreen-real")
     let pic = LockScreenPicture(dir: dir, desktop: FakeDesktop([], shown: [:]))
-    for name in ["Tidewater", "StandBy", "Liquid Chrome"] {
+    for name in ["Golden Hour", "StandBy", "Liquid Chrome"] {
         guard let preset = lib.presets.first(where: { $0.name == name }) else { continue }
         let t0 = CFAbsoluteTimeGetCurrent()
         var tRender = 0.0
