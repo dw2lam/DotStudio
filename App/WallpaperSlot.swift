@@ -47,8 +47,8 @@ final class WallpaperSlot: ObservableObject {
         hookUp()
     }
 
-    func set(_ id: UUID) { backend.set(id); refresh() }
-    func stop() { backend.stop(); refresh() }
+    func set(_ id: UUID) { Breadcrumbs.note("wallpaper start \(id.uuidString.prefix(8))"); backend.set(id); refresh() }
+    func stop() { Breadcrumbs.note("wallpaper stop"); backend.stop(); refresh() }
     func toggle(_ id: UUID) { styleID == id ? stop() : set(id) }
 
     /// Re-read the backend's state.

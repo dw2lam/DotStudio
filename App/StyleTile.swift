@@ -96,6 +96,12 @@ struct StyleTile: View, Equatable {
                 overlays
             }
             .aspectRatio(16.0 / 10.0, contentMode: .fit)
+            .background {   // DEV harness only (ClickProbe)
+                if TileProbe.enabled {
+                    TileProbeReporter(id: preset.id, select: select, open: open,
+                                      hover: { h in pointerInside = h; setHover(h) })
+                }
+            }
             .clipShape(RoundedRectangle(cornerRadius: Self.radius, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: Self.radius, style: .continuous)
                 .strokeBorder(.white.opacity(0.10), lineWidth: 1))
@@ -127,8 +133,8 @@ struct StyleTile: View, Equatable {
                 setHover(pointerInside)
             }
         }
-        .onTapGesture(count: 2) { model.edit(preset.id) }
-        .onTapGesture { model.selectedID = preset.id }
+        .onTapGesture(count: 2) { open() }
+        .onTapGesture { select() }
         .contextMenu { TileMenu(model: model, preset: preset, lineup: lineup, confirmDelete: $confirmDelete) }
         .help("\(preset.name) — double-click to edit")
         .accessibilityElement(children: .combine)
@@ -141,12 +147,18 @@ struct StyleTile: View, Equatable {
         }
     }
 
+    /// A click: select this style.
+    private func select() { model.selectedID = preset.id }
+
+    /// A double-click: open it in the editor.
+    private func open() { model.edit(preset.id) }
+
     private func setHover(_ h: Bool) {
         hovering = h || DemoHooks.hoverName == preset.name
         // Animate the tile live after a short dwell; one live preview at a time.
         if h {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                if hovering && !ScrollActivity.isScrolling { live = true }
+                if hovering && !ScrollActivity.isScrolling && !DemoHooks.livePreviewsPaused { live = true }
             }
         } else {
             live = false
@@ -550,31 +562,36 @@ private struct TileActionBar: View {
         icon("slider.horizontal.3", help: "Edit") { model.edit(preset.id) }
     }
 
+    /// "…": a SwiftUI button that pops up an AppKit menu. Not a SwiftUI `Menu`: that is an
+    /// AppKit pop-up button, and the bar's ViewThatFits measures its variants — a measured
+    /// AppKit control being created and dropped mid-layout is what crashed on macOS 26
+    /// (see ColorWellsRow).
     private func moreMenu(includeDestinations: Bool) -> some View {
-        Menu {
-            if includeDestinations {
-                Button(badges.onScreensaver ? "Remove from Screensaver" : "Add to Screensaver") {
-                    Motion.run { model.togglePlaylist(preset.id) }
-                }
-                .disabled(isOnly)
-                if wallpaper.isAvailable {
-                    Button(badges.wallpaper ? "Stop Wallpaper" : "Set as Wallpaper") {
-                        Motion.run { wallpaper.toggle(preset.id) }
-                    }
-                }
-                Divider()
-            }
-            Button("Preview Full Screen") { preview() }
-            Button("Edit") { model.edit(preset.id) }
-        } label: {
+        Button { popUpMore(includeDestinations: includeDestinations) } label: {
             Image(systemName: "ellipsis")
         }
-        .menuStyle(.button)
-        .menuIndicator(.hidden)
         .buttonStyle(ScaledIconButtonStyle())
         .fixedSize()
         .help("More")
         .accessibilityLabel("More")
+    }
+
+    private func popUpMore(includeDestinations: Bool) {
+        var items: [ActionMenu.Item] = []
+        if includeDestinations {
+            let id = preset.id
+            items.append(.init(badges.onScreensaver ? "Remove from Screensaver" : "Add to Screensaver",
+                               enabled: !isOnly) { [model] in Motion.run { model.togglePlaylist(id) } })
+            if wallpaper.isAvailable {
+                items.append(.init(badges.wallpaper ? "Stop Wallpaper" : "Set as Wallpaper") { [wallpaper] in
+                    Motion.run { wallpaper.toggle(id) }
+                })
+            }
+            items.append(.separator)
+        }
+        items.append(.init("Preview Full Screen") { preview() })
+        items.append(.init("Edit") { [model, id = preset.id] in model.edit(id) })
+        ActionMenu.popUp(items)
     }
 
     private func preview() {
@@ -705,4 +722,48 @@ struct TileThumb: View {
 struct GeoPoint: Equatable {
     var lat: Double
     var lon: Double
+}
+
+/// An AppKit menu popped up at the pointer from a SwiftUI button (TileActionBar's "…").
+enum ActionMenu {
+    struct Item {
+        let title: String
+        var enabled = true
+        let action: (() -> Void)?
+        init(_ title: String, enabled: Bool = true, action: @escaping () -> Void) {
+            self.title = title
+            self.enabled = enabled
+            self.action = action
+        }
+        private init() { title = ""; action = nil }
+        static let separator = Item()
+    }
+
+    private final class Target: NSObject {
+        let action: () -> Void
+        init(_ action: @escaping () -> Void) { self.action = action }
+        @objc func run() { action() }
+    }
+
+    static func popUp(_ items: [Item]) {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        var targets: [Target] = []
+        for item in items {
+            guard let action = item.action else { menu.addItem(.separator()); continue }
+            let t = Target(action)
+            targets.append(t)
+            let mi = NSMenuItem(title: item.title, action: #selector(Target.run), keyEquivalent: "")
+            mi.target = t
+            mi.isEnabled = item.enabled
+            menu.addItem(mi)
+        }
+        // The targets outlive the menu's tracking (an item's action can arrive after popUp
+        // returns); the next menu replaces them.
+        live = targets
+        // Screen coordinates (in: nil).
+        _ = menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    }
+
+    private static var live: [Target] = []
 }

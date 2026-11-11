@@ -36,11 +36,12 @@ enum Playback {
     }
 
     /// The style on screen at `now`. Every display computes the same answer with no
-    /// coordination. Requires a non-empty library.
+    /// coordination. An empty library (every style deleted, or only styles a newer build
+    /// made) plays an empty style — black — rather than crashing the screensaver host.
     static func effectivePreset(in lib: Library, now: Date) -> Preset {
         let night = (lib.schedule?.enabled ?? false) && isNight(lib)
         let pool = pool(in: lib, night: night)
-        let fallback = lib.presets.first { $0.id == lib.activeID } ?? lib.presets.first!
+        let fallback = lib.presets.first { $0.id == lib.activeID } ?? lib.presets.first ?? Preset(name: "Empty")
         guard pool.count > 1, let rot = lib.rotation else { return pool.first ?? fallback }
         let interval = max(rot.intervalMinutes, 0.25) * 60
         let slot = Int(now.timeIntervalSince1970 / interval)

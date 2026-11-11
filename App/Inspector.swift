@@ -78,7 +78,7 @@ struct ScaledControlLabel: View {
 /// kind, media scaling): it spans its column and never runs past it, and stacked choices
 /// share one height.
 ///
-/// The stock control is used where it fits: equal segments stretched across the column.
+/// (Until 1.4.3 the stock control was used where it fits; now always the drawn one, below.)
 /// On the macOS 26/27 SDK its segments are each as wide as the widest title and it never
 /// shrinks (the 4-way Kind control is 342 pt, 294 pt even when small, against a 288-pt
 /// column), so otherwise — and from .xxLarge at every width, since a stock control keeps
@@ -93,22 +93,11 @@ struct SegmentedChoice<Value: Hashable>: View {
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        Group {
-            if typeSize >= .xxLarge {
-                RoleSegments(title: title, selection: $selection, options: options)
-            } else {
-                ViewThatFits(in: .horizontal) {
-                    Picker(title, selection: $selection) {
-                        ForEach(options.indices, id: \.self) { i in Text(options[i].title).tag(options[i].value) }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .fillsColumn()
-                    RoleSegments(title: title, selection: $selection, options: options)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // Always the drawn control. Measuring the stock one against it (a ViewThatFits that
+        // could swap an AppKit segmented control in and out as the width settled) is the
+        // pattern that crashed on macOS 26 inside the inspector's list — see ColorWellsRow.
+        RoleSegments(title: title, selection: $selection, options: options)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -276,7 +265,12 @@ struct ColorWellsRow<Accessory: View>: View {
 
     var body: some View {
         InspectorRow(label: label, alignment: .wellCenter) {
-            ReflowStack(rowAlignment: .wellCenter, columnAlignment: .leading, spacing: layout.controlGap) {
+            // Row or column by the text size (AdaptiveStack), never by measuring: the wells are
+            // AppKit color wells, and a ViewThatFits flipping between two copies of them inside
+            // the inspector's list re-created them in the middle of the window's layout, round
+            // and round — on macOS 26 that ended in AppKit's display-cycle exception (a crash on
+            // opening any style with colours).
+            AdaptiveStack(rowAlignment: .wellCenter, columnAlignment: .leading, spacing: layout.controlGap) {
                 ForEach(wells.indices, id: \.self) { i in
                     let well = wells[i]
                     VStack(alignment: .leading, spacing: layout.labelGap) {
@@ -312,8 +306,22 @@ struct EffectStackView: View {
     @ObservedObject var model: AppModel
     @Environment(\.layout) private var layout
     @ScaledLength(relativeTo: .body) private var eyeColumn: CGFloat = InspectorMetrics.eyeColumn
-    @State private var expanded: Set<UUID> = []
+    /// The open effects. Starts with the first one open (its main knobs right there) — set
+    /// here, before the List exists, never from its onAppear: opening a row as the List
+    /// appears changes row heights in the middle of the window's layout, and the table's
+    /// constraint passes then never settle within one display cycle. macOS 27 logs that and
+    /// moves on; macOS 26 throws ("…more Update Constraints in Window passes than there are
+    /// views in the window") and the app crashed on opening any style (1.4.1–1.4.3).
+    @State private var expanded: Set<UUID>
     @State private var showAdd = false
+
+    init(preset: Binding<Preset>, model: AppModel) {
+        _preset = preset
+        self.model = model
+        let effects = preset.wrappedValue.effects
+        _expanded = State(initialValue: DemoHooks.expandAllEffects ? Set(effects.map(\.id))
+                                        : Set(effects.prefix(1).map(\.id)))
+    }
 
     /// The inset List draws its rows this far in from its own edge on macOS (measured on
     /// the macOS 26 SDK). Row insets make up the rest, so every row's content lands
@@ -406,10 +414,15 @@ struct EffectStackView: View {
         // with a logged error on every layout.)
         .environment(\.defaultMinListRowHeight, 1)
         .scrollContentBackground(.hidden)
-        .onAppear {
-            // Open the first effect so the main knobs are right there.
-            if expanded.isEmpty, let first = preset.effects.first { expanded = [first.id] }
-            if DemoHooks.expandAllEffects { expanded = Set(preset.effects.map(\.id)) }   // UI shots / design review
+        .background {   // DEV harness only (ClickProbe): open and close rows as a click does
+            if TileProbe.enabled {
+                Color.clear.onAppear {
+                    TileProbe.toggleEffects = {
+                        guard let first = preset.effects.first?.id else { return }
+                        if expanded.contains(first) { expanded.remove(first) } else { expanded.insert(first) }
+                    }
+                }
+            }
         }
     }
 
@@ -658,16 +671,18 @@ struct BounceLogoSection: View {
         let has = effect.logoFile != nil
         return VStack(alignment: .leading, spacing: layout.inspectorRowGap) {
             InspectorRow(label: "Image") {
-                // The thumbnail beside its buttons; where they'd be cut off (a narrow inspector,
-                // large text), the buttons go under it instead.
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: layout.controlGap) {
-                        thumbnail(has)
-                        VStack(alignment: .leading, spacing: layout.labelGap) { imageButtons(has) }
-                    }
+                // The thumbnail beside its buttons; at large text sizes the buttons go under
+                // it instead. Chosen by the text size, not by measuring (no ViewThatFits): the
+                // buttons are AppKit controls inside the inspector's list — see ColorWellsRow.
+                if layout.prefersStacking || layout.typeSize >= .xxLarge {
                     VStack(alignment: .leading, spacing: layout.labelGap) {
                         thumbnail(has)
                         HStack(spacing: layout.controlGap) { imageButtons(has) }
+                    }
+                } else {
+                    HStack(spacing: layout.controlGap) {
+                        thumbnail(has)
+                        VStack(alignment: .leading, spacing: layout.labelGap) { imageButtons(has) }
                     }
                 }
             }
