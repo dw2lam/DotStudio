@@ -607,7 +607,8 @@ final class WallpaperController: ObservableObject {
         if stateLine != lastLoggedState { lastLoggedState = stateLine; log("state \(stateLine)") }
 
         renderLoop?.update(WallpaperFrameState(canDraw: hard == nil, visible: visible, profile: profile,
-                                               fps: targetFPS, still: still != nil),
+                                               fps: targetFPS, still: still != nil,
+                                               stepFPS: applied.flatMap { WallpaperPacing.steppedFPS($0.preset) }),
                            forceDraw: force)
         updateMusicSubscription()
     }

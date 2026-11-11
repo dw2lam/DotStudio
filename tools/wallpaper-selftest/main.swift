@@ -77,6 +77,11 @@ do {
     check(WallpaperBudget.stillReason(WallpaperSettings(), st) == "Still — Mac is running hot", "hot Mac holds")
     check(WallpaperPacing.divisorRate(target: 20, refresh: 120) == 20 && WallpaperPacing.divisorRate(target: 20, refresh: 60) == 20,
           "20 fps is an exact divisor of 60 and 120 Hz")
+    // Bloom steps its time at 24 fps: drawn at the slowest exact divisor at or above that
+    check(WallpaperPacing.rate(target: 24, step: 24, refresh: 120) == 24 && WallpaperPacing.rate(target: 24, step: 24, refresh: 60) == 30
+          && WallpaperPacing.rate(target: 120, step: 24, refresh: 120) == 24 && WallpaperPacing.rate(target: 20, step: 24, refresh: 60) == 20
+          && WallpaperPacing.rate(target: 24, step: nil, refresh: 60) == 20,
+          "stepped 24 fps: 24 on 120 Hz, 30 on 60 Hz, never skipping a step unless the battery asks for less")
 }
 
 print("time of day")

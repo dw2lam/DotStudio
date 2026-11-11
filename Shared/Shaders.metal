@@ -679,6 +679,7 @@ static inline float3 uniShade(int i, float3 c, float3 n0, float3 rd, float fp, f
 #include "Scenes/ClockKit_funcs.h"
 #include "Scenes/Studio6_funcs.h"
 #include "Scenes/Standby_funcs.h"
+#include "Scenes/Bloom_funcs.h"
 
 // ---------------------------------------------------------------- slideshow source
 
