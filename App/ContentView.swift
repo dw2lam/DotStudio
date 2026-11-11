@@ -49,6 +49,9 @@ struct ContentView: View {
         .navigationTitle(editing?.name ?? "DotStudio")
         .navigationSubtitle(editing.map { $0.isScene ? "Scene" : "Look" } ?? "")
         .frame(minWidth: 880, minHeight: 600)
+        .onReceive(NotificationCenter.default.publisher(for: CrashReporter.safeModeChanged)) { _ in
+            model.objectWillChange.send()   // live previews come back (safe mode ended)
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             model.refreshSetupStatus()   // user may have just picked us in System Settings
             WallpaperSlot.shared.refresh()
@@ -165,6 +168,9 @@ enum DemoHooks {
     static let wallpaperName = env["DOTSTUDIO_DEMO_WALLPAPER_STUB"]
     static let wallpaperStub: WallpaperSlot.Backend? = wallpaperName.map { _ in .memory(initial: nil) }
     static var stillPreviews = env["DOTSTUDIO_DEMO_STILL"] != nil
+    /// Stills instead of live previews: the demo hook, or safe mode after two quick crashes
+    /// (CrashReporter) until "Start Normally".
+    static var livePreviewsPaused: Bool { stillPreviews || CrashReporter.shared.safeMode }
     static var expandAllEffects = env["DOTSTUDIO_DEMO_EXPAND"] == "all"
     static let liveWallpaperName = env["DOTSTUDIO_DEMO_WALLPAPER"]
     static let closeWindow = env["DOTSTUDIO_DEMO_CLOSE_WINDOW"] == "1"

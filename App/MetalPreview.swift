@@ -128,9 +128,12 @@ struct MetalPreview: NSViewRepresentable {
 
         /// Pause while nobody can see it: scrolled out of view, scrolling (its own scroll view),
         /// or its window covered / minimized. Paused, MTKView keeps showing its last frame.
+        /// DEV harness only (ClickProbe): an off-screen window counts as seen.
+        static var probeAssumesVisible = false
+
         private func updateDrawing() {
             var seen = false
-            if let window, window.occlusionState.contains(.visible), !window.isMiniaturized {
+            if let window, Self.probeAssumesVisible || window.occlusionState.contains(.visible), !window.isMiniaturized {
                 seen = !visibleRect.isEmpty
                 if seen, let sv = enclosingScrollView, ScrollActivity.isScrolling,
                    sv.window != nil, ScrollActivity.isScrolling(sv) { seen = false }

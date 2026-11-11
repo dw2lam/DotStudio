@@ -564,7 +564,7 @@ struct ScreensaverCard: View {
             Group {
                 if let p = playing {
                     // Live while the gallery is up front; a still otherwise (no GPU in the background).
-                    if model.editingID == nil && activeState != .inactive && !DemoHooks.stillPreviews {
+                    if model.editingID == nil && activeState != .inactive && !DemoHooks.livePreviewsPaused {
                         // Music as the screensaver would show it (Show music: Corner, or Full
                         // Screen easing in over the style).
                         MetalPreview(preset: p, source: model.library.source,

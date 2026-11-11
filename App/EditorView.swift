@@ -63,13 +63,13 @@ struct EditorView: View {
                 // every edit for nothing. The hero geometry stays on the (black) frame.
                 Color.black
                     .heroGeometry(id, in: hero)
-                if !live || DemoHooks.stillPreviews {
+                if !live || DemoHooks.livePreviewsPaused {
                     StyleThumb(preset: preset)
                         // Gone only once the live view has faded in over it (no dip to black).
                         .transition(.asymmetric(insertion: .identity,
                                                 removal: .opacity.animation(.linear(duration: 0.01).delay(0.6))))
                 }
-                if live && !DemoHooks.stillPreviews {
+                if live && !DemoHooks.livePreviewsPaused {
                     MetalPreview(preset: preset, source: model.library.source,
                                  location: model.locationTuple, store: model.store,
                                  music: model.library.musicSettings)
