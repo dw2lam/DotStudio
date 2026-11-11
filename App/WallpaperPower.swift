@@ -387,6 +387,25 @@ enum WallpaperPacing {
         }
     }
 
+    /// The rate a style steps its own time at, whatever rate it is drawn at (Bloom keeps a
+    /// 24 fps film cadence: Bloom_funcs.h), else nil. See `rate(target:step:refresh:)`.
+    static func steppedFPS(_ preset: Preset) -> Double? {
+        guard let first = preset.effects.first(where: \.enabled) else { return nil }
+        return first.kind == .flowerBloom ? 24 : nil
+    }
+
+    /// The display-link rate for `target` fps on a `refresh` Hz display. A style that steps its
+    /// own time at `step` fps, when the budget allows that many, draws at the slowest exact
+    /// divisor of the refresh at or above it — 24 on 120 Hz, 30 on 60 Hz, 25 on 50 Hz — so no
+    /// step is ever skipped (20 on 60 Hz would drop one in six) and none is drawn twice over
+    /// for nothing (Smooth's 120). Anything else: `divisorRate`.
+    static func rate(target: Double, step: Double?, refresh: Double) -> Double {
+        guard let step, step > 0, refresh > 0, target >= step - 0.01 else {
+            return divisorRate(target: target, refresh: refresh)
+        }
+        return refresh / max((refresh / step + 1e-6).rounded(.down), 1)
+    }
+
     /// The exact divisor of `refresh` closest to `target` (30 on 60/120 Hz, 25 on 50 Hz,
     /// 36 on 144 Hz...), so every frame is held for the same number of refreshes.
     static func divisorRate(target: Double, refresh: Double) -> Double {

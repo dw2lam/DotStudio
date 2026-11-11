@@ -112,6 +112,7 @@ enum EffectKind: String, Codable, CaseIterable {
     case standbyClock, minimalClock, watchClock               // StandBy pack (Clocks) 75–77 (Standby.swift)
 
     case meadow                                               // Meadow pack (Nature) 78 (Meadow.swift)
+    case flowerBloom                                          // Bloom pack (Nature) 79 (Bloom.swift)
 
     var displayName: String {
         switch self {

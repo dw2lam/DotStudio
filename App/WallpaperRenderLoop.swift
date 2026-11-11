@@ -34,6 +34,8 @@ struct WallpaperFrameState: Equatable {
     var fps: Double = 30
     /// Hot Mac / battery freeze: motion holds; a clock turns over once a minute.
     var still = false
+    /// The rate the style steps its own time at (WallpaperPacing.steppedFPS), if it does.
+    var stepFPS: Double? = nil
 }
 
 /// Per-display geometry, measured on the main thread.
@@ -325,7 +327,7 @@ final class WallpaperRenderLoop {
         let canDraw = state.canDraw
         for s in surfaces.values {
             if case .continuous(let fps) = p, canDraw, state.visible.contains(s.id) {
-                runLink(s, at: WallpaperPacing.divisorRate(target: fps, refresh: s.config.refreshRate))
+                runLink(s, at: WallpaperPacing.rate(target: fps, step: state.stepFPS, refresh: s.config.refreshRate))
             } else {
                 pauseLink(s)
             }

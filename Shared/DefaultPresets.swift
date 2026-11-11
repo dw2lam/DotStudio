@@ -123,7 +123,8 @@ enum DefaultPresets {
         "Liquid Chrome", "Aurora", "Universe", "Topography", "Zen Garden", "Black Hole", "Afterglow",
         "StandBy", "Minimal", "Chronometer", "Flip Clock", "Word Clock", "Window Light",
         "Lava Lamp", "Currents",
-        "Golden Hour", "Tidewater", "Shallows", "Meadow", "Rolling Hills", "Hillside", "Tall Grass", "Night Sky", "First Snow",
+        "Golden Hour", "Tidewater", "Shallows", "Meadow", "Tall Grass", "Night Sky", "First Snow",
+        "Blue Bloom", "Baby's Breath",
         "Neon Horizon", "Light Ribbons", "Bounce",
         // Looks
         "Film", "Riso Duotone", "Cyanotype", "Floyd–Steinberg", "Atkinson", "ASCII", "Amber CRT", "Soft Focus",
