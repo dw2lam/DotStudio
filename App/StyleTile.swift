@@ -758,9 +758,12 @@ enum ActionMenu {
             mi.isEnabled = item.enabled
             menu.addItem(mi)
         }
-        // Screen coordinates (in: nil); the targets live until the menu closes.
-        withExtendedLifetime(targets) {
-            _ = menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
-        }
+        // The targets outlive the menu's tracking (an item's action can arrive after popUp
+        // returns); the next menu replaces them.
+        live = targets
+        // Screen coordinates (in: nil).
+        _ = menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     }
+
+    private static var live: [Target] = []
 }
