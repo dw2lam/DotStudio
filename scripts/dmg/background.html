@@ -1,0 +1,97 @@
+<!doctype html>
+<!--
+  DotStudio installer window background: the source of background.tiff.
+  660x480 pt = the Finder window's content area. Item positions are mirrored from settings.py
+  (ICON_SIZE / ITEMS); keep the two in step.
+
+  Re-render (headless Chromium; needs network for the Almarai webfont, the site's typeface):
+    1x: screenshot .win at deviceScaleFactor 1 -> 660x480 PNG
+    2x: screenshot .win at deviceScaleFactor 2 -> 1320x960 PNG
+  then: swift scripts/dmg/hidpi-tiff.swift <1x.png> <2x.png> scripts/dmg/background.tiff
+
+  #preview=dark|light&app=<png>&folder=<png>&doc=<png> adds the icons and the names Finder draws
+  (white in Dark Mode, black in Light Mode) for an offscreen look at the finished window.
+-->
+<html><head><meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Almarai:wght@400;700&display=block" rel="stylesheet">
+<style>
+  :root { --cream: #E1E0CC; --ink: #0b0b0c; }
+  html, body { margin: 0; padding: 0; background: #000; }
+  .win { position: relative; width: 660px; height: 480px; overflow: hidden; background: var(--ink);
+         font-family: Almarai, -apple-system, sans-serif; color: var(--cream);
+         -webkit-font-smoothing: antialiased; }
+  .abs { position: absolute; }
+
+  /* Wordmark: the site hero's tight, medium-weight cream type. */
+  .word { left: 30px; top: 28px; font-size: 50px; font-weight: 400; letter-spacing: -0.07em; line-height: .85; }
+  .tag  { right: 30px; top: 32px; font-size: 11px; line-height: 1.4; text-align: right; color: rgba(225,224,204,.58); }
+
+  /* Letterboxed band of a real scene render (Liquid Chrome) behind the drag pair. */
+  .band { left: 0; right: 0; top: 88px; height: 214px; overflow: hidden;
+          -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 22%, #000 74%, transparent 100%); }
+  .band img { position: absolute; left: -70px; top: -236px; width: 800px; filter: brightness(.74) saturate(1.35) contrast(1.05); }
+  .band .side { inset: 0; background: linear-gradient(90deg, rgba(11,11,12,.55), rgba(11,11,12,0) 22%, rgba(11,11,12,0) 78%, rgba(11,11,12,.55)); }
+
+  /* Name plates: Finder draws each item's name itself (black in Light Mode, white in Dark Mode),
+     so every name sits on a mid-grey plate (relative luminance ~0.18) that reads either way. */
+  .plate { width: 124px; height: 24px; margin-left: -62px; border-radius: 12px;
+           background: rgba(118,117,110,.9); box-shadow: inset 0 0 0 .5px rgba(255,255,255,.14), 0 1px 10px rgba(0,0,0,.25); }
+
+  /* First-launch hint, beside the How to Install document. */
+  .hint { left: 186px; top: 334px; width: 440px; font-size: 11px; line-height: 1.55; letter-spacing: .01em; color: rgba(225,224,204,.6); }
+  .hint .path { font-size: 12.5px; font-weight: 700; color: var(--cream); letter-spacing: 0; }
+  .vr { left: 170px; top: 326px; width: 1px; height: 72px; background: rgba(225,224,204,.16); }
+
+  .grain { inset: 0; opacity: .28; mix-blend-mode: overlay;
+           background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+           background-size: 240px 240px; }
+
+  /* preview only */
+  .label { width: 160px; margin-left: -80px; text-align: center; font: 13px -apple-system, BlinkMacSystemFont, sans-serif; }
+</style></head>
+<body>
+<div class="win" id="win">
+  <div class="abs band"><img src="scene.jpg" alt=""><div class="abs side"></div></div>
+  <div class="abs word">DotStudio</div>
+  <div class="abs tag">Living screensavers<br>for your Mac</div>
+  <div id="cue"></div>
+  <div class="abs vr"></div>
+  <div class="abs hint">
+    First open needs one approval:<br>
+    <span class="path">System Settings › Privacy &amp; Security › Open Anyway</span><br>
+    Every step is in How to Install, on the left.
+  </div>
+  <div class="abs grain"></div>
+</div>
+<script>
+  // Mirrors settings.py: icon centres in window points, and the icon size.
+  const ICON = 112;
+  const APP = { x: 170, y: 184 }, DST = { x: 490, y: 184 }, DOC = { x: 92, y: 360 };
+  const PLATE_TOP = ICON / 2 + 2;   // plate spans the line Finder draws the name on, just under the icon
+  const cue = document.getElementById("cue");
+  let h = "";
+  // Drag cue: a run of dots (the "Dot" in DotStudio) that grow and brighten toward Applications.
+  const x0 = APP.x + ICON / 2 + 26, x1 = DST.x - ICON / 2 - 22, n = 11;
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1), x = x0 + (x1 - x0 - 16) * t, r = 1.1 + 1.5 * t, a = .3 + .7 * t;
+    h += `<div class="abs" style="left:${x - r}px;top:${APP.y - r}px;width:${2 * r}px;height:${2 * r}px;border-radius:50%;background:rgba(225,224,204,${a});box-shadow:0 0 6px rgba(0,0,0,.55)"></div>`;
+  }
+  h += `<svg class="abs" style="left:${x1 - 12}px;top:${APP.y - 8}px;filter:drop-shadow(0 0 4px rgba(0,0,0,.6))" width="14" height="16" viewBox="0 0 14 16"><path d="M3 2 L11 8 L3 14" fill="none" stroke="#E1E0CC" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  for (const p of [APP, DST, DOC]) h += `<div class="abs plate" style="left:${p.x}px;top:${p.y + PLATE_TOP}px"></div>`;
+  cue.innerHTML = h;
+
+  const q = new URLSearchParams(location.hash.slice(1));
+  const mode = q.get("preview");
+  if (mode) {
+    const ink = mode === "dark" ? "#fff" : "#000";
+    let p = "";
+    for (const [pt, src, name] of [[APP, q.get("app"), "DotStudio"], [DST, q.get("folder"), "Applications"], [DOC, q.get("doc"), "How to Install"]]) {
+      p += `<img class="abs" src="${src}" style="left:${pt.x - ICON / 2}px;top:${pt.y - ICON / 2}px;width:${ICON}px;height:${ICON}px">`;
+      p += `<div class="abs label" style="left:${pt.x}px;top:${pt.y + PLATE_TOP + 4}px;color:${ink}">${name}</div>`;
+    }
+    document.getElementById("win").insertAdjacentHTML("beforeend", p);
+  }
+</script>
+</body></html>
