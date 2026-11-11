@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.4.5 — Meadow and Bloom
+
+### New
+- **Meadow.** Wildflowers at your feet and rolling hills under big summer clouds, with a fine
+  film grain. Follows the real sun, moon and your weather. Also **Tall Grass**: low in long
+  grass, backlit at golden hour. (Rolling Hills and Hillside are in File › Add Built-in Styles.)
+- **Bloom.** A single flower swaying in a breeze, set in tiny letters or glowing LED dots at
+  24 fps: **Blue Bloom** (a blue poppy on a deep-to-powder blue sky) and **Baby's Breath**.
+  White Anemone is in Add Built-in Styles.
+
+### Changed
+- **Tidewater is now Golden Hour.** They were the same scene; Follow the Sun is Golden Hour's
+  setting. An untouched Tidewater leaves your library, and if you were using it, Golden Hour
+  takes its place with Follow the Sun on. An edited Tidewater stays.
+
+### Fixed
+- More of the layouts that could crash on macOS 26 and earlier (Settings rows, banners, the
+  filter chips) no longer swap controls while the window lays itself out.
+
 ## 1.4.4 — Stability
 
 ### Fixed

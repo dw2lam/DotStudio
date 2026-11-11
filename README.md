@@ -35,7 +35,9 @@ the app. Native, local, free.
   Word Clock and Window Light.
 - **Bounce.** A logo drifts corner to corner, changing colour on every bounce, and every couple
   of minutes lands exactly in a corner. Use the DotStudio mark, a word, or your own logo.
-- **Live skies.** Tidewater follows the real sun and moon; the sea scenes follow your local
+- **Meadow and Bloom.** Rolling wildflower hills and tall grass that follow your sky and weather,
+  and a single flower set in tiny letters or LED dots at 24 fps.
+- **Live skies.** Golden Hour can follow the real sun and moon; the sea scenes follow your local
   weather — cloud, rain, storms, fog and snow.
 - **What's playing.** Spotify or Apple Music over any screensaver — in a corner, or full screen
   in Album, Stage or Cover layouts over the album's living art.
@@ -58,7 +60,7 @@ Every frame here is rendered by the app.
 | | | |
 |:--:|:--:|:--:|
 | <img src="docs/gallery/liquid-chrome.jpg" alt="Liquid Chrome"><br>**Liquid Chrome** | <img src="docs/gallery/topography.jpg" alt="Topography"><br>**Topography** | <img src="docs/gallery/universe.jpg" alt="Universe"><br>**Universe** |
-| <img src="docs/gallery/zen-garden.jpg" alt="Zen Garden"><br>**Zen Garden** | <img src="docs/gallery/tidewater.jpg" alt="Tidewater at sunset"><br>**Tidewater** | <img src="docs/gallery/aurora.jpg" alt="Aurora"><br>**Aurora** |
+| <img src="docs/gallery/zen-garden.jpg" alt="Zen Garden"><br>**Zen Garden** | <img src="docs/gallery/tidewater.jpg" alt="Golden Hour at sunset"><br>**Golden Hour** | <img src="docs/gallery/aurora.jpg" alt="Aurora"><br>**Aurora** |
 | <img src="docs/gallery/black-hole.jpg" alt="Black Hole"><br>**Black Hole** | <img src="docs/gallery/standby.jpg" alt="StandBy clock"><br>**StandBy** | <img src="docs/gallery/chronometer.jpg" alt="Chronometer clock"><br>**Chronometer** |
 | <img src="docs/gallery/minimal.jpg" alt="Minimal clock"><br>**Minimal** | <img src="docs/gallery/bounce.jpg" alt="Bounce with the DotStudio logo"><br>**Bounce** | <img src="docs/gallery/word-clock.jpg" alt="Word Clock"><br>**Word Clock** |
 

@@ -34,13 +34,13 @@ const TILES: Tile[] = [
     aspect: "aspect-[16/10]",
   },
   {
-    name: "Tidewater",
+    name: "Golden Hour",
     blurb: "Your sky, live: the real sun, moon and weather, snow included.",
     cycle: [
-      { src: "/media/scenes/tidewater-dusk.webp", alt: "Tidewater at dusk, a crescent moon over the sea" },
-      { src: "/media/scenes/tidewater-night.webp", alt: "Tidewater at night, moonlight on the water" },
-      { src: "/media/scenes/tidewater-morning.webp", alt: "Tidewater in the morning, low sun through broken cloud" },
-      { src: "/media/scenes/tidewater-snow.webp", alt: "Tidewater in falling snow" },
+      { src: "/media/scenes/tidewater-dusk.webp", alt: "Golden Hour at dusk, a crescent moon over the sea" },
+      { src: "/media/scenes/tidewater-night.webp", alt: "Golden Hour at night, moonlight on the water" },
+      { src: "/media/scenes/tidewater-morning.webp", alt: "Golden Hour in the morning, low sun through broken cloud" },
+      { src: "/media/scenes/tidewater-snow.webp", alt: "Golden Hour in falling snow" },
     ],
     span: "md:col-span-4",
     aspect: "aspect-[16/10]",

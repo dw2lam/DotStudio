@@ -114,6 +114,13 @@ final class WallpaperController: ObservableObject {
         }
     }
 
+    /// The style wallpaper.json picks (nil: none, or no wallpaper.json yet). For migrations.
+    static func pickedPresetID(storeDir: URL) -> UUID? {
+        let url = storeDir.appendingPathComponent("wallpaper.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return WallpaperSettings.load(from: url).presetID
+    }
+
     /// 1.4.2 retirement (DefaultPresets.retireUntouched, run by AppModel.migrate before `attach`):
     /// a wallpaper showing a removed style moves to its replacement. Rewrites wallpaper.json in
     /// `storeDir` only when its pick was removed; returns that move.

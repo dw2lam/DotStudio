@@ -73,7 +73,8 @@ final class AppModel: ObservableObject {
     init() {
         switch store.loadLibrary() {
         case .loaded(let loaded):
-            let (migrated, retirement) = AppModel.migrateReporting(loaded)
+            let (migrated, retirement) = AppModel.migrateReporting(
+                loaded, wallpaperPick: WallpaperController.pickedPresetID(storeDir: store.baseDir))
             library = migrated
             // The wallpaper's own pick (wallpaper.json, read by WallpaperController.attach
             // after this) follows a style the 1.4.2 retirement removed.
@@ -180,7 +181,10 @@ final class AppModel: ObservableObject {
     static func migrate(_ lib: Library) -> Library { migrateReporting(lib).library }
 
     /// migrate, plus what the 1.4.2 retirement did (nil: it had already run on this library).
-    static func migrateReporting(_ lib: Library) -> (library: Library, retirement: DefaultPresets.Retirement?) {
+    /// `wallpaperPick`: the live wallpaper's own style (wallpaper.json), so the 1.4.5 Tidewater
+    /// fold knows it was in use there too.
+    static func migrateReporting(_ lib: Library, wallpaperPick: UUID? = nil)
+        -> (library: Library, retirement: DefaultPresets.Retirement?) {
         var lib = lib
         if lib.version < 2 {
             // Prefer the active style's old source, else the first non-gradient one.
@@ -238,6 +242,21 @@ final class AppModel: ObservableObject {
             retirement = report
             lib.seenBuiltIns = (lib.seenBuiltIns ?? []) + [DefaultPresets.retirementMarker]
         }
+        // 1.4.5, once per library: Tidewater (Golden Hour with Follow the Sun on) folds into
+        // Golden Hour. Its moves join the report, so the wallpaper's pick follows them too.
+        if !(lib.seenBuiltIns ?? []).contains(DefaultPresets.tidewaterMarker) {
+            let (folded, report) = DefaultPresets.foldTidewater(lib, wallpaperPick: wallpaperPick)
+            lib = folded
+            lib.seenBuiltIns = (lib.seenBuiltIns ?? []) + [DefaultPresets.tidewaterMarker]
+            if !report.removed.isEmpty || !report.remapped.isEmpty || !report.kept.isEmpty {
+                var r = retirement ?? DefaultPresets.Retirement()
+                r.removed += report.removed
+                r.kept += report.kept
+                r.remapped += report.remapped
+                r.replacements.merge(report.replacements) { a, _ in a }
+                retirement = r
+            }
+        }
         if lib.version < 4 { lib.version = 4 }
         return (lib, retirement)
     }
@@ -247,10 +266,11 @@ final class AppModel: ObservableObject {
     /// Featured built-ins every library gets once, even one from before seenBuiltIns existed.
     /// (Now Playing was one until music became a presentation over any style — it's retired:
     /// never added, and a library that has it keeps it.)
-    // The 1.4 highlights 1.3 users get once on upgrade (Zen Garden, Tidewater, Shallows), Bounce
+    // The 1.4 highlights 1.3 users get once on upgrade (Zen Garden, Shallows), Bounce
     // (new after 1.4) and the 1.4.2 clocks (a 1.4 library gets those as new featured built-ins).
-    // Sunray was one until 1.4.2 retired it (DefaultPresets.retiredStyles).
-    static let promotedBuiltIns = ["Zen Garden", "Tidewater", "Shallows", "Bounce",
+    // Sunray was one until 1.4.2 retired it (DefaultPresets.retiredStyles); Tidewater until 1.4.5
+    // folded it into Golden Hour (DefaultPresets.foldTidewater).
+    static let promotedBuiltIns = ["Zen Garden", "Shallows", "Bounce",
                                    "StandBy", "Minimal", "Chronometer", "Meadow", "Tall Grass",
                                    "Blue Bloom", "Baby's Breath"]
 
@@ -304,7 +324,8 @@ final class AppModel: ObservableObject {
         let result: Library
         switch store.loadLibrary() {
         case .loaded(let before):
-            let (migrated, retirement) = migrateReporting(before)
+            let (migrated, retirement) = migrateReporting(
+                before, wallpaperPick: WallpaperController.pickedPresetID(storeDir: store.baseDir))
             result = migrated
             let old = Set(before.presets.map(\.name))
             out += "version: \(before.version) → \(result.version)\n"

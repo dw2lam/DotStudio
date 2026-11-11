@@ -123,7 +123,7 @@ enum DefaultPresets {
         "Liquid Chrome", "Aurora", "Universe", "Topography", "Zen Garden", "Black Hole", "Afterglow",
         "StandBy", "Minimal", "Chronometer", "Flip Clock", "Word Clock", "Window Light",
         "Lava Lamp", "Currents",
-        "Golden Hour", "Tidewater", "Shallows", "Meadow", "Tall Grass", "Night Sky", "First Snow",
+        "Golden Hour", "Shallows", "Meadow", "Tall Grass", "Night Sky", "First Snow",
         "Blue Bloom", "Baby's Breath",
         "Neon Horizon", "Light Ribbons", "Bounce",
         // Looks
@@ -139,7 +139,7 @@ enum DefaultPresets {
     /// Never offered or added; a library that already has one keeps it working (except an
     /// untouched copy of a `retiredStyles` one, which retireUntouched removes once).
     static var retired: Set<String> {
-        Set(SceneCatalog.musicPresets.map(\.name)).union(retiredStyles.keys)
+        Set(SceneCatalog.musicPresets.map(\.name)).union(retiredStyles.keys).union(["Tidewater"])
     }
 
     // MARK: 1.4.2 retirement
@@ -209,6 +209,63 @@ enum DefaultPresets {
     /// day/night schedule — to its replacement. Pure; AppModel.migrate runs it once per library
     /// (`retirementMarker`), after offerNewBuiltIns, so a replacement new in this version
     /// (Chronometer) is already there. The wallpaper's pick (App-only) follows `replacements`.
+    // MARK: 1.4.5 — Tidewater folds into Golden Hour
+
+    /// Tidewater was Golden Hour with Follow the Sun on — the same scene twice under two names.
+    /// From 1.4.5 there's one, Golden Hour; Follow the Sun is its setting. Recorded in
+    /// `seenBuiltIns` once a library has been through foldTidewater.
+    static let tidewaterMarker = "folded-tidewater-1.4.5"
+
+    /// 1.4.5, once per library: an UNTOUCHED Tidewater leaves (an edited one stays, renders as
+    /// before). If it was in use — the active style, the day/night schedule, the rotation, or
+    /// `wallpaperPick` — what pointed at it moves to Golden Hour, which turns Follow the Sun on,
+    /// so the screen keeps following the real sky. Without an untouched Golden Hour to take
+    /// over, the Tidewater copy simply becomes "Golden Hour" (same ID, so nothing moves). Pure.
+    static func foldTidewater(_ lib: Library, wallpaperPick: UUID?) -> (Library, Retirement) {
+        var lib = lib
+        var r = Retirement()
+        guard let tideDef = builtInDefinition("Tidewater"), let goldDef = builtInDefinition("Golden Hour"),
+              let t = lib.presets.firstIndex(where: { $0.name == "Tidewater" })
+        else { return (lib, r) }
+        guard isUntouched(lib.presets[t], as: tideDef) else { r.kept.append("Tidewater"); return (lib, r) }
+        let tid = lib.presets[t].id
+        let inUse = lib.activeID == tid || wallpaperPick == tid
+            || lib.schedule?.dayPresetID == tid || lib.schedule?.nightPresetID == tid
+            || (lib.rotation?.presetIDs ?? []).contains(tid)
+
+        guard let g = lib.presets.firstIndex(where: { $0.name == "Golden Hour" }) else {
+            lib.presets[t].name = "Golden Hour"
+            r.remapped.append("renamed: Tidewater → Golden Hour")
+            return (lib, r)
+        }
+        if inUse && !isUntouched(lib.presets[g], as: goldDef) {
+            return (lib, r)   // the user's own Golden Hour isn't ours to change: keep Tidewater
+        }
+        let gid = lib.presets[g].id
+        if inUse {
+            for i in lib.presets[g].effects.indices where lib.presets[g].effects[i].kind == .oceanHorizon {
+                lib.presets[g].effects[i].params["live"] = 1
+            }
+            r.remapped.append("Golden Hour: Follow the Sun on")
+        }
+        lib.presets.remove(at: t)
+        r.removed.append("Tidewater")
+        r.replacements.updateValue(gid, forKey: tid)
+        if lib.activeID == tid { lib.activeID = gid; r.remapped.append("active: Tidewater → Golden Hour") }
+        if var s = lib.schedule {
+            if s.dayPresetID == tid { s.dayPresetID = gid; r.remapped.append("day: Tidewater → Golden Hour") }
+            if s.nightPresetID == tid { s.nightPresetID = gid; r.remapped.append("night: Tidewater → Golden Hour") }
+            lib.schedule = s
+        }
+        if var rot = lib.rotation, var ids = rot.presetIDs, ids.contains(tid) {
+            ids = ids.contains(gid) ? ids.filter { $0 != tid } : ids.map { $0 == tid ? gid : $0 }
+            rot.presetIDs = ids
+            lib.rotation = rot
+            r.remapped.append("rotation: Tidewater → Golden Hour")
+        }
+        return (lib, r)
+    }
+
     static func retireUntouched(_ lib: Library) -> (Library, Retirement) {
         var lib = lib
         var r = Retirement()

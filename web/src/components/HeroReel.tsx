@@ -21,7 +21,7 @@ type Scene = { loop: string; tall: string; name: string };
 
 const SCENES: Scene[] = [
   { loop: "liquid", tall: "hero-liquid-p", name: "Liquid Chrome" },
-  { loop: "hero-tidewater", tall: "hero-tidewater-p", name: "Tidewater" },
+  { loop: "hero-tidewater", tall: "hero-tidewater-p", name: "Golden Hour" },
   { loop: "hero-blackhole", tall: "hero-blackhole-p", name: "Black Hole" },
   { loop: "hero-universe", tall: "hero-universe-p", name: "Universe" },
 ];
@@ -37,7 +37,7 @@ const FADE_REDUCED = 2400;
 const clip = (s: Scene, tall: boolean) => `/media/loops/${tall ? s.tall : s.loop}`;
 
 export const HERO_REEL_DESCRIPTION =
-  "Scenes rendered by DotStudio, crossfading in turn: Liquid Chrome, Tidewater under a live sunset sky, Black Hole and Universe.";
+  "Scenes rendered by DotStudio, crossfading in turn: Liquid Chrome, Golden Hour under a live sunset sky, Black Hole and Universe.";
 
 export function HeroReel() {
   const reduced = useReducedMotion() ?? false;

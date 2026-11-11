@@ -4,7 +4,7 @@ import { Reveal } from "../components/Reveal";
 import { SectionHeader } from "../components/SectionHeader";
 
 /*
- * Live sky: Tidewater rendered by the app (tools/gallery, Follow the Sun, San Francisco,
+ * Live sky: Golden Hour rendered by the app (tools/gallery, Follow the Sun, San Francisco,
  * 24 Nov 2026 — a near-full moon) at four times of day under six weathers. The visitor
  * picks a time and a weather; until they do, the day plays through on its own.
  */
@@ -113,7 +113,7 @@ export function LiveSky() {
       <div className="mx-auto max-w-7xl">
         <SectionHeader eyebrow="Live Sky" title="Your sky, live.">
           <p className="mt-6 max-w-2xl text-xs leading-relaxed text-primary/70 sm:text-sm md:text-base">
-            Tidewater follows the real sun, moon and weather where you are.
+            Turn on Follow the Sun and Golden Hour tracks the real sun, moon and weather where you are.
           </p>
         </SectionHeader>
 
@@ -127,7 +127,7 @@ export function LiveSky() {
                 <img
                   key={url}
                   src={url}
-                  alt={url === active ? `Tidewater at ${t.name.toLowerCase()}, ${w.name.toLowerCase()}` : ""}
+                  alt={url === active ? `Golden Hour at ${t.name.toLowerCase()}, ${w.name.toLowerCase()}` : ""}
                   width={1600}
                   height={1000}
                   loading={url === seen[0] ? "lazy" : "eager"}
@@ -184,7 +184,7 @@ export function LiveSky() {
               />
             </div>
             <figcaption className="sr-only">
-              Tidewater, rendered by DotStudio for San Francisco at four times of day and in six kinds of weather.
+              Golden Hour, rendered by DotStudio for San Francisco at four times of day and in six kinds of weather.
             </figcaption>
           </figure>
 
