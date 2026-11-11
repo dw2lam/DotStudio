@@ -379,6 +379,8 @@ enum WallpaperPacing {
                 return (inst.params["live"] ?? 0) > 0.5
             case .windowLight:
                 return (inst.params["follow"] ?? 1) > 0.5
+            case .meadow:
+                return (inst.params["live"] ?? 1) > 0.5
             default:
                 return false
             }

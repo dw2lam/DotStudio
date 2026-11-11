@@ -1221,7 +1221,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             let target: PassTarget = isLast ? final : .texture(i % 2 == 0 ? pingA : pingB)
 
             // The pass's effect id (as packed below): its own pipeline if it has one, else the
-            // über-shader. (Ocean Horizon and Shallows: WeatherLink.fill binds theirs.)
+            // über-shader. (Ocean Horizon, Shallows, Meadow: WeatherLink.fill binds theirs.)
             let effectID: Int32 = i == 0 ? (useGradient ? 1 : 0) : serialBlit ? 38
                 : packed?.count == effects.count ? packed![i - 1].effect : inst!.kind.shaderID
             guard let pso = passPipeline(effectID), let enc = makeEncoder(cmd, target) else { continue }
@@ -1361,7 +1361,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     }
 
     // MARK: Live sky ("Follow the Sun": Ocean Horizon, Shallows, Pleats, Dichroic, Zen Garden; Window Light;
-    // StandBy's Auto night mode, Chronometer's Auto lume)
+    // StandBy's Auto night mode, Chronometer's Auto lume; Meadow, which always has a sky: fixedSky)
 
     /// Fills u.sun / u.moon / u.sky for a scene following the real sun (Ocean Horizon, Shallows,
     /// Pleats, Dichroic, Zen Garden in "Follow the Sun", Window Light following the sun); leaves
@@ -1375,6 +1375,15 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         case .windowLight: live = (inst.params["follow"] ?? 1) > 0.5
         case .standbyClock: live = Int((inst.params["night"] ?? 0).rounded()) == 0   // Night Mode: Auto
         case .watchClock: live = (inst.params["lume"] ?? 0) < 0.5                     // Lume: Auto
+        case .meadow:                            // always a sky: the real one, or a fixed hour's
+            live = (inst.params["live"] ?? 1) > 0.5
+            if !live {
+                let lapse = inst.params["lapse"] ?? 0
+                let rate = lapse > 0.05 ? 24.0 / (lapse * 60.0) : 0.0          // simulated h per s
+                let s = fixedSky(hour: (inst.params["hour"] ?? 15.5) + Double(time) * rate)
+                u.sun = s.sun; u.moon = s.moon; u.sky = s.sky
+                return
+            }
         default: live = false
         }
         guard live else { return }
@@ -1383,6 +1392,27 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let date = now.addingTimeInterval(Double(time) * (rate - 1))
         let s = liveSky(at: date, location: location)
         u.sun = s.sun; u.moon = s.moon; u.sky = s.sky
+    }
+
+    /// Meadow's Time of Day (Follow the Sun off): the sun and moon at local solar hour `hour` of a
+    /// midsummer day at 40° N — sunrise ≈ 4:35, sunset ≈ 19:25 — with a waxing gibbous moon (up
+    /// through the evening and into the night). Same packing as liveSky.
+    static func fixedSky(hour: Double) -> (sun: simd_float4, moon: simd_float4, sky: simd_float4) {
+        let d2r = Double.pi / 180
+        let lat = 40 * d2r, decS = 23.0 * d2r, decM = -8.0 * d2r
+        func wrapPi(_ x: Double) -> Double { let a = fmod(fmod(x + .pi, 2 * .pi) + 2 * .pi, 2 * .pi); return a - .pi }
+        func halfArc(_ dec: Double, _ h0: Double) -> Double {
+            acos(max(-1, min(1, (sin(h0) - sin(lat) * sin(dec)) / max(cos(lat) * cos(dec), 1e-9))))
+        }
+        func alt(_ H: Double, _ dec: Double) -> Double { asin(sin(lat) * sin(dec) + cos(lat) * cos(dec) * cos(H)) }
+        let h = fmod(fmod(hour, 24) + 24, 24)
+        let Hs = wrapPi((h - 12) * 15 * d2r)
+        let elong = 2.3                                   // waxing gibbous: 132° east of the sun
+        let Hm = wrapPi(Hs - elong)
+        let raS = 90 * d2r                                // the June solstice sun
+        return (simd_float4(Float(alt(Hs, decS)), Float(Hs), Float(halfArc(decS, -0.833 * d2r)), Float(lat)),
+                simd_float4(Float(alt(Hm, decM)), Float(Hm), Float(halfArc(decM, 0.125 * d2r)), Float(elong)),
+                simd_float4(Float(wrapPi(Hs + raS)), 1, 0, 0))
     }
 
     /// Low-precision sun and moon for `date` (NOAA / Meeus-style mean elements, ~0.01° sun,
