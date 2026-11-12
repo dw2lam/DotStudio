@@ -48,7 +48,7 @@ def build(ctx):
     P = dict(ctx.light)
     # physical units: the diffusers glow at ~1.5 (sky ~0.3-3) and light the cabin to a few hundred lux,
     # which the sun swamps by day; the variant exposure (lighting presets) brings the interior up.
-    P["cabin_lamp"] = 1.5 * P.get("cabin", 1.0) * ctx.params.get("cabin", 1.0)
+    P["cabin_lamp"] = 0.9 * P.get("cabin", 1.0) * ctx.params.get("cabin", 1.0)
     lp = ctx.loop
     speed = PERIOD / lp.seconds
 
@@ -85,8 +85,8 @@ def build(ctx):
 
     pen = None
     if ctx.params.get("penguin", True):
-        pen = peng.build(C_PEN, (car.seat_x(PENGUIN_SEAT) + 0.03, -car.HALF_W + 0.05 + 0.29, car.SEAT_TOP - 0.03),
-                         yaw_deg=-12, color=tuple(ctx.params.get("penguin_color", (0.0, 0.30, 0.47))))
+        pen = peng.build(C_PEN, (car.seat_x(PENGUIN_SEAT) + 0.04, -car.HALF_W + 0.05 + 0.36, car.SEAT_TOP - 0.025),
+                         yaw_deg=-12, color=tuple(ctx.params.get("penguin_color", (0.0, 0.42, 0.56))))
 
     rig = lighting.setup(ctx.scene, C_OUT, ctx.variant, **ctx.params.get("lighting", {}).get(ctx.variant, {}))
     cams = _cameras(C_CAR)
@@ -128,15 +128,16 @@ def build(ctx):
             pen["torso"].rotation_euler = (math.radians(-0.6 * br), math.radians(lat * 0.9), 0)
             pitch, lid = dozing(lp, t)
             pitch += lat * 1.2 + b * 0.6
-            pen["neck"].rotation_euler = (math.radians(-pitch), math.radians(lat * 2.0), math.radians(roll * 1.5))
+            # head bone: x = nod (chin down is negative), y = turn (bone axis), z = lean (world -y)
+            pen["head"].rotation_euler = (math.radians(-0.65 * pitch), math.radians(roll * 1.5), math.radians(-lat * 2.0))
             for l in pen["lids"]:
-                l.rotation_euler = (math.radians(45 - 135 * lid), 0, 0)  # dome up-back = open, forward = shut
+                l.rotation_euler = (math.radians(80 - 170 * lid), 0, 0)  # dome back = open, forward = shut
         if M.get("rain_map") is not None:
             M["rain_map"].inputs["Location"].default_value = (0.0, 0.0, 6.0 * t / lp.seconds)
 
     ids = [r for r, _, _ in rigs.values()] + [rig.sun] + pivots
     if pen:
-        ids += [pen["torso"], pen["neck"]] + pen["lids"]
+        ids += [pen["torso"], (pen["head"], "rotation_euler")] + pen["lids"]
     if not ctx.params.get("static", False):
         lp.bake(ids, frame, props=("location", "rotation_euler", "scale"))
     else:
@@ -171,8 +172,8 @@ def _cameras(C):
         # seated opposite, a little toward the car centre, looking across at the bench and windows
         "wide": dict(frm=(0.0, 1.06, 1.17), to=(-1.15, -1.45, 1.08), lens=26, fstop=5.6, focus=(car.seat_x(0), -1.0, 0.95)),
         # closer on the penguin, longer lens, shallow focus
-        "close": dict(frm=(-1.05, 0.55, 1.08), to=(car.seat_x(0) - 0.05, -1.10, 1.02), lens=50, fstop=2.2,
-                      focus=(car.seat_x(0) + 0.03, -0.95, 1.20)),
+        "close": dict(frm=(-1.05, 0.55, 1.16), to=(car.seat_x(0) - 0.05, -1.10, 1.10), lens=50, fstop=2.2,
+                      focus=(car.seat_x(0) + 0.04, -0.75, 1.22)),
         # standing in the aisle looking down the car
         "aisle": dict(frm=(1.6, 0.35, 1.55), to=(-3.0, -0.9, 1.05), lens=24, fstop=5.6, focus=(car.seat_x(0), -1.0, 1.0)),
     }
