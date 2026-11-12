@@ -64,6 +64,13 @@ def setup(scene, engine="cycles", res=(1600, 1000), samples=None, exposure=0.0, 
         cy.sample_clamp_indirect = 10.0
         cy.caustics_reflective = cy.caustics_refractive = False
         cy.blur_glossy = 1.0
+        # memory: tile the frame and cap texture size (a 24 GB Mac shares RAM with the GPU)
+        cy.use_auto_tile = True
+        cy.tile_size = 1024
+        try:
+            cy.texture_limit_render = "2048"
+        except Exception:
+            pass
         try:
             cy.use_light_tree = True
         except Exception:

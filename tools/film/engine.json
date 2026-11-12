@@ -1,0 +1,19 @@
+{
+  "id": "film",
+  "kind": "film",
+  "name": "Film — prerendered photoreal loops",
+  "version": "0.1.0",
+  "requires": {"blender": ">=5.1", "python3": ">=3.10", "ffmpeg": ">=6", "pillow": "for template textures"},
+  "entry": "run.py",
+  "cli": "Blender -b --factory-startup --python run.py -- SPEC.json (--stills DIR | --still FILE | --anim DIR [--frames A-B] | --build-sequence DIR) [--variant V] [--camera C] [--engine cycles|eevee] [--res WxH] [--samples N] [--no-post]",
+  "protocol": {
+    "progress": "lines 'PROGRESS {json}': stage fetch|build|still|sample|frame, done, of, eta_s",
+    "result": "final line 'RESULT {json}': ok, outputs, timings | ok=false, error"
+  },
+  "encode": "python3 -I dsfilm/encode.py FRAMES_DIR OUT_BASE  ->  OUT_BASE.mov (HEVC main10 hvc1) + OUT_BASE-preview.mp4",
+  "fetch": "python3 -I fetch.py <template>",
+  "templates": ["commute"],
+  "guide": "guide.md",
+  "cache": "~/Library/Caches/DotStudio-film (override DOTSTUDIO_FILM_CACHE)",
+  "licence_of_assets": "CC0 only (Poly Haven, ambientCG); logged in <cache>/LICENSES.tsv"
+}

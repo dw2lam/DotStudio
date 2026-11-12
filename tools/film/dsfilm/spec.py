@@ -19,6 +19,7 @@ Spec keys (all optional except "scene"):
       "render": {"engine": "cycles", "res": [1600, 1000], "samples": 384, "exposure": 0.0,
                  "motion_blur": true},
       "stills": [{"name": "day_wide", "camera": "wide", "frame": 1, "variant": "day"}, ...],
+      "look": {"bloom": {...}, "halation": {...}, "vignette": 0.22, "grain": {"amount": 0.03}},  # dsfilm.post
       "animation": {"camera": "wide", "engine": "eevee", "res": [2560, 1600], "samples": 64}
     }
 """
@@ -31,7 +32,7 @@ from types import SimpleNamespace
 
 import bpy
 
-from . import lighting, render
+from . import lighting, post, render
 from .loop import Loop
 
 FILM_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -76,4 +77,6 @@ def build(spec, variant=None, engine=None, res=None, samples=None):
     render.setup(scene, engine=engine or rs.get("engine", "cycles"), res=tuple(res or rs.get("res", (1600, 1000))),
                  samples=samples or rs.get("samples"), exposure=rs.get("exposure", 0.0) + light.get("exposure", 0.0),
                  motion_blur=rs.get("motion_blur", True))
+    ctx.look = spec.get("look")
+    post.setup(scene, ctx.look)
     return ctx, out

@@ -2,11 +2,23 @@
   "scene": "commute",
   "variant": "day",
   "loop": {"seconds": 48, "fps": 24},
-  "params": {"penguin_color": [0.0, 0.30, 0.47], "sway": 1.0},
+  "params": {
+    "penguin_color": [0.0, 0.42, 0.56],
+    "sway": 1.0,
+    "cabin": 1.0,
+    "sun_side_height": 0.55,
+    "lighting": {"day": {}, "golden": {}, "night": {}, "rain": {}}
+  },
   "render": {"engine": "cycles", "res": [1600, 1000], "samples": 384, "exposure": 0.0, "motion_blur": true},
+  "look": {
+    "bloom": {"strength": 0.08, "threshold": 3.0, "size": 0.55},
+    "halation": {"strength": 0.35, "threshold": 2.0, "size": 0.22, "tint": [1.0, 0.32, 0.10]},
+    "vignette": 0.22,
+    "grain": {"amount": 0.018}
+  },
   "stills": [
-    {"name": "day_wide", "camera": "wide", "frame": 1, "variant": "day"},
-    {"name": "day_close", "camera": "close", "frame": 1, "variant": "day"},
+    {"name": "day_wide", "camera": "wide", "frame": 1, "variant": "day", "compare": true},
+    {"name": "day_close", "camera": "close", "frame": 445, "variant": "day"},
     {"name": "golden_wide", "camera": "wide", "frame": 1, "variant": "golden"},
     {"name": "night_wide", "camera": "wide", "frame": 1, "variant": "night"},
     {"name": "rain_wide", "camera": "wide", "frame": 1, "variant": "rain"}

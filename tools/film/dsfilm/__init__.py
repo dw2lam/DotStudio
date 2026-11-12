@@ -7,6 +7,7 @@ Modules (import the ones you need; only `encode` and `assets` work outside Blend
     lighting   sky + sun rigs with presets day / golden / night / rain
     loop       seamless-loop maths: periodic waves, scenery strips, per-frame baking
     render     Cycles / EEVEE setup, stills, frame sequences
+    post       the film look (bloom, halation, vignette) baked in the compositor; preview grain
     encode     ffmpeg: HEVC 10-bit loop + H.264 preview, seam check
     spec       scene spec (JSON) -> build -> stills / frames (used by tools/film/run.py)
 

@@ -55,7 +55,7 @@ def make_materials(P, assets_tex):
                                 rough_var=0.04)
     M["steel"] = mt.noise_bump(mt.principled("BrushedSteel", (0.74, 0.74, 0.75), 0.26, 1.0, **{"Anisotropic": 0.6}),
                                scale=6, strength=0.01, stretch=(1, 1, 200), rough_var=0.08)
-    M["ceiling"] = mt.noise_bump(mt.principled("Ceiling", (0.86, 0.86, 0.84), 0.42), scale=120, strength=0.005,
+    M["ceiling"] = mt.noise_bump(mt.principled("Ceiling", (0.78, 0.78, 0.76), 0.45), scale=120, strength=0.005,
                                  rough_var=0.05)
     M["grille"] = mt.principled("Grille", (0.55, 0.56, 0.57), 0.5, 0.6)
     M["lamp"] = mt.emission("LampDiffuser", (1.0, 0.97, 0.93), P["cabin_lamp"])
@@ -77,7 +77,8 @@ def make_materials(P, assets_tex):
     M["black"] = mt.principled("BlackPlastic", (0.025, 0.025, 0.03), 0.25)
     M["exterior"] = mt.principled("CarExterior", (0.70, 0.71, 0.72), 0.3, 0.9)
     rain = P.get("rain", False)
-    g = mt.thin_glass("WindowGlass", rain=rain)
+    # UV-cut tinted glass as on Japanese EMUs: less light through, so the cabin shows in it by day too
+    g = mt.thin_glass("WindowGlass", tint=(0.70, 0.77, 0.74), refl=0.12, smudge=0.06, rain=rain)
     M["glass"], M["rain_map"] = (g if rain else (g, None))
     return M
 
@@ -141,7 +142,7 @@ def _doors(C, M, s, posters):
             no_shadow(g)
             if s < 0:
                 plane_uv(f"Sticker{di}_{k}", 0.12, 0.12, mt.image_mat(f"Sticker{di}{k}", posters["door_sticker"], alpha=True),
-                         C, (lx0 + w / 2, yc - s * 0.019, 0.88), (math.radians(90), 0, 0))
+                         C, (lx0 + w / 2, yc - s * 0.019, 0.88), (math.radians(90), 0, math.pi))  # face +y (the camera), text unmirrored
         box(f"DoorSeal{s}_{di}", (0.024, 0.05, 1.88), (x0 + w, yc, 0.95), M["rubber"], C, bevel=0.008)
         box(f"Threshold{s}_{di}", (x1 - x0, 0.17, 0.012), ((x0 + x1) / 2, s * (HALF_W - 0.03), 0.006), M["steel"], C)
         # yellow edge line on the floor at the door
@@ -236,7 +237,7 @@ def _ceiling_floor(C, M):
 
 def _ads(C, M, posters):
     order = ["tea", "school", "travel", "clinic", "manners", "travel", "tea", "school", "clinic"]
-    tilt = math.radians(40)
+    tilt = math.radians(35)          # the frames lean out from the cove, facing down into the car
     k = 0
     for s in (-1, 1):
         for (x0, x1) in BENCHES:
@@ -252,7 +253,8 @@ def _ads(C, M, posters):
                 wdt = min(h * aspect, pw - 0.08)
                 if aspect < 1:
                     h, wdt = 0.36, 0.36 * aspect
-                rot = (math.radians(90) - tilt, 0, 0) if s < 0 else (math.radians(90) - tilt, 0, math.pi)
+                # face the aisle and a little down; the 180° turn on the far side keeps the print unmirrored
+                rot = (math.radians(90) + tilt, 0, math.pi) if s < 0 else (math.radians(90) + tilt, 0, 0)
                 p = plane_uv(f"Poster{k}", wdt, h, mt.image_mat(f"Poster{k}_{name}", posters[name], rough=0.3, coat=0.5),
                              C, (cx, s * (HALF_W - 0.10), WALL_TOP + 0.14), rot)
                 fr = slab(f"PosterFrame{k}", [rrect(-wdt / 2 - 0.02, -h / 2 - 0.02, wdt / 2 + 0.02, h / 2 + 0.02, 0.012),
@@ -263,15 +265,15 @@ def _ads(C, M, posters):
     for di, (x0, x1) in enumerate(DOORS):
         cx = (x0 + x1) / 2
         plane_uv(f"RouteMap{di}", 0.95, 0.142, mt.image_mat(f"RouteMat{di}", posters["route_map"], rough=0.3, coat=0.5),
-                 C, (cx - 0.28, -HALF_W + 0.012, 2.05), (math.radians(90), 0, 0))
+                 C, (cx - 0.28, -HALF_W + 0.012, 2.05), (math.radians(90), 0, math.pi))
         box(f"ScreenBezel{di}", (0.44, 0.04, 0.17), (cx + 0.45, -HALF_W + 0.02, 2.05), M["black"], C, bevel=0.01)
         plane_uv(f"Screen{di}", 0.40, 0.13, mt.image_mat(f"ScreenMat{di}", posters["screen"], rough=0.08, coat=1.0, emit=1.2),
-                 C, (cx + 0.45, -HALF_W + 0.041, 2.05), (math.radians(90), 0, 0))
+                 C, (cx + 0.45, -HALF_W + 0.041, 2.05), (math.radians(90), 0, math.pi))
     plane_uv("PrioritySign", 0.26, 0.13, mt.image_mat("PriorityMat", posters["priority"], rough=0.3, coat=0.3), C,
-             ((BENCHES[2][0] + BENCHES[2][1]) / 2, -HALF_W + 0.012, 1.935), (math.radians(90), 0, 0))
+             ((BENCHES[2][0] + BENCHES[2][1]) / 2, -HALF_W + 0.012, 1.935), (math.radians(90), 0, math.pi))
     for k, x in enumerate((-5.0, -0.4, 4.0)):
         p = plane_uv(f"Drop{k}", 0.70, 0.25, mt.image_mat(f"DropMat{k}", posters["hanging"], rough=0.35, coat=0.2),
-                     C, (x, 0.0, 2.12), (math.radians(90), 0, 0))
+                     C, (x, 0.0, 2.12), (math.radians(90), 0, math.pi))
         tube(f"DropClip{k}", [(x - 0.36, 0, 2.252), (x + 0.36, 0, 2.252)], 0.006, M["alu"], C)
         tube(f"DropWire{k}", [(x, 0, 2.252), (x, 0, CEIL)], 0.002, M["alu"], C)
 

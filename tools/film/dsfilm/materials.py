@@ -12,6 +12,7 @@ object scale applied (1,1,1) or the texture scales with the object.
     emission(name, color, strength)
     image_mat(name, path, ...)                     # UV-mapped printed sheet (posters, signs)
     thin_glass(name, refl=0.08)                    # window pane: see-through + Fresnel reflection
+    facade_grid(name, wall, pitch, floor_h, ...)   # procedural building wall with windows (lit at night)
 """
 import os
 
@@ -93,10 +94,10 @@ def pbr(name, diff, nor=None, rough=None, size_m=1.0, tint=None, desat=False, va
         mx = nt.new("ShaderNodeMix")
         mx.data_type = "RGBA"
         mx.blend_type = "MULTIPLY"
-        mx.inputs["Factor"].default_value = 1.0
-        ln.new(col, mx.inputs["A"])
-        _set(mx.inputs["B"], tint)
-        col = mx.outputs["Result"]
+        mx.inputs[0].default_value = 1.0          # Mix sockets by index: names repeat per data type
+        ln.new(col, mx.inputs[6])                  # colour A
+        _set(mx.inputs[7], tint)                  # colour B
+        col = mx.outputs[2]
     ln.new(col, b.inputs["Base Color"])
     if rough and os.path.exists(rough):
         r = _tex(nt, ln, rough, "Non-Color", vec, proj)
@@ -198,7 +199,7 @@ def image_mat(name, path, rough=0.35, coat=0.0, emit=0.0, alpha=False):
     return mat
 
 
-def thin_glass(name, tint=(0.93, 0.97, 0.95), refl=0.08, rough=0.0, rain=False):
+def thin_glass(name, tint=(0.93, 0.97, 0.95), refl=0.08, rough=0.0, rain=False, smudge=0.0):
     """A thin pane: Transparent (no refraction offset, as a real thin pane) mixed with a Fresnel
     glossy reflection. Objects using it should also get ``visible_shadow = False`` (geometry.no_shadow)
     so sunlight passes. With rain=True a drop-and-runnel normal is added; returns (mat, mapping) where
@@ -211,6 +212,18 @@ def thin_glass(name, tint=(0.93, 0.97, 0.95), refl=0.08, rough=0.0, rain=False):
     _set(tr.inputs["Color"], tint)
     gl = nt.new("ShaderNodeBsdfGlossy")
     gl.inputs["Roughness"].default_value = rough
+    if smudge:   # faint wipe marks: the reflection blurs a little in patches
+        nz = nt.new("ShaderNodeTexNoise")
+        nz.inputs["Scale"].default_value = 3.0
+        nz.inputs["Detail"].default_value = 6.0
+        ln.new(nt.new("ShaderNodeTexCoord").outputs["Object"], nz.inputs["Vector"])
+        mr = nt.new("ShaderNodeMapRange")
+        mr.inputs["From Min"].default_value = 0.45
+        mr.inputs["From Max"].default_value = 0.75
+        mr.inputs["To Min"].default_value = rough
+        mr.inputs["To Max"].default_value = rough + smudge
+        ln.new(nz.outputs["Fac"], mr.inputs["Value"])
+        ln.new(mr.outputs["Result"], gl.inputs["Roughness"])
     fr = nt.new("ShaderNodeFresnel")
     fr.inputs["IOR"].default_value = 1.52
     mf = nt.new("ShaderNodeMath")
@@ -281,3 +294,82 @@ def _rain(nt, ln, gl, fr, mf):
     ln.new(fr.outputs[0], mm.inputs[2])
     ln.new(mm.outputs[0], mf.inputs[0])
     return mp
+
+
+def facade_grid(name, wall=(0.82, 0.80, 0.76), glass=(0.05, 0.06, 0.07), pitch=3.2, floor_h=3.0, win_w=0.55,
+                win_h=0.50, sill=0.32, curtain=(0.78, 0.74, 0.66), curtain_prob=0.35, lit=0.0, lit_prob=0.45,
+                lit_color=(1.0, 0.78, 0.52), wall_rough=0.8, x_offset=0.0):
+    """A procedural window grid for building walls: no textures, any colour, real-world pitch.
+    Windows repeat every `pitch` m along the wall (object x + y, so any axis-aligned box works) and
+    every `floor_h` m up; `win_w`/`win_h` are fractions of the cell, `sill` where the window starts
+    in it. Each window independently gets curtains (by day) or a lit room (`lit` > 0, at night) by a
+    per-cell hash, and is recessed with a bump. Keep object scale 1."""
+    mat = bpy.data.materials.new(name)
+    nt, ln = _nodes(mat)
+    b = nt.get("Principled BSDF")
+    tc = nt.new("ShaderNodeTexCoord")
+    sep = nt.new("ShaderNodeSeparateXYZ")
+    ln.new(tc.outputs["Object"], sep.inputs[0])
+
+    def m(op, a, bb=None, c=None):
+        n = nt.new("ShaderNodeMath")
+        n.operation = op
+        for i, v in enumerate((a, bb, c)):
+            if v is None:
+                continue
+            if isinstance(v, (int, float)):
+                n.inputs[i].default_value = v
+            else:
+                ln.new(v, n.inputs[i])
+        return n.outputs[0]
+
+    u = m("DIVIDE", m("ADD", m("ADD", sep.outputs["X"], sep.outputs["Y"]), x_offset), pitch)
+    v = m("DIVIDE", sep.outputs["Z"], floor_h)
+    fu, fv = m("FRACT", u), m("FRACT", v)
+    inu = m("LESS_THAN", m("ABSOLUTE", m("SUBTRACT", fu, 0.5)), win_w / 2)
+    inv = m("LESS_THAN", m("ABSOLUTE", m("SUBTRACT", fv, sill + win_h / 2)), win_h / 2)
+    mask = m("MULTIPLY", inu, inv)
+    comb = nt.new("ShaderNodeCombineXYZ")
+    ln.new(m("FLOOR", u), comb.inputs[0])
+    ln.new(m("FLOOR", v), comb.inputs[1])
+    wn = nt.new("ShaderNodeTexWhiteNoise")
+    wn.noise_dimensions = "3D"
+    ln.new(comb.outputs[0], wn.inputs["Vector"])
+    rnd = wn.outputs["Value"]
+    gmix = nt.new("ShaderNodeMix")                       # glass, sometimes with curtains behind it
+    gmix.data_type = "RGBA"
+    ln.new(m("GREATER_THAN", rnd, 1.0 - curtain_prob), gmix.inputs[0])
+    _set(gmix.inputs[6], glass)
+    _set(gmix.inputs[7], tuple(c * 0.55 for c in curtain))
+    nz = nt.new("ShaderNodeTexNoise")                    # weathering on the wall
+    nz.inputs["Scale"].default_value = 0.35
+    ln.new(tc.outputs["Object"], nz.inputs["Vector"])
+    wmix = nt.new("ShaderNodeMix")
+    wmix.data_type = "RGBA"
+    wmix.blend_type = "MULTIPLY"
+    wmix.inputs[0].default_value = 0.35
+    _set(wmix.inputs[6], wall)
+    ln.new(nz.outputs["Color"], wmix.inputs[7])
+    col = nt.new("ShaderNodeMix")
+    col.data_type = "RGBA"
+    ln.new(mask, col.inputs[0])
+    ln.new(wmix.outputs[2], col.inputs[6])
+    ln.new(gmix.outputs[2], col.inputs[7])
+    ln.new(col.outputs[2], b.inputs["Base Color"])
+    rr = nt.new("ShaderNodeMapRange")
+    rr.inputs["To Min"].default_value = wall_rough
+    rr.inputs["To Max"].default_value = 0.06
+    ln.new(mask, rr.inputs["Value"])
+    ln.new(rr.outputs["Result"], b.inputs["Roughness"])
+    bump = nt.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = 0.6
+    bump.inputs["Distance"].default_value = 0.08
+    bump.invert = True
+    ln.new(mask, bump.inputs["Height"])
+    ln.new(bump.outputs["Normal"], b.inputs["Normal"])
+    if lit:
+        on = m("MULTIPLY", mask, m("GREATER_THAN", m("FRACT", m("MULTIPLY", rnd, 7.31)), 1.0 - lit_prob))
+        k = m("MULTIPLY", on, m("MULTIPLY_ADD", rnd, 0.6, 0.4))
+        ln.new(m("MULTIPLY", k, lit), b.inputs["Emission Strength"])
+        _set(b.inputs["Emission Color"], lit_color)
+    return mat

@@ -235,6 +235,53 @@ def append_collection(path, cname):
     return dst.collections[0]
 
 
+class Batch:
+    """Many simple parts merged into one mesh per material — thousands of buildings, windows or
+    balconies cost a handful of objects. Coordinates are the batch object's (keep it at the
+    origin, scale 1) so box-projected / object-space materials stay at real-world scale.
+
+        b = Batch("Houses", coll)
+        b.box((w, d, h), (x, y, z), mat, rot_z=0.0)
+        b.poly(verts, faces, mat, loc=(x, y, z))       # any small mesh (e.g. a gable roof)
+        b.finish()                                      # -> list of objects
+    """
+
+    def __init__(self, name, coll):
+        self.name, self.coll = name, coll
+        self.parts = {}
+
+    def _bm(self, mat):
+        k = mat.name if mat else "_"
+        if k not in self.parts:
+            self.parts[k] = (bmesh.new(), mat)
+        return self.parts[k][0]
+
+    def box(self, size, loc, mat, rot_z=0.0):
+        from mathutils import Matrix
+        m = Matrix.Translation(loc) @ Matrix.Rotation(rot_z, 4, "Z") @ Matrix.Diagonal((*size, 1.0))
+        bmesh.ops.create_cube(self._bm(mat), size=1.0, matrix=m)
+
+    def cylinder(self, r, h, loc, mat, segs=16):
+        from mathutils import Matrix
+        bmesh.ops.create_cone(self._bm(mat), cap_ends=True, segments=segs, radius1=r, radius2=r, depth=h,
+                              matrix=Matrix.Translation(loc))
+
+    def poly(self, verts, faces, mat, loc=(0, 0, 0)):
+        bm = self._bm(mat)
+        vs = [bm.verts.new(Vector(v) + Vector(loc)) for v in verts]
+        for f in faces:
+            bm.faces.new([vs[i] for i in f])
+
+    def finish(self, angle=30):
+        out = []
+        for k, (bm, mat) in self.parts.items():
+            ob = from_bm(f"{self.name}_{k}", bm, mat, self.coll)
+            ob.data.polygons.foreach_set("use_smooth", [False] * len(ob.data.polygons))
+            out.append(ob)
+        self.parts = {}
+        return out
+
+
 def no_shadow(ob):
     ob.visible_shadow = False
     return ob
