@@ -16,11 +16,13 @@ It takes about a minute (macOS 14 or later).
 4. DotStudio opens with a welcome guide. It installs the screensaver
    and walks you through choosing it in
    System Settings › Wallpaper › Screen Saver….
+   Guide Me points at each button in System Settings for you; it asks
+   once for Accessibility permission so it can see where they are.
 
 5. Live wallpaper: turn it on in DotStudio's Wallpaper card. In Low
    Power Mode it shows a still picture and starts moving again when Low
    Power Mode is off. On battery it plays lighter
-   (Settings › Wallpaper › On Battery).
+   (DotStudio › Settings › Live Wallpaper › On Battery).
 
 6. That's it. Updates install themselves from now on, so you only do
    this once.

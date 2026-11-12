@@ -208,3 +208,34 @@ enum SetupWords {
         return "\(seconds) sec"
     }
 }
+
+// MARK: - Where the app runs from (Move to Applications)
+
+/// Whether DotStudio runs from somewhere it should be moved out of. Updates (Sparkle) and the
+/// login item need a stable copy in an Applications folder; a copy opened straight from the
+/// disk image or Downloads runs translocated (a read-only random path) and can do neither.
+enum AppLocation {
+    /// Gatekeeper's App Translocation: a quarantined app opened where it was downloaded.
+    static func isTranslocated(_ bundlePath: String) -> Bool {
+        bundlePath.contains("/AppTranslocation/")
+    }
+
+    /// Inside /Applications or ~/Applications (subfolders included).
+    static func isInApplications(_ bundlePath: String, home: String) -> Bool {
+        let p = (bundlePath as NSString).standardizingPath
+        let user = ((home as NSString).appendingPathComponent("Applications") as NSString).standardizingPath
+        return p.hasPrefix("/Applications/") || p.hasPrefix(user + "/")
+    }
+
+    /// A build product (Xcode, DerivedData, this repo's build/): developers run these in place.
+    static func isDevBuild(_ bundlePath: String) -> Bool {
+        ["/DerivedData/", "/Build/Products/", "/.build/"].contains { bundlePath.contains($0) }
+    }
+
+    /// Offer the move: translocated, or outside both Applications folders (never a build product).
+    static func shouldOfferMove(bundlePath: String, home: String) -> Bool {
+        if isTranslocated(bundlePath) { return true }
+        if isDevBuild(bundlePath) { return false }
+        return !isInApplications(bundlePath, home: home)
+    }
+}

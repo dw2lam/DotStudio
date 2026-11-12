@@ -44,7 +44,8 @@ if !dumps.isEmpty {
 let all = cases()
 for c in all {
     let scene = CoachMatcher.match(c.tree, strings: c.strings)
-    let d = CoachPlanner.decide(scene, chosenOn: c.chosenOn, chosenOf: c.chosenOf, chosenWhenOpened: c.chosenWhenOpened)
+    let d = CoachPlanner.decide(scene, chosenOn: c.chosenOn, chosenOf: c.chosenOf, chosenWhenOpened: c.chosenWhenOpened,
+                                pickedInChooser: c.picked)
     var ok = scene.page == c.page && d.step == c.step && d.situation == c.situation
     if let want = c.ringAround {
         ok = ok && d.kind == c.kind && (d.target.map { $0.insetBy(dx: -2, dy: -2).contains(CGPoint(x: want.midX, y: want.midY))

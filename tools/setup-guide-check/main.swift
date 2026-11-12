@@ -126,5 +126,21 @@ if CommandLine.arguments.count > 1 {
     check(timers.ac != nil || timers.battery != nil, "pmset parses on this Mac")
 }
 
+// MARK: Where the app runs from (Move to Applications)
+
+let home = "/Users/me"
+check(!AppLocation.shouldOfferMove(bundlePath: "/Applications/DotStudio.app", home: home), "location: /Applications → stay")
+check(!AppLocation.shouldOfferMove(bundlePath: "/Applications/Utilities/DotStudio.app", home: home), "location: a subfolder of /Applications → stay")
+check(!AppLocation.shouldOfferMove(bundlePath: "/Users/me/Applications/DotStudio.app", home: home), "location: ~/Applications → stay")
+check(AppLocation.shouldOfferMove(bundlePath: "/private/var/folders/x/T/AppTranslocation/1234-ABCD/d/DotStudio.app", home: home),
+      "location: App Translocation → offer the move")
+check(AppLocation.shouldOfferMove(bundlePath: "/Users/me/Downloads/DotStudio.app", home: home), "location: Downloads → offer the move")
+check(AppLocation.shouldOfferMove(bundlePath: "/Volumes/DotStudio 1.4.5/DotStudio.app", home: home), "location: the disk image → offer the move")
+check(!AppLocation.shouldOfferMove(bundlePath: "/Users/me/Developer/DotStudio/build/Build/Products/Release/DotStudio.app", home: home),
+      "location: a build product → never")
+check(AppLocation.shouldOfferMove(bundlePath: "/ApplicationsOld/DotStudio.app", home: home), "location: a look-alike folder → offer the move")
+check(AppLocation.shouldOfferMove(bundlePath: "/Users/me/Applications Backup/DotStudio.app", home: home),
+      "location: ~/Applications Backup → offer the move")
+
 print(failures == 0 ? "all checks passed" : "\(failures) check(s) FAILED")
 exit(failures == 0 ? 0 : 1)

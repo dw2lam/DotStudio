@@ -185,6 +185,10 @@ struct CoachCard: View {
                         .textRole(.callout)
                         .foregroundStyle(.secondary)
                         .wrapping()
+                    Text("If DotStudio is already listed there, remove it with \u{2212} and add it again.")
+                        .textRole(.caption)
+                        .foregroundStyle(.secondary)
+                        .wrapping()
                 }
             }
             ReflowStack(rowAlignment: .center, columnAlignment: .leading, spacing: layout.controlGap) {
@@ -269,6 +273,12 @@ struct CoachCard: View {
 
     private var statusLine: String? {
         if manual { return "You moved ahead of the guide \u{2014} it follows again when you click in System Settings." }
+        if coach.accessibilityOff {
+            return "Accessibility is turned off for DotStudio, so it can't point at the buttons \u{2014} here's the picture. Turn it on in Privacy & Security \u{203A} Accessibility (if DotStudio is listed, remove it with \u{2212} and add it again)."
+        }
+        if coach.blockedByGuide {
+            return "This guide is covering it \u{2014} here's the picture. Move the guide aside to see the ring."
+        }
         if coach.degraded {
             if let d = coach.lastDump { return "DotStudio can't find this on screen, so here's the picture. (Saved what it sees to \(d).)" }
             return "DotStudio can't find this on screen \u{2014} the picture shows where it is."
@@ -281,12 +291,13 @@ struct CoachCard: View {
 
     private var statusSymbol: String {
         if manual { return "hand.raised" }
+        if coach.accessibilityOff { return "lock.shield" }
         if coach.degraded { return "photo" }
         return coach.ringShown ? "scope" : "magnifyingglass"
     }
 
     /// The illustrated step: when the coach can't point, or the user stepped away from it.
-    private var showsPicture: Bool { coach.degraded || manual }
+    private var showsPicture: Bool { coach.degraded || manual || coach.accessibilityOff }
 
     private var actionRow: some View {
         ReflowStack(rowAlignment: .center, columnAlignment: .leading, spacing: layout.controlGap) {
@@ -306,7 +317,12 @@ struct CoachCard: View {
                 Button { coach.useIllustratedGuide() } label: { Text("Stop Guiding").textRole(.body) }
                     .buttonStyle(.link)
                     .accessibilityHint("Turns off the pointers and shows the picture guide")
-                if !manual && coach.decision.situation == .settingsClosed {
+                if coach.accessibilityOff {
+                    Button { coach.openAccessibilitySettings() } label: { Text("Accessibility Settings\u{2026}").textRole(.body) }
+                        .buttonStyle(.borderedProminent)
+                        .adaptiveControlSize()
+                        .accessibilityHint("Opens System Settings at Privacy & Security, Accessibility")
+                } else if !manual && coach.decision.situation == .settingsClosed {
                     Button { coach.reopenWallpaper() } label: { Text("Open System Settings").textRole(.body) }
                         .buttonStyle(.borderedProminent)
                         .adaptiveControlSize()

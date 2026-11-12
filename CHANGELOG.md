@@ -8,6 +8,14 @@
   right in System Settings, and moves on by itself as you click. It never gets in the way of
   your clicks. It asks once for Accessibility permission (it only reads System Settings, and
   only while the guide is open); without it, the illustrated guide works as before.
+- **Move to Applications.** Opened straight from the disk image or Downloads, DotStudio offers
+  once to move itself into Applications and reopen — updates and Open at login need it there.
+
+### Fixed
+- The setup guide keeps clear of System Settings' buttons on smaller displays and never grows
+  taller than the screen.
+- "Start DotStudio at login" is now suggested the first time a song shows on your screensaver
+  (music is on from the start, so it was never offered for music before).
 
 ## 1.4.5 — Meadow and Bloom
 

@@ -43,3 +43,22 @@ jobs:
         run: |
           xcodebuild -project DotStudio.xcodeproj -scheme DotStudio -configuration Debug \
             -derivedDataPath build/DD build
+
+      - name: Set up Python (dmgbuild)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Package an unsigned DMG
+        # The same disk-image path release.yml takes (scripts/make-dmg.sh + the pinned dmgbuild
+        # in scripts/dmg/requirements.txt), so a broken DMG shows up before a tag does. Not
+        # uploaded; the release asset is still built only by release.yml.
+        run: |
+          python -m venv "$RUNNER_TEMP/dmgbuild"
+          "$RUNNER_TEMP/dmgbuild/bin/pip" install --quiet --disable-pip-version-check -r scripts/dmg/requirements.txt
+          DMGBUILD="$RUNNER_TEMP/dmgbuild/bin/dmgbuild" \
+            zsh scripts/make-dmg.sh build/DD/Build/Products/Debug/DotStudio.app "0.0.0-ci" "$RUNNER_TEMP/DotStudio.dmg"
+          MNT=$(mktemp -d)
+          hdiutil attach -nobrowse -noautoopen -readonly -mountpoint "$MNT" "$RUNNER_TEMP/DotStudio.dmg"
+          test -d "$MNT/DotStudio.app" && test -f "$MNT/How to Install.txt" && test -L "$MNT/Applications"
+          hdiutil detach "$MNT"
