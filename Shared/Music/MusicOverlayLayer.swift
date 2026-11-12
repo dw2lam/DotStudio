@@ -834,6 +834,12 @@ private final class MusicOverlayGroup: CALayer {
         return (tb, ab, lb)
     }
 
+    /// Full Screen's gaps between the title, artist and album blocks, in units. Each block's
+    /// line box already carries the font's descent and ascent, so these stay small or the
+    /// artist reads as a separate paragraph from its title.
+    static let titleToArtist: CGFloat = 0.007
+    static let artistToAlbum: CGFloat = 0.004
+
     /// Apple Music full screen: artwork left, type right, the group centred on the art.
     private func buildAlbum(_ d: MusicDisplay, _ o: MusicSceneOptions) {
         let art = MusicGeometry.artRect(.album, size: CGSize(width: W, height: H))
@@ -841,13 +847,13 @@ private final class MusicOverlayGroup: CALayer {
         debugRects.append(("art", art))
         let x = art.maxX + MusicGeometry.albumGap * u
         let colW = max(min(MusicGeometry.albumText * u, W - x - 0.06 * u), 40)
-        // Sized for the far side of a room: the title's cap height is ≈ 4.5 % of a 16:10
-        // screen's height (0.064 u); every other line in step with it.
-        let ts = typeSet(title: 0.064 * u, artist: 0.040 * u, album: 0.030 * u, time: 0.0195 * u,
+        // Readable across a room without shouting on a laptop: the title's cap height is
+        // ≈ 3.7 % of a 16:10 screen's height (0.053 u); every other line in step with it.
+        let ts = typeSet(title: 0.053 * u, artist: 0.033 * u, album: 0.025 * u, time: 0.0175 * u,
                          align: .left, titleLines: 2)
         let barH = max(0.0062 * u, 3)
         let showBar = o.showProgress && d.hasDuration
-        let rowGap = 0.054 * u
+        let rowGap = 0.046 * u
         let margin = 0.05 * u
         // Measure, then centre the whole column on the artwork — within the screen's margins,
         // with smaller type only if a Reduce Motion third line would otherwise leave them.
@@ -857,8 +863,8 @@ private final class MusicOverlayGroup: CALayer {
         while true {
             let (tb, ab, lb) = fitted
             h = tb.height
-            if !ab.isEmpty { h += 0.018 * u + ab.height }
-            if let lb, !lb.isEmpty { h += 0.010 * u + lb.height }
+            if !ab.isEmpty { h += Self.titleToArtist * u + ab.height }
+            if let lb, !lb.isEmpty { h += Self.artistToAlbum * u + lb.height }
             if showBar { h += rowGap + barH + 0.017 * u + ts.time.size * MusicGeometry.lineBox }
             else { h += rowGap + Self.glyphHeight(ts.time.size) }
             if h <= H - 2 * margin || squeeze <= 0.7 { break }
@@ -869,8 +875,8 @@ private final class MusicOverlayGroup: CALayer {
         var y = max(art.midY - h / 2, art.minY)
         y = max(min(y, H - margin - h), margin)
         y += addBlock(tb, x: x, top: y, width: colW)
-        if !ab.isEmpty { y += 0.018 * u; y += addBlock(ab, x: x, top: y, width: colW) }
-        if let lb, !lb.isEmpty { y += 0.010 * u; y += addBlock(lb, x: x, top: y, width: colW) }
+        if !ab.isEmpty { y += Self.titleToArtist * u; y += addBlock(ab, x: x, top: y, width: colW) }
+        if let lb, !lb.isEmpty { y += Self.artistToAlbum * u; y += addBlock(lb, x: x, top: y, width: colW) }
         y += rowGap
         let glyphH = Self.glyphHeight(ts.time.size)
         if showBar {
@@ -939,7 +945,7 @@ private final class MusicOverlayGroup: CALayer {
         let left = m + insets.left
         let bottom = H - m - insets.bottom
         let colW = max(min(1.05 * u, W - left - m - insets.right), 40)
-        var ts = typeSet(title: 0.080 * u, artist: 0.040 * u, album: 0.028 * u, time: 0.0172 * u,
+        var ts = typeSet(title: 0.064 * u, artist: 0.034 * u, album: 0.025 * u, time: 0.0165 * u,
                          align: .left, titleLines: 2)
         // Over full-bleed art the secondary lines need more weight than over the calm Album /
         // Stage backgrounds (the shader's scrim targets ≥ 7:1 for the title; these keep ≥ 4.5:1).
@@ -963,8 +969,8 @@ private final class MusicOverlayGroup: CALayer {
             addPauseGlyph(height: glyphH, color: ts.time.color, at: CGPoint(x: left, y: y), followsElapsed: false)
             y -= 0.040 * u
         }
-        if let lb, !lb.isEmpty { y -= lb.height; addBlock(lb, x: left, top: y, width: colW); y -= 0.010 * u }
-        if !ab.isEmpty { y -= ab.height; addBlock(ab, x: left, top: y, width: colW); y -= 0.016 * u }
+        if let lb, !lb.isEmpty { y -= lb.height; addBlock(lb, x: left, top: y, width: colW); y -= Self.artistToAlbum * u }
+        if !ab.isEmpty { y -= ab.height; addBlock(ab, x: left, top: y, width: colW); y -= Self.titleToArtist * u }
         y -= tb.height
         addBlock(tb, x: left, top: y, width: colW)
     }
