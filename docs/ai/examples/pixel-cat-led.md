@@ -49,15 +49,15 @@ float4 dsScene(float2 uv, DSContext ctx) {
 ```text
 Compiles.
 GPU ≈ 2.50 ms per frame at 5K.
-Installed as sleepy-cat-7b693928. Use it: create_style(effects: [{"kind": "custom", "scene": "sleepy-cat-7b693928"}]).
+Installed as sleepy-cat-035dd8ec. Use it: create_style(effects: [{"kind": "custom", "scene": "sleepy-cat-035dd8ec"}]).
 ```
 
 ```
-→ create_style({"name": "Sleepy Cat", "fps": 24, "effects": [{"kind": "custom", "scene": "sleepy-cat-7b693928", "params": {"zzz": true}}]})
+→ create_style({"name": "Sleepy Cat", "fps": 24, "effects": [{"kind": "custom", "scene": "sleepy-cat-035dd8ec", "params": {"zzz": true}}]})
 ```
 ```text
-Created “Sleepy Cat” (A8ADD755-345D-4172-9A48-B319E1A47FB8). DotStudio isn't running: library.json was updated; the app shows it next time it opens.
-Next: preview_style(style: "A8ADD755-345D-4172-9A48-B319E1A47FB8") — and a contact sheet over time (frames: 6) to check the motion.
+Created “Sleepy Cat” (8021C859-B0A4-4494-94A8-8F86C1EF2B77). DotStudio isn't running: library.json was updated; the app shows it next time it opens.
+Next: preview_style(style: "8021C859-B0A4-4494-94A8-8F86C1EF2B77") — and a contact sheet over time (frames: 6) to check the motion.
 ```
 
 Resulting style (as stored in `library.json`):
@@ -79,10 +79,10 @@ Resulting style (as stored in `library.json`):
         "a": 1
       },
       "custom": {
-        "id": "sleepy-cat-7b693928"
+        "id": "sleepy-cat-035dd8ec"
       },
       "enabled": true,
-      "id": "7E1634A9-A55D-4ABD-86B5-FA4D4045CF05",
+      "id": "AF2FB205-FB8D-4DF9-AF5F-7D4C0A08E966",
       "params": {
         "breath": 0.5,
         "zzz": 1
@@ -90,7 +90,7 @@ Resulting style (as stored in `library.json`):
       "kind": "custom"
     }
   ],
-  "id": "A8ADD755-345D-4172-9A48-B319E1A47FB8",
+  "id": "8021C859-B0A4-4494-94A8-8F86C1EF2B77",
   "fps": 24,
   "name": "Sleepy Cat"
 }

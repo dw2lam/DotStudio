@@ -39,6 +39,9 @@ protocol FilmToolkitAPI {
     /// The toolkit (film engine) is in this build and pulled.
     var isAvailable: Bool { get }
     func status() -> FilmStatus
+    /// Scenes to start from (Commute first): id, name, summary, variants, cameras, loop, the
+    /// editable params with their defaults, and the full starting `spec`.
+    func templates() -> [JSONObject]
     /// Check a scene spec in the toolkit's format (dsfilm's schema) without rendering.
     func validate(spec: JSONObject) -> CSReport
     /// Cycles stills of the base scene, one PNG per variant into `outDir` (`<variant>.png`).
@@ -56,25 +59,58 @@ enum FilmPaths {
     static func draftsDir(_ store: URL) -> URL { store.appendingPathComponent("film", isDirectory: true) }
     static func jobsDir(_ store: URL) -> URL { store.appendingPathComponent("jobs", isDirectory: true) }
 
-    static let blenderCandidates = ["/Applications/Blender.app/Contents/MacOS/Blender",
-                                    SharedStore.realHome.path + "/Applications/Blender.app/Contents/MacOS/Blender"]
+    static let blenderApps = ["/Applications/Blender.app", SharedStore.realHome.path + "/Applications/Blender.app"]
 
-    /// Blender's path and version (`Blender --version`'s first line), if installed.
+    /// The toolkit targets this Blender (tools/film README: Blender 5.1).
+    static let minimumBlender = "5.1"
+
+    /// Blender's executable and version, if installed — read from Blender.app's Info.plist, so
+    /// checking never launches Blender (a Blender process is gigabytes; only renders start one).
     static func blender() -> (path: String, version: String?)? {
-        if let fake = ProcessInfo.processInfo.environment["DOTSTUDIO_MCP_FAKE_BLENDER"] { return (fake, "Blender 4.5.0 (test)") }
-        guard let path = blenderCandidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { return nil }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: path)
-        p.arguments = ["--version"]
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = FileHandle.nullDevice
-        do { try p.run() } catch { return (path, nil) }
-        let deadline = Date().addingTimeInterval(10)
-        while p.isRunning && Date() < deadline { usleep(50_000) }
-        if p.isRunning { p.terminate(); return (path, nil) }
-        let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        return (path, out.split(separator: "\n").first.map(String.init))
+        if let fake = ProcessInfo.processInfo.environment["DOTSTUDIO_MCP_FAKE_BLENDER"] {
+            return fake == "none" ? nil : (fake, "5.1.0")
+        }
+        for app in blenderApps {
+            let exe = app + "/Contents/MacOS/Blender"
+            guard FileManager.default.isExecutableFile(atPath: exe) else { continue }
+            let info = NSDictionary(contentsOfFile: app + "/Contents/Info.plist")
+            return (exe, info?["CFBundleShortVersionString"] as? String)
+        }
+        return nil
+    }
+
+    static func versionAtLeast(_ v: String?, _ min: String) -> Bool {
+        guard let v else { return false }
+        let a = v.split(separator: ".").compactMap { Int($0) }, b = min.split(separator: ".").compactMap { Int($0) }
+        for i in 0..<max(a.count, b.count) {
+            let x = i < a.count ? a[i] : 0, y = i < b.count ? b[i] : 0
+            if x != y { return x > y }
+        }
+        return true
+    }
+
+    /// What to tell the user when Blender is missing or too old. DotStudio never installs it.
+    static func installAdvice(found: (path: String, version: String?)?) -> String? {
+        if let found, versionAtLeast(found.version, minimumBlender) { return nil }
+        let why = found == nil ? "Blender isn't installed." : "Blender \(found!.version ?? "?") is older than \(minimumBlender), which the film toolkit needs."
+        return why + " Ask the user to install it themselves (DotStudio never installs it): download Blender \(minimumBlender) or newer for macOS (Apple Silicon) from https://www.blender.org/download/, open the disk image and drag Blender into Applications, then open it once so macOS approves it, and quit it. It's free and about 1 GB on disk."
+    }
+}
+
+/// The scene spec's "look" block: applied at render (bloom, halation) or at playback (grain).
+enum FilmLook {
+    static let schema: JSONObject = S.obj([
+        "bloom": S.num("Soft glow around bright lights, 0 (off) … 1. Default 0.25.", min: 0, max: 1),
+        "halation": S.num("Warm red-orange glow bleeding from bright edges, like film stock, 0 … 1. Default 0.15.", min: 0, max: 1),
+        "grain": S.num("Live film grain, 0 … 1, added by DotStudio at playback (not baked into the clips, so it never loops visibly); the package carries it as the default. Default 0.2.", min: 0, max: 1),
+    ])
+    static let defaults: JSONObject = ["bloom": 0.25, "halation": 0.15, "grain": 0.2]
+
+    static func merged(_ base: Any?, _ patch: Any?) -> JSONObject {
+        var out = defaults
+        for (k, v) in base as? JSONObject ?? [:] { out[k] = v }
+        for (k, v) in patch as? JSONObject ?? [:] { out[k] = v }
+        return out
     }
 }
 
@@ -87,6 +123,7 @@ struct UnavailableFilmToolkit: FilmToolkitAPI {
         return FilmStatus(blenderPath: b?.path, blenderVersion: b?.version, toolkitPulled: false, toolkitVersion: nil,
                           gpu: PreviewRenderer.gpuName, notes: [Self.message])
     }
+    func templates() -> [JSONObject] { [] }
     func validate(spec: JSONObject) -> CSReport { CSReport(ok: false, diagnostics: [CSDiagnostic(message: Self.message, severity: "error")], warnings: []) }
     func stillsCommand(spec: URL, outDir: URL, variants: [String], width: Int, height: Int, samples: Int) throws -> FilmCommand { throw ToolError(Self.message) }
     func loopCommand(spec: URL, outDir: URL, variants: [String], seconds: Double, fps: Int, width: Int, height: Int, quality: String) throws -> FilmCommand { throw ToolError(Self.message) }
@@ -101,13 +138,42 @@ struct FakeFilmToolkit: FilmToolkitAPI {
     var isAvailable: Bool { true }
     var pulled: Bool { FileManager.default.fileExists(atPath: AIStore.enginesDir(store).appendingPathComponent("film").path) }
     func status() -> FilmStatus {
-        FilmStatus(blenderPath: "/fake/Blender", blenderVersion: "Blender 4.5.0 (test)", toolkitPulled: pulled,
-                   toolkitVersion: pulled ? "1" : nil, gpu: PreviewRenderer.gpuName, notes: ["test toolkit"])
+        let b = FilmPaths.blender()
+        return FilmStatus(blenderPath: b?.path, blenderVersion: b?.version, toolkitPulled: pulled,
+                          toolkitVersion: pulled ? "1" : nil, gpu: PreviewRenderer.gpuName, notes: ["test toolkit"])
+    }
+    /// Commute, shaped like tools/film/scenes/commute/commute.json.
+    func templates() -> [JSONObject] {
+        let spec: JSONObject = [
+            "scene": "commute", "variant": "day", "loop": ["seconds": 48, "fps": 24],
+            "params": ["penguin_color": [0.0, 0.30, 0.47], "sway": 1.0],
+            "render": ["engine": "cycles", "res": [1600, 1000], "samples": 384, "exposure": 0.0, "motion_blur": true],
+            "stills": [["name": "day_wide", "camera": "wide", "frame": 1, "variant": "day"]],
+            "animation": ["camera": "wide", "engine": "eevee", "res": [2560, 1600], "samples": 64],
+        ]
+        return [["id": "commute", "name": "Commute",
+                 "summary": "A Japanese commuter-train interior at real scale, city scrolling past on a viaduct; an original penguin in a suit dozes on the end seat.",
+                 "variants": ["day", "golden", "night", "rain"], "cameras": ["wide", "close", "aisle"], "loop": ["seconds": 48, "fps": 24],
+                 "params": [["key": "penguin_color", "kind": "rgb", "default": [0.0, 0.30, 0.47], "label": "Passenger feathers"],
+                            ["key": "sway", "kind": "number", "min": 0, "max": 2, "default": 1.0, "label": "Carriage sway"]],
+                 "spec": spec]]
     }
     func validate(spec: JSONObject) -> CSReport {
-        spec["shots"] == nil && spec["scene"] == nil
-            ? CSReport(ok: false, diagnostics: [CSDiagnostic(line: nil, column: nil, message: "spec needs `scene`", severity: "error")], warnings: [])
-            : CSReport(ok: true, diagnostics: [], warnings: [])
+        guard let scene = spec["scene"] as? String else {
+            return CSReport(ok: false, diagnostics: [CSDiagnostic(line: nil, column: nil, message: "spec needs `scene`", severity: "error")], warnings: [])
+        }
+        if scene == "local" {
+            // A new set: the toolkit imports <scene_dir>/scene.py (the stand-in only reads it).
+            let src = (spec["scene_dir"] as? String).flatMap { try? String(contentsOfFile: $0 + "/scene.py", encoding: .utf8) } ?? ""
+            var d: [CSDiagnostic] = []
+            if !src.contains("def build(") { d.append(CSDiagnostic(line: 1, column: 1, message: "scene.py has no build(ctx)", severity: "error")) }
+            if !src.contains("ASSETS") { d.append(CSDiagnostic(line: 1, column: 1, message: "scene.py has no ASSETS list", severity: "error")) }
+            return CSReport(ok: d.isEmpty, diagnostics: d, warnings: [])
+        }
+        if !templates().contains(where: { $0["id"] as? String == scene }) {
+            return CSReport(ok: false, diagnostics: [CSDiagnostic(message: "no scene module \"\(scene)\" in the film toolkit (list_film_templates)", severity: "error")], warnings: [])
+        }
+        return CSReport(ok: true, diagnostics: [], warnings: [])
     }
     private func worker(_ mode: String, _ outDir: URL, _ variants: [String], seconds: Double) -> FilmCommand {
         let me = executablePath()   // absolute: the job runs from its own folder
@@ -130,8 +196,11 @@ struct FakeFilmToolkit: FilmToolkitAPI {
             try fm.copyItem(at: f, to: package.appendingPathComponent("clips").appendingPathComponent(f.lastPathComponent))
             clips.append(["variant": f.deletingPathExtension().lastPathComponent, "file": "clips/" + f.lastPathComponent, "codec": "hevc"])
         }
+        let look = FilmLook.merged(spec["look"], nil)
+        let grain = (look["grain"] as? NSNumber)?.doubleValue ?? 0.2
         let m: JSONObject = ["format": 1, "id": sceneID, "name": spec["name"] as? String ?? "Film", "engine": ["id": "film", "version": ">=1"],
-                             "entry": "clips", "fps": 30, "params": [], "clips": clips, "uses": ["sun", "weather"]]
+                             "entry": "clips", "fps": 24, "clips": clips, "uses": ["sun", "weather"], "look": look,
+                             "params": [["key": "grain", "label": "Film Grain", "kind": "slider", "min": 0, "max": 1, "default": grain]]]
         try JSON.data(m, pretty: true).write(to: package.appendingPathComponent("scene.json"))
         try Data("// film package: clips only\nfloat4 dsScene(float2 uv, DSContext ctx) { return 0; }\n".utf8)
             .write(to: package.appendingPathComponent("clips.txt"))

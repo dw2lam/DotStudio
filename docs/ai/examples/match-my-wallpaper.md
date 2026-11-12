@@ -15,12 +15,12 @@ DotStudio makes calm, living screensavers and live wallpapers for the Mac. A STY
 → create_style({"name": "Morning Fog", "fps": 24, "effects": [{"kind": "meadow", "params": {"live": false, "hour": 6.5, "weather": "Fog", "landscape": "Tall Grass", "flowers": 0.05, "wind": 0.2, "speed": 0.6}, "colorA": {"r": 0.22, "g": 0.34, "b": 0.3}, "colorB": {"r": 0.72, "g": 0.76, "b": 0.74}}, {"kind": "grainWash", "params": {"soft": 0.2, "grain": 0.06, "tint": 0.1}}]})
 ```
 ```text
-Created “Morning Fog” (A490C0EF-8141-4E14-AE3C-CBEDF3EC5704). DotStudio isn't running: library.json was updated; the app shows it next time it opens.
-Next: preview_style(style: "A490C0EF-8141-4E14-AE3C-CBEDF3EC5704") — and a contact sheet over time (frames: 6) to check the motion.
+Created “Morning Fog” (23EE7B68-7781-4701-ADAE-3AD2D422AC6C). DotStudio isn't running: library.json was updated; the app shows it next time it opens.
+Next: preview_style(style: "23EE7B68-7781-4701-ADAE-3AD2D422AC6C") — and a contact sheet over time (frames: 6) to check the motion.
 ```
 
 ```
-→ preview_style({"style": "A490C0EF-8141-4E14-AE3C-CBEDF3EC5704", "t": 12, "width": 1280, "height": 800})
+→ preview_style({"style": "23EE7B68-7781-4701-ADAE-3AD2D422AC6C", "t": 12, "width": 1280, "height": 800})
 ```
 ```text
 “Morning Fog” at t = 12.0 s.
@@ -29,10 +29,10 @@ Next: preview_style(style: "A490C0EF-8141-4E14-AE3C-CBEDF3EC5704") — and a con
 ![match-my-wallpaper.jpg](img/match-my-wallpaper.jpg)
 
 ```
-→ benchmark_style({"style": "A490C0EF-8141-4E14-AE3C-CBEDF3EC5704"})
+→ benchmark_style({"style": "23EE7B68-7781-4701-ADAE-3AD2D422AC6C"})
 ```
 ```text
-“Morning Fog” at 5120×2880 on Apple M5 Pro: 12.73 ms min, 13.21 ms median GPU per frame (≈76 fps of GPU headroom). Too heavy for a screensaver: simplify (fewer looks, lower detail/octave params) or lower fps.
+“Morning Fog” at 5120×2880 on Apple M5 Pro: 12.74 ms min, 14.15 ms median GPU per frame (≈71 fps of GPU headroom). Too heavy for a screensaver: simplify (fewer looks, lower detail/octave params) or lower fps.
 ```
 
 Resulting style (as stored in `library.json`):
@@ -47,7 +47,7 @@ Resulting style (as stored in `library.json`):
         "g": 0.34,
         "a": 1
       },
-      "id": "A5DDAC16-6656-489B-8E94-D2FFFF1A6181",
+      "id": "481A8986-A039-44D6-B411-9F83382CF147",
       "colorB": {
         "r": 0.72,
         "b": 0.74,
@@ -77,7 +77,7 @@ Resulting style (as stored in `library.json`):
         "g": 0.08,
         "a": 1
       },
-      "id": "72B2C402-06E9-439D-B1EB-A2C1CB0374B4",
+      "id": "EC7F242A-9776-4AD4-9701-66D37012B30A",
       "colorB": {
         "r": 1,
         "b": 0.64,
@@ -95,7 +95,7 @@ Resulting style (as stored in `library.json`):
       }
     }
   ],
-  "id": "A490C0EF-8141-4E14-AE3C-CBEDF3EC5704",
+  "id": "23EE7B68-7781-4701-ADAE-3AD2D422AC6C",
   "fps": 24,
   "name": "Morning Fog"
 }

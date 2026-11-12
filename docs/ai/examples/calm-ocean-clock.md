@@ -36,12 +36,12 @@ Ocean Horizon (oceanHorizon): Open sea at golden hour, or live: the real sun, mo
 → create_style({"name": "Dusk Tide", "fps": 30, "effects": [{"kind": "oceanHorizon", "params": {"sun": -0.6, "waves": 0.28, "clouds": 0.4, "haze": 0.7, "speed": 0.6, "weather": "Clear", "live": false}, "colorA": {"r": 0.02, "g": 0.05, "b": 0.09}, "colorB": {"r": 1.0, "g": 0.66, "b": 0.45}}]})
 ```
 ```text
-Created “Dusk Tide” (BC4330DA-15E1-4CD4-AE16-BA3B8C993AC1). DotStudio isn't running: library.json was updated; the app shows it next time it opens.
-Next: preview_style(style: "BC4330DA-15E1-4CD4-AE16-BA3B8C993AC1") — and a contact sheet over time (frames: 6) to check the motion.
+Created “Dusk Tide” (BF1B6E31-EF13-4757-B6B8-68D05447378D). DotStudio isn't running: library.json was updated; the app shows it next time it opens.
+Next: preview_style(style: "BF1B6E31-EF13-4757-B6B8-68D05447378D") — and a contact sheet over time (frames: 6) to check the motion.
 ```
 
 ```
-→ preview_style({"style": "BC4330DA-15E1-4CD4-AE16-BA3B8C993AC1", "t": 20, "width": 1280, "height": 800})
+→ preview_style({"style": "BF1B6E31-EF13-4757-B6B8-68D05447378D", "t": 20, "width": 1280, "height": 800})
 ```
 ```text
 “Dusk Tide” at t = 20.0 s.
@@ -50,7 +50,7 @@ Next: preview_style(style: "BC4330DA-15E1-4CD4-AE16-BA3B8C993AC1") — and a con
 ![calm-ocean-clock-tide.jpg](img/calm-ocean-clock-tide.jpg)
 
 ```
-→ preview_style({"style": "BC4330DA-15E1-4CD4-AE16-BA3B8C993AC1", "frames": 6, "span": 240, "width": 1200, "height": 750})
+→ preview_style({"style": "BF1B6E31-EF13-4757-B6B8-68D05447378D", "frames": 6, "span": 240, "width": 1200, "height": 750})
 ```
 ```text
 Contact sheet of “Dusk Tide”: 6 frames at t = 4, 52, 100, 148, 196, 244 s (left to right, top to bottom)..
@@ -71,12 +71,12 @@ Minimal (minimalClock): Thin, quiet time with the day and date beneath it, and r
 → create_style({"name": "Dusk Clock", "fps": 24, "effects": [{"kind": "minimalClock", "params": {"background": "Soft Gradient", "size": 1.4, "date": true}}]})
 ```
 ```text
-Created “Dusk Clock” (EB5D29CF-9936-43D8-A812-3AFD44025EF8). DotStudio isn't running: library.json was updated; the app shows it next time it opens.
-Next: preview_style(style: "EB5D29CF-9936-43D8-A812-3AFD44025EF8") — and a contact sheet over time (frames: 6) to check the motion.
+Created “Dusk Clock” (C6C0491B-A065-4477-B020-B09C581572C3). DotStudio isn't running: library.json was updated; the app shows it next time it opens.
+Next: preview_style(style: "C6C0491B-A065-4477-B020-B09C581572C3") — and a contact sheet over time (frames: 6) to check the motion.
 ```
 
 ```
-→ preview_style({"style": "EB5D29CF-9936-43D8-A812-3AFD44025EF8", "clock": "19:42", "width": 1280, "height": 800})
+→ preview_style({"style": "C6C0491B-A065-4477-B020-B09C581572C3", "clock": "19:42", "width": 1280, "height": 800})
 ```
 ```text
 “Dusk Clock” at t = 4.0 s, clock 19:42.
@@ -85,10 +85,10 @@ Next: preview_style(style: "EB5D29CF-9936-43D8-A812-3AFD44025EF8") — and a con
 ![calm-ocean-clock-clock.jpg](img/calm-ocean-clock-clock.jpg)
 
 ```
-→ benchmark_style({"style": "BC4330DA-15E1-4CD4-AE16-BA3B8C993AC1"})
+→ benchmark_style({"style": "BF1B6E31-EF13-4757-B6B8-68D05447378D"})
 ```
 ```text
-“Dusk Tide” at 5120×2880 on Apple M5 Pro: 6.16 ms min, 8.71 ms median GPU per frame (≈115 fps of GPU headroom). Too heavy for a screensaver: simplify (fewer looks, lower detail/octave params) or lower fps.
+“Dusk Tide” at 5120×2880 on Apple M5 Pro: 4.42 ms min, 5.55 ms median GPU per frame (≈180 fps of GPU headroom). Acceptable, near the ceiling — consider fewer effects or lower detail params.
 ```
 
 **Assistant:** Both are within budget. Want them as your screensaver, rotating every five minutes?
@@ -96,14 +96,14 @@ Next: preview_style(style: "EB5D29CF-9936-43D8-A812-3AFD44025EF8") — and a con
 > **You:** Yes please.
 
 ```
-→ set_screensaver({"style": "BC4330DA-15E1-4CD4-AE16-BA3B8C993AC1"})
+→ set_screensaver({"style": "BF1B6E31-EF13-4757-B6B8-68D05447378D"})
 ```
 ```text
 “Dusk Tide” is now the screensaver on every display. DotStudio isn't running: library.json was updated; the app shows it next time it opens.
 ```
 
 ```
-→ set_screensaver({"style": "EB5D29CF-9936-43D8-A812-3AFD44025EF8", "mode": "add"})
+→ set_screensaver({"style": "C6C0491B-A065-4477-B020-B09C581572C3", "mode": "add"})
 ```
 ```text
 “Dusk Clock” joined the screensaver rotation (2 styles). DotStudio isn't running: library.json was updated; the app shows it next time it opens.
@@ -121,7 +121,7 @@ Resulting style (as stored in `library.json`):
         "g": 0.05,
         "a": 1
       },
-      "id": "EB8C1CE5-0C72-4D48-8478-34C6F49AD2B6",
+      "id": "4AB318BD-20A3-45EA-803B-2D62B1701A18",
       "colorB": {
         "r": 1,
         "b": 0.45,
@@ -143,7 +143,7 @@ Resulting style (as stored in `library.json`):
       }
     }
   ],
-  "id": "BC4330DA-15E1-4CD4-AE16-BA3B8C993AC1",
+  "id": "BF1B6E31-EF13-4757-B6B8-68D05447378D",
   "fps": 30,
   "name": "Dusk Tide"
 }

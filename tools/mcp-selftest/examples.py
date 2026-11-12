@@ -19,7 +19,8 @@ class Session:
         self.store = tempfile.mkdtemp(prefix="dsmcp-ex-")
         env = dict(os.environ, DOTSTUDIO_STORE_DIR=self.store, DOTSTUDIO_MCP_FAKE_DISPLAYS="37D8832A-2D66-02CA-B9F7-8F30A301B230=Built-in Retina Display")
         if fakes:
-            env.update(DOTSTUDIO_MCP_TEST_FAKES="1", DOTSTUDIO_MCP_FAKE_RENDER_SECONDS="2")
+            env.update(DOTSTUDIO_MCP_TEST_FAKES="1", DOTSTUDIO_MCP_FAKE_RENDER_SECONDS="2",
+                       DOTSTUDIO_MCP_FAKE_BLENDER="/Applications/Blender.app/Contents/MacOS/Blender")
         self.p = subprocess.Popen([BIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env)
         self.n = 0
         self.md = [f"# {title}\n", f"> **You:** {prompt}\n"]
@@ -43,6 +44,8 @@ class Session:
         if show:
             shown_args = dict(args or {})
             source = shown_args.pop("source", None)
+            if "scene_files" in shown_args:
+                shown_args["scene_files"] = {k: "…below…" for k in shown_args["scene_files"]}
             if source is not None:
                 shown_args["source"] = "…below…"
             a = json.dumps(shown_args, ensure_ascii=False)
@@ -214,24 +217,69 @@ s = Session("rainy-cafe-film", "A photoreal rainy café window (film scene)",
             "Can you make a photoreal one — looking out of a café window at night while it rains?", fakes=True,
             note="Film scenes arrive with the film engine (DotStudio's Blender toolkit). This session was recorded against the "
             "self-test's stand-in toolkit: the job flow, progress and install are real; the stills it returned were placeholders, "
-            "so they aren't shown.")
-s.call("film_status", max_text=400)
-s.say("This needs Blender and the film engine, a render of roughly an hour, and a few hundred MB. Shall I go ahead?")
+            "so they aren't shown, and the scene module below is illustrative — it has not been run in Blender.")
+s.call("film_status", max_text=500)
+s.say("Blender 5.1 is installed. This needs the film engine (a small download), about a minute per approval still, then "
+      "a background render of a few hours for a 24-second loop, and roughly 300 MB for the two variants (night, rain). Go ahead?")
 s.md.append("> **You:** Go ahead.\n")
 s.call("pull_engine", {"id": "film"})
 s.call("read_guide", {"id": "engines/film"}, max_text=300)
-spec = {"scene": {"set": "cafe-window", "camera": {"lens_mm": 35, "height_m": 1.2, "look": "street"},
-                  "assets": ["cc0:polyhaven/wooden_table_02", "cc0:polyhaven/coffee_cup", "cc0:ambientcg/Glass_Rain"],
-                  "lighting": {"interior": "warm tungsten 2700K, low", "exterior": "sodium street lamps, wet asphalt"},
-                  "motion": [{"type": "rain_on_glass", "loop": True}, {"type": "steam", "source": "coffee_cup", "loop": True},
-                             {"type": "passing_headlights", "every_s": 14}]},
-        "variants": ["night", "rain"]}
-r = s.call("create_film_scene", {"spec": spec, "name": "Rainy Café"})
+s.call("list_film_templates", max_text=300)
+s.say("The only template is Commute (a train interior), so I'll write a new set with the toolkit: a café corner looking out "
+      "through a rain-streaked window at a wet street. All assets CC0 (Poly Haven / ambientCG); every motion is a whole "
+      "number of cycles per 24-second loop so it repeats seamlessly; the sign outside stays dim.")
+cafe_py = '''"""Rainy Café — a corner table at a café window, night, rain on the glass. Original set; CC0 assets only."""
+from dsfilm import geometry as G, materials as M, lighting as L, loop as LP
+
+ASSETS = ["ph:hdri:kloppenheim_07_puresky", "ph:tex:wood_table_001", "ph:tex:concrete_wall_008",
+          "ph:model:coffee_cup_01", "acg:Asphalt012", "acg:Facade005"]
+VARIANTS = ["night", "rain"]
+CAMERAS = ["wide", "close"]
+
+def build(ctx):
+    c = ctx.coll("cafe")
+    loop = ctx.loop                                            # 24 s at 24 fps: everything below repeats exactly
+    table = G.box("table", (1.2, 0.7, 0.04), (0, 0.9, 0.74), c)
+    table.data.materials.append(M.ph_pbr("oak", "wood_table_001", 0.8))
+    cup = G.instance("cup", "coffee_cup_01", (0.15, 0.85, 0.78), c)
+    wall = G.slab([[(-2, 0), (2, 0), (2, 2.6), (-2, 2.6)], [(-1.3, 0.9), (1.3, 0.9), (1.3, 2.3), (-1.3, 2.3)]], 0.2)
+    wall.data.materials.append(M.ph_pbr("plaster", "concrete_wall_008", 2.0, desat=True, tint=(0.82, 0.74, 0.66)))
+    glass = G.box("pane", (2.6, 0.01, 1.4), (0, 1.6, 1.6), c)
+    glass.data.materials.append(M.thin_glass("window", 0.06, rain=1.0 if ctx.light.get("rain") else 0.6))
+    street = G.box("street", (40, 30, 0.1), (0, 18, -0.4), c)
+    street.data.materials.append(M.acg_pbr("wet asphalt", "Asphalt012", 4.0, rough=0.08))
+    L.setup(ctx.scene, c, ctx.variant, exposure=3.3)
+    lamp = G.sphere("pendant", 0.08, (0.1, 0.8, 1.9), c)
+    lamp.data.materials.append(M.emission("tungsten", (1.0, 0.62, 0.32), 6.0))
+    # steam: three wisps rising and fading, one full cycle each per loop, phase-offset
+    for i in range(3):
+        w = G.smooth_tube(f"steam{i}", [(0.15, 0.85, 0.80), (0.16, 0.86, 0.95), (0.13, 0.84, 1.1)], 0.01, c, taper=True)
+        loop.bake([w], lambda t, i=i: {"scale": 0.6 + 0.4 * loop.wave(t, 1, i / 3), "alpha": 0.25 * loop.wave(t, 1, i / 3)})
+    # a car's headlights sweep the wall twice per loop (period 12 s divides 24 s)
+    sweep = G.empty("headlights", (0, 12, 0.6), c)
+    loop.pulse_train(sweep, 12.0, lambda u: {"x": -20 + 40 * u, "energy": 400 * LP.bump(u, 0.5, 0.35)}, offsets=[0])
+    cams = {"wide": G.look_at(G.empty("cam_wide", (0, -1.6, 1.35), c), (0, -1.6, 1.35), (0, 2.0, 1.2)),
+            "close": G.look_at(G.empty("cam_close", (0.5, 0.2, 1.05), c), (0.5, 0.2, 1.05), (0.1, 0.9, 0.85))}
+    return {"cameras": cams}
+'''
+assets_json = json.dumps({"hdri": ["kloppenheim_07_puresky"], "tex": ["wood_table_001", "concrete_wall_008"],
+                          "model": ["coffee_cup_01"], "acg": ["Asphalt012", "Facade005"]}, indent=1)
+r = s.call("create_film_scene", {"spec": {"scene": "local", "variant": "night", "loop": {"seconds": 24, "fps": 24},
+                                          "render": {"engine": "cycles", "res": [1600, 1000], "samples": 384, "motion_blur": True},
+                                          "stills": [{"name": "night_wide", "camera": "wide", "frame": 1, "variant": "night"},
+                                                     {"name": "rain_wide", "camera": "wide", "frame": 1, "variant": "rain"}],
+                                          "animation": {"camera": "wide", "engine": "eevee", "res": [2560, 1600], "samples": 64}},
+                                 "name": "Rainy Café", "variants": ["night", "rain"],
+                                 "look": {"bloom": 0.3, "halation": 0.35, "grain": 0.25},
+                                 "scene_files": {"scene.py": cafe_py, "assets.json": assets_json}}, max_text=500)
 draft = r["structuredContent"]["draft"]
-s.call("render_film_stills", {"draft": draft, "variants": ["night", "rain"], "samples": 64, "wait_seconds": 30})
-s.say("Here are the base stills. Happy with the framing and the light before I animate it?")
-s.md.append("> **You:** Love it. Animate it.\n")
-r = s.call("render_film_loop", {"draft": draft, "variants": ["night", "rain"], "seconds": 20, "fps": 24})
+s.md.append("`scene_files[\"scene.py\"]`:\n\n```python\n" + cafe_py.rstrip() + "\n```\n")
+s.call("render_film_stills", {"draft": draft, "wait_seconds": 30}, max_text=400)
+s.say("Here are the night and rain stills. Happy with the framing and the light before I animate it? (Halation is up at "
+      "0.35 for the tungsten lamp against the dark window; grain is added live, so it won't repeat with the loop.)")
+s.md.append("> **You:** A touch brighter, a little less bloom. Then animate it.\n")
+s.call("update_film_scene", {"draft": draft, "look": {"bloom": 0.2}, "spec_patch": {"render": {"exposure": 0.3}}}, max_text=400)
+r = s.call("render_film_loop", {"draft": draft}, max_text=300)
 job = r["structuredContent"]["job"]
 import time
 time.sleep(1)
@@ -239,6 +287,7 @@ s.call("film_job_status", {"job": job}, max_text=300)
 time.sleep(3)
 r = s.call("film_job_status", {"job": job}, max_text=400)
 scene = r["structuredContent"].get("scene", "")
-r = s.call("create_style", {"name": "Rainy Café", "fps": 24, "effects": [{"kind": "custom", "scene": scene}]})
+r = s.call("create_style", {"name": "Rainy Café", "fps": 24, "effects": [{"kind": "custom", "scene": scene, "params": {"grain": 0.25}}]})
+s.say("“Rainy Café” is in your library. It's video, so it's light on the GPU — a good live wallpaper too.")
 s.done()
 print("examples →", DOCS, "and", OUT)
