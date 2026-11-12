@@ -179,6 +179,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // never competes with the launch itself.
         Installer.refreshPipelineArchive(delay: 8)
         if DemoHooks.isActive { DemoHooks.applyAtLaunch() }
+        // Opened from the disk image / Downloads (or translocated): offer, once, to move into
+        // /Applications — updates and the login item need it there (MoveToApplications.swift).
+        MoveToApplications.shared.offerIfNeeded()
     }
 
     /// AppPresence decides (menu-bar mode → menu bar; off → quit, unless a wallpaper plays).

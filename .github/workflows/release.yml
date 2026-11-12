@@ -112,15 +112,22 @@ jobs:
             security delete-keychain "$KC" || rm -f "$KC"
           fi
 
+      - name: Set up Python (dmgbuild)
+        # A known Python for dmgbuild, not whatever the runner image ships this month.
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Package DMG
         # The designed installer window (scripts/dmg/: background, layout, How to Install.txt).
         # dmgbuild writes the Finder layout into .DS_Store directly; no Finder/GUI session needed.
         # Same volume name, path and asset name as before, so the appcast below and the
-        # releases/latest/download/DotStudio.dmg links are unchanged.
+        # releases/latest/download/DotStudio.dmg links are unchanged. dmgbuild and its
+        # dependencies are pinned in scripts/dmg/requirements.txt.
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          python3 -m venv "$RUNNER_TEMP/dmgbuild"
-          "$RUNNER_TEMP/dmgbuild/bin/pip" install --quiet "dmgbuild==1.6.7"
+          python -m venv "$RUNNER_TEMP/dmgbuild"
+          "$RUNNER_TEMP/dmgbuild/bin/pip" install --quiet --disable-pip-version-check -r scripts/dmg/requirements.txt
           mkdir -p dist
           DMGBUILD="$RUNNER_TEMP/dmgbuild/bin/dmgbuild" \
             zsh scripts/make-dmg.sh build/DD/Build/Products/Release/DotStudio.app "$VERSION" dist/DotStudio.dmg

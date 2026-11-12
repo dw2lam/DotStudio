@@ -302,11 +302,21 @@ final class SetupGuidePanel: NSObject, NSWindowDelegate {
         p.contentMinSize = CGSize(width: 380, height: 520)
         p.delegate = self
         p.center()
+        // Small displays: never taller than the visible area (the guide scrolls inside), so
+        // Done at its foot stays reachable.
+        if let vf = (p.screen ?? NSScreen.main)?.visibleFrame {
+            p.setFrame(clamped(p.frame, in: vf, minimum: minimumFrameSize(p)), display: false)
+        }
         panel = p
         let coach = SetupCoach.shared
         coach.log = { [weak model] in model?.store.debug("coach", $0) }
         coach.install = { [weak model] in model?.installScreensaver() }
         coach.onSettingsFrame = { [weak self] in self?.dock(besideSettingsAX: $0) }
+        // A target under this panel shows the picture instead of a ring nobody can click.
+        coach.panelFrame = { [weak self] in
+            guard let p = self?.panel, p.isVisible, !p.isMiniaturized else { return nil }
+            return p.frame
+        }
         docked = false
         p.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -314,37 +324,67 @@ final class SetupGuidePanel: NSObject, NSWindowDelegate {
 
     private var docked = false
 
-    /// The coach found the Settings window (AX global frame): put the guide right beside it
-    /// (left if there's no room on the right) so it never covers what the user has to click.
-    /// After the first time, only when the two overlap — a guide the user moved stays put.
+    /// The smallest the panel's frame gets (its content minimum plus the title bar).
+    private func minimumFrameSize(_ panel: NSPanel) -> CGSize {
+        panel.frameRect(forContentRect: CGRect(origin: .zero, size: panel.contentMinSize)).size
+    }
+
+    /// Never taller than the screen's visible area (the content scrolls inside); on screen.
+    private func clamped(_ f: CGRect, in vf: CGRect, minimum: CGSize) -> CGRect {
+        var f = f
+        f.size.height = max(min(f.height, vf.height), min(minimum.height, vf.height))
+        f.size.width = min(f.width, vf.width)
+        f.origin.x = min(max(f.minX, vf.minX), vf.maxX - f.width)
+        f.origin.y = min(max(f.minY, vf.minY), vf.maxY - f.height)
+        return f
+    }
+
+    /// The coach found the Settings window (AX global frame): put the guide beside it so it
+    /// never covers what the user has to click ("Screen Saver…" and Done are on the window's
+    /// right). Tries its current width right then left of the window, then its narrowest width,
+    /// and with no room either side, the screen's LEFT edge (over the sidebar, away from those
+    /// buttons). Always within the screen's visible height. After the first time, only when the
+    /// two overlap — a guide the user moved stays put.
     private func dock(besideSettingsAX ax: CGRect) {
         guard let panel, let main = NSScreen.screens.first else { return }
         let s = CoachGeometry.flip(ax, mainHeight: main.frame.height)
         if docked && !panel.frame.intersects(s) { return }
         let screen = NSScreen.screens.first { $0.frame.contains(CGPoint(x: s.midX, y: s.midY)) } ?? panel.screen ?? main
         let vf = screen.visibleFrame
+        let minimum = minimumFrameSize(panel)
+        let gap = Space.s
         var f = panel.frame
-        let gap = Space.m
-        if s.maxX + gap + f.width <= vf.maxX {
-            f.origin.x = s.maxX + gap
-        } else if s.minX - gap - f.width >= vf.minX {
-            f.origin.x = s.minX - gap - f.width
-        } else {
-            f.origin.x = vf.maxX - f.width   // no room either side: the screen's edge
+        var placed = false
+        for width in [f.width, minimum.width] where !placed {
+            if s.maxX + gap + width <= vf.maxX {
+                f.size.width = width; f.origin.x = s.maxX + gap; placed = true
+            } else if s.minX - gap - width >= vf.minX {
+                f.size.width = width; f.origin.x = s.minX - gap - width; placed = true
+            }
         }
-        f.origin.y = min(max(s.maxY - f.height, vf.minY), vf.maxY - f.height)
+        if !placed {
+            f.size.width = minimum.width
+            f.origin.x = vf.minX
+        }
+        // Top aligned with the Settings window, clamped to the visible area.
+        f.origin.y = s.maxY - f.height
+        f = clamped(f, in: vf, minimum: minimum)
         docked = true
         guard !f.equalTo(panel.frame) else { return }
         if Motion.reduceMotion { panel.setFrame(f, display: true) } else { panel.animator().setFrame(f, display: true) }
     }
 
-    /// System Settings opens near the middle of the screen: park the guide at the right edge.
+    /// "Open System Settings" without the coach: System Settings opens near the middle of the
+    /// screen, its buttons on the right — park the guide, narrowest, at the left edge.
     private func moveBesideSettings() {
         guard let panel, let screen = panel.screen ?? NSScreen.main else { return }
         let vf = screen.visibleFrame
-        let f = panel.frame
-        let origin = CGPoint(x: vf.maxX - f.width - Space.l, y: vf.maxY - f.height - Space.l * 2)
-        panel.animator().setFrameOrigin(origin)
+        let minimum = minimumFrameSize(panel)
+        var f = panel.frame
+        f.size.width = minimum.width
+        f.origin = CGPoint(x: vf.minX + Space.s, y: vf.maxY - f.height - Space.s)
+        f = clamped(f, in: vf, minimum: minimum)
+        if Motion.reduceMotion { panel.setFrame(f, display: true) } else { panel.animator().setFrame(f, display: true) }
     }
 
     func close() {
@@ -391,6 +431,26 @@ final class LoginNudge: ObservableObject {
             .receive(on: DispatchQueue.main)   // objectWillChange fires before the change
             .sink { [weak self] in MainActor.assumeIsolated { self?.evaluate() } }
             .store(in: &subs)
+        // Music is on by default (Corner), so it's never "turned on": suggest it instead the
+        // first time a song is actually playing for the screensaver / wallpaper to show.
+        MusicMonitor.shared.$state
+            .map { $0.hasTrack && ($0.isPlaying ?? false) }
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] playing in MainActor.assumeIsolated { if playing { self?.songShown() } } }
+            .store(in: &subs)
+    }
+
+    /// Once ever: the first song shown while music is on and DotStudio doesn't open at login.
+    static let songSeenKey = "loginNudgeMusicSongSeen"
+
+    private func songShown() {
+        guard let model, model.library.musicSettings.displayMode != .off,
+              !AppPrefs.shared.bool(Self.songSeenKey, default: false) else { return }
+        AppPrefs.shared.set(true, Self.songSeenKey)
+        guard pending == nil, !AppPrefs.shared.bool(Self.answeredKey, default: false),
+              LoginItem.status() == .off else { return }
+        pending = .music
     }
 
     /// UI shots (main thread): show the suggestion for `kind`.

@@ -168,6 +168,8 @@ struct Case {
     var chosenOn: Int? = 0
     var chosenOf: Int? = 1
     var chosenWhenOpened: Int? = nil
+    /// DotStudio was picked in the chooser that just closed (SetupCoach remembers it).
+    var picked = false
     /// Expected.
     var page: CoachScene.Page
     var step: CoachStep
@@ -225,6 +227,22 @@ func cases() -> [Case] {
     c.append(Case(name: "26: chosen everywhere, sheet closed",
                   tree: app([window(title: "Wallpaper", .tahoe, selected: "Wallpaper", content: [wallpaperPage(.tahoe)])]),
                   chosenOn: 2, chosenOf: 2, page: .wallpaper, step: .finished))
+    // The store can't be read (choice .unknown): picking DotStudio in the sheet, then closing
+    // it, finishes; closing it without picking doesn't
+    let wallpaperOnly = app([window(title: "Wallpaper", .tahoe, selected: "Wallpaper", content: [wallpaperPage(.tahoe)])])
+    c.append(Case(name: "26 unknown choice: sheet closed after picking DotStudio", tree: wallpaperOnly,
+                  chosenOn: nil, chosenOf: nil, picked: true, page: .wallpaper, step: .finished))
+    c.append(Case(name: "26 unknown choice: sheet closed without picking", tree: wallpaperOnly,
+                  chosenOn: nil, chosenOf: nil, page: .wallpaper, step: .openChooser, ringAround: wallpaperButton))
+    // A readable store wins over the remembered pick (it says 0: not chosen after all)
+    c.append(Case(name: "26 store says not chosen despite a pick", tree: wallpaperOnly,
+                  chosenOn: 0, chosenOf: 1, picked: true, page: .wallpaper, step: .openChooser, ringAround: wallpaperButton))
+    do {
+        var m = window(title: "Wallpaper", .tahoe, selected: "Wallpaper", content: [wallpaperPage(.tahoe)])
+        m.children.append(sheet(style: .buttonAndLabel, scroll: 460, selected: "DotStudio"))
+        c.append(Case(name: "26 unknown choice: tile selected in the sheet → Done", tree: app([m]),
+                      chosenOn: nil, chosenOf: nil, page: .chooser, step: .clickDone, ringAround: R(790, 670, 60, 24)))
+    }
 
     // Elsewhere
     let wallpaperRow = R(200, 160 + 10 * 28, 215, 28)

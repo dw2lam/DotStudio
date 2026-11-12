@@ -69,6 +69,8 @@ struct SetupChecklist: View {
     @ObservedObject var guide: SetupGuideModel
     @ObservedObject private var music = MusicNow.shared
     var commitPhrase: String
+    /// The coach is pointing in System Settings (no picture on screen): the wording follows.
+    var coaching = false
 
     private var s: SetupSnapshot { guide.snapshot }
 
@@ -151,11 +153,17 @@ struct SetupChecklist: View {
             detail = of == 2 ? "On both displays." : of > 2 ? "On all \(of) displays." : "Chosen in System Settings › Wallpaper."
         case .unknown where s.installed:
             title = "Choose DotStudio as your screensaver"
-            detail = "DotStudio can't check this on your Mac — follow the steps in the picture."
+            detail = coaching ? "DotStudio can't check this on your Mac — follow the ring in System Settings."
+                              : "DotStudio can't check this on your Mac — follow the steps in the picture."
         default:
             title = "Choose DotStudio as your screensaver"
-            detail = s.installed ? "Follow the steps above. This ticks itself when it's done."
-                                 : "After installing, follow the steps in the picture."
+            if coaching {
+                detail = s.installed ? "Follow the ring in System Settings. This ticks itself when it's done."
+                                     : "After installing, follow the ring in System Settings."
+            } else {
+                detail = s.installed ? "Follow the steps in the picture. This ticks itself when it's done."
+                                     : "After installing, follow the steps in the picture."
+            }
         }
         return ChecklistRow(state: chooseState, title: title, detail: detail) { EmptyView() }
     }
@@ -431,7 +439,7 @@ struct SetupGuidePanelView: View {
                         if coach.mode == .coaching {
                             // The ring in System Settings replaces the picture (the card brings
                             // it back for a step the coach can't point at).
-                            SetupChecklist(guide: guide, commitPhrase: "when you click Done")
+                            SetupChecklist(guide: guide, commitPhrase: "when you click Done", coaching: true)
                         } else {
                             SetupGuideContent(guide: guide, sideBySide: wide, commitPhrase: "when you click Done",
                                               frozenStep: frozenStep, forceStill: forceStill) {
