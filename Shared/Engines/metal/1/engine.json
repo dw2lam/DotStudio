@@ -8,6 +8,6 @@
   "wrapper": "wrapper.metal",
   "entryExtensions": ["metal"],
   "guide": "guide.md",
-  "examples": ["examples/aurora-lake", "examples/paper-moon", "examples/tide-pool", "examples/neon-rain", "examples/solar-dial"],
+  "examples": ["examples/aurora-lake", "examples/paper-moon", "examples/tide-pool", "examples/rain-window", "examples/solar-dial", "examples/music-bloom"],
   "minApp": "1.4.6"
 }
