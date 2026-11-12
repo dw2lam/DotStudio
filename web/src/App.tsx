@@ -5,6 +5,7 @@ import { NowPlaying } from "./sections/NowPlaying";
 import { Studio } from "./sections/Studio";
 import { Packs } from "./sections/Packs";
 import { Looks } from "./sections/Looks";
+import { MakeWithAI } from "./sections/MakeWithAI";
 import { Steps } from "./sections/Steps";
 import { Questions } from "./sections/Questions";
 import { Download } from "./sections/Download";
@@ -19,6 +20,7 @@ export default function App() {
       <Studio />
       <Packs />
       <Looks />
+      <MakeWithAI />
       <Steps />
       <Questions />
       <Download />
