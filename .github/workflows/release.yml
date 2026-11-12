@@ -113,13 +113,22 @@ jobs:
           fi
 
       - name: Package DMG
+        # The designed installer window (scripts/dmg/: background, layout, How to Install.txt).
+        # dmgbuild writes the Finder layout into .DS_Store directly; no Finder/GUI session needed.
+        # Same volume name, path and asset name as before, so the appcast below and the
+        # releases/latest/download/DotStudio.dmg links are unchanged.
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          STAGE=build/dmg-stage
-          mkdir -p "$STAGE" dist
-          cp -R build/DD/Build/Products/Release/DotStudio.app "$STAGE/"
-          ln -s /Applications "$STAGE/Applications"
-          hdiutil create -volname "DotStudio $VERSION" -srcfolder "$STAGE" -ov -format UDZO dist/DotStudio.dmg
+          python3 -m venv "$RUNNER_TEMP/dmgbuild"
+          "$RUNNER_TEMP/dmgbuild/bin/pip" install --quiet "dmgbuild==1.6.7"
+          mkdir -p dist
+          DMGBUILD="$RUNNER_TEMP/dmgbuild/bin/dmgbuild" \
+            zsh scripts/make-dmg.sh build/DD/Build/Products/Release/DotStudio.app "$VERSION" dist/DotStudio.dmg
+          # The app inside must still carry the release signature.
+          MNT=$(mktemp -d)
+          hdiutil attach -nobrowse -noautoopen -readonly -mountpoint "$MNT" dist/DotStudio.dmg
+          codesign --verify --deep --strict "$MNT/DotStudio.app"
+          hdiutil detach "$MNT"
 
       - name: Generate Sparkle appcast
         env:

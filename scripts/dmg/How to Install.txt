@@ -1,0 +1,29 @@
+How to Install DotStudio
+========================
+
+DotStudio isn't from the App Store, so macOS asks you to approve it once.
+It takes about a minute (macOS 14 or later).
+
+1. Drag DotStudio into Applications.
+
+2. Open DotStudio from Applications. macOS says it can't verify the
+   developer. Click Done (on macOS 14: OK). Don't click Move to Trash.
+
+3. Open System Settings › Privacy & Security and scroll down to
+   "DotStudio was blocked…". Click Open Anyway, then confirm with Open
+   (and your password or Touch ID if asked).
+
+4. DotStudio opens with a welcome guide. It installs the screensaver
+   and walks you through choosing it in
+   System Settings › Wallpaper › Screen Saver….
+
+5. Live wallpaper: turn it on in DotStudio's Wallpaper card. In Low
+   Power Mode it shows a still picture and starts moving again when Low
+   Power Mode is off. On battery it plays lighter
+   (Settings › Wallpaper › On Battery).
+
+6. That's it. Updates install themselves from now on, so you only do
+   this once.
+
+
+Need help? github.com/dw2lam/DotStudio/issues
