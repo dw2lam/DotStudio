@@ -441,24 +441,34 @@ struct TileBadgeCluster: View {
     var body: some View {
         let _ = Perf.body("TileBadgeCluster")
         if !badges.isEmpty {
+            // With several displays, a style that plays on just one of them says which:
+            // "Screensaver · LG".
+            let ssOn = badges.screensaverDisplay.map { " \u{00B7} \($0)" } ?? ""
+            let wpOn = badges.wallpaperDisplay.map { " \u{00B7} \($0)" } ?? ""
             FlowLayout(spacing: GlassBadge.spacing, lineSpacing: GlassBadge.spacing) {
                 if badges.onScreensaver {
                     if rotates {
-                        GlassBadge(text: badges.playingNow ? "Playing" : nil,
-                                   symbol: badges.playingNow ? "play.fill" : "play.square.stack.fill")
+                        // On screen now: the lineup's pick, or a display's own style.
+                        let now = badges.playingNow || badges.pinnedScreensaver
+                        GlassBadge(text: now ? "Playing" + ssOn : nil,
+                                   symbol: now ? "play.fill" : "play.square.stack.fill")
                             .help(badges.playingNow ? "In the screensaver playlist — on screen now" : "In the screensaver playlist")
                     } else {
-                        GlassBadge(text: "Screensaver", symbol: "play.fill")
-                            .help("Plays as your screensaver")
+                        GlassBadge(text: "Screensaver" + ssOn, symbol: "play.fill")
+                            .help("Plays as your screensaver\(badges.screensaverDisplay.map { " on \($0)" } ?? "")")
                     }
+                } else if badges.pinnedScreensaver {
+                    GlassBadge(text: "Screensaver" + ssOn, symbol: "play.fill")
+                        .help("Plays as the screensaver\(badges.screensaverDisplay.map { " on \($0)" } ?? " on some displays")")
                 }
                 if badges.night {
-                    GlassBadge(text: badges.onScreensaver ? nil : "Night", symbol: "moon.fill")
+                    GlassBadge(text: badges.onScreensaver || badges.pinnedScreensaver ? nil : "Night", symbol: "moon.fill")
                         .help("Plays at night")
                 }
-                if badges.wallpaper {
-                    GlassBadge(text: badges.isOnlyWallpaper ? "Wallpaper" : nil, symbol: "photo.artframe")
-                        .help("Playing as your wallpaper")
+                if badges.wallpaper || badges.pinnedWallpaper {
+                    GlassBadge(text: badges.isOnlyWallpaper ? "Wallpaper" + wpOn : badges.wallpaperDisplay,
+                               symbol: "photo.artframe")
+                        .help("Playing as your wallpaper\(badges.wallpaperDisplay.map { " on \($0)" } ?? "")")
                 }
             }
             .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .topLeading)))
@@ -493,7 +503,7 @@ struct GlassBadge: View {
 }
 
 private extension TileBadges {
-    var isOnlyWallpaper: Bool { wallpaper && !onScreensaver && !night }
+    var isOnlyWallpaper: Bool { (wallpaper || pinnedWallpaper) && !onScreensaver && !pinnedScreensaver && !night }
 }
 
 // MARK: - Hover bar
@@ -501,6 +511,7 @@ private extension TileBadges {
 private struct TileActionBar: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var wallpaper = WallpaperSlot.shared
+    @ObservedObject private var roster = DisplayRoster.shared
     @ScaledLength(relativeTo: .body) private var dividerHeight: CGFloat = 16
     let preset: Preset
     let badges: TileBadges
@@ -512,8 +523,14 @@ private struct TileActionBar: View {
         let _ = Perf.body("TileActionBar")
         // Every action when the tile has room. On a narrow tile (or at large text sizes)
         // Preview and Edit fold into a "…" menu; narrower still, everything but Play does.
+        // With several displays the "…" is always there: it holds "Set as Screensaver on ▸" and
+        // "Set as Wallpaper on ▸" (a SwiftUI button, so measuring it is safe — see moreMenu).
+        let multi = roster.isMulti
         ViewThatFits(in: .horizontal) {
-            bar { destinationIcons; divider; styleIcons }
+            bar {
+                destinationIcons; divider; styleIcons
+                if multi { moreMenu(includeDestinations: false, includeStyle: false) }
+            }
             bar { destinationIcons; divider; moreMenu(includeDestinations: false) }
             bar { playIcon; moreMenu(includeDestinations: true) }
         }
@@ -566,8 +583,8 @@ private struct TileActionBar: View {
     /// AppKit pop-up button, and the bar's ViewThatFits measures its variants — a measured
     /// AppKit control being created and dropped mid-layout is what crashed on macOS 26
     /// (see ColorWellsRow).
-    private func moreMenu(includeDestinations: Bool) -> some View {
-        Button { popUpMore(includeDestinations: includeDestinations) } label: {
+    private func moreMenu(includeDestinations: Bool, includeStyle: Bool = true) -> some View {
+        Button { popUpMore(includeDestinations: includeDestinations, includeStyle: includeStyle) } label: {
             Image(systemName: "ellipsis")
         }
         .buttonStyle(ScaledIconButtonStyle())
@@ -576,10 +593,10 @@ private struct TileActionBar: View {
         .accessibilityLabel("More")
     }
 
-    private func popUpMore(includeDestinations: Bool) {
+    private func popUpMore(includeDestinations: Bool, includeStyle: Bool = true) {
         var items: [ActionMenu.Item] = []
+        let id = preset.id
         if includeDestinations {
-            let id = preset.id
             items.append(.init(badges.onScreensaver ? "Remove from Screensaver" : "Add to Screensaver",
                                enabled: !isOnly) { [model] in Motion.run { model.togglePlaylist(id) } })
             if wallpaper.isAvailable {
@@ -589,8 +606,22 @@ private struct TileActionBar: View {
             }
             items.append(.separator)
         }
-        items.append(.init("Preview Full Screen") { preview() })
-        items.append(.init("Edit") { [model, id = preset.id] in model.edit(id) })
+        // Several displays: which ones play it (DisplayStyles.swift).
+        let displays = roster.displays
+        if displays.count > 1 {
+            items.append(.submenu("Set as Screensaver on",
+                                  ActionMenu.items(DisplayChoices.screensaver(id, model: model, displays: displays))))
+            if wallpaper.isAvailable {
+                items.append(.submenu("Set as Wallpaper on",
+                                      ActionMenu.items(DisplayChoices.wallpaper(id, model: model, slot: wallpaper,
+                                                                                displays: displays))))
+            }
+            if includeStyle { items.append(.separator) }
+        }
+        if includeStyle {
+            items.append(.init("Preview Full Screen") { preview() })
+            items.append(.init("Edit") { [model] in model.edit(id) })
+        }
         ActionMenu.popUp(items)
     }
 
@@ -638,6 +669,7 @@ struct TileMenu: View {
     /// Actions only (a plain reference: the menu never observes the model).
     let model: AppModel
     @ObservedObject private var wallpaper = WallpaperSlot.shared
+    @ObservedObject private var roster = DisplayRoster.shared
     let preset: Preset
     let lineup: ScreensaverLineup
     @Binding var confirmDelete: Bool
@@ -668,6 +700,10 @@ struct TileMenu: View {
         } else {
             Button("Play at Night") { Motion.run { model.setNight(id) } }
         }
+        if roster.isMulti {
+            DisplayChoiceMenu(title: "Set as Screensaver on",
+                              choices: DisplayChoices.screensaver(id, model: model, displays: roster.displays))
+        }
     }
 
     @ViewBuilder private var wallpaperSection: some View {
@@ -676,6 +712,11 @@ struct TileMenu: View {
                 Button("Stop Wallpaper") { Motion.run { wallpaper.stop() } }
             } else {
                 Button("Set as Wallpaper") { Motion.run { wallpaper.set(preset.id) } }
+            }
+            if roster.isMulti {
+                DisplayChoiceMenu(title: "Set as Wallpaper on",
+                                  choices: DisplayChoices.wallpaper(preset.id, model: model, slot: wallpaper,
+                                                                    displays: roster.displays))
             }
         }
     }
@@ -729,14 +770,29 @@ enum ActionMenu {
     struct Item {
         let title: String
         var enabled = true
+        var checked = false
         let action: (() -> Void)?
-        init(_ title: String, enabled: Bool = true, action: @escaping () -> Void) {
+        /// A submenu's items (`action` is nil).
+        var children: [Item]?
+        init(_ title: String, enabled: Bool = true, checked: Bool = false, action: @escaping () -> Void) {
             self.title = title
             self.enabled = enabled
+            self.checked = checked
             self.action = action
         }
-        private init() { title = ""; action = nil }
-        static let separator = Item()
+        private init(title: String, children: [Item]?) { self.title = title; action = nil; self.children = children }
+        static let separator = Item(title: "", children: nil)
+        static func submenu(_ title: String, _ items: [Item]) -> Item { Item(title: title, children: items) }
+    }
+
+    /// "All Displays", a separator, then each display (DisplayChoices).
+    static func items(_ choices: [DisplayChoice]) -> [Item] {
+        var out: [Item] = []
+        for (i, c) in choices.enumerated() {
+            out.append(Item(menuName(c.title, limit: 40), checked: c.checked, action: c.action))
+            if i == 0 { out.append(.separator) }
+        }
+        return out
     }
 
     private final class Target: NSObject {
@@ -746,18 +802,8 @@ enum ActionMenu {
     }
 
     static func popUp(_ items: [Item]) {
-        let menu = NSMenu()
-        menu.autoenablesItems = false
         var targets: [Target] = []
-        for item in items {
-            guard let action = item.action else { menu.addItem(.separator()); continue }
-            let t = Target(action)
-            targets.append(t)
-            let mi = NSMenuItem(title: item.title, action: #selector(Target.run), keyEquivalent: "")
-            mi.target = t
-            mi.isEnabled = item.enabled
-            menu.addItem(mi)
-        }
+        let menu = build(items, targets: &targets)
         // The targets outlive the menu's tracking (an item's action can arrive after popUp
         // returns); the next menu replaces them.
         live = targets
@@ -766,4 +812,26 @@ enum ActionMenu {
     }
 
     private static var live: [Target] = []
+
+    private static func build(_ items: [Item], targets: inout [Target]) -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        for item in items {
+            if let children = item.children {
+                let mi = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
+                mi.submenu = build(children, targets: &targets)
+                menu.addItem(mi)
+                continue
+            }
+            guard let action = item.action else { menu.addItem(.separator()); continue }
+            let t = Target(action)
+            targets.append(t)
+            let mi = NSMenuItem(title: item.title, action: #selector(Target.run), keyEquivalent: "")
+            mi.target = t
+            mi.isEnabled = item.enabled
+            mi.state = item.checked ? .on : .off
+            menu.addItem(mi)
+        }
+        return menu
+    }
 }

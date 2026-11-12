@@ -106,6 +106,7 @@ final class AppModel: ObservableObject {
     /// Persist the library, surfacing a write failure instead of dropping it silently.
     func save() {
         Perf.count("AppModel.save")
+        library.pruneDisplayStyles()   // a deleted style's display pins go (Shared/DisplayPins.swift)
         if !store.save(library) && storeAlert == nil {
             storeAlert = StoreAlert(
                 title: "Couldn't Save Changes",
@@ -524,6 +525,9 @@ final class AppModel: ObservableObject {
         if !WallpaperController.shared.followsScreensaver, WallpaperSlot.shared.styleID == id {
             WallpaperSlot.shared.stop()
         }
+        // Displays that played it as a style of their own go back to the shared pick (the
+        // screensaver's pins are dropped by save()).
+        WallpaperSlot.shared.forget(id)
         if editingID == id { editingID = nil }
         let neighbor = library.presets.indices.contains(idx) ? idx : library.presets.count - 1
         selectedID = neighbor >= 0 ? library.presets[neighbor].id : nil

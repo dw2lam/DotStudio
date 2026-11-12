@@ -9,8 +9,9 @@
 //  fake (tools/wallpaper-selftest) and never touches the real desktop there:
 //    • saveOriginals — before the first replacement, each screen's own picture (URL + options)
 //      is recorded (WallpaperSettings.savedDesktopPictures); never one of ours.
-//    • prepare       — renders one still per native pixel size and writes it under a NEW file
-//      name each time (macOS caches pictures by URL), off the main thread.
+//    • prepare       — renders one still per native pixel size (and per style: each display can
+//      play its own) and writes it under a NEW file name each time (macOS caches pictures by
+//      URL), off the main thread.
 //    • set           — points each screen at its file, then deletes the older files (keeping the
 //      previous one, which macOS may still be reading).
 //    • restore       — puts the recorded pictures back on screens still showing ours (a picture
@@ -82,20 +83,32 @@ final class LockScreenPicture {
     /// Thread-safe (no shared state but the file system); call it off the main thread.
     /// - render: width, height → the frame (nil = failed; those screens are skipped).
     func prepare(screens: [Screen], render: (Int, Int) -> CGImage?) -> [Prepared] {
+        prepare(screens: screens, style: { _ in "" }) { render($0.pixelWidth, $0.pixelHeight) }
+    }
+
+    /// One still per distinct (style, native pixel size): screens showing different styles get
+    /// stills of their own. Files are named lock-<W>x<H>-<stamp>[-<n>].heic, n counting the
+    /// styles of one size in this call.
+    /// - style: a screen's style identity (equal = one shared still).
+    /// - render: the first screen of a group → the frame (nil = failed; that group is skipped).
+    func prepare(screens: [Screen], style: (Screen) -> String, render: (Screen) -> CGImage?) -> [Prepared] {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        var bySize: [String: [Screen]] = [:]
-        var order: [String] = []
+        var groups: [String: [Screen]] = [:]
+        var order: [(key: String, size: String)] = []
         for s in screens {
-            let k = "\(s.pixelWidth)x\(s.pixelHeight)"
-            if bySize[k] == nil { order.append(k) }
-            bySize[k, default: []].append(s)
+            let size = "\(s.pixelWidth)x\(s.pixelHeight)"
+            let k = size + "|" + style(s)
+            if groups[k] == nil { order.append((k, size)) }
+            groups[k, default: []].append(s)
         }
         let stamp = Self.stamp()
         var out: [Prepared] = []
-        for k in order {
-            guard let group = bySize[k], let first = group.first,
-                  let image = render(first.pixelWidth, first.pixelHeight) else { continue }
-            let url = dir.appendingPathComponent("lock-\(k)-\(stamp).heic")
+        var perSize: [String: Int] = [:]
+        for (k, size) in order {
+            guard let group = groups[k], let first = group.first, let image = render(first) else { continue }
+            let n = perSize[size, default: 0]
+            perSize[size] = n + 1
+            let url = dir.appendingPathComponent("lock-\(size)-\(stamp)\(n > 0 ? "-\(n)" : "").heic")
             guard Self.write(image, to: url) else { continue }
             out.append(Prepared(url: url, screens: group.map(\.key)))
         }
@@ -103,8 +116,8 @@ final class LockScreenPicture {
     }
 
     /// Point each screen at its new still, then delete our older files (keeping the newest
-    /// two of each size: the new one, and the one macOS may still be reading). Returns the
-    /// keys of the screens set.
+    /// two renders of each size: the new one, and the one macOS may still be reading — every
+    /// style's still of a render counts as that render). Returns the keys of the screens set.
     @discardableResult
     func set(_ prepared: [Prepared]) -> [String] {
         var done: [String] = []
@@ -146,13 +159,21 @@ final class LockScreenPicture {
             .sorted { $0.lastPathComponent > $1.lastPathComponent }   // the stamp sorts by time
     }
 
-    /// Delete all but the newest `keep` files of each pixel size.
+    /// Delete all but the newest `keep` renders of each pixel size (a render = the files of one
+    /// stamp: one per style shown at that size).
     private func prune(keep: Int) {
-        var seen: [String: Int] = [:]
+        var stamps: [String: [String]] = [:]       // size → stamps, newest first
+        var parsed: [(url: URL, size: String, stamp: String)] = []
         for url in files() {
-            let size = url.lastPathComponent.split(separator: "-").dropFirst().first.map(String.init) ?? ""
-            seen[size, default: 0] += 1
-            if seen[size]! > keep { try? FileManager.default.removeItem(at: url) }
+            let parts = url.deletingPathExtension().lastPathComponent.split(separator: "-").map(String.init)
+            let size = parts.count > 1 ? parts[1] : ""
+            let stamp = parts.count > 2 ? parts[2] : ""
+            parsed.append((url, size, stamp))
+            if !(stamps[size]?.contains(stamp) ?? false) { stamps[size, default: []].append(stamp) }
+        }
+        for f in parsed {
+            let newest = (stamps[f.size] ?? []).sorted(by: >).prefix(keep)
+            if !newest.contains(f.stamp) { try? FileManager.default.removeItem(at: f.url) }
         }
     }
 

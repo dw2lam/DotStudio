@@ -25,17 +25,35 @@ import QuartzCore
 
 /// What the main thread's policy allows right now: an immutable snapshot.
 struct WallpaperFrameState: Equatable {
+    /// How one display's style wants its frames (each display can play its own style).
+    struct Pacing: Equatable {
+        var profile: WallpaperPacing.Profile = .still
+        /// Target frames per second (settings, preset cap and battery already applied).
+        var fps: Double = 30
+        /// The rate the style steps its own time at (WallpaperPacing.steppedFPS), if it does.
+        var stepFPS: Double? = nil
+    }
+
     /// No hard pause (user pause, lock, sleep, screensaver).
     var canDraw = false
     /// Displays whose wallpaper someone can see.
     var visible: Set<CGDirectDisplayID> = []
-    var profile: WallpaperPacing.Profile = .still
-    /// Target frames per second (settings, preset cap and battery already applied).
-    var fps: Double = 30
     /// Hot Mac / battery freeze: motion holds; a clock turns over once a minute.
     var still = false
-    /// The rate the style steps its own time at (WallpaperPacing.steppedFPS), if it does.
-    var stepFPS: Double? = nil
+    /// Each display's pacing; a display not listed uses `fallback`.
+    var displays: [CGDirectDisplayID: Pacing] = [:]
+    var fallback = Pacing()
+
+    func pacing(_ id: CGDirectDisplayID) -> Pacing { displays[id] ?? fallback }
+}
+
+extension WallpaperFrameState {
+    /// Every display paced alike (one style everywhere: tools/perf).
+    init(canDraw: Bool, visible: Set<CGDirectDisplayID>, profile: WallpaperPacing.Profile, fps: Double,
+         still: Bool, stepFPS: Double? = nil) {
+        self.init(canDraw: canDraw, visible: visible, still: still,
+                  fallback: Pacing(profile: profile, fps: fps, stepFPS: stepFPS))
+    }
 }
 
 /// Per-display geometry, measured on the main thread.
@@ -82,6 +100,7 @@ final class WallpaperRenderLoop {
     /// its view (not yet scheduled; this thread adopts it) and the GPU to draw on.
     func addDisplay(_ id: CGDirectDisplayID, token: UInt64, layer: CAMetalLayer, link: CADisplayLink,
                     device: MTLDevice, config: WallpaperSurfaceConfig) {
+        surfaceIDs.insert(id)
         thread.async { [self] in
             addSurface(id, token: token, layer: layer, link: link, device: device, config: config)
         }
@@ -92,16 +111,21 @@ final class WallpaperRenderLoop {
     }
 
     func removeDisplay(_ id: CGDirectDisplayID) {
+        surfaceIDs.remove(id)
         thread.async { [self] in removeSurface(id) }
     }
 
     func removeAll() {
+        surfaceIDs.removeAll()
         thread.async { [self] in
             for id in Array(surfaces.keys) { removeSurface(id) }
-            setPlan(.none)
+            state = WallpaperFrameState()
+            setPlans()
             style = nil
+            styles = [:]
             music = nil            // drop the cover; the controller re-sends it on restart
             musicBackdrop = .none
+            musicBackdrops = [:]
         }
     }
 
@@ -117,13 +141,25 @@ final class WallpaperRenderLoop {
         }
     }
 
-    /// Full Screen music's backdrop (MusicPresentation, decided on the main thread). Each
-    /// renderer eases it in or out over the frames it draws; a held frame shows the end state.
-    func setMusicBackdrop(_ backdrop: MusicBackdrop, animated: Bool) {
+    /// Full Screen music's backdrop (MusicPresentation, decided on the main thread) — per
+    /// display, as a legacy Now Playing style on one display draws none. Each renderer eases it
+    /// in or out over the frames it draws; a held frame shows the end state.
+    func setMusicBackdrops(_ backdrops: [CGDirectDisplayID: MusicBackdrop], fallback: MusicBackdrop, animated: Bool) {
         thread.async { [self] in
-            musicBackdrop = backdrop
-            for s in surfaces.values { s.renderer.setMusicBackdrop(backdrop, animated: animated) }
+            musicBackdrop = fallback
+            musicBackdrops = backdrops
+            for s in surfaces.values {
+                let b = backdrops[s.id] ?? fallback
+                guard b != s.backdrop else { continue }
+                s.backdrop = b
+                s.renderer.setMusicBackdrop(b, animated: animated)
+            }
         }
+    }
+
+    /// One backdrop on every display.
+    func setMusicBackdrop(_ backdrop: MusicBackdrop, animated: Bool) {
+        setMusicBackdrops([:], fallback: backdrop, animated: animated)
     }
 
     /// The animation time base (wall clock while the wallpaper matches the screensaver).
@@ -134,28 +170,49 @@ final class WallpaperRenderLoop {
         }
     }
 
-    /// The style every display draws (value types: copied across, nothing shared).
-    /// - fade: crossfade seconds (only meaningful while frames run continuously); 0 = cut.
-    func setStyle(_ preset: Preset, source: SourceSpec, location: (lat: Double, lon: Double)?,
-                  fade: Double = 0) {
+    /// The style each display draws (value types: copied across, nothing shared): `styles`
+    /// for the displays listed, `fallback` for the rest (and for displays added later until
+    /// the next call). Only displays whose style, source or location changed are touched.
+    /// - fades: crossfade seconds per display (only meaningful while its frames run
+    ///   continuously); missing or 0 = cut.
+    func setStyles(_ styles: [CGDirectDisplayID: Preset], fallback: Preset, source: SourceSpec,
+                   location: (lat: Double, lon: Double)?, fades: [CGDirectDisplayID: Double] = [:]) {
         thread.async { [self] in
-            style = (preset, source)
+            style = (fallback, source)
+            self.styles = styles
             self.location = location
             boosted {
                 for s in surfaces.values {
+                    let preset = styles[s.id] ?? fallback
+                    let moved = s.location?.lat != location?.lat || s.location?.lon != location?.lon
+                    guard s.preset != preset || s.source != source || moved else { continue }
                     s.renderer.location = location
-                    if fade > 0.05 {
+                    s.location = location
+                    let fade = fades[s.id] ?? 0
+                    if fade > 0.05, s.preset != nil {
                         s.renderer.transition(to: preset, source: source, duration: fade)
                     } else {
                         s.renderer.apply(preset, source: source)   // may load an image/video
                     }
+                    s.preset = preset
+                    s.source = source
                     // A freshly loaded video starts playing; hold it if frames are held.
-                    s.renderer.setMediaPaused(mediaPaused)
+                    s.renderer.setMediaPaused(s.mediaPaused)
                     s.warming = true
                 }
             }
         }
     }
+
+    /// One style on every display.
+    func setStyle(_ preset: Preset, source: SourceSpec, location: (lat: Double, lon: Double)?,
+                  fade: Double = 0) {
+        setStyles([:], fallback: preset, source: source, location: location,
+                  fades: fade > 0 ? Dictionary(uniqueKeysWithValues: surfaceIDs.map { ($0, fade) }) : [:])
+    }
+
+    /// The displays added (main thread only: setStyle's fades).
+    private var surfaceIDs: Set<CGDirectDisplayID> = []
 
     /// Re-decide what runs. `forceDraw` draws a fresh frame now even if the plan is
     /// already running (an edit, a new drawable size).
@@ -177,6 +234,16 @@ final class WallpaperRenderLoop {
         /// The next frame is the first of a style: it may build lazy assets.
         var warming = true
         let pacing = WallpaperPacingStats()
+        /// What this display was last handed (setStyles skips displays whose style didn't change).
+        var preset: Preset?
+        var source: SourceSpec?
+        var location: (lat: Double, lon: Double)?
+        var backdrop: MusicBackdrop = .none
+        /// What its frames do now (setPlans), and when its next clock frame is due (`.after`).
+        var plan: WallpaperPacing.Plan = .none
+        var due: Date = .distantFuture
+        /// Whether its media decoders are held (a video source keeps decoding on its own clock).
+        var mediaPaused = false
 
         init(id: CGDirectDisplayID, token: UInt64, layer: CAMetalLayer, link: CADisplayLink,
              renderer: MetalRenderer, config: WallpaperSurfaceConfig) {
@@ -187,21 +254,27 @@ final class WallpaperRenderLoop {
 
     private var surfaces: [CGDirectDisplayID: Surface] = [:]
     private var state = WallpaperFrameState()
-    private var plan: WallpaperPacing.Plan = .none
+    /// The fallback style (displays without one of their own) and the per-display ones.
     private var style: (Preset, SourceSpec)?
+    private var styles: [CGDirectDisplayID: Preset] = [:]
     private var location: (lat: Double, lon: Double)?
     private var music: (snapshot: MusicSnapshot, linger: Double)?
     private var musicBackdrop: MusicBackdrop = .none
+    private var musicBackdrops: [CGDirectDisplayID: MusicBackdrop] = [:]
     private var timeBase: MetalRenderer.TimeBase = .instance
     private var clockTimer: Timer?
-    /// Whether media decoders should be held. Invariant: every surface's renderer has
-    /// been told this value since its media last changed (addSurface and setStyle push
-    /// it after `apply`), so `setMediaPaused` may skip calls that wouldn't change it.
-    private var mediaPaused = false
     private var activity: NSObjectProtocol?
     private var framesDrawn = 0
     /// Frames drawn since creation (tools/perf reads it; never reset).
     private(set) var framesDrawnTotal = 0
+    /// …per display, only under tools/perf (its two-display check; written on the render thread,
+    /// read after the loop has gone quiet).
+    private(set) var framesDrawnPerDisplay: [CGDirectDisplayID: Int] = [:]
+#if DOTSTUDIO_PERF
+    private let debugCounts = true
+#else
+    private let debugCounts = false
+#endif
     private var statsSince = CACurrentMediaTime()
     private var loggedThread = false
     private var clockTicks = 0
@@ -224,8 +297,8 @@ final class WallpaperRenderLoop {
                 r.musicLingerMinutes = music.linger
                 r.setMusic(music.snapshot)
             }
-            r.setMusicBackdrop(musicBackdrop, animated: false)   // a new display starts where the rest are
-            if let (preset, source) = style { r.apply(preset, source: source) }
+            r.setMusicBackdrop(musicBackdrops[id] ?? musicBackdrop, animated: false)   // a new display starts where the rest are
+            if let (fallback, source) = style { r.apply(styles[id] ?? fallback, source: source) }
             return r
         }
         guard let r = made else {
@@ -239,8 +312,15 @@ final class WallpaperRenderLoop {
         }
         link.isPaused = true
         link.add(to: .current, forMode: .common)
-        r.setMediaPaused(mediaPaused)
+        r.setMediaPaused(true)            // held until setPlans runs its frames
         let s = Surface(id: id, token: token, layer: layer, link: link, renderer: r, config: config)
+        s.mediaPaused = true
+        s.backdrop = musicBackdrops[id] ?? musicBackdrop
+        if let (fallback, source) = style {
+            s.preset = styles[id] ?? fallback
+            s.source = source
+            s.location = location
+        }
         surfaces[id] = s
         setDrawableSize(s, config.drawableSize)
     }
@@ -279,7 +359,7 @@ final class WallpaperRenderLoop {
         let rateChanged = s.config.refreshRate != config.refreshRate
         s.config = config
         setDrawableSize(s, config.drawableSize)
-        if rateChanged, case .continuous = plan { setPlan(plan) }   // re-derive the divisor
+        if rateChanged, s.plan.isContinuous { setPlans() }   // re-derive the divisor
     }
 
     private func setDrawableSize(_ s: Surface, _ size: CGSize) {
@@ -299,50 +379,64 @@ final class WallpaperRenderLoop {
         // The layer belongs to a view; let its last reference go on the main thread.
         let layer = s.layer
         DispatchQueue.main.async { withExtendedLifetime(layer) {} }
-        if surfaces.isEmpty { setPlan(.none) } else { updateFrameQoS() }
+        setPlans()
     }
 
-    private func apply(_ s: WallpaperFrameState, forceDraw: Bool) {
-        state = s
-        guard s.canDraw, !s.visible.isEmpty else {
-            setPlan(.none)
-            return
-        }
-        // A fresh frame now when something changed or we're resuming from a hold;
-        // a running display link just keeps going. A frame the next plan will hold shows
-        // the end of any fade it would start (a track change, a time-base switch).
-        let next = currentPlan()
-        if forceDraw || plan == .none { drawVisible(settled: !next.isContinuous) }
-        setPlan(next)
-    }
-
-    private func currentPlan() -> WallpaperPacing.Plan {
-        WallpaperPacing.plan(state.profile, fps: state.fps, still: state.still)
-    }
-
-    /// Start/stop the display links, the clock timer, the decoders and the App Nap
-    /// activity to match `p`.
-    private func setPlan(_ p: WallpaperPacing.Plan) {
-        plan = p
-        let canDraw = state.canDraw
-        for s in surfaces.values {
-            if case .continuous(let fps) = p, canDraw, state.visible.contains(s.id) {
-                runLink(s, at: WallpaperPacing.rate(target: fps, step: state.stepFPS, refresh: s.config.refreshRate))
-            } else {
-                pauseLink(s)
+    private func apply(_ st: WallpaperFrameState, forceDraw: Bool) {
+        state = st
+        // A fresh frame on each display that can show one when something changed or it's
+        // resuming from a hold; a running display link just keeps going. A frame its next plan
+        // will hold shows the end of any fade it would start (a track change, a time-base
+        // switch). A new display draws its first frame even before its occlusion state
+        // settles, so it can fade in over the system wallpaper with real content.
+        if st.canDraw, !st.visible.isEmpty {
+            for s in surfaces.values where st.visible.contains(s.id) || !s.hasDrawn {
+                guard forceDraw || s.plan == .none else { continue }
+                draw(s, fromLink: false, settled: !plan(for: s).isContinuous)
             }
+            noteStats()
+        }
+        setPlans()
+    }
+
+    /// What one display's frames should do now.
+    private func plan(for s: Surface) -> WallpaperPacing.Plan {
+        guard state.canDraw, state.visible.contains(s.id) else { return .none }
+        let p = state.pacing(s.id)
+        return WallpaperPacing.plan(p.profile, fps: p.fps, still: state.still)
+    }
+
+    /// Start/stop each display's link and decoders, the shared clock timer (armed for the
+    /// soonest clock frame due on any display) and the App Nap activity, to match each
+    /// display's plan.
+    private func setPlans() {
+        let now = Date()
+        var soonest: TimeInterval?
+        for s in surfaces.values {
+            let p = plan(for: s)
+            s.plan = p
+            switch p {
+            case .continuous(let fps):
+                let step = state.pacing(s.id).stepFPS
+                runLink(s, at: WallpaperPacing.rate(target: fps, step: step, refresh: s.config.refreshRate))
+                s.due = .distantFuture
+            case .after(let delay):
+                pauseLink(s)
+                s.due = now.addingTimeInterval(delay)
+                soonest = min(soonest ?? delay, delay)
+            case .none:
+                pauseLink(s)
+                s.due = .distantFuture
+            }
+            setMediaPaused(s, !p.isContinuous)
         }
         updateFrameQoS()
-        if case .after(let delay) = p, canDraw {
-            armClock(after: delay)
+        if let soonest {
+            armClock(after: soonest)
         } else {
             clockTimer?.fireDate = .distantFuture
         }
-        switch p {
-        case .continuous: setMediaPaused(!canDraw)
-        default: setMediaPaused(true)
-        }
-        setActive(canDraw && p != .none && !surfaces.isEmpty)
+        setActive(state.canDraw && surfaces.values.contains { $0.plan != .none })
     }
 
     private func runLink(_ s: Surface, at fps: Double) {
@@ -371,23 +465,11 @@ final class WallpaperRenderLoop {
         draw(s, fromLink: true)
         noteStats()
         // A clock only animates around a change; hand back to the 1 Hz timer after.
-        if case .clock = state.profile {
-            let next = currentPlan()
-            if next != plan { setPlan(next) }
-        }
+        if case .clock = state.pacing(id).profile, plan(for: s) != s.plan { setPlans() }
     }
 
     /// - settled: the frame will be held (no display link runs after it), so it must show
     ///   the end state of any crossfade rather than its first frame.
-    private func drawVisible(settled: Bool) {
-        // A new display draws its first frame even before its occlusion state settles,
-        // so it can fade in over the system wallpaper with real content.
-        for s in surfaces.values where state.visible.contains(s.id) || !s.hasDrawn {
-            draw(s, fromLink: false, settled: settled)
-        }
-        noteStats()
-    }
-
     private func draw(_ s: Surface, fromLink: Bool, settled: Bool = false) {
         let pacing = s.pacing
         s.renderer.onPresented = (debug && fromLink) ? { pacing.presented($0) } : nil
@@ -397,6 +479,7 @@ final class WallpaperRenderLoop {
         s.warming = false
         framesDrawn += 1
         framesDrawnTotal += 1
+        if debugCounts { framesDrawnPerDisplay[s.id, default: 0] += 1 }
         guard !s.hasDrawn else { return }
         s.hasDrawn = true
         let id = s.id, token = s.token
@@ -428,17 +511,24 @@ final class WallpaperRenderLoop {
             clockTicks += 1
             clockTickLatest = max(clockTickLatest, Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 1))
         }
-        guard state.canDraw else { setPlan(.none); return }
-        let next = currentPlan()
-        drawVisible(settled: !next.isContinuous)
-        setPlan(next)
+        guard state.canDraw else { setPlans(); return }
+        // The displays whose clock frame is due (within the timer's 30 ms tolerance); one whose
+        // next tick is later (a once-a-minute still clock beside a seconds clock) waits for it.
+        let now = Date().addingTimeInterval(0.03)
+        for s in surfaces.values where s.due <= now && state.visible.contains(s.id) {
+            draw(s, fromLink: false, settled: !plan(for: s).isContinuous)
+        }
+        noteStats()
+        setPlans()
     }
 
-    /// A video source keeps decoding on its own clock; stop it with the frame loop.
-    private func setMediaPaused(_ paused: Bool) {
-        guard paused != mediaPaused else { return }
-        mediaPaused = paused
-        for s in surfaces.values { s.renderer.setMediaPaused(paused) }
+    /// A video source keeps decoding on its own clock; stop it with that display's frames.
+    /// Invariant: each renderer has been told its surface's value since its media last changed
+    /// (addSurface and setStyles push it after `apply`), so calls that wouldn't change it skip.
+    private func setMediaPaused(_ s: Surface, _ paused: Bool) {
+        guard paused != s.mediaPaused else { return }
+        s.mediaPaused = paused
+        s.renderer.setMediaPaused(paused)
     }
 
     /// While frames are actually being drawn, tell the system this is ongoing work so
@@ -470,7 +560,8 @@ final class WallpaperRenderLoop {
             ? String(format: ", clock ticks %d (latest +%.0fms past the second)", clockTicks, clockTickLatest * 1000) : ""
         log(String(format: "stats %.1f fps, GPU busy %.2f%% (%.2f ms/frame) over %.0fs, intervals %@ (profile=%@)%@",
                    Double(framesDrawn) / span, gpu / span * 100,
-                   framesDrawn > 0 ? gpu / Double(framesDrawn) * 1000 : 0, span, pacing, "\(state.profile)", clock))
+                   framesDrawn > 0 ? gpu / Double(framesDrawn) * 1000 : 0, span, pacing,
+                   surfaces.keys.map { "\($0)=\(state.pacing($0).profile)" }.joined(separator: " "), clock))
         framesDrawn = 0
         statsSince = now
         clockTicks = 0

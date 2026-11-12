@@ -22,14 +22,31 @@ final class WallpaperSlot: ObservableObject {
         var changes: AnyPublisher<Void, Never>? = nil
         /// False hides wallpaper controls entirely (e.g. no backend in this build).
         var isAvailable = true
+        /// Displays with a style of their own (display key → pin; Shared/DisplayPins.swift).
+        var pins: () -> [String: DisplayPin] = { [:] }
+        /// Give a display a style of its own (nil: back to the shared pick). Starts the
+        /// wallpaper when it's off.
+        var setPin: (String, DisplayPin?) -> Void = { _, _ in }
+        /// Every display plays the shared pick again.
+        var clearPins: () -> Void = {}
+        /// A deleted style's pins go.
+        var forget: (UUID) -> Void = { _ in }
+        /// The wallpaper follows the screensaver (each display shows what its screensaver shows).
+        var follows: () -> Bool = { false }
 
         static let stub = Backend(styleID: { nil }, set: { _ in }, stop: {})
     }
 
     static let shared = WallpaperSlot(backend: DemoHooks.wallpaperStub ?? .stub)
 
-    /// The style on the desktop right now; nil = wallpaper off.
+    /// The style on the desktop right now (every display without one of its own); nil =
+    /// wallpaper off.
     @Published private(set) var styleID: UUID?
+    /// Displays playing a style of their own (display key → pin), whether or not they're
+    /// connected now. Unused while the wallpaper follows the screensaver.
+    @Published private(set) var pins: [String: DisplayPin] = [:]
+    /// Following the screensaver ("Same as Screensaver"): the pins are kept but unused.
+    @Published private(set) var follows = false
     var isActive: Bool { styleID != nil }
     var isAvailable: Bool { backend.isAvailable }
 
@@ -51,10 +68,33 @@ final class WallpaperSlot: ObservableObject {
     func stop() { Breadcrumbs.note("wallpaper stop"); backend.stop(); refresh() }
     func toggle(_ id: UUID) { styleID == id ? stop() : set(id) }
 
+    /// One display plays `id` (nil: the shared pick again).
+    func set(_ id: UUID?, on display: DisplayInfo) {
+        Breadcrumbs.note("wallpaper display \(display.shortName): \(id.map { String($0.uuidString.prefix(8)) } ?? "shared")")
+        backend.setPin(display.key, id.map { DisplayPin(presetID: $0, name: display.name) })
+        refresh()
+    }
+
+    /// Every display plays `id`: the shared pick, and no display keeps a style of its own.
+    func setEverywhere(_ id: UUID) {
+        backend.clearPins()
+        set(id)
+    }
+
+    /// Every display plays the shared pick again.
+    func clearPins() { backend.clearPins(); refresh() }
+
+    /// A deleted style: its pins go.
+    func forget(_ id: UUID) { backend.forget(id); refresh() }
+
     /// Re-read the backend's state.
     func refresh() {
         let id = backend.styleID()
         if id != styleID { styleID = id }
+        let p = backend.pins()
+        if p != pins { pins = p }
+        let f = backend.follows()
+        if f != follows { follows = f }
     }
 
     private func hookUp() {
@@ -69,8 +109,21 @@ extension WallpaperSlot.Backend {
     /// In-memory stand-in for design captures (DOTSTUDIO_DEMO_WALLPAPER_STUB): remembers
     /// the pick so the card and badges can be seen in their "on" state. Never shipped on.
     static func memory(initial: UUID?) -> Self {
-        final class Box { var id: UUID? ; init(_ id: UUID?) { self.id = id } }
+        final class Box {
+            var id: UUID?
+            var pins: [String: DisplayPin] = [:]
+            init(_ id: UUID?) { self.id = id }
+        }
         let box = Box(initial)
-        return .init(styleID: { box.id }, set: { box.id = $0 }, stop: { box.id = nil })
+        var b = Self(styleID: { box.id }, set: { box.id = $0 }, stop: { box.id = nil })
+        b.pins = { box.pins }
+        b.setPin = { key, pin in
+            box.pins[key] = pin
+            if let pin, box.id == nil { box.id = pin.presetID }
+        }
+        b.clearPins = { box.pins = [:] }
+        b.forget = { id in box.pins = box.pins.filter { $0.value.presetID != id } }
+        b.follows = { WallpaperController.shared.followsScreensaver }   // shots set it on the controller
+        return b
     }
 }

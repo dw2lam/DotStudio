@@ -13,11 +13,19 @@ import SwiftUI
 struct WallpaperMenu: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var wallpaper = WallpaperController.shared
+    @ObservedObject private var roster = DisplayRoster.shared
 
     var body: some View {
         let synced = wallpaper.isActive && wallpaper.followsScreensaver
         if wallpaper.isActive {
-            Text("Wallpaper: \(menuName(wallpaper.currentPreset?.name ?? "—"))")
+            let lines = perDisplay(synced: synced)
+            if lines.isEmpty {
+                Text("Wallpaper: \(menuName(wallpaper.currentPreset?.name ?? "—"))")
+            } else {
+                // Some displays play a style of their own: one line per display.
+                Text("Wallpaper")
+                ForEach(lines, id: \.self) { Text($0) }
+            }
             if let status = wallpaper.statusText {
                 Text(status)
             }
@@ -36,6 +44,19 @@ struct WallpaperMenu: View {
                                    isChosen: { _ in false },
                                    choose: { wallpaper.use($0) })
             }
+        }
+    }
+
+    /// "<display>: <style>" per connected display, when some display plays a style of its own
+    /// (the wallpaper's own, or — synced — the screensaver's); empty otherwise.
+    private func perDisplay(synced: Bool) -> [String] {
+        guard roster.isMulti else { return [] }
+        let lineup = DisplayLineup(model: model, displays: roster.displays,
+                                   wallpaperShared: wallpaper.currentPreset?.id,
+                                   wallpaperPins: wallpaper.settings.displayStyles, synced: synced)
+        guard !(synced ? lineup.screensaverPinned : lineup.wallpaperPinned).isEmpty else { return [] }
+        return roster.displays.map { d in
+            "\(menuName(d.name, limit: 24)): \(menuName(lineup.wallpaper[d.key].flatMap(model.preset)?.name ?? "—", limit: 26))"
         }
     }
 
