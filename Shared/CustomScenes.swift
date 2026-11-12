@@ -121,6 +121,8 @@ struct CustomSceneManifest: Codable, Equatable {
         var variant: String
         var file: String
         var loop: Bool?
+        /// "hevc" / "h264" (informational; AVFoundation reads the file's own).
+        var codec: String?
     }
 
     var format: Int = 1
@@ -504,9 +506,22 @@ enum CustomScenes {
                 try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try fm.copyItem(at: url.appendingPathComponent(rel), to: dst)
             }
-            let enc = JSONEncoder()
-            enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try enc.encode(m).write(to: tmp.appendingPathComponent("scene.json"), options: .atomic)
+            // scene.json as written (every field kept, nested unknown ones too), with only its id
+            // replaced when it needed a new one.
+            let raw = try Data(contentsOf: url.appendingPathComponent("scene.json"))
+            if var obj = try? JSONSerialization.jsonObject(with: raw) as? [String: Any] {
+                if (obj["id"] as? String) != m.id {
+                    obj["id"] = m.id
+                    try JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys])
+                        .write(to: tmp.appendingPathComponent("scene.json"), options: .atomic)
+                } else {
+                    try raw.write(to: tmp.appendingPathComponent("scene.json"), options: .atomic)
+                }
+            } else {
+                let enc = JSONEncoder()
+                enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+                try enc.encode(m).write(to: tmp.appendingPathComponent("scene.json"), options: .atomic)
+            }
             let dst = packageDir(id: m.id, store: store)
             if fm.fileExists(atPath: dst.path) {
                 _ = try fm.replaceItemAt(dst, withItemAt: tmp)
@@ -618,6 +633,18 @@ enum CustomScenes {
     static func knownManifest(id: String) -> CustomSceneManifest? {
         cacheLock.lock(); defer { cacheLock.unlock() }
         return knownByID[id]
+    }
+
+    /// Changes whenever the installed package's files do (thumbnail cache keys).
+    static func revisionKey(id: String, store: URL) -> String {
+        let dir = packageDir(id: id, store: store)
+        let m = manifest(id: id, store: store)
+        var parts = ["scene.json"] + (m?.entry.map { [$0] } ?? []) + (m?.assets ?? [])
+        parts += (m?.clips ?? []).map(\.file)
+        return parts.map { rel -> String in
+            guard let s = FileStamp(path: dir.appendingPathComponent(rel).path) else { return "-" }
+            return "\(s.size).\(s.sec).\(s.nsec).\(s.inode)"
+        }.joined(separator: "|")
     }
 
     static func clearCaches(id: String) {

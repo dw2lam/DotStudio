@@ -949,7 +949,8 @@ if runChecks {
     let live = liveChecks(), format = formatChecks(), bounce = bounceChecks()
     let retirement = retirementChecks()
     let hardening = hardeningChecks(), lapse = lapseChecks(), landscape = meadowLandscapeChecks()
-    exit(live && format && bounce && retirement && hardening && lapse && landscape ? 0 : 1)
+    let custom = customSceneChecks()                           // tools/gallery/CustomChecks.swift
+    exit(live && format && bounce && retirement && hardening && lapse && landscape && custom ? 0 : 1)
 }
 
 if let tzArg, let tz = TimeZone(identifier: tzArg) { NSTimeZone.default = tz }
