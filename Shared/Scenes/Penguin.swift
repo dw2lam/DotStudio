@@ -36,6 +36,7 @@
 //    [6] (custom character 0/1, its half width, height (heights), mip level)
 //    [7] (its texture's clear margin in uv (x, y), slide direction ±1, snow spray 0…1)
 //    [8] (igloo x px from the centre, its radius px, behind it 0/1, night 0 day … 1 night)
+//    [9] (camera px (the penguin's [0].x is already on screen), burst age s (< 0 none), its seed, 0)
 
 import Foundation
 import Metal
@@ -51,7 +52,7 @@ extension SceneCatalog {
             shaderID: 80,
             params: [ParamSpec(menu: "render", "Render", ["LED Dots", "Pixels", "Glyphs"], def: 0),
                      ParamSpec("cell", "Cell Size", 8, 22, def: 13),
-                     ParamSpec("glow", "Glow", 0, 1, def: 0.85),
+                     ParamSpec("glow", "Glow", 0, 1, def: 0.9),
                      ParamSpec("energy", "Energy", 0, 1, def: 0.5),
                      ParamSpec("snow", "Snow", 0, 1, def: 1, toggle: true),
                      ParamSpec("size", "Size", 0.6, 1.3, def: 1),
@@ -96,6 +97,7 @@ enum WaddleRig {
         var tuft = 0.0
         var spray = 0.0                  // snow kicked up behind a belly slide
         var behind = false               // passing behind the igloo (it hides what it covers)
+        var burst = -1.0, burstSeed = 0.0 // seconds into a burst of hearts and stars (< 0 none)
         var act = Act.stroll
         /// What part of the episode this is: 0 rest, 1 turn, 2 walk, 3 run, 4 dive, 5 glide,
         /// 6 getting up, 7 peering over the edge, 8 the behaviour, 9 a fidget.
@@ -453,6 +455,7 @@ enum WaddleRig {
             p.yaw = s * 0.12 * up
             p.happy = up > 0.5 ? 1 : 0
             p.beak = bump(min(l / 0.5, 1)) * 0.9
+            for (i, b) in [0.35, 1.55].enumerated() where l >= b { p.burst = l - b; p.burstSeed = Double(k * 31 + i) }
             p.headTilt = -s * 0.1 * up
         case .dance:
             // little hops, side to side, flippers out
@@ -471,6 +474,10 @@ enum WaddleRig {
             p.flipL = 0.28 + (fl - 0.28) * env; p.flipR = 0.28 + (fl - 0.28) * env
             p.happy = env > 0.5 ? 1 : 0
             p.beak = live * (n % 3 == 1 ? bump(fr) : 0)
+            if l > 0.3 && l < dur - 0.3 {                    // a burst every other hop
+                let b = ((l - 0.3) / 1.1).rounded(.down)
+                p.burst = l - 0.3 - b * 1.1; p.burstSeed = Double(k * 31 + 5 + Int(b))
+            }
         case .doze:
             // sit, droop, Zz…, wake with a start
             let sit = smooth(l / 0.6) * smooth((dur - l) / 0.5)
@@ -574,6 +581,14 @@ enum WaddleRig {
         let p = pose(at: ts, range: st.range, energy: energy, night: nf, igloo: ig)
         // the backdrop's night: the clock's when following it, else the one picked
         let sky = follow ? nf : (backdrop == 1 ? 1 : 0)
+        // with a backdrop the camera follows the penguin a little, lagging (where it was over
+        // the last ¾ s), and the backdrop's layers move by their own shares of it: parallax
+        var cam = 0.0
+        if backdrop > 0 {
+            let x1 = pose(at: ts - 0.35, range: st.range, energy: energy, night: nf, igloo: ig).x
+            let x2 = pose(at: ts - 0.7, range: st.range, energy: energy, night: nf, igloo: ig).x
+            cam = 0.3 * (p.x + x1 + x2) / 3
+        }
         let snowAmt = u.p1.x > 0.5 ? snow(at: ts) : 0
 
         var tex: MTLTexture?
@@ -589,7 +604,7 @@ enum WaddleRig {
             tex = e.tex
         }
         func f(_ x: Double) -> Float { Float(x) }
-        u.scene.0 = SIMD4(f(p.x * st.hp), f(st.groundY), f(st.hp), f(st.cellPx))
+        u.scene.0 = SIMD4(f((p.x - cam) * st.hp), f(st.groundY), f(st.hp), f(st.cellPx))
         u.scene.1 = SIMD4(f(p.yaw), f(p.lean), f(p.sx), f(p.sy))
         u.scene.2 = SIMD4(f(p.hop), f(p.slide), f(p.flipL), f(p.flipR))
         u.scene.3 = SIMD4(f(p.eyeOpen), f(p.lookX), f(p.lookY), f(p.happy))
@@ -598,6 +613,7 @@ enum WaddleRig {
         u.scene.6 = custom
         u.scene.7 = SIMD4(margin.x, margin.y, f(p.slideDir), f(p.spray))
         u.scene.8 = SIMD4(f(st.iglooX * st.hp), f(iglooR * st.hp), p.behind ? 1 : 0, f(sky))
+        u.scene.9 = SIMD4(f(cam * st.hp), f(p.burst), f(p.burstSeed), 0)
         return tex
     }
 }
