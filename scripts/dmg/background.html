@@ -29,20 +29,17 @@
   .tag  { right: 30px; top: 32px; font-size: 11px; line-height: 1.4; text-align: right; color: rgba(225,224,204,.58); }
 
   /* Letterboxed band of a real scene render (Liquid Chrome) behind the drag pair. */
-  .band { left: 0; right: 0; top: 88px; height: 214px; overflow: hidden;
-          -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 22%, #000 74%, transparent 100%); }
-  .band img { position: absolute; left: -70px; top: -236px; width: 800px; filter: brightness(.74) saturate(1.35) contrast(1.05); }
-  .band .side { inset: 0; background: linear-gradient(90deg, rgba(11,11,12,.55), rgba(11,11,12,0) 22%, rgba(11,11,12,0) 78%, rgba(11,11,12,.55)); }
-
-  /* Name plates: Finder draws each item's name itself (black in Light Mode, white in Dark Mode),
-     so every name sits on a mid-grey plate (relative luminance ~0.18) that reads either way. */
-  .plate { width: 124px; height: 24px; margin-left: -62px; border-radius: 12px;
-           background: rgba(118,117,110,.9); box-shadow: inset 0 0 0 .5px rgba(255,255,255,.14), 0 1px 10px rgba(0,0,0,.25); }
+  .band { left: 0; right: 0; top: 88px; bottom: 0; overflow: hidden;
+          -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 12%, #000 100%); }
+  .band img { position: absolute; left: -170px; top: -200px; width: 1000px; filter: brightness(.74) saturate(1.35) contrast(1.05); }
+  .band .side { inset: 0; background: linear-gradient(90deg, rgba(11,11,12,.45), rgba(11,11,12,0) 22%, rgba(11,11,12,0) 78%, rgba(11,11,12,.45)); }
+  /* Finder draws the item names itself (black in Light Mode, white in Dark Mode); the scene's
+     mid tones under every name keep both readable, so there are no plates or shapes. */
 
   /* First-launch hint, beside the How to Install document. */
-  .hint { left: 186px; top: 334px; width: 440px; font-size: 11px; line-height: 1.55; letter-spacing: .01em; color: rgba(225,224,204,.6); }
-  .hint .path { font-size: 12.5px; font-weight: 700; color: var(--cream); letter-spacing: 0; }
-  .vr { left: 170px; top: 326px; width: 1px; height: 72px; background: rgba(225,224,204,.16); }
+  .hint { right: 30px; top: 26px; width: 300px; text-align: right; font-size: 10.5px; line-height: 1.5; letter-spacing: .01em; color: rgba(225,224,204,.6); }
+  .hint .path { font-size: 11.5px; font-weight: 700; color: var(--cream); letter-spacing: 0; }
+  .vr { left: 170px; top: 326px; width: 1px; height: 72px; background: rgba(225,224,204,.22); }
 
   .grain { inset: 0; opacity: .28; mix-blend-mode: overlay;
            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
@@ -55,13 +52,11 @@
 <div class="win" id="win">
   <div class="abs band"><img src="scene.jpg" alt=""><div class="abs side"></div></div>
   <div class="abs word">DotStudio</div>
-  <div class="abs tag">Living screensavers<br>for your Mac</div>
   <div id="cue"></div>
-  <div class="abs vr"></div>
   <div class="abs hint">
     First open needs one approval:<br>
     <span class="path">System Settings › Privacy &amp; Security › Open Anyway</span><br>
-    Every step is in How to Install, on the left.
+    Every step is in How to Install, bottom left.
   </div>
   <div class="abs grain"></div>
 </div>
@@ -79,7 +74,6 @@
     h += `<div class="abs" style="left:${x - r}px;top:${APP.y - r}px;width:${2 * r}px;height:${2 * r}px;border-radius:50%;background:rgba(225,224,204,${a});box-shadow:0 0 6px rgba(0,0,0,.55)"></div>`;
   }
   h += `<svg class="abs" style="left:${x1 - 12}px;top:${APP.y - 8}px;filter:drop-shadow(0 0 4px rgba(0,0,0,.6))" width="14" height="16" viewBox="0 0 14 16"><path d="M3 2 L11 8 L3 14" fill="none" stroke="#E1E0CC" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-  for (const p of [APP, DST, DOC]) h += `<div class="abs plate" style="left:${p.x}px;top:${p.y + PLATE_TOP}px"></div>`;
   cue.innerHTML = h;
 
   const q = new URLSearchParams(location.hash.slice(1));
