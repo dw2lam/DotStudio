@@ -43,6 +43,8 @@ struct CoachObservation {
     var occluders: [CGRect] = []
     /// Accessibility refused (not trusted any more) or System Settings isn't answering.
     var axError: String?
+    /// The error is macOS refusing Accessibility (kAXErrorAPIDisabled), not a busy app.
+    var axDenied = false
     var at = Date()
 }
 
@@ -60,6 +62,8 @@ final class SetupCoach: ObservableObject {
     }()
     /// How long a step's target may stay missing before the illustrated step takes over.
     static let degradeAfter: TimeInterval = 3
+    /// "All set" this long → stop reading System Settings (energy).
+    static let parkAfter: TimeInterval = 4
 
     enum Mode: Equatable {
         case off
@@ -83,6 +87,10 @@ final class SetupCoach: ObservableObject {
     @Published private(set) var lastDump: String?
     /// Accessibility is already allowed (read when the offer appears; never prompts).
     @Published private(set) var trusted = false
+    /// The target is under this guide's own panel: the picture instead of a ring nobody can click.
+    @Published private(set) var blockedByGuide = false
+    /// macOS refuses Accessibility to DotStudio (turned off, or the entry is stale).
+    @Published private(set) var accessibilityOff = false
 
     /// The step on screen: Back/Skip's pick, else the observed one.
     var shownStep: CoachStep { override ?? decision.step }
@@ -94,6 +102,8 @@ final class SetupCoach: ObservableObject {
     var onSettingsFrame: ((CGRect) -> Void)?
     /// Install the screensaver first (when it isn't): the panel's model does it.
     var install: (() -> Void)?
+    /// The guide panel's frame (Cocoa screen coordinates), so a target under it counts as covered.
+    var panelFrame: (() -> CGRect?)?
 
     private var worker: CoachWorker?
     private var overlay: CoachOverlay?
@@ -111,6 +121,16 @@ final class SetupCoach: ObservableObject {
     private var lastLoggedStep: String?
     private var lastTarget: CGRect?
     private var celebrateUntil: Date?
+    /// DotStudio was picked in the chooser that's open (or just closed): with an unreadable
+    /// store, closing the chooser afterwards means done.
+    private var pickedInChooser = false
+    /// When "all set" was reached (the worker parks a few seconds later).
+    private var finishedSince: Date?
+    private var lastAnnounced: String?
+    /// The worker is stopped because everything's set (see parkAfter).
+    private var parked = false
+    /// Self-test: the guide panel's frame in AX coordinates.
+    private var testPanelAX: CGRect?
     /// Self-test harness: observations are fed by hand, nothing is shown, the clock is fake.
     private var harness = false
     private var clock: () -> Date = Date.init
@@ -120,8 +140,10 @@ final class SetupCoach: ObservableObject {
 
     /// UI shots: a pinned state; never starts anything.
     init(demoMode: Mode, decision: CoachDecision, override: CoachStep? = nil, degraded: Bool = false,
-         ringShown: Bool = true, trusted: Bool = false) {
+         ringShown: Bool = true, trusted: Bool = false, blockedByGuide: Bool = false, accessibilityOff: Bool = false) {
         isDemo = true
+        self.blockedByGuide = blockedByGuide
+        self.accessibilityOff = accessibilityOff
         mode = demoMode
         self.decision = decision
         self.override = override
@@ -190,19 +212,13 @@ final class SetupCoach: ObservableObject {
         lastLoggedStep = nil
         chosenWhenOpened = nil
         targetMissingSince = Date()
+        pickedInChooser = false
+        finishedSince = nil
         say("coaching on (macOS \(ProcessInfo.processInfo.operatingSystemVersionString))")
 
         if !Installer.isInstalled { install?() } else { Installer.openScreenSaverSettings() }
 
-        let strings = CoachStrings.system()
-        say("labels: button=\(strings.screenSaverButton.sorted()) other=\(strings.other.sorted()) done=\(strings.done.sorted())")
-        let w = CoachWorker(strings: strings, ourPID: ProcessInfo.processInfo.processIdentifier,
-                            keepTree: Self.dumpPath != nil)
-        w.onObservation = { [weak self] obs in
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.apply(obs) } }
-        }
-        worker = w
-        w.start()
+        startWorker()
         updateSettingsPID()
 
         let center = NSWorkspace.shared.notificationCenter
@@ -212,7 +228,11 @@ final class SetupCoach: ObservableObject {
                 .store(in: &subs)
         }
         center.publisher(for: NSWorkspace.didActivateApplicationNotification)
-            .sink { [weak self] _ in MainActor.assumeIsolated { self?.recompute() } }
+            .sink { [weak self] _ in MainActor.assumeIsolated { self?.updateCadence(); self?.recompute() } }
+            .store(in: &subs)
+        NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in MainActor.assumeIsolated { self?.updateCadence() } }
             .store(in: &subs)
         guide.$snapshot
             .removeDuplicates()
@@ -221,6 +241,42 @@ final class SetupCoach: ObservableObject {
         tick = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.recompute() }
         }
+    }
+
+    private lazy var strings: CoachStrings = {
+        let s = CoachStrings.system()
+        say("labels: button=\(s.screenSaverButton.sorted()) other=\(s.other.sorted()) done=\(s.done.sorted())")
+        return s
+    }()
+
+    /// The AX worker: started with coaching, parked a few seconds after "all set" (and
+    /// started again if the setup comes undone while the guide is still open).
+    private func startWorker() {
+        guard worker == nil, !harness else { return }
+        let w = CoachWorker(strings: strings, ourPID: ProcessInfo.processInfo.processIdentifier,
+                            keepTree: Self.dumpPath != nil)
+        w.onObservation = { [weak self] obs in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.apply(obs) } }
+        }
+        worker = w
+        w.start()
+        w.setSettingsPID(settingsPID)
+        lastObservationAt = clock()
+        updateCadence()
+    }
+
+    private func parkWorker() {
+        guard let w = worker else { return }
+        w.stop()
+        worker = nil
+        say("all set: stopped reading System Settings")
+    }
+
+    /// Lighter reading when System Settings (or this guide) isn't in front, and in Low Power Mode.
+    private func updateCadence() {
+        let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let active = front == ProcessInfo.processInfo.processIdentifier || (front != nil && front == settingsPID)
+        worker?.setCadence(active: active, lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled)
     }
 
     /// Stop everything: observers, the worker thread, timers, the overlay.
@@ -238,7 +294,11 @@ final class SetupCoach: ObservableObject {
         override = nil
         degraded = false
         ringShown = false
+        blockedByGuide = false
+        accessibilityOff = false
         celebrateUntil = nil
+        finishedSince = nil
+        parked = false
     }
 
     /// "Use the Picture Instead" / "Stop Guiding".
@@ -273,6 +333,7 @@ final class SetupCoach: ObservableObject {
         guard pid != settingsPID else { return }
         settingsPID = pid
         worker?.setSettingsPID(pid)
+        updateCadence()
     }
 
     // MARK: Each observation
@@ -287,6 +348,20 @@ final class SetupCoach: ObservableObject {
     private func recompute() {
         guard mode == .coaching else { return }
         let now = clock()
+        var chosenOn: Int?, chosenOf: Int?
+        if case .chosen(let on, let of) = testChoice ?? guide.snapshot.choice { chosenOn = on; chosenOf = of }
+
+        // Parked after "all set": nothing to read. Wake up if the setup comes undone.
+        if parked {
+            let everywhere = (chosenOn ?? 0) > 0 && (chosenOn ?? 0) >= (chosenOf ?? 1)
+            guard chosenOn != nil && !everywhere else { return }
+            parked = false
+            finishedSince = nil
+            say("setup changed after all set: reading System Settings again")
+            startWorker()
+            return
+        }
+
         var obs = observation
         // The worker stopped answering (System Settings hung): no ring on stale frames.
         if now.timeIntervalSince(lastObservationAt) > 3 && settingsPID != nil {
@@ -294,14 +369,21 @@ final class SetupCoach: ObservableObject {
             obs.scene = CoachScene(page: .none)
         }
         let scene = obs.scene
+        let denied = (obs.axError != nil && obs.axDenied) || (!harness && !AXIsProcessTrusted())
+        if denied != accessibilityOff { accessibilityOff = denied }
 
-        var chosenOn: Int?, chosenOf: Int?
-        if case .chosen(let on, let of) = testChoice ?? guide.snapshot.choice { chosenOn = on; chosenOf = of }
-        if scene.page == .chooser && lastPage != .chooser { chosenWhenOpened = chosenOn }
+        if scene.page == .chooser && lastPage != .chooser {
+            chosenWhenOpened = chosenOn
+            pickedInChooser = false
+        }
+        if scene.page == .chooser && (scene.tileSelected || (chosenWhenOpened.map { (chosenOn ?? 0) > $0 } ?? false)) {
+            pickedInChooser = true
+        }
         if scene.page != .chooser && scene.page != .none { chosenWhenOpened = nil }
         lastPage = scene.page
 
-        var d = CoachPlanner.decide(scene, chosenOn: chosenOn, chosenOf: chosenOf, chosenWhenOpened: chosenWhenOpened)
+        var d = CoachPlanner.decide(scene, chosenOn: chosenOn, chosenOf: chosenOf, chosenWhenOpened: chosenWhenOpened,
+                                    pickedInChooser: pickedInChooser)
         if settingsPID == nil { d = CoachDecision(step: .openWallpaper, situation: .settingsClosed) }
         // Accessibility failing while System Settings runs: not "closed" — keep the step the
         // user was on, with no ring (it turns into the illustrated step below).
@@ -325,6 +407,23 @@ final class SetupCoach: ObservableObject {
         if key != lastLoggedStep {
             lastLoggedStep = key
             say("step → \(key) page=\(scene.page) target=\(d.target.map { "\($0)" } ?? "none")")
+            announce(d)
+        }
+
+        // The ring's target under this guide's own panel: the picture, not an unclickable ring.
+        var underPanel = false
+        if let t = d.target, let pf = panelFrame?(), let main = NSScreen.screens.first {
+            let panelAX = CoachGeometry.flip(pf, mainHeight: main.frame.height)
+            underPanel = CoachGeometry.coveredFraction(t, by: [panelAX]) >= 0.3
+        } else if let t = d.target, let p = testPanelAX {
+            underPanel = CoachGeometry.coveredFraction(t, by: [p]) >= 0.3
+        }
+        if underPanel != blockedByGuide {
+            blockedByGuide = underPanel
+            if underPanel, let w = scene.window {
+                say("the guide covers the target: re-docking, picture meanwhile")
+                onSettingsFrame?(w)   // try to move out of the way
+            }
         }
 
         // Missing for a few seconds (or AX failing): the illustrated step, and a dump.
@@ -335,10 +434,10 @@ final class SetupCoach: ObservableObject {
             targetMissingSince = now
         }
         let missingLong = needsTarget && d.target == nil && now.timeIntervalSince(targetMissingSince ?? now) >= Self.degradeAfter
-        let nowDegraded = missingLong
+        let nowDegraded = missingLong || (needsTarget && underPanel)
         if nowDegraded != degraded {
             degraded = nowDegraded
-            say(nowDegraded ? "can't find the target for \(d.step.name) (\(obs.axError ?? "not in the tree")): illustrated step" : "target found again")
+            say(nowDegraded ? "no ring for \(d.step.name) (\(underPanel ? "under the guide" : obs.axError ?? "not in the tree")): illustrated step" : "target found again")
         }
         if missingLong && !dumpedThisStep {
             dumpedThisStep = true
@@ -346,13 +445,13 @@ final class SetupCoach: ObservableObject {
         }
 
         // The ring: on the observed step's target, when System Settings (or the guide) is in
-        // front, its window is on this Space and nothing covers the target.
+        // front, its window is on this Space and nothing — another app or this guide — covers it.
         let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let ours = ProcessInfo.processInfo.processIdentifier
         let frontOK = harness || front == ours || (front != nil && front == settingsPID)
         var ring: CGRect?
         if let t = d.target, override == nil || override == d.step, frontOK, obs.settingsOnScreen, obs.axError == nil,
-           CoachGeometry.coveredFraction(t, by: obs.occluders) < 0.3 {
+           !underPanel, CoachGeometry.coveredFraction(t, by: obs.occluders) < 0.3 {
             ring = t
         }
         if ring != nil { lastTarget = ring }
@@ -377,6 +476,36 @@ final class SetupCoach: ObservableObject {
                 onSettingsFrame?(w)
             }
         }
+
+        // All set: stop reading System Settings a few seconds later (after the celebration).
+        if d.step == .finished && !axFailing {
+            if finishedSince == nil { finishedSince = now }
+            if let since = finishedSince, now.timeIntervalSince(since) >= Self.parkAfter, !parked {
+                parked = true
+                parkWorker()
+                overlay?.hide()
+                if ringShown { ringShown = false }
+            }
+        } else {
+            finishedSince = nil
+        }
+    }
+
+    /// VoiceOver: say the new step (the ring itself is invisible to it).
+    private func announce(_ d: CoachDecision) {
+        guard !harness, !isDemo else { return }
+        let text: String
+        switch d.situation {
+        case .settingsClosed: text = "Open System Settings to continue the setup."
+        case .elsewhere: text = "Go back to Wallpaper in System Settings."
+        default:
+            text = d.step == .finished ? "DotStudio is your screensaver."
+                : "Step \(d.step.walkthroughStep + 1) of 4. \(d.callout ?? d.step.title)."
+        }
+        guard text != lastAnnounced else { return }
+        lastAnnounced = text
+        NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
+                             userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
     }
 
     private func showOverlay(ring: CGRect, kind: CoachTargetKind, callout: String, step: Int, celebrate: Bool) {
@@ -542,6 +671,44 @@ final class SetupCoach: ObservableObject {
         now += 0.5; feed(CoachScene(page: .elsewhere, wallpaperRow: CGRect(x: 200, y: 440, width: 215, height: 28)))
         expect(coach.decision.situation == .elsewhere && coach.ringShown, "another page → Go Back to Wallpaper, ring on the sidebar row")
 
+        // The target under the guide's own panel: the picture, not an unclickable ring
+        coach.testPanelAX = CGRect(x: 700, y: 600, width: 440, height: 300)
+        now += 0.5; feed(wallpaper)
+        expect(coach.decision.step == .openChooser && coach.blockedByGuide && coach.degraded && !coach.ringShown,
+               "Screen Saver… under the guide panel → picture, no ring")
+        coach.testPanelAX = CGRect(x: 1000, y: 100, width: 380, height: 520)
+        now += 0.5; feed(wallpaper)
+        expect(!coach.blockedByGuide && !coach.degraded && coach.ringShown, "panel moved aside → the ring again")
+        coach.testPanelAX = nil
+
+        // Accessibility turned off: said as such (not "can't find it")
+        now += 0.5
+        var deniedObs = CoachObservation(scene: CoachScene(page: .none), settingsRunning: true, settingsOnScreen: true)
+        deniedObs.axError = AXCapture.deniedMessage; deniedObs.axDenied = true; deniedObs.at = now
+        coach.apply(deniedObs)
+        expect(coach.accessibilityOff, "kAXErrorAPIDisabled → \"Accessibility is turned off\"")
+        now += 0.5; feed(wallpaper)
+        expect(!coach.accessibilityOff, "…cleared once reading works again")
+
+        // The store can't be read: picking in the sheet, then closing it, finishes
+        coach.testChoice = .unknown
+        now += 0.5; feed(wallpaper)
+        expect(coach.decision.step == .openChooser, "unknown choice, Wallpaper page → Screen Saver…")
+        var picked = sheet; picked.tileSelected = true
+        now += 0.5; feed(sheet)
+        now += 0.5; feed(picked)
+        expect(coach.decision.step == .clickDone, "unknown choice, DotStudio selected → Done")
+        now += 0.5; feed(wallpaper)
+        expect(coach.decision.step == .finished, "unknown choice, sheet closed after picking → all set")
+        // …and it stops reading System Settings a few seconds after all set
+        now += SetupCoach.parkAfter + 0.1; feed(wallpaper)
+        expect(coach.parked && !coach.ringShown, "all set for \(Int(SetupCoach.parkAfter)) s → stops reading System Settings")
+        now += 5; coach.recompute()
+        expect(coach.decision.step == .finished && !coach.degraded, "…parked: no stale-data alarm")
+        coach.testChoice = .chosen(on: 0, of: 1)
+        coach.recompute()
+        expect(!coach.parked, "setup undone while the guide is open → reads again")
+
         coach.harness = false   // stop() must not reach a worker/overlay here (there are none)
         coach.stop()
         expect(coach.mode == .off && !coach.ringShown, "stop() turns everything off")
@@ -667,6 +834,9 @@ final class CoachWorker: @unchecked Sendable {
     private var lastExtensionScan = Date.distantPast
     private var observers: [pid_t: AXObserver] = [:]
     private var dirty = true
+    private var valueDirty = false
+    private var lastTick = Date.distantPast
+    private var cadence = Cadence(fast: 0.1, full: 1, dirty: 0.25, value: 1)
     private var lastFull = Date.distantPast
     private var tree = AXNodeSnapshot("AXApplication")
     private var refs: [Int: AXUIElement] = [:]
@@ -784,7 +954,32 @@ final class CoachWorker: @unchecked Sendable {
     /// frames re-read (next tick); anything else asks for a new capture.
     private func noted(_ notification: String) {
         if notification == kAXWindowMovedNotification || notification == kAXWindowResizedNotification { return }
+        // Value changes stream in (sliders, previews, scroll bars): at most one capture a second.
+        if notification == kAXValueChangedNotification { valueDirty = true; return }
         dirty = true
+    }
+
+    /// How often to look (main actor → worker): lighter when neither System Settings nor the
+    /// guide is in front, and in Low Power Mode.
+    func setCadence(active: Bool, lowPower: Bool) {
+        perform { [self] in
+            switch (active, lowPower) {
+            case (true, false): self.cadence = Cadence(fast: 0.1, full: 1, dirty: 0.25, value: 1)
+            case (true, true): self.cadence = Cadence(fast: 0.25, full: 2, dirty: 0.5, value: 1.5)
+            case (false, _): self.cadence = Cadence(fast: 0.5, full: 2, dirty: 1, value: 2)
+            }
+        }
+    }
+
+    struct Cadence {
+        /// Re-read the targets' frames this often.
+        var fast: TimeInterval
+        /// A full capture at least this often.
+        var full: TimeInterval
+        /// …and after a structural AX notification, no sooner than this.
+        var dirty: TimeInterval
+        /// …and after value changes, no sooner than this.
+        var value: TimeInterval
     }
 
     // MARK: Tick
@@ -792,6 +987,9 @@ final class CoachWorker: @unchecked Sendable {
     private func tickOnWorker() {
         guard !stopped else { return }
         let now = Date()
+        // The timer runs at 10 Hz; slower cadences skip ticks.
+        guard now.timeIntervalSince(lastTick) >= cadence.fast - 0.02 else { return }
+        lastTick = now
         guard let pid = settingsPID else {
             if now.timeIntervalSince(lastFull) >= 1 {
                 lastFull = now
@@ -805,7 +1003,7 @@ final class CoachWorker: @unchecked Sendable {
             ensureObservers([pid] + extensionPIDs)
         }
         let since = now.timeIntervalSince(lastFull)
-        if (dirty && since >= 0.25) || since >= 1 {
+        if (dirty && since >= cadence.dirty) || (valueDirty && since >= cadence.value) || since >= cadence.full {
             fullCapture(pid: pid)
         } else {
             fastUpdate(pid: pid)
@@ -814,6 +1012,7 @@ final class CoachWorker: @unchecked Sendable {
 
     private func fullCapture(pid: pid_t) {
         dirty = false
+        valueDirty = false
         let now = Date()
         lastFull = now
         skipUntil = skipUntil.filter { $0.value > now }
@@ -827,6 +1026,7 @@ final class CoachWorker: @unchecked Sendable {
         var obs = observe(pids: Set(apps))
         obs.tree = keepTree ? tree : nil
         obs.axError = result.error
+        obs.axDenied = result.denied
         publish(obs, force: true)
     }
 
@@ -920,6 +1120,8 @@ enum AXCapture {
         kAXSizeAttribute, kAXSelectedAttribute, kAXMainAttribute, kAXChildrenAttribute,
     ]
 
+    static let deniedMessage = "Accessibility is turned off for DotStudio"
+
     struct Result {
         var tree: AXNodeSnapshot
         var refs: [Int: AXUIElement]
@@ -927,6 +1129,8 @@ enum AXCapture {
         var error: String?
         /// Processes that didn't answer (skipped for a while: each costs a timeout).
         var unresponsive: [pid_t] = []
+        /// macOS refused Accessibility (kAXErrorAPIDisabled).
+        var denied = false
     }
 
     private final class Box {
@@ -948,7 +1152,7 @@ enum AXCapture {
             let app = AXUIElementCreateApplication(pid)
             var windowsRef: CFTypeRef?
             let err = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef)
-            if err == .apiDisabled { error = "Accessibility isn't allowed for DotStudio" }
+            if err == .apiDisabled { error = deniedMessage }
             else if err == .cannotComplete {
                 if pid == pids.first { error = "System Settings isn't answering" } else { unresponsive.append(pid) }
             }
@@ -1000,7 +1204,8 @@ enum AXCapture {
         var kids: [AXNodeSnapshot] = []
         for k in root.kids where k.node.id != nil { kids.append(build(k, path: [kids.count])) }
         tree.children = kids
-        return Result(tree: tree, refs: refs, paths: paths, error: error, unresponsive: unresponsive)
+        return Result(tree: tree, refs: refs, paths: paths, error: error, unresponsive: unresponsive,
+                      denied: error != nil && error == deniedMessage)
     }
 
     /// Several attributes in one round trip; missing ones are left out.

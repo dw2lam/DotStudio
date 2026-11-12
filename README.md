@@ -90,12 +90,18 @@ Stack effects on top of a scene, or start from nothing with **Create Your Own**.
 2. Open DotStudio from Applications. It isn't notarized yet, so macOS stops the first launch
    with "Apple could not verify…". Click **Done** (not Move to Trash).
 3. Open **System Settings › Privacy & Security** and scroll down to **Security**. Next to
-   "DotStudio was blocked to protect your Mac", click **Open Anyway**, confirm with your password
-   or Touch ID, then click **Open Anyway** once more. The button shows for about an hour after
-   the blocked launch; if it's gone, open DotStudio again and come back.
+   "DotStudio was blocked to protect your Mac", click **Open Anyway**, then confirm with **Open**
+   (and your password or Touch ID if asked). The button shows for about an hour after the
+   blocked launch; if it's gone, open DotStudio again and come back.
    (On macOS 15 and later, right-click › Open no longer skips this step.)
+   Opened it straight from the disk image or Downloads? DotStudio offers once to move itself
+   into Applications, which updates and Open at login need.
 4. Follow the welcome guide. It installs the screensaver, walks you through choosing it, and
    explains music and the menu bar. It's always under **Help › Welcome to DotStudio…**.
+   **Guide Me** points at each button in System Settings and moves on as you click. It asks
+   once for **Accessibility** permission so it can see where those buttons are; it only reads
+   System Settings, and only while the guide is open. Without it, the guide shows the same
+   steps as pictures.
 
 You only do this once. Updates are automatic: DotStudio checks GitHub Releases, downloads new
 versions in the background and installs them when you quit (or **Settings › Updates › Restart

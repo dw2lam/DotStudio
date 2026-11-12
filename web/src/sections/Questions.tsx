@@ -15,7 +15,8 @@ const QUESTIONS: { q: string; a: ReactNode }[] = [
     a: (
       <>
         DotStudio isn't notarized yet. Click <K>Done</K>, then in{" "}
-        <K>System Settings → Privacy &amp; Security</K> click <K>Open Anyway</K>. You do this once;
+        <K>System Settings → Privacy &amp; Security</K> click <K>Open Anyway</K>, then confirm with{" "}
+        <K>Open</K>. You do this once;
         on macOS 15 and later, right-click → Open no longer skips it.
       </>
     ),
@@ -26,6 +27,17 @@ const QUESTIONS: { q: string; a: ReactNode }[] = [
       <>
         <K>System Settings → Wallpaper → Screen Saver…</K>, then <K>DotStudio</K> under Other. The
         welcome guide shows each click. After that, you pick styles in the app.
+      </>
+    ),
+  },
+  {
+    q: "Why does Guide Me ask for Accessibility?",
+    a: (
+      <>
+        So it can see where the buttons are in System Settings and point at the next one as you
+        click. It only reads System Settings, and only while the guide is open. Say no and the guide
+        shows the same steps as pictures; change it any time in{" "}
+        <K>Privacy &amp; Security → Accessibility</K>.
       </>
     ),
   },

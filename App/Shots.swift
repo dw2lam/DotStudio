@@ -507,6 +507,15 @@ enum UIShots {
                 AnyView(CoachOverlayPreview(scene: scene))
             }))
         }
+        // Move to Applications (MoveToApplications.swift): the offer, the replace question, a failure
+        for (tag, phase) in [("ask", MoveToApplications.Phase.ask),
+                             ("replace", .replace(existing: "1.4.4 (245)", ours: "1.4.5 (260)")),
+                             ("failed", .failed("DotStudio doesn't have permission to write to the Applications folder. In Finder, drag DotStudio into Applications (you may be asked for an administrator password), then open it from there."))] {
+            s.append(Screen(name: "move-to-applications-\(tag)", frame: .fit(width: 440, minHeight: 120), view: { _ in
+                AnyView(MainActor.assumeIsolated { MoveToApplicationsView(mover: MoveToApplications(demo: phase)) }
+                    .background(Color(nsColor: .windowBackgroundColor)))
+            }))
+        }
         for demo in CoachDemo.allCases {
             s.append(Screen(name: "setup-coach-\(demo.rawValue)", frame: .fixed(SetupGuidePanel.size), view: { _ in
                 AnyView(SetupGuidePanelView(guide: demo.guide.guide, coach: demo.coach))
@@ -963,7 +972,7 @@ enum SetupDemo {
 /// for Accessibility, never reads System Settings) with the checklist state that goes with it.
 enum CoachDemo: String, CaseIterable {
     case offer, waiting, closed, elsewhere, step2, otherDisplay = "step2-other-display", step3, step4, done = "step4-done",
-         degraded, manual, finished, finishedAttention = "finished-attention"
+         degraded, blocked = "blocked-by-guide", accessibilityOff = "accessibility-off", manual, finished, finishedAttention = "finished-attention"
 
     var guide: SetupDemo {
         switch self {
@@ -981,6 +990,7 @@ enum CoachDemo: String, CaseIterable {
         var override: CoachStep?
         var degraded = false
         var ring = true
+        var blocked = false, axOff = false
         switch self {
         case .offer: mode = .off; d = CoachDecision(step: .openWallpaper, situation: .settingsClosed)
         case .waiting: mode = .waitingForPermission; d = CoachDecision(step: .openWallpaper, situation: .settingsClosed)
@@ -992,11 +1002,14 @@ enum CoachDemo: String, CaseIterable {
         case .step4: d = CoachDecision(step: .chooseTile, target: r, callout: "Click DotStudio")
         case .done: d = CoachDecision(step: .clickDone, target: r, callout: "Click Done")
         case .degraded: d = CoachDecision(step: .chooseTile); degraded = true; ring = false
+        case .blocked: d = CoachDecision(step: .openChooser, target: r, callout: "Click Screen Saver\u{2026}"); degraded = true; ring = false; blocked = true
+        case .accessibilityOff: d = CoachDecision(step: .scrollToTile); degraded = true; ring = false; axOff = true
         case .manual: d = CoachDecision(step: .openChooser, target: r, callout: "Click Screen Saver\u{2026}"); override = .scrollToTile; ring = false
         case .finished, .finishedAttention: d = CoachDecision(step: .finished); ring = false
         }
         return MainActor.assumeIsolated {
-            SetupCoach(demoMode: mode, decision: d, override: override, degraded: degraded, ringShown: ring)
+            SetupCoach(demoMode: mode, decision: d, override: override, degraded: degraded, ringShown: ring,
+                       blockedByGuide: blocked, accessibilityOff: axOff)
         }
     }
 }

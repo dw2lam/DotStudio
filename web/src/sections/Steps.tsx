@@ -22,7 +22,8 @@ const STEPS = [
         It isn't notarized yet, so macOS stops the first launch: click{" "}
         <b className="font-normal text-gray-200">Done</b>, then in{" "}
         <b className="font-normal text-gray-200">System Settings → Privacy &amp; Security</b> click{" "}
-        <b className="font-normal text-gray-200">Open Anyway</b>.
+        <b className="font-normal text-gray-200">Open Anyway</b>, then confirm with{" "}
+        <b className="font-normal text-gray-200">Open</b>.
       </>
     ),
   },
