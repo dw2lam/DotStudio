@@ -19,8 +19,9 @@ const STEPS = [
     title: "Open it once",
     body: (
       <>
-        It isn't notarized yet, so macOS stops the first launch. Go to{" "}
-        <b className="font-normal text-gray-200">System Settings → Privacy &amp; Security</b> and click{" "}
+        It isn't notarized yet, so macOS stops the first launch: click{" "}
+        <b className="font-normal text-gray-200">Done</b>, then in{" "}
+        <b className="font-normal text-gray-200">System Settings → Privacy &amp; Security</b> click{" "}
         <b className="font-normal text-gray-200">Open Anyway</b>.
       </>
     ),

@@ -226,7 +226,8 @@ struct MusicSettingsSection: View {
 /// Stage (art centred, type below), Cover (the art fills it, type bottom-left) — drawn over the
 /// backdrop "Behind the music" picks, so the pair reads as the screen you'll get. Equal columns
 /// across the value column; the selected one gets an accent ring and a semibold label.
-private struct MusicLayoutChoice: View {
+/// Also on the onboarding's music step.
+struct MusicLayoutChoice: View {
     @Binding var selection: MusicSpec.FullLayout
     let backdrop: MusicSpec.Backdrop
     @Environment(\.layout) private var layout
