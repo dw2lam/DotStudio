@@ -125,7 +125,7 @@ enum DefaultPresets {
         "Lava Lamp", "Currents",
         "Golden Hour", "Shallows", "Meadow", "Tall Grass", "Night Sky", "First Snow",
         "Blue Bloom", "Baby's Breath",
-        "Neon Horizon", "Light Ribbons", "Bounce",
+        "Neon Horizon", "Light Ribbons", "Bounce", "Penguin",
         // Looks
         "Film", "Riso Duotone", "Cyanotype", "Floyd–Steinberg", "Atkinson", "ASCII", "Amber CRT", "Soft Focus",
     ]

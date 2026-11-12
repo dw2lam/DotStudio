@@ -113,6 +113,7 @@ enum EffectKind: String, Codable, CaseIterable {
 
     case meadow                                               // Meadow pack (Nature) 78 (Meadow.swift)
     case flowerBloom                                          // Bloom pack (Nature) 79 (Bloom.swift)
+    case waddle                                               // Penguin pack (Retro) 80 (Penguin.swift)
 
     var displayName: String {
         switch self {
@@ -599,6 +600,7 @@ extension EffectInstance {
         case .grainWash: u.p0 = .init(g("soft"), g("grain"), g("tint"), g("halation"))
                          u.p1 = .init(g("paper"), 0, 0, 0)
         case .glass:     u.p0 = .init(g("style"), g("size"), g("refract"), g("frost"))
+        case .waddle:    WaddleRig.pack(self, into: &u)              // (toggles as bits: Penguin.swift)
         default:
             // Scene packs: params fill p0.xyzw, p1.xyzw, p2.xyzw in catalog order.
             var v = (kind.params.prefix(12).map { g($0.key) })

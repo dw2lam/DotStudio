@@ -1325,6 +1325,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 if inst!.kind == .bounce {          // the logo (cached per logo) + this frame's pose
                     sceneData = BounceLogo.prepare(&u, inst: inst!, mediaDir: store.mediaDir, device: device)
                 }
+                if inst!.kind == .waddle {          // the penguin's pose (a custom character: its texture)
+                    sceneData = WaddleRig.prepare(&u, inst: inst!, mediaDir: store.mediaDir, device: device)
+                }
                 if inst!.kind == .nowPlaying {
                     fillMusic(&u, options: MusicSceneOptions(inst!), size: size, now: CACurrentMediaTime(), wall: wall)
                 }

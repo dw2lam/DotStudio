@@ -45,7 +45,7 @@ enum StyleTag: String, CaseIterable, Identifiable, Hashable {
         if SceneCatalog.nature[kind] != nil || SceneCatalog.meadow[kind] != nil || SceneCatalog.bloomPack[kind] != nil
             || natureKinds.contains(kind) { tags.insert(.nature) }
         if SceneCatalog.flowing[kind] != nil { tags.insert(.flowing) }
-        if SceneCatalog.retro[kind] != nil { tags.insert(.retro) }
+        if SceneCatalog.retro[kind] != nil || SceneCatalog.penguinPack[kind] != nil { tags.insert(.retro) }
         if spaceKinds.contains(kind) { tags.insert(.space) }
         if abstractKinds.contains(kind) { tags.insert(.abstract) }
         // Looks: a CRT/console/tape effect anywhere in the stack makes it Retro.

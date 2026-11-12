@@ -40,7 +40,9 @@
 //  compute pass, e.g. the error-diffusion dithers) with GPU timestamps, per preset, on its own renderer.
 //  Bounce: --logo builtin | text:WORD | file:/path/to/image (copied into the store's media folder,
 //  as the app imports one) sets the logo of every Bounce preset; each Bounce render prints its
-//  corner period and the next corner hits (render one with --times).
+//  corner period and the next corner hits (render one with --times). file: also gives every
+//  Penguin preset that image as its custom character. --waddlepeaks prints the time each Penguin
+//  behaviour is at its fullest, the first time it plays.
 //  --checks runs the live-renderer checks (wall-clock time base, synced slideshow, held-frame
 //  track change, rapid skips) through MetalRenderer.renderFrame, the format, Bounce and retirement
 //  checks, params from a shared file (1e20 / 1e300 / NaN / ±inf: clamped on load, and every kind
@@ -598,6 +600,40 @@ func bounceChecks() -> Bool {
     check(BounceLogo.fileURL("A1.png", mediaDir: md)?.path == "/tmp/media/A1.png"
           && ["../library.json", "/etc/hosts", "sub/a.png", ".hidden", "", nil].allSatisfy { BounceLogo.fileURL($0, mediaDir: md) == nil },
           "Bounce: an Image logo only ever reads a plain file name inside the media folder")
+    // Penguin: the pose is a pure function of t; the penguin never jumps (its feet move at most a
+    // fast glide's step per 24 fps step, across every episode boundary), stays on screen, and
+    // a behaviour waits at least three episodes to come back — over a whole hour, on a wide,
+    // a 16:10 and a portrait screen, by day and by night, with and without the backdrop's igloo;
+    // and when it rests it never stands in front of the igloo (only dozes beside it).
+    for (w, h) in [(3440.0, 1440.0), (1600.0, 1000.0), (900.0, 1600.0)] {
+        for nf in [0.0, 1.0] {
+            let st = WaddleRig.stage(width: w, height: h, size: 1, cell: 13)
+            for ig in [nil, st.igloo] {
+                var prev: WaddleRig.Pose?, worstStep = 0.0, worstOut = 0.0, same = true, worstRest = Double.infinity
+                for i in 0..<(3600 * 24) {
+                    let t = Double(i) / 24
+                    let q = WaddleRig.pose(at: t, range: st.range, energy: 0.5, night: nf, igloo: ig)
+                    if i % 997 == 0 { same = same && q == WaddleRig.pose(at: t, range: st.range, energy: 0.5, night: nf, igloo: ig) }
+                    if let prev { worstStep = max(worstStep, abs(q.x - prev.x)) }
+                    worstOut = max(worstOut, abs(q.x) - st.range)
+                    if let ig, q.phase == 0 || q.phase == 9 { worstRest = min(worstRest, abs(q.x - ig)) }
+                    prev = q
+                }
+                check(same && worstStep < 0.12 && worstOut < 1e-9 && worstRest >= 0.79,
+                      String(format: "Penguin %.0fx%.0f night %.0f %@: stateless, never jumps (worst step %.3f heights), never off its ground (%.2g)%@",
+                             w, h, nf, ig == nil ? "no igloo" : "igloo", worstStep, max(worstOut, 0),
+                             ig == nil ? "" : String(format: ", rests clear of the igloo (nearest %.2f)", worstRest)))
+            }
+        }
+    }
+    var gap = Int.max
+    var last: [WaddleRig.Act: Int] = [:]
+    for k in -40..<400 {
+        let a = WaddleRig.act(k)
+        if let j = last[a] { gap = min(gap, k - j) }
+        last[a] = k
+    }
+    check(gap >= 3, "Penguin: a behaviour comes back no sooner than \(gap) episodes later (≥ 3)")
     // Stateless: two renderers on the wall-clock time base draw the same frame (made and warmed
     // first, then drawn back to back: the logo moves ~0.1 px between the two reads of the clock).
     let p = Preset(name: "Bounce", effects: [EffectInstance(.bounce)])
@@ -979,7 +1015,8 @@ if let logoArg {
         catch { print("--logo: couldn't import \(logoArg): \(error)"); exit(2) }
     }
     for i in presets.indices {
-        for j in presets[i].effects.indices where presets[i].effects[j].kind == .bounce {
+        for j in presets[i].effects.indices where presets[i].effects[j].kind == .bounce
+                                                  || (presets[i].effects[j].kind == .waddle && kind != .text) {
             presets[i].effects[j].logoKind = kind
             presets[i].effects[j].logoText = text
             presets[i].effects[j].logoFile = file
@@ -1003,7 +1040,49 @@ if !overrides.isEmpty {
     }
 }
 
-for p in presets { bounceInfo(p) }
+/// Penguin: what the penguin is doing at each of --times (at the wall clock the renders use).
+func waddleInfo(_ p: Preset) {
+    guard let inst = p.effects.first(where: { $0.enabled && $0.kind == .waddle }) else { return }
+    let st = WaddleRig.stage(width: Double(W), height: Double(H), size: Double(inst.g("size")), cell: Double(inst.g("cell")))
+    let wall = clocks.first.flatMap(wallDate) ?? Date()
+    let nf = inst.g("night") > 0.5 ? WaddleRig.nightFactor(hour: Double(MetalRenderer.wallClock(wall).0.x)) : 0
+    for t in times {
+        let ts = (Double(t) * WaddleRig.stepFPS).rounded(.down) / WaddleRig.stepFPS
+        let ig = inst.g("backdrop") > 0.5 && inst.g("igloo") > 0.5 ? st.igloo : nil
+        let q = WaddleRig.pose(at: ts, range: st.range, energy: Double(inst.g("energy")), night: nf, igloo: ig)
+        print(String(format: "waddle %@ t=%.2f: %@ x %.2f yaw %.2f lean %.2f slide %.2f hop %.3f zz %.1f eye %.2f happy %.0f night %.2f igloo %.2f",
+                     p.name, t, "\(q.act)", q.x, q.yaw, q.lean, q.slide, q.hop, q.zz, q.eyeOpen, q.happy, nf,
+                     ig ?? .nan))
+    }
+}
+/// --waddlepeaks: the moment each behaviour is at its fullest, the first time it plays (to
+/// render with --times and check every pose reads at a glance).
+func waddlePeaks() {
+    let st = WaddleRig.stage(width: Double(W), height: Double(H), size: 1, cell: 13)
+    var best: [WaddleRig.Act: (score: Double, t: Double, k: Int)] = [:]
+    for i in 0..<(480 * 24) {
+        let t = (Double(i) + 0.5) / 24
+        let q = WaddleRig.pose(at: t, range: st.range, energy: 0.5, night: 0, igloo: st.igloo)
+        let k = Int(t / WaddleRig.episode)
+        if let b = best[q.act], b.k != k { continue }                  // its first episode only
+        var s = 0.0
+        switch q.act {
+        case .wave: s = q.phase == 8 ? max(q.flipL, q.flipR) : 0
+        case .dance: s = q.phase == 8 ? q.hop : 0
+        case .slide: s = q.phase == 5 ? q.spray : 0
+        case .doze: s = q.phase == 8 && q.zz > 0 ? 3 - abs(q.zz - 3) : 0
+        case .look, .stroll: s = q.phase == 8 ? abs(q.yaw) : 0
+        case .shake: s = q.phase == 8 ? abs(q.lean) : 0
+        case .edge: s = q.phase == 7 ? abs(q.lean) : 0
+        }
+        if s > (best[q.act]?.score ?? 0) { best[q.act] = (s, t, k) }
+    }
+    for a in WaddleRig.Act.allCases {
+        if let b = best[a] { print(String(format: "waddle peak %@ t=%.3f", "\(a)", b.t)) }
+    }
+}
+if CommandLine.arguments.contains("--waddlepeaks") { waddlePeaks(); exit(0) }
+for p in presets { bounceInfo(p); waddleInfo(p) }
 
 var source = lib.source
 var photoTex: MTLTexture?
@@ -1106,6 +1185,9 @@ if gpuBench {
                 if kind == .sandGarden { sceneData = sand.prepare(&u, wall: wall, device: dev) }
                 if kind == .bounce, let inst = benchInst {
                     sceneData = BounceLogo.prepare(&u, inst: inst, mediaDir: store.mediaDir, device: dev)
+                }
+                if kind == .waddle, let inst = benchInst {
+                    sceneData = WaddleRig.prepare(&u, inst: inst, mediaDir: store.mediaDir, device: dev)
                 }
                 let rpd = MTLRenderPassDescriptor()
                 rpd.colorAttachments[0].texture = target
