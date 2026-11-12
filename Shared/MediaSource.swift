@@ -33,28 +33,32 @@ final class ImageSource: MediaSource {
 }
 
 /// A looping, hardware-decoded video.
+///
+/// AVPlayerLooper never plays its template item: it queues copies of it, and a video output
+/// serves only the item it was added to (copies don't inherit it). So each copy gets its own
+/// output and frames come from whichever copy is playing — an output on the template alone
+/// never sees a frame and the source pass falls back to the gradient. The looper also needs the
+/// queue to advance at an item's end (the default), not `.none`.
 final class VideoSource: MediaSource {
     private let player: AVQueuePlayer
     private var looper: AVPlayerLooper?
-    private let output: AVPlayerItemVideoOutput
+    private var outputs: [ObjectIdentifier: AVPlayerItemVideoOutput] = [:]
     private var cache: CVMetalTextureCache?
     private let device: MTLDevice
     private(set) var size: CGSize = CGSize(width: 1920, height: 1080)
+    private static let attrs: [String: Any] = [
+        kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+        kCVPixelBufferMetalCompatibilityKey as String: true
+    ]
 
     init?(url: URL, device: MTLDevice) {
         self.device = device
         let asset = AVURLAsset(url: url)
-        let item = AVPlayerItem(asset: asset)
-        let attrs: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferMetalCompatibilityKey as String: true
-        ]
-        output = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
-        item.add(output)
-        player = AVQueuePlayer(playerItem: item)
+        let template = AVPlayerItem(asset: asset)
+        player = AVQueuePlayer()
         player.isMuted = true
-        player.actionAtItemEnd = .none
-        looper = AVPlayerLooper(player: player, templateItem: item)
+        looper = AVPlayerLooper(player: player, templateItem: template)
+        for item in looper?.loopingPlayerItems ?? [] { _ = output(for: item) }
         CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &cache)
 
         if let track = asset.tracks(withMediaType: .video).first {
@@ -68,15 +72,23 @@ final class VideoSource: MediaSource {
         if paused { player.pause() } else { player.play() }
     }
 
+    /// The output on `item` (each looping copy has its own; one is added if a copy shows up late).
+    private func output(for item: AVPlayerItem) -> AVPlayerItemVideoOutput {
+        if let o = outputs[ObjectIdentifier(item)] { return o }
+        let o = AVPlayerItemVideoOutput(pixelBufferAttributes: Self.attrs)
+        item.add(o)
+        outputs[ObjectIdentifier(item)] = o
+        return o
+    }
+
     func currentTexture() -> MTLTexture? {
-        guard let cache = cache else { return nil }
-        let host = CACurrentMediaTime()
-        let time = output.itemTime(forHostTime: host)
-        guard output.hasNewPixelBuffer(forItemTime: time) || lastTexture == nil,
-              let pb = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) ?? lastBuffer
+        guard let cache = cache, let item = player.currentItem else { return lastTexture }
+        let output = output(for: item)
+        let time = output.itemTime(forHostTime: CACurrentMediaTime())
+        guard output.hasNewPixelBuffer(forItemTime: time),
+              let pb = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil)
         else { return lastTexture }
 
-        lastBuffer = pb
         let w = CVPixelBufferGetWidth(pb), h = CVPixelBufferGetHeight(pb)
         size = CGSize(width: w, height: h)
         var cvTex: CVMetalTexture?
@@ -85,12 +97,15 @@ final class VideoSource: MediaSource {
         guard status == kCVReturnSuccess, let cvTex, let tex = CVMetalTextureGetTexture(cvTex) else {
             return lastTexture
         }
+        // keep the CVMetalTexture (and its buffer) alive while the GPU may still read the frame
+        lastCVTexture = cvTex
         lastTexture = tex
+        CVMetalTextureCacheFlush(cache, 0)
         return tex
     }
 
     private var lastTexture: MTLTexture?
-    private var lastBuffer: CVPixelBuffer?
+    private var lastCVTexture: CVMetalTexture?
 }
 
 // MARK: - Collection (photo slideshow)
