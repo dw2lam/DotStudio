@@ -29,17 +29,17 @@
   .tag  { right: 30px; top: 32px; font-size: 11px; line-height: 1.4; text-align: right; color: rgba(225,224,204,.58); }
 
   /* Letterboxed band of a real scene render (Liquid Chrome) behind the drag pair. */
-  .band { left: 0; right: 0; top: 88px; bottom: 0; overflow: hidden;
-          -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 12%, #000 100%); }
-  .band img { position: absolute; left: -170px; top: -200px; width: 1000px; filter: brightness(.74) saturate(1.35) contrast(1.05); }
-  .band .side { inset: 0; background: linear-gradient(90deg, rgba(11,11,12,.45), rgba(11,11,12,0) 22%, rgba(11,11,12,0) 78%, rgba(11,11,12,.45)); }
-  /* Finder draws the item names itself (black in Light Mode, white in Dark Mode); the scene's
-     mid tones under every name keep both readable, so there are no plates or shapes. */
+  .band { left: 0; right: 0; top: 88px; height: 214px; overflow: hidden;
+          -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 22%, #000 74%, transparent 100%); }
+  .band img { position: absolute; left: -70px; top: -236px; width: 800px; filter: brightness(.74) saturate(1.35) contrast(1.05); }
+  .band .side { inset: 0; background: linear-gradient(90deg, rgba(11,11,12,.55), rgba(11,11,12,0) 22%, rgba(11,11,12,0) 78%, rgba(11,11,12,.55)); }
 
+  /* Finder draws the item names itself (black in Light Mode, white in Dark Mode): the pair's
+     names sit on the scene's mid tones; How to Install's sits on the dark floor. */
   /* First-launch hint, beside the How to Install document. */
-  .hint { right: 30px; top: 26px; width: 300px; text-align: right; font-size: 10.5px; line-height: 1.5; letter-spacing: .01em; color: rgba(225,224,204,.6); }
-  .hint .path { font-size: 11.5px; font-weight: 700; color: var(--cream); letter-spacing: 0; }
-  .vr { left: 170px; top: 326px; width: 1px; height: 72px; background: rgba(225,224,204,.22); }
+  .hint { left: 186px; top: 342px; width: 440px; font-size: 11px; line-height: 1.55; letter-spacing: .01em; color: rgba(225,224,204,.6); }
+  .hint .path { font-size: 12.5px; font-weight: 700; color: var(--cream); letter-spacing: 0; }
+  .vr { left: 170px; top: 338px; width: 1px; height: 44px; background: rgba(225,224,204,.16); }
 
   .grain { inset: 0; opacity: .28; mix-blend-mode: overlay;
            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
@@ -52,11 +52,12 @@
 <div class="win" id="win">
   <div class="abs band"><img src="scene.jpg" alt=""><div class="abs side"></div></div>
   <div class="abs word">DotStudio</div>
+  <div class="abs tag">Living screensavers<br>for your Mac</div>
   <div id="cue"></div>
+  <div class="abs vr"></div>
   <div class="abs hint">
-    First open needs one approval:<br>
-    <span class="path">System Settings › Privacy &amp; Security › Open Anyway</span><br>
-    Every step is in How to Install, bottom left.
+    First open<br>
+    <span class="path">System Settings › Privacy &amp; Security › Open Anyway</span>
   </div>
   <div class="abs grain"></div>
 </div>
