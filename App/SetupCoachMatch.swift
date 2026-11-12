@@ -606,7 +606,11 @@ enum CoachPlanner {
     /// - chosenOn / chosenOf: SetupSnapshot.choice (nil when it couldn't be read).
     /// - chosenWhenOpened: chosenOn when the chooser opened — a rise means the user just
     ///   picked DotStudio in it.
-    static func decide(_ scene: CoachScene, chosenOn: Int?, chosenOf: Int?, chosenWhenOpened: Int?) -> CoachDecision {
+    /// - pickedInChooser: the user picked DotStudio in the chooser that just closed (its tile
+    ///   was selected, or the store's count rose). When the store can't be read (chosenOn nil),
+    ///   that's the only sign it worked: closing the chooser afterwards finishes.
+    static func decide(_ scene: CoachScene, chosenOn: Int?, chosenOf: Int?, chosenWhenOpened: Int?,
+                       pickedInChooser: Bool = false) -> CoachDecision {
         let everywhere = (chosenOn ?? 0) > 0 && (chosenOn ?? 0) >= (chosenOf ?? 1)
         switch scene.page {
         case .none:
@@ -615,7 +619,7 @@ enum CoachPlanner {
             return CoachDecision(step: .openWallpaper, situation: .elsewhere, target: scene.wallpaperRow,
                                  callout: scene.wallpaperRow == nil ? nil : "Click Wallpaper")
         case .wallpaper:
-            if everywhere { return CoachDecision(step: .finished) }
+            if everywhere || (chosenOn == nil && pickedInChooser) { return CoachDecision(step: .finished) }
             let situation: CoachDecision.Situation = (chosenOn ?? 0) > 0 ? .otherDisplay : .normal
             if let b = scene.screenSaverButton {
                 return CoachDecision(step: .openChooser, situation: situation, target: b, callout: "Click Screen Saver\u{2026}")
