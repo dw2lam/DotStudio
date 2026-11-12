@@ -63,7 +63,7 @@ struct ScreensaverMenu: View {
             let lineup = model.screensaverLineup
             let now = model.nowPlayingID.flatMap(model.preset)?.name ?? "—"
             let pins = model.screensaverPins
-            if roster.isMulti, roster.displays.contains(where: { pins[$0.key] != nil }) {
+            if roster.displays.contains(where: { pins[$0.key] != nil }) {
                 // Some displays play a style of their own: one line per display.
                 Text("Screensaver")
                 ForEach(roster.displays) { d in

@@ -31,13 +31,26 @@ final class DisplayRoster: ObservableObject {
     static let shared = DisplayRoster()
 
     @Published private(set) var displays: [DisplayInfo] = []
-    /// More than one display: the per-display controls show.
+    /// More than one display.
     var isMulti: Bool { displays.count > 1 }
+
+    /// Whether a connected display has a pin in `pins` (whose style exists, per `alive`).
+    func hasPin(_ pins: [String: DisplayPin], alive: (UUID) -> Bool = { _ in true }) -> Bool {
+        displays.contains { d in pins[d.key].map { alive($0.presetID) } ?? false }
+    }
+
+    /// The per-display controls show with more than one display — and with one, while it has a
+    /// style of its own (unplugged, clamshell, mirrored), so that style can be seen and undone.
+    func showsControls(_ pins: [String: DisplayPin]..., alive: (UUID) -> Bool = { _ in true }) -> Bool {
+        isMulti || pins.contains { hasPin($0, alive: alive) }
+    }
 
     /// UI shots / demos (DOTSTUDIO_DEMO_DISPLAYS=2): a made-up second display beside the real
     /// ones, so the per-display controls render on a one-display Mac. Never touches a real
     /// display: only the menus see it.
     private var demoExtra: [DisplayInfo] = []
+    /// Shots: only the first real display, as on a laptop with its external display unplugged.
+    private var demoSingle = false
     private var observer: NSObjectProtocol?
 
     static let demoDisplay = DisplayInfo(key: "DEMO-DISPLAY-LG-HDR-4K", name: "LG HDR 4K", isBuiltIn: false,
@@ -57,11 +70,20 @@ final class DisplayRoster: ObservableObject {
     /// Shots: add (or drop) the made-up second display.
     func setDemo(_ on: Bool) {
         demoExtra = on ? [Self.demoDisplay] : []
+        demoSingle = false
+        refresh()
+    }
+
+    /// Shots: just one display connected (the first real one).
+    func setDemoSingle() {
+        demoExtra = []
+        demoSingle = true
         refresh()
     }
 
     func refresh() {
-        let real = Self.read(NSScreen.screens)
+        var real = Self.read(NSScreen.screens)
+        if demoSingle { real = Array(real.prefix(1)) }
         let next = real + demoExtra.filter { d in !real.contains { $0.key == d.key } }
         if next != displays { displays = next }
     }
@@ -71,8 +93,11 @@ final class DisplayRoster: ObservableObject {
 
     static func read(_ screens: [NSScreen]) -> [DisplayInfo] {
         struct Raw { let key: String; let name: String; let builtIn: Bool; let x: CGFloat; let y: CGFloat }
+        // Keys told apart where identical monitors share a UUID (DisplayIdentity.keys).
+        let keys = DisplayIdentity.keys(screens)
         let raw: [Raw] = screens.compactMap { s in
-            guard let id = DisplayIdentity.displayID(s), let key = DisplayIdentity.key(id) else { return nil }
+            guard let id = DisplayIdentity.displayID(s), let key = keys[id] else { return nil }
+            if key.contains("#") { Breadcrumbs.note("display \(s.localizedName) shares its UUID: key \(key)") }
             return Raw(key: key, name: s.localizedName, builtIn: CGDisplayIsBuiltin(id) != 0,
                        x: s.frame.minX, y: s.frame.minY)
         }
@@ -156,6 +181,16 @@ struct DisplayLineup: Equatable {
     static let single = DisplayLineup(displays: [], screensaver: [:], wallpaper: [:], screensaverPinned: [],
                                       wallpaperPinned: [])
 
+    /// Every connected display plays a screensaver style of its own: the lineup is on no screen.
+    var lineupOffScreen: Bool { !displays.isEmpty && displays.allSatisfy { screensaverPinned.contains($0.key) } }
+    /// Every connected display plays a wallpaper style of its own: the shared pick is on none.
+    var sharedWallpaperOffScreen: Bool {
+        !displays.isEmpty && !wallpaper.isEmpty && displays.allSatisfy { wallpaperPinned.contains($0.key) }
+    }
+    /// The wallpaper style to name for the whole desktop: the first display's when no display
+    /// shows the shared pick (one display with a style of its own), else nil (the shared pick).
+    var wallpaperNow: UUID? { sharedWallpaperOffScreen ? displays.first.flatMap { wallpaper[$0.key] } : nil }
+
     var isMulti: Bool { displays.count > 1 }
 
     init(displays: [DisplayInfo], screensaver: [String: UUID], wallpaper: [String: UUID],
@@ -172,7 +207,7 @@ struct DisplayLineup: Equatable {
     ///   that display's screensaver shows).
     init(model: AppModel, displays: [DisplayInfo], wallpaperShared: UUID?, wallpaperPins: [String: DisplayPin],
          synced: Bool) {
-        guard displays.count > 1, !model.library.presets.isEmpty else { self = .single; return }
+        guard !displays.isEmpty, !model.library.presets.isEmpty else { self = .single; return }
         let lib = model.library
         let now = Date()
         let shared = Playback.effectivePreset(in: lib, now: now).id
@@ -281,6 +316,9 @@ func displayKeyValues(displays: [DisplayInfo], pins: [String: DisplayPin], model
 struct DisplayChoice {
     let title: String
     let checked: Bool
+    /// False for a display that already shows it through the shared pick: picking it there
+    /// would change nothing on screen.
+    var enabled = true
     let action: () -> Void
 }
 
@@ -290,15 +328,17 @@ enum DisplayChoices {
     /// a display it's pinned to gives that display back to the lineup).
     static func screensaver(_ id: UUID, model: AppModel, displays: [DisplayInfo]) -> [DisplayChoice] {
         let pins = model.screensaverPins
-        let alone = model.screensaverLineup.playlist == [id]
+        // Alone: the lineup is this style, day and night.
+        let lineup = model.screensaverLineup
+        let alone = lineup.playlist == [id] && (lineup.night == nil || lineup.night == id)
         let connectedPinned = displays.contains { pins[$0.key] != nil }
         var out = [DisplayChoice(title: "All Displays", checked: alone && !connectedPinned) {
             Motion.run { model.playAsScreensaverEverywhere(id) }
         }]
         for d in displays {
             let pinned = pins[d.key]?.presetID == id
-            let shows = pinned || (pins[d.key] == nil && alone)
-            out.append(DisplayChoice(title: d.name, checked: shows) {
+            let viaLineup = pins[d.key] == nil && alone
+            out.append(DisplayChoice(title: d.name, checked: pinned || viaLineup, enabled: !viaLineup) {
                 Motion.run { model.setScreensaverStyle(pinned ? nil : id, on: d) }
             })
         }
@@ -317,7 +357,8 @@ enum DisplayChoices {
         }]
         for d in displays {
             let pinned = !slot.follows && slot.pins[d.key]?.presetID == id
-            out.append(DisplayChoice(title: d.name, checked: lineup.wallpaper[d.key] == id) {
+            let shows = lineup.wallpaper[d.key] == id
+            out.append(DisplayChoice(title: d.name, checked: shows, enabled: pinned || !shows || slot.follows) {
                 Motion.run { slot.set(pinned ? nil : id, on: d) }
             })
         }
@@ -336,6 +377,7 @@ struct DisplayChoiceMenu: View {
                 Button(action: c.action) {
                     if c.checked { Label(menuName(c.title, limit: 40), systemImage: "checkmark") } else { Text(menuName(c.title, limit: 40)) }
                 }
+                .disabled(!c.enabled)
                 if i == 0 { Divider() }
             }
         }

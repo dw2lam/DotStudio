@@ -221,7 +221,7 @@ enum DefaultPresets {
     /// `wallpaperPick` — what pointed at it moves to Golden Hour, which turns Follow the Sun on,
     /// so the screen keeps following the real sky. Without an untouched Golden Hour to take
     /// over, the Tidewater copy simply becomes "Golden Hour" (same ID, so nothing moves). Pure.
-    static func foldTidewater(_ lib: Library, wallpaperPick: UUID?) -> (Library, Retirement) {
+    static func foldTidewater(_ lib: Library, wallpaperPick: UUID?, wallpaperPins: [UUID] = []) -> (Library, Retirement) {
         var lib = lib
         var r = Retirement()
         guard let tideDef = builtInDefinition("Tidewater"), let goldDef = builtInDefinition("Golden Hour"),
@@ -229,9 +229,10 @@ enum DefaultPresets {
         else { return (lib, r) }
         guard isUntouched(lib.presets[t], as: tideDef) else { r.kept.append("Tidewater"); return (lib, r) }
         let tid = lib.presets[t].id
-        let inUse = lib.activeID == tid || wallpaperPick == tid
+        let inUse = lib.activeID == tid || wallpaperPick == tid || wallpaperPins.contains(tid)
             || lib.schedule?.dayPresetID == tid || lib.schedule?.nightPresetID == tid
             || (lib.rotation?.presetIDs ?? []).contains(tid)
+            || (lib.displayStyles ?? [:]).values.contains { $0.presetID == tid }
 
         guard let g = lib.presets.firstIndex(where: { $0.name == "Golden Hour" }) else {
             lib.presets[t].name = "Golden Hour"
@@ -262,6 +263,14 @@ enum DefaultPresets {
             rot.presetIDs = ids
             lib.rotation = rot
             r.remapped.append("rotation: Tidewater → Golden Hour")
+        }
+        if let pins = lib.displayStyles, pins.values.contains(where: { $0.presetID == tid }) {
+            lib.displayStyles = pins.mapValues { p in
+                var p = p
+                if p.presetID == tid { p.presetID = gid }
+                return p
+            }
+            r.remapped.append("display styles: Tidewater → Golden Hour")
         }
         return (lib, r)
     }
@@ -318,6 +327,19 @@ enum DefaultPresets {
                 lib.rotation = rot
             }
         }
+        // A display's own style moves with the rest (none left: that display plays the lineup).
+        if let pins = lib.displayStyles, pins.values.contains(where: { removedIDs[$0.presetID] != nil }) {
+            var next: [String: DisplayPin] = [:]
+            for (key, pin) in pins {
+                guard removedIDs[pin.presetID] != nil else { next[key] = pin; continue }
+                if let new = remap(pin.presetID, "display \(pin.name ?? key)") {
+                    var p = pin
+                    p.presetID = new
+                    next[key] = p
+                }
+            }
+            lib.displayStyles = next.isEmpty ? nil : next
+        }
         return (lib, r)
     }
 
@@ -333,7 +355,7 @@ enum DefaultPresets {
         lib.activeID = sc.first(where: { $0.name == "Liquid Chrome" })?.id ?? sc.first?.id
         // A new library has been offered everything shipping today (the rest is in Add
         // Built-in Styles), so only built-ins added in later versions arrive (AppModel.migrate).
-        lib.seenBuiltIns = offeredBuiltIns().map(\.name) + [retirementMarker]
+        lib.seenBuiltIns = offeredBuiltIns().map(\.name) + [retirementMarker, tidewaterMarker]
         return lib
     }
 

@@ -238,10 +238,10 @@ struct WorkspaceDesktopPictures: DesktopPictures {
         try NSWorkspace.shared.setDesktopImageURL(url, for: screen, options: o)
     }
 
+    /// The display's UUID — told apart (#2…) where identical monitors share one, so each has its
+    /// own picture and `screen(_:)` finds exactly one (DisplayIdentity.keys).
     static func key(_ screen: NSScreen) -> String? {
-        guard let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value,
-              let uuid = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue() else { return nil }
-        return CFUUIDCreateString(nil, uuid) as String
+        DisplayIdentity.key(screen)
     }
 
     private static func screen(_ key: String) -> NSScreen? {

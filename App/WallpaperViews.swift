@@ -20,7 +20,7 @@ struct WallpaperMenu: View {
         if wallpaper.isActive {
             let lines = perDisplay(synced: synced)
             if lines.isEmpty {
-                Text("Wallpaper: \(menuName(wallpaper.currentPreset?.name ?? "—"))")
+                Text("Wallpaper: \(menuName(shownName))")
             } else {
                 // Some displays play a style of their own: one line per display.
                 Text("Wallpaper")
@@ -32,25 +32,35 @@ struct WallpaperMenu: View {
             sameAsScreensaver(synced)
             MenuBarStylePicker(title: "Set as Wallpaper", presets: model.library.presets,
                                isChosen: { !synced && wallpaper.settings.presetID == $0 },
-                               choose: { wallpaper.use($0) })
+                               choose: { WallpaperSlot.shared.set($0) })
             Button(wallpaper.userPaused ? "Resume Wallpaper" : "Pause Wallpaper") { wallpaper.togglePause() }
             Button("Stop Wallpaper") { wallpaper.stop() }
         } else {
             Text("Wallpaper: Off")
             if let first = startStyle {
-                Button("Set \u{201C}\(menuName(first.name, limit: 24))\u{201D} as Wallpaper") { wallpaper.use(first.id) }
+                Button("Set \u{201C}\(menuName(first.name, limit: 24))\u{201D} as Wallpaper") { WallpaperSlot.shared.set(first.id) }
                 sameAsScreensaver(false)
                 MenuBarStylePicker(title: "Set as Wallpaper", presets: model.library.presets,
                                    isChosen: { _ in false },
-                                   choose: { wallpaper.use($0) })
+                                   choose: { WallpaperSlot.shared.set($0) })
             }
         }
     }
 
     /// "<display>: <style>" per connected display, when some display plays a style of its own
     /// (the wallpaper's own, or — synced — the screensaver's); empty otherwise.
+    /// What the desktop shows: the shared pick — or, with every connected display on a style of
+    /// its own (one display, pinned), that style.
+    private var shownName: String {
+        let lineup = DisplayLineup(model: model, displays: roster.displays, wallpaperShared: wallpaper.currentPreset?.id,
+                                   wallpaperPins: wallpaper.settings.displayStyles,
+                                   synced: wallpaper.isActive && wallpaper.followsScreensaver)
+        return (lineup.wallpaperNow ?? wallpaper.currentPreset?.id).flatMap(model.preset)?.name ?? "—"
+    }
+
     private func perDisplay(synced: Bool) -> [String] {
-        guard roster.isMulti else { return [] }
+        guard roster.isMulti || roster.hasPin(synced ? model.screensaverPins : wallpaper.settings.displayStyles,
+                                              alive: { model.preset($0) != nil }) else { return [] }
         let lineup = DisplayLineup(model: model, displays: roster.displays,
                                    wallpaperShared: wallpaper.currentPreset?.id,
                                    wallpaperPins: wallpaper.settings.displayStyles, synced: synced)
