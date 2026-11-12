@@ -42,7 +42,10 @@
 //  as the app imports one) sets the logo of every Bounce preset; each Bounce render prints its
 //  corner period and the next corner hits (render one with --times).
 //  --checks runs the live-renderer checks (wall-clock time base, synced slideshow, held-frame
-//  track change, rapid skips) through MetalRenderer.renderFrame and exits non-zero on a failure.
+//  track change, rapid skips) through MetalRenderer.renderFrame, the format, Bounce and retirement
+//  checks, params from a shared file (1e20 / 1e300 / NaN / ±inf: clamped on load, and every kind
+//  renders unsanitized without trapping), Time Lapse across the hourly wrap, and Meadow's Landscape
+//  changing under live weather — and exits non-zero on a failure.
 
 import AppKit
 import Metal
@@ -710,10 +713,235 @@ func retirementChecks() -> Bool {
 }
 // MARK: - end retirement checks ────────────────────────────────────────────────────────────────
 
+// MARK: - Hardening, Time Lapse and Meadow checks ───────────────────────────────────────────────
+
+/// Params from a shared file: no conversion traps (SafeNumbers), decoding clamps every param to
+/// its range, and every effect renders with 1e20 / 1e300 / NaN / ±inf params without trapping.
+func hardeningChecks() -> Bool {
+    var ok = true
+    func check(_ pass: Bool, _ what: String) {
+        print("\(pass ? "PASS" : "FAIL")  \(what)")
+        if !pass { ok = false }
+    }
+    let bad: [Double] = [1e20, 1e300, -1e300, .nan, -.infinity, .infinity]
+    let lim = 1 << 53
+    check(Int(saturating: Double.nan) == 0 && Int(saturating: Double.infinity) == lim && Int(saturating: -Double.infinity) == -lim
+          && Int(saturating: 1e300) == lim && Int(saturating: Float(1e30)) == lim && Int(saturating: Float.nan) == 0
+          && Int(saturating: 2.5, .toNearestOrAwayFromZero) == 3 && Int(saturating: -2.7) == -2 && Int(saturating: 2.7, .down) == 2
+          && Int32(saturating: 1e20) == .max && Int32(saturating: -Double.infinity) == .min && UInt32(saturating: -5.0) == 0,
+          "Int(saturating:) never traps: NaN → 0, ±inf / 1e300 → ±2⁵³, rounding rules as Int(x.rounded(rule))")
+
+    // Every kind's params at each bad value, sanitized: all finite and in range; a param this
+    // build has no spec for is kept; in-range values (the shipping library) are untouched.
+    var outOfRange: [String] = []
+    for kind in EffectKind.allCases {
+        for v in bad {
+            var e = EffectInstance(kind)
+            for k in e.params.keys { e.params[k] = v }
+            e.params["paramFromTheFuture"] = 0.25
+            var p = Preset(name: "x", effects: [e])
+            p.fps = v.isFinite ? Int(saturating: v) : 30
+            p.sanitize()
+            let s = p.effects[0]
+            for spec in kind.params {
+                guard let x = s.params[spec.key], x.isFinite, x >= min(spec.min, spec.max), x <= max(spec.min, spec.max)
+                else { outOfRange.append("\(kind.rawValue).\(spec.key)@\(v)"); continue }
+            }
+            if s.params["paramFromTheFuture"] != 0.25 { outOfRange.append("\(kind.rawValue): unknown param dropped") }
+            if !(1...120).contains(p.fps) { outOfRange.append("\(kind.rawValue): fps \(p.fps)") }
+        }
+    }
+    check(outOfRange.isEmpty, "sanitize: \(EffectKind.allCases.count) kinds × \(bad.count) bad values → every param finite and in its range, unknown params kept, fps 1…120 \(outOfRange.prefix(6))")
+    var shipping = DefaultPresets.makeLibrary()
+    let shippingBefore = shipping
+    check(!shipping.sanitize() && shipping == shippingBefore, "sanitize leaves the shipping library untouched (every value already in range)")
+
+    // The load path (SharedStore.loadLibrary, which the saver and the app read): a library.json
+    // with 1e300-scale params decodes clamped. Only into a temp store (DOTSTUDIO_STORE_DIR).
+    if ProcessInfo.processInfo.environment["DOTSTUDIO_STORE_DIR"] != nil {
+        var lib = Library()
+        for kind in EffectKind.allCases where !kind.params.isEmpty {
+            for v in [1e20, 1e300, -1e300] {
+                var e = EffectInstance(kind)
+                for k in e.params.keys { e.params[k] = v }
+                lib.presets.append(Preset(name: "\(kind.rawValue) \(v)", effects: [e]))
+            }
+        }
+        let saved = try? Data(contentsOf: store.libraryURL)
+        _ = store.save(lib)
+        var bad = 0
+        if case .loaded(let back) = store.loadLibrary() {
+            for p in back.presets {
+                for e in p.effects {
+                    for spec in e.kind.params {
+                        let x = e.params[spec.key] ?? .nan
+                        if !(x.isFinite && x >= min(spec.min, spec.max) && x <= max(spec.min, spec.max)) { bad += 1 }
+                    }
+                }
+            }
+            check(bad == 0 && back.presets.count == lib.presets.count,
+                  "loadLibrary clamps a library.json of \(lib.presets.count) styles with ±1e300 / 1e20 params (\(bad) out of range)")
+        } else {
+            check(false, "loadLibrary reads the 1e300 library back")
+        }
+        if let saved { try? saved.write(to: store.libraryURL) } else { try? FileManager.default.removeItem(at: store.libraryURL) }
+    } else {
+        print("SKIP  loadLibrary clamp check: DOTSTUDIO_STORE_DIR isn't set (never writes the real library)")
+    }
+
+    // Render every kind UNSANITIZED (the renderer's own conversions must hold too): live frames
+    // through renderFrame (weather, live sky, music, Bounce's logo, Zen Garden, serial dither)
+    // and a thumbnail, at each bad value. A trap ends the process: reaching the end is the pass.
+    let t0 = CFAbsoluteTimeGetCurrent()
+    var frames = 0
+    let r = MetalRenderer(pixelFormat: .bgra8Unorm, store: store)!
+    r.waitsForScenePipelines = true
+    for kind in EffectKind.allCases {
+        for v in bad {
+            var e = EffectInstance(kind)
+            for k in e.params.keys { e.params[k] = v }
+            let p = Preset(name: "bad", effects: kind.isScene ? [e] : [e, EffectInstance(.dither)])
+            r.apply(p, source: kind.isScene ? SourceSpec() : .builtInPhotos)
+            if r.renderFrame(width: 48, height: 30) != nil { frames += 1 }
+            if r.renderThumbnail(preset: p, source: SourceSpec(), width: 48, height: 30, time: Float(v.isFinite ? 5 : 1)) != nil { frames += 1 }
+        }
+    }
+    check(frames > 0, String(format: "every kind renders with 1e20 / ±1e300 / NaN / ±inf params, unsanitized, without trapping (%d frames, %.1f s)",
+                             frames, CFAbsoluteTimeGetCurrent() - t0))
+    return ok
+}
+
+/// Time Lapse runs on across the hourly wrap of t: the simulated hour (Meadow's fixed Time of
+/// Day) and Follow the Sun's simulated instant, as the renderer computes them each frame, never
+/// jump — for lapse rates that divide an hour and ones that don't.
+func lapseChecks() -> Bool {
+    var ok = true
+    func check(_ pass: Bool, _ what: String) {
+        print("\(pass ? "PASS" : "FAIL")  \(what)")
+        if !pass { ok = false }
+    }
+    func circ(_ a: Double, _ b: Double, _ p: Double) -> Double { let d = (b - a).truncatingRemainder(dividingBy: p); return d > p / 2 ? d - p : d < -p / 2 ? d + p : d }
+    for base in [MetalRenderer.TimeBase.instance, .wallClock] {
+        for lapse in [1.0, 7.0, 13.0, 45.0] {
+            for live in [0.0, 1.0] {
+                var e = EffectInstance(.meadow)
+                e.params["live"] = live; e.params["lapse"] = lapse; e.params["hour"] = 9.25
+                let r = MetalRenderer(pixelFormat: .bgra8Unorm, store: store)!
+                r.timeBase = base
+                r.apply(Preset(name: "Lapse", effects: [e]), source: SourceSpec())
+                if base == .instance { r.setInstanceTime(3599.7) } else {
+                    r.timeBaseSkew = 3599.7 - MetalRenderer.wallPhase(Date().timeIntervalSince1970)
+                }
+                // frames back to back across the wrap; per frame the sky the renderer would fill
+                var last: (wall: Double, hour: Double, sim: Double, sunH: Float, t: Double)?
+                var worst = 0.0, oldWorst = 0.0, wrapped = false
+                let rateH = 24.0 / (lapse * 60)                      // simulated hours per second
+                let t0 = CACurrentMediaTime()
+                while CACurrentMediaTime() - t0 < 0.7 {
+                    _ = r.renderFrame(width: 16, height: 10)
+                    let now = Date(), L = r.lapseClock(), t = r.animationTime()
+                    let hour = MetalRenderer.lapseHour(hour: 9.25, lapse: lapse, lapseClock: L)
+                    let sim = MetalRenderer.lapseDate(now: now, lapse: lapse, lapseClock: L).timeIntervalSince1970
+                    var u = FXUniforms()
+                    MetalRenderer.fillLiveSky(&u, inst: e, now: now, lapseClock: L, location: (43.7, -79.4))
+                    if let p = last {
+                        let dt = now.timeIntervalSince1970 - p.wall
+                        if t < p.t { wrapped = true }
+                        if live < 0.5 {
+                            worst = max(worst, abs(circ(p.hour, hour, 24)) - rateH * dt)
+                            // what the old formula did: hour + t·rate
+                            oldWorst = max(oldWorst, abs(circ(9.25 + p.t * rateH, 9.25 + t * rateH, 24)) - rateH * dt)
+                        } else {
+                            worst = max(worst, abs(sim - p.sim) / 3600 - 1440 / lapse * dt / 3600)
+                            oldWorst = max(oldWorst, abs((now.timeIntervalSince1970 + t * (1440 / lapse - 1))
+                                                         - (p.wall + p.t * (1440 / lapse - 1))) / 3600 - 1440 / lapse * dt / 3600)
+                        }
+                        // the hour angle the shader gets moves by no more than the frame's share
+                        let dH = abs(circ(Double(p.sunH), Double(u.sun.y), 2 * .pi)) / (2 * .pi) * 24
+                        worst = max(worst, dH - (live < 0.5 ? rateH : 1440 / lapse / 3600 * 1.01) * dt - 0.01)
+                    }
+                    last = (now.timeIntervalSince1970, hour, sim, u.sun.y, t)
+                }
+                check(wrapped && worst < 0.02,
+                      String(format: "Time Lapse %2.0f min/day, %@, %@: continuous across the wrap (worst excess step %.4f h; the old hour + t·rate jumped %.2f h)",
+                             lapse, live > 0.5 ? "Follow the Sun" : "fixed hour", base == .instance ? "instance" : "wall clock", worst, oldWorst))
+            }
+        }
+    }
+    // Follow the Sun's offset wraps by whole Metonic cycles only: the time of day is exact.
+    let now = Date()
+    let a = MetalRenderer.lapseDate(now: now, lapse: 1, lapseClock: MetalRenderer.lapseCycle / 1439 - 0.01)
+    let b = MetalRenderer.lapseDate(now: now, lapse: 1, lapseClock: MetalRenderer.lapseCycle / 1439 + 0.01)
+    let tod = { (d: Date) in d.timeIntervalSince1970.truncatingRemainder(dividingBy: 86400) }
+    check(abs(circ(tod(a), tod(b), 86400) - 0.02 * 1440) < 1 && abs(a.timeIntervalSince(b)) > 86400 * 6000,
+          "the 19-year (Metonic) wrap of Follow the Sun's lapse keeps the time of day (only the date jumps back)")
+    return ok
+}
+
+/// Meadow under Live weather: a new Landscape draws its weather from the first frame (its
+/// pipelines prewarm on apply; a blocking renderer waits for them, the saver's holds the frame).
+func meadowLandscapeChecks() -> Bool {
+    var ok = true
+    func check(_ pass: Bool, _ what: String) {
+        print("\(pass ? "PASS" : "FAIL")  \(what)")
+        if !pass { ok = false }
+    }
+    func meanDiff(_ a: CGImage?, _ b: CGImage?) -> Double {
+        guard let a, let b, a.width == b.width, a.height == b.height,
+              let da = a.dataProvider?.data, let db = b.dataProvider?.data else { return .infinity }
+        let n = min(CFDataGetLength(da), CFDataGetLength(db)), pa = CFDataGetBytePtr(da)!, pb = CFDataGetBytePtr(db)!
+        var s = 0
+        for i in 0..<n where i % 4 != 3 { s += abs(Int(pa[i]) - Int(pb[i])) }
+        return Double(s) / Double(n / 4 * 3)
+    }
+    let saved = WeatherLink.forced
+    defer { WeatherLink.forced = saved }
+    func meadow(_ land: Double) -> Preset {
+        var e = EffectInstance(.meadow)
+        e.params["live"] = 0; e.params["hour"] = 13; e.params["weather"] = 0; e.params["landscape"] = land
+        e.params["speed"] = 0                 // a still scene: frames compare across renderers
+        return Preset(name: "Meadow \(Int(land))", effects: [e])
+    }
+    var snow = WeatherMix.preset(.snow); snow.precip = 0.85
+    let w = 320, h = 200
+    for mode in [FXPipelines.Mode.blocking, .fastStart] {
+        for (from, to) in [(0.0, 2.0), (2.0, 3.0), (3.0, 1.0)] {
+            WeatherLink.forced = snow
+            let r = MetalRenderer(pixelFormat: .bgra8Unorm, store: store, pipelines: mode)!
+            r.timeBase = .wallClock
+            r.apply(meadow(from), source: SourceSpec())
+            var first: CGImage?
+            let t0 = CACurrentMediaTime()
+            while first == nil, CACurrentMediaTime() - t0 < 20 { first = r.renderFrame(width: w, height: h) }
+            r.apply(meadow(to), source: SourceSpec())            // the Landscape menu
+            var after: CGImage?
+            let t1 = CACurrentMediaTime()
+            while after == nil, CACurrentMediaTime() - t1 < 20 { after = r.renderFrame(width: w, height: h) }
+            // references: the new landscape settled, under the snow and under a clear sky
+            func ref(_ mix: WeatherMix) -> CGImage? {
+                WeatherLink.forced = mix
+                let q = MetalRenderer(pixelFormat: .bgra8Unorm, store: store)!
+                q.timeBase = .wallClock
+                q.apply(meadow(to), source: SourceSpec())
+                _ = q.renderFrame(width: w, height: h)
+                return q.renderFrame(width: w, height: h)
+            }
+            let wx = ref(snow), clear = ref(.clear)
+            let dWx = meanDiff(after, wx), dClear = meanDiff(after, clear)
+            check(after != nil && dWx < dClear * 0.5,
+                  String(format: "%@: Landscape %.0f → %.0f under Live heavy snow: the first frame drawn shows the weather (Δ snow %.2f, Δ clear sky %.2f)",
+                         mode == .blocking ? "blocking (app, wallpaper)" : "fastStart (saver)", from, to, dWx, dClear))
+        }
+    }
+    return ok
+}
+// MARK: - end hardening checks ──────────────────────────────────────────────────────────────────
+
 if runChecks {
     let live = liveChecks(), format = formatChecks(), bounce = bounceChecks()
     let retirement = retirementChecks()
-    exit(live && format && bounce && retirement ? 0 : 1)
+    let hardening = hardeningChecks(), lapse = lapseChecks(), landscape = meadowLandscapeChecks()
+    exit(live && format && bounce && retirement && hardening && lapse && landscape ? 0 : 1)
 }
 
 if let tzArg, let tz = TimeZone(identifier: tzArg) { NSTimeZone.default = tz }
@@ -843,7 +1071,7 @@ if gpuBench {
         }
         let wall = clocks.first.flatMap(wallDate) ?? Date()
         (u.clock, u.date) = MetalRenderer.wallClock(wall)
-        MetalRenderer.fillLiveSky(&u, inst: inst, now: wall, time: 0, location: renderer.location)
+        MetalRenderer.fillLiveSky(&u, inst: inst, now: wall, lapseClock: 0, location: renderer.location)
         if WeatherLink.usesWeather(inst.kind) {
             let mix = WeatherLink.fixedCondition(inst).map(WeatherMix.preset) ?? WeatherLink.forced ?? .clear
             WeatherLink.pack(&u, mix: mix, inst: inst, drift: 0)

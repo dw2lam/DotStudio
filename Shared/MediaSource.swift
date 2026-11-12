@@ -214,7 +214,7 @@ final class CollectionSource {
     private func step(_ c: SlideClock) -> Step {
         let F = fade
         let tt = max(c.t, 0) + F                     // t = 0 opens fully on the first photo
-        let k = Int(floor(tt / interval))
+        let k = Int(saturating: tt / interval, .down)
         let local = tt - Double(k) * interval
         let x = min(max(local / F, 0), 1)
         return (k, local, Float(x * x * (3 - 2 * x)), c.seed ?? offset)

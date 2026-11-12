@@ -49,8 +49,8 @@ struct MusicSceneOptions: Equatable {
 
     init(_ inst: EffectInstance) {
         func v(_ k: String) -> Double { Double(inst.g(k)) }
-        layout = MusicLayoutKind(rawValue: Int(v("layout").rounded())) ?? .album
-        background = MusicBackground(rawValue: Int(v("background").rounded())) ?? .livingArt
+        layout = MusicLayoutKind(rawValue: Int(saturating: v("layout"), .toNearestOrAwayFromZero)) ?? .album
+        background = MusicBackground(rawValue: Int(saturating: v("background"), .toNearestOrAwayFromZero)) ?? .livingArt
         motion = v("motion")
         showAlbum = v("album") > 0.5
         showProgress = v("progress") > 0.5

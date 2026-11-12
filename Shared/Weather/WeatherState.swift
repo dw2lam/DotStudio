@@ -175,7 +175,7 @@ extension WeatherState {
             if let n = cur[k] as? NSNumber { return n.doubleValue }
             return nil
         }
-        let code = num("weather_code").map { Int($0) } ?? 0
+        let code = num("weather_code").map { Int(saturating: $0) } ?? 0
         var cond = WeatherCondition(wmo: code)
         let cover = num("cloud_cover").map { min(max($0 / 100, 0), 1) }
         // A "mainly clear" code under a sky the model calls mostly covered reads as partly cloudy.
