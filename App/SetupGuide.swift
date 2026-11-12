@@ -303,8 +303,39 @@ final class SetupGuidePanel: NSObject, NSWindowDelegate {
         p.delegate = self
         p.center()
         panel = p
+        let coach = SetupCoach.shared
+        coach.log = { [weak model] in model?.store.debug("coach", $0) }
+        coach.install = { [weak model] in model?.installScreensaver() }
+        coach.onSettingsFrame = { [weak self] in self?.dock(besideSettingsAX: $0) }
+        docked = false
         p.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private var docked = false
+
+    /// The coach found the Settings window (AX global frame): put the guide right beside it
+    /// (left if there's no room on the right) so it never covers what the user has to click.
+    /// After the first time, only when the two overlap — a guide the user moved stays put.
+    private func dock(besideSettingsAX ax: CGRect) {
+        guard let panel, let main = NSScreen.screens.first else { return }
+        let s = CoachGeometry.flip(ax, mainHeight: main.frame.height)
+        if docked && !panel.frame.intersects(s) { return }
+        let screen = NSScreen.screens.first { $0.frame.contains(CGPoint(x: s.midX, y: s.midY)) } ?? panel.screen ?? main
+        let vf = screen.visibleFrame
+        var f = panel.frame
+        let gap = Space.m
+        if s.maxX + gap + f.width <= vf.maxX {
+            f.origin.x = s.maxX + gap
+        } else if s.minX - gap - f.width >= vf.minX {
+            f.origin.x = s.minX - gap - f.width
+        } else {
+            f.origin.x = vf.maxX - f.width   // no room either side: the screen's edge
+        }
+        f.origin.y = min(max(s.maxY - f.height, vf.minY), vf.maxY - f.height)
+        docked = true
+        guard !f.equalTo(panel.frame) else { return }
+        if Motion.reduceMotion { panel.setFrame(f, display: true) } else { panel.animator().setFrame(f, display: true) }
     }
 
     /// System Settings opens near the middle of the screen: park the guide at the right edge.
@@ -321,6 +352,8 @@ final class SetupGuidePanel: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        // The coach reads System Settings only while this guide is open.
+        SetupCoach.shared.stop()
         SetupGuideModel.shared.commit()
         panel?.contentViewController = nil
         panel = nil

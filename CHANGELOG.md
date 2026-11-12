@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **Guide Me in System Settings.** The setup guide can now point at the exact control to
+  click — Wallpaper, Screen Saver…, the Other section, DotStudio, Done — with a glowing ring
+  right in System Settings, and moves on by itself as you click. It never gets in the way of
+  your clicks. It asks once for Accessibility permission (it only reads System Settings, and
+  only while the guide is open); without it, the illustrated guide works as before.
+
 ## 1.4.5 — Meadow and Bloom
 
 ### New

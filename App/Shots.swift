@@ -433,6 +433,19 @@ enum UIShots {
         s.append(Screen(name: "setup-panel", frame: .fixed(SetupGuidePanel.size), view: { _ in
             AnyView(SetupGuidePanelView(guide: SetupDemo.notChosen.guide, frozenStep: 0))
         }))
+        // The setup coach (SetupCoach.swift): the overlay's ring and callout over a stand-in for
+        // System Settings, and the guide panel's coach card in each state (pinned; nothing reads
+        // System Settings here)
+        for scene in CoachOverlayPreview.Scene.allCases {
+            s.append(Screen(name: "coach-overlay-\(scene.rawValue)", frame: .fixed(CoachOverlayPreview.size), view: { _ in
+                AnyView(CoachOverlayPreview(scene: scene))
+            }))
+        }
+        for demo in CoachDemo.allCases {
+            s.append(Screen(name: "setup-coach-\(demo.rawValue)", frame: .fixed(SetupGuidePanel.size), view: { _ in
+                AnyView(SetupGuidePanelView(guide: demo.guide.guide, coach: demo.coach))
+            }))
+        }
         // The one-time "start at login" suggestion: on the Wallpaper card after turning it on,
         // on the Screensaver card after turning music on, and in Settings › General
         s.append(Screen(name: "setup-nudge-wallpaper", frame: .window, prepare: { st in
@@ -875,6 +888,48 @@ enum SetupDemo {
     var guide: SetupGuideModel {
         let s = snapshot
         return MainActor.assumeIsolated { SetupGuideModel(demo: s, wantsLogin: true) }
+    }
+}
+
+/// The setup coach's panel states for UI shots: a pinned SetupCoach (never starts, never asks
+/// for Accessibility, never reads System Settings) with the checklist state that goes with it.
+enum CoachDemo: String, CaseIterable {
+    case offer, waiting, closed, elsewhere, step2, otherDisplay = "step2-other-display", step3, step4, done = "step4-done",
+         degraded, manual, finished, finishedAttention = "finished-attention"
+
+    var guide: SetupDemo {
+        switch self {
+        case .otherDisplay: return .partial
+        case .finished: return .chosen
+        case .finishedAttention: return .idleNever
+        default: return .notChosen
+        }
+    }
+
+    var coach: SetupCoach {
+        let r = CGRect(x: 0, y: 0, width: 100, height: 24)
+        let d: CoachDecision
+        var mode = SetupCoach.Mode.coaching
+        var override: CoachStep?
+        var degraded = false
+        var ring = true
+        switch self {
+        case .offer: mode = .off; d = CoachDecision(step: .openWallpaper, situation: .settingsClosed)
+        case .waiting: mode = .waitingForPermission; d = CoachDecision(step: .openWallpaper, situation: .settingsClosed)
+        case .closed: d = CoachDecision(step: .openWallpaper, situation: .settingsClosed); ring = false
+        case .elsewhere: d = CoachDecision(step: .openWallpaper, situation: .elsewhere, target: r, callout: "Click Wallpaper")
+        case .step2: d = CoachDecision(step: .openChooser, target: r, callout: "Click Screen Saver\u{2026}")
+        case .otherDisplay: d = CoachDecision(step: .openChooser, situation: .otherDisplay, target: r, callout: "Click Screen Saver\u{2026}")
+        case .step3: d = CoachDecision(step: .scrollToTile, target: r, kind: .area, callout: "Scroll down to Other")
+        case .step4: d = CoachDecision(step: .chooseTile, target: r, callout: "Click DotStudio")
+        case .done: d = CoachDecision(step: .clickDone, target: r, callout: "Click Done")
+        case .degraded: d = CoachDecision(step: .chooseTile); degraded = true; ring = false
+        case .manual: d = CoachDecision(step: .openChooser, target: r, callout: "Click Screen Saver\u{2026}"); override = .scrollToTile; ring = false
+        case .finished, .finishedAttention: d = CoachDecision(step: .finished); ring = false
+        }
+        return MainActor.assumeIsolated {
+            SetupCoach(demoMode: mode, decision: d, override: override, degraded: degraded, ringShown: ring)
+        }
     }
 }
 

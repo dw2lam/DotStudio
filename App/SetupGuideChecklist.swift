@@ -403,6 +403,8 @@ struct ChecklistRow<Action: View, Extra: View>: View {
 struct SetupGuidePanelView: View {
     @Environment(\.layout) private var layout
     @ObservedObject var guide: SetupGuideModel
+    /// The coach marks (SetupCoach.swift); UI shots pass a pinned one.
+    @ObservedObject var coach: SetupCoach = .shared
     var frozenStep: Int?
     var forceStill = false
     var onOpenSettings: () -> Void = {}
@@ -418,15 +420,24 @@ struct SetupGuidePanelView: View {
                             Text("Set Up Your Screensaver")
                                 .textRole(.sectionTitle)
                                 .wrapping()
-                            Text("macOS lets only you choose the screensaver. Follow the picture in System Settings — this guide stays on top while you do.")
+                            Text(coach.mode == .coaching
+                                 ? "macOS lets only you choose the screensaver. DotStudio points at each click in System Settings \u{2014} this guide stays beside it."
+                                 : "macOS lets only you choose the screensaver. Follow the picture in System Settings — this guide stays on top while you do.")
                                 .textRole(.callout)
                                 .foregroundStyle(.secondary)
                                 .wrapping()
                         }
-                        SetupGuideContent(guide: guide, sideBySide: wide, commitPhrase: "when you click Done",
-                                          frozenStep: frozenStep, forceStill: forceStill) {
-                            onOpenSettings()
-                            guide.openSystemSettings()
+                        CoachCard(coach: coach, guide: guide)
+                        if coach.mode == .coaching {
+                            // The ring in System Settings replaces the picture (the card brings
+                            // it back for a step the coach can't point at).
+                            SetupChecklist(guide: guide, commitPhrase: "when you click Done")
+                        } else {
+                            SetupGuideContent(guide: guide, sideBySide: wide, commitPhrase: "when you click Done",
+                                              frozenStep: frozenStep, forceStill: forceStill) {
+                                onOpenSettings()
+                                guide.openSystemSettings()
+                            }
                         }
                     }
                     .padding(wide ? layout.pagePadding : layout.cardPadding + Space.xxs)
