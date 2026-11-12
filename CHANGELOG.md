@@ -1,8 +1,17 @@
 # Changelog
 
-## Unreleased
+## 1.4.6 — A style for each display
 
 ### New
+- **A different style on each display.** Pick a style for the screensaver or the live
+  wallpaper on one display only, with Set as Screensaver on ▸ and Set as Wallpaper on ▸.
+  Styles in use show which display they're on. With one display, nothing
+  changes.
+- **A new installer.** The disk image now opens as a designed window: drag DotStudio to
+  Applications, with a How to Install guide beside it and the first-launch step
+  (System Settings › Privacy & Security › Open Anyway) printed right there.
+- **Show What's Playing** is now its own step in the welcome tour.
+- **Bloom Dots.** Bloom can now be drawn as round LED dots, every dot the same size.
 - **Guide Me in System Settings.** The setup guide can now point at the exact control to
   click — Wallpaper, Screen Saver…, the Other section, DotStudio, Done — with a glowing ring
   right in System Settings, and moves on by itself as you click. It never gets in the way of
@@ -11,7 +20,24 @@
 - **Move to Applications.** Opened straight from the disk image or Downloads, DotStudio offers
   once to move itself into Applications and reopen — updates and Open at login need it there.
 
+### Changed
+- **Low Power Mode shows your wallpaper.** A live wallpaper turned on in Low Power Mode used to
+  draw nothing until Low Power was switched off. It now draws a still frame (a clock turns over
+  once a minute), and the card says "Still — Low Power Mode".
+- Full Screen music uses smaller type, with the artist sitting closer under the title.
+- Bloom steps evenly at 24 fps in the screensaver too, and at 12 when it needs to save power.
+- Meadow and Tall Grass in live weather draw at a size that keeps 5K displays smooth.
+
 ### Fixed
+- An imported or hand-edited style with impossible values (not-a-number, infinity, huge
+  numbers) could crash the app or the screensaver. Values are now kept in range when a
+  library is loaded.
+- Time Lapse no longer jumps once an hour, and Follow the Sun stays continuous.
+- Bloom's captions step aside instead of running into the flower, and a rare dark speck at a
+  leaf's tip is gone.
+- Full Screen music's Album layout stays inside the screen's safe area; with Increase
+  Contrast on, the artist, album and times are easier to read.
+- The library's filter chips fade only at the edge you can scroll toward.
 - The setup guide keeps clear of System Settings' buttons on smaller displays and never grows
   taller than the screen.
 - "Start DotStudio at login" is now suggested the first time a song shows on your screensaver
