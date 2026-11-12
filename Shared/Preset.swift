@@ -79,12 +79,24 @@ struct EffectInstance: Codable, Identifiable, Equatable, Hashable {
     /// The Image logo: a file in the shared media/ folder (SharedStore.importMedia).
     var logoFile: String?
 
+    // Custom Scene (EffectKind.custom): which installed scene package draws it (CustomScenes.swift).
+    // nil (and never written) for every other effect. Optional and add-only, like logoFile; its
+    // params live in `params` under the package manifest's keys, its colours in colorA / colorB.
+    /// The package: <store>/scenes/<id>/.
+    var custom: CustomSceneRef?
+
     init(_ kind: EffectKind) {
         self.kind = kind
         self.params = kind.defaultParams
         self.colorA = kind.defaultColorA
         self.colorB = kind.defaultColorB
     }
+}
+
+/// A Custom Scene's package: the folder name of an installed scene package, `<store>/scenes/<id>/`
+/// (`[a-z0-9-]{1,48}-<8 hex>`; CustomScenes.isValidID). Anything else renders the calm stand-in.
+struct CustomSceneRef: Codable, Hashable {
+    var id: String
 }
 
 /// A named effect style. The source it renders is global (see Library.source).

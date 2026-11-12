@@ -69,8 +69,13 @@ extension EffectInstance {
     /// them, and the effect's own default stands in). Returns whether anything changed.
     @discardableResult
     mutating func sanitizeParams() -> Bool {
-        guard !params.isEmpty else { return false }
         var changed = false
+        // A Custom Scene's package reference is a folder name: anything that isn't one (a path, a
+        // hand-edited file) is dropped, and the style draws its stand-in (CustomScenes.isValidID).
+        // Its params have no spec here (they're the package manifest's): kept while finite, and
+        // clamped to the manifest's ranges when they're packed (CustomSceneLink).
+        if let ref = custom, kind != .custom || !CustomScenes.isValidID(ref.id) { custom = nil; changed = true }
+        guard !params.isEmpty else { return changed }
         let specs = kind.params
         for (key, v) in params {
             if let spec = specs.first(where: { $0.key == key }) {

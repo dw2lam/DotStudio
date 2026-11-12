@@ -1,0 +1,19 @@
+{
+  "id": "cells",
+  "version": "1",
+  "kind": "cells",
+  "name": "Cells",
+  "summary": "The same dsScene function, but its alpha is coverage: drawn as glyphs, LED pixels or LED dots over a soft glow (the Bloom look).",
+  "base": { "id": "metal", "version": ">=1" },
+  "headers": ["CellKit.h", "Cells.h"],
+  "wrapper": "wrapper.metal",
+  "entryExtensions": ["metal"],
+  "params": [
+    { "key": "ds.render", "label": "Render", "kind": "menu", "options": ["Glyphs", "Pixels", "Dots"], "default": 2 },
+    { "key": "ds.cell", "label": "Cell Size", "kind": "slider", "min": 6, "max": 32, "default": 13 },
+    { "key": "ds.glow", "label": "Glow", "kind": "slider", "min": 0, "max": 1, "default": 0.5 }
+  ],
+  "guide": "guide.md",
+  "examples": ["examples/ember-sun", "examples/tide-dots"],
+  "minApp": "1.4.6"
+}

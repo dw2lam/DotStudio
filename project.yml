@@ -32,10 +32,15 @@ targets:
     sources:
       - Saver
       - path: Shared
-        excludes: ["Photos/**"]
+        excludes: ["Photos/**", "Engines/**"]
       # Built-in slideshow photos ship ONCE, inside the saver (Resources/Photos). The app
       # reads them from its embedded DotStudio.saver (CollectionSource.builtInPhotoURLs).
       - path: Shared/Photos
+        type: folder
+        buildPhase: resources
+      # Custom Scene engines (data: Metal headers, wrappers, guides, examples — CustomScenes.swift),
+      # Resources/Engines in the saver and the app alike: each compiles its packages at runtime.
+      - path: Shared/Engines
         type: folder
         buildPhase: resources
     settings:
@@ -55,7 +60,10 @@ targets:
     sources:
       - App
       - path: Shared
-        excludes: ["Photos/**"]
+        excludes: ["Photos/**", "Engines/**"]
+      - path: Shared/Engines
+        type: folder
+        buildPhase: resources
     dependencies:
       - target: DotStudioSaver
         embed: true

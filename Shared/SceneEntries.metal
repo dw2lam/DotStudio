@@ -169,3 +169,5 @@
 #include "FXScene_entry.h"
 #define FX_SCENE_ID 79
 #include "FXScene_entry.h"
+#define FX_SCENE_ID 90
+#include "FXScene_entry.h"

@@ -275,7 +275,7 @@ enum ScenePipelines {
     /// Every id with an fx_scene_<id> in SceneEntries.metal. Keep the two lists the same.
     /// 0 / 1: the source passes (photo or video; the gradient behind a scene); 38: the
     /// error-diffusion dithers' upscale; 41: the style crossfade; the rest: effects and scenes.
-    static let ids: [Int32] = Array(0...58) + Array(60...66) + Array(68...72) + Array(74...77) + [79]
+    static let ids: [Int32] = Array(0...58) + Array(60...66) + Array(68...72) + Array(74...77) + [79, 90]
 
     /// By id (dense: ids are small), so a pass's lookup is an index, not a hash or a new string.
     private static let names: [String?] = {
