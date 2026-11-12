@@ -340,6 +340,9 @@ private struct FilterBar: View {
     @Namespace private var chipNS
     @State private var chipsWidth: CGFloat = 0
     @State private var chipsViewport: CGFloat = 0
+    @State private var chipFade = ChipEdgeFade()
+    /// Coordinate space of the chips' own horizontal scroll view.
+    private static let chipSpace = "filterChipsScroll"
 
     /// Narrower in compact windows, wider in wide ones; grows with the text.
     private var searchWidth: CGFloat { layout.scaled(layout.widthClass.pick(208, 240, 288)) }
@@ -378,16 +381,20 @@ private struct FilterBar: View {
                     .fixedSize()
                     .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { chipsWidth = $0 }
                     .padding(.vertical, Self.verticalInset)            // room for the hover lift
-                    .padding(.trailing, overflows ? Space.l : 0)       // the last chip clears the fade
+                    .padding(.trailing, overflows ? ChipEdgeFade.width : 0)   // the last chip clears the fade
+                    // Where the row is scrolled to, as the two fades' strengths (quantized, so a
+                    // scroll through the middle changes nothing and re-renders nothing).
+                    .onGeometryChange(for: ChipEdgeFade.self) { g in
+                        ChipEdgeFade(offset: -g.frame(in: .named(Self.chipSpace)).minX, content: g.size.width,
+                                     viewport: g.bounds(of: .named(Self.chipSpace))?.width ?? g.size.width)
+                    } action: { chipFade = $0 }
             }
+            .coordinateSpace(.named(Self.chipSpace))
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { chipsViewport = $0 }
             .padding(.vertical, -Self.verticalInset)
             .noScrollEdgeEffects()
-            .mask(LinearGradient(stops: [.init(color: .black, location: 0),
-                                         .init(color: .black, location: 0.9),
-                                         .init(color: overflows ? .clear : .black, location: 1)],
-                                 startPoint: .leading, endPoint: .trailing))
+            .mask(chipFade.mask)
         }
         .pageColumn(layout)
         .padding(.vertical, Self.verticalInset)
@@ -413,6 +420,45 @@ private struct FilterBar: View {
                 }
             }
             .allowsHitTesting(false)
+        }
+    }
+}
+
+/// The filter chips' edge fades when the row overflows: a fixed width — the row's end
+/// clearance, so the last chip sits just clear of it — each as strong as there is content
+/// scrolled past its edge: none at the start on the leading side, none at the end on the
+/// trailing one (the last chip is never left faded), ramping over the fade's own width in
+/// between. Quantized to 1/16 steps, so scrolling through the middle changes nothing.
+private struct ChipEdgeFade: Equatable {
+    static let width: CGFloat = Space.l
+    static let steps: CGFloat = 16
+    /// 0 (a hard edge) … 1 (fully faded out at the edge).
+    var leading: CGFloat = 0
+    var trailing: CGFloat = 0
+
+    init() {}
+
+    /// `offset` how far the row is scrolled; `content` its width (end clearance included);
+    /// `viewport` the scroll view's.
+    init(offset: CGFloat, content: CGFloat, viewport: CGFloat) {
+        let travel = max(content - viewport, 0)
+        let scrolled = min(max(offset, 0), travel)          // a rubber-band overscroll counts as the end
+        leading = Self.strength(scrolled)
+        trailing = Self.strength(travel - scrolled)
+    }
+
+    /// The fade's strength for `beyond` points of content past an edge (0 within ¾ pt).
+    static func strength(_ beyond: CGFloat) -> CGFloat {
+        (min(max(beyond / width, 0), 1) * steps).rounded() / steps
+    }
+
+    var mask: some View {
+        HStack(spacing: 0) {
+            LinearGradient(colors: [.black.opacity(1 - leading), .black], startPoint: .leading, endPoint: .trailing)
+                .frame(width: Self.width)
+            Rectangle().fill(.black)
+            LinearGradient(colors: [.black, .black.opacity(1 - trailing)], startPoint: .leading, endPoint: .trailing)
+                .frame(width: Self.width)
         }
     }
 }
