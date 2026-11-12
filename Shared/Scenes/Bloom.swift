@@ -1,7 +1,8 @@
 //  Bloom.swift — the Bloom pack (shader id 79). See SceneCatalog.swift. Tagged Nature.
 //
 //  Bloom (79)  one flower, drawn procedurally and set in a grid of cells: tiny glyphs coloured
-//              by the flower (Glyphs) or rounded LED cells with gaps and a soft glow (Pixels).
+//              by the flower (Glyphs), rounded LED cells with gaps and a soft glow (Pixels), or a
+//              round dot matrix (Dots).
 //              Only the flower is celled; the sky behind it stays a smooth gradient. It sways
 //              in a light breeze, slowly turns and nods, and now and then a petal flutters —
 //              at 24 frames a second (the time is stepped in the shader, the styles ask 24 fps).
@@ -21,7 +22,7 @@ extension SceneCatalog {
             blurb: "A single flower swaying in a light breeze, set in tiny glyphs or glowing cells.",
             shaderID: 79,
             params: [ParamSpec(menu: "flower", "Flower", ["Blue Poppy", "Baby's Breath", "White Anemone"], def: 0),
-                     ParamSpec(menu: "render", "Render", ["Glyphs", "Pixels"], def: 0),
+                     ParamSpec(menu: "render", "Render", ["Glyphs", "Pixels", "Dots"], def: 0),
                      ParamSpec("cell", "Cell Size", 7, 24, def: 11),
                      ParamSpec("breeze", "Breeze", 0, 1, def: 0.5),
                      ParamSpec("gradient", "Sky Gradient", 0, 1, def: 1),
