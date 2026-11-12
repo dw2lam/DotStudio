@@ -1,16 +1,22 @@
 //  Penguin.swift — the Penguin pack (shader id 80). See SceneCatalog.swift. Tagged Retro.
 //
-//  Waddle (80)  a little penguin living on an LED panel: a chubby, round penguin of our own
+//  Penguin (80)  a little penguin living on an LED panel: a chubby, round penguin of our own
 //               (blue back and head, a white bib, big eyes, a small yellow bill, rosy cheeks and a
 //               tuft on top) drawn procedurally and shown as round LED dots with a soft bloom
 //               (LED Dots), rounded cells (Pixels) or tiny glyphs (Glyphs), at 24 fps.
 //               It breathes and blinks, waddles across the panel and turns around, looks about,
 //               waves, belly-slides, hops a little dance, shakes itself off, and now and then
-//               sits down and dozes (Zz). Snow comes and goes; a faint row of dots is the ground.
-//               Follow the Clock: it dozes more at night and the panel dims.
+//               sits down and dozes (Zz). The screen's bottom edge is the floor.
+//               Backdrop (dimmer, in the same cells): Snowy Night — drifts, two pines, an igloo
+//               it passes behind or dozes beside, distant peaks, a crescent moon, stars — or Day
+//               (a pale sky and the sun); None. Snow comes and goes.
+//               Follow the Clock: Night or Day by the local time; it dozes more at night and the
+//               panel dims.
 //               Custom character: the user's own image (Inspector, the same section as Bounce's
-//               logo: EffectInstance.logoKind / logoFile) becomes the dot-matrix character and
+//               logo: EffectInstance.logoKind / logoFile; trimmed to what shows, as tall as the
+//               penguin, each cell an average of its area) becomes the dot-matrix character and
 //               does the same things as a whole sprite — bobbing, squashing, waddling, hopping.
+//  (The effect's internal names say waddle: EffectKind.waddle, WaddleRig, waddle_* shaders.)
 //
 //  Everything that moves is a pure function of the scene time t (saver, wallpaper, previews,
 //  thumbnails and synced screens agree), worked out on the CPU once a frame (WaddleRig.prepare,
@@ -29,6 +35,7 @@
 //    [5] (snow 0…1, brightness, tuft sway, bill open 0…1)
 //    [6] (custom character 0/1, its half width, height (heights), mip level)
 //    [7] (its texture's clear margin in uv (x, y), slide direction ±1, snow spray 0…1)
+//    [8] (igloo x px from the centre, its radius px, behind it 0/1, night 0 day … 1 night)
 
 import Foundation
 import Metal
@@ -37,9 +44,9 @@ import simd
 extension SceneCatalog {
     /// Packed in order into p0.xyzw, p1.xyzw.
     static let penguinPack: [EffectKind: SceneSpec] = [
-        // p0 = (render, cell size, glow, energy), p1 = (snow, size, follow the clock)
+        // p0 = (render, cell size, glow, energy), p1 = (snow, size, follow the clock, backdrop)
         .waddle: SceneSpec(
-            name: "Waddle",
+            name: "Penguin",
             blurb: "A little penguin on an LED panel: it waddles, waves, belly-slides, dances and dozes.",
             shaderID: 80,
             params: [ParamSpec(menu: "render", "Render", ["LED Dots", "Pixels", "Glyphs"], def: 0),
@@ -48,7 +55,8 @@ extension SceneCatalog {
                      ParamSpec("energy", "Energy", 0, 1, def: 0.5),
                      ParamSpec("snow", "Snow", 0, 1, def: 1, toggle: true),
                      ParamSpec("size", "Size", 0.6, 1.3, def: 1),
-                     ParamSpec("night", "Follow the Clock", 0, 1, def: 1, toggle: true)],
+                     ParamSpec("night", "Follow the Clock", 0, 1, def: 1, toggle: true),
+                     ParamSpec(menu: "backdrop", "Backdrop", ["None", "Snowy Night", "Day"], def: 1)],
             colorA: RGBA(0.16, 0.44, 1.0), colorB: RGBA(0.010, 0.012, 0.020),
             colorALabel: "Penguin", colorBLabel: "Background"),
     ]
@@ -57,11 +65,11 @@ extension SceneCatalog {
     static var penguinPresets: [Preset] {
         var e = EffectInstance(.waddle)
         e.params = EffectKind.waddle.defaultParams
-        return [Preset(name: "Waddle", effects: [e], fps: 24)]
+        return [Preset(name: "Penguin", effects: [e], fps: 24)]
     }
 }
 
-/// Waddle's behaviour: where the penguin is and what it is doing at scene time t.
+/// Penguin's behaviour: where the penguin is and what it is doing at scene time t.
 enum WaddleRig {
     /// The 24 fps cadence (FramePacing.steppedFPS asks the hosts for it).
     static let stepFPS = 24.0
@@ -87,25 +95,33 @@ enum WaddleRig {
         var beak = 0.0                   // bill open 0…1
         var tuft = 0.0
         var spray = 0.0                  // snow kicked up behind a belly slide
+        var behind = false               // passing behind the igloo (it hides what it covers)
         var act = Act.stroll
         /// What part of the episode this is: 0 rest, 1 turn, 2 walk, 3 run, 4 dive, 5 glide,
         /// 6 getting up, 7 peering over the edge, 8 the behaviour, 9 a fidget.
         var phase = 0
     }
 
-    /// Screen geometry (px): the penguin's height, the cell, where the ground is, and how far
-    /// either side of the centre its feet may go (in penguin heights).
+    /// Screen geometry (px): the penguin's height, the cell, where the ground is (the bottom
+    /// edge: the screen's floor), and how far either side of the centre its feet may go (in
+    /// penguin heights). With a backdrop, the igloo: where it stands (heights from the centre),
+    /// and whether the penguin plays round it (room for it on the screen).
     struct Stage: Equatable {
         var hp = 0.0, cellPx = 0.0, groundY = 0.0, range = 0.0
+        var iglooX = 0.0
+        var igloo: Double? { range >= 1.0 ? iglooX : nil }
     }
+    /// The igloo's radius, in penguin heights (a little lower than the penguin is tall).
+    static let iglooR = 0.55
 
     static func stage(width W: Double, height H: Double, size: Double, cell: Double) -> Stage {
         let unit = min(H, 1.3 * W)                 // portrait: the penguin keeps its dot count
         let hp = 0.40 * min(max(size, 0.3), 2) * unit
         let cellPx = max(min(max(cell, 4), 40) * unit / 1000, 3)
-        let groundY = (0.5 * H + 0.75 * hp).rounded()
-        return Stage(hp: hp, cellPx: cellPx, groundY: groundY,
-                     range: max((0.5 * W - 0.66 * hp) / max(hp, 1), 0))
+        let range = max((0.5 * W - 0.66 * hp) / max(hp, 1), 0)
+        // off to the left: inside the penguin's ground on a wide enough screen, else at the edge
+        let iglooX = range >= 1.0 ? -(0.55 * range + 0.15) : -(range + 0.75)
+        return Stage(hp: hp, cellPx: cellPx, groundY: H, range: range, iglooX: iglooX)
     }
 
     // MARK: Hashes
@@ -120,8 +136,15 @@ enum WaddleRig {
     }
 
     /// Where the penguin stands between episodes k − 1 and k, in −range…range (the middle at
-    /// t = 0, where a preview or a thumbnail starts).
-    static func home(_ k: Int, range: Double) -> Double { k == 0 ? 0 : range * (2 * hash(k, 101) - 1) }
+    /// t = 0, where a preview or a thumbnail starts), never in front of the igloo (it stops on
+    /// the screen's side of it).
+    static func home(_ k: Int, range: Double, igloo: Double? = nil) -> Double {
+        var x = k == 0 ? 0 : range * (2 * hash(k, 101) - 1)
+        if let ig = igloo, abs(x - ig) < clear { x = min(ig + clear + 0.3 * abs(x - ig), range) }
+        return x
+    }
+    /// How far from the igloo's middle the penguin's feet must be to stand clear of it.
+    static let clear = 0.95
 
     /// Block b's order of the eight behaviours (a shuffle by hash).
     static func order(_ b: Int) -> [Act] {
@@ -143,13 +166,13 @@ enum WaddleRig {
         return o[j]
     }
 
-    /// How deep in the night local hour `h` is: 1 from 22:30 to 5:30, easing over an hour.
+    /// How deep in the night local hour `h` is: 1 from 21:00 to 5:30, easing over an hour.
     static func nightFactor(hour h: Double) -> Double {
         func ss(_ a: Double, _ b: Double, _ x: Double) -> Double {
             let t = min(max((x - a) / (b - a), 0), 1); return t * t * (3 - 2 * t)
         }
         let x = h.truncatingRemainder(dividingBy: 24)
-        return x >= 12 ? ss(21.5, 22.5, x) : 1 - ss(5.5, 6.5, x)
+        return x >= 12 ? ss(20.0, 21.0, x) : 1 - ss(5.5, 6.5, x)
     }
 
     // MARK: Episodes
@@ -175,14 +198,15 @@ enum WaddleRig {
     private struct Step { var t0: Double; var dur: Double; var seg: Seg }
 
     /// Episode k's script: (steps, its behaviour, the night's pull, the dozing time).
-    private static func script(_ k: Int, range R: Double, energy e: Double, night nf: Double) -> ([Step], Act) {
+    private static func script(_ k: Int, range R: Double, energy e: Double, night nf: Double,
+                               igloo ig: Double?) -> ([Step], Act) {
         var a = act(k)
         // low energy: the boisterous behaviours turn into gentler ones now and then
         if e < 0.3, a == .slide || a == .dance || a == .shake, hash(k, 11) < (0.3 - e) * 2.6 {
             a = hash(k, 12) < 0.5 ? .stroll : .look
         }
         if nf > 0, hash(k, 9) < 0.65 * nf { a = .doze }
-        let x0 = home(k, range: R), x1 = home(k + 1, range: R)
+        let x0 = home(k, range: R, igloo: ig), x1 = home(k + 1, range: R, igloo: ig)
         let v = (0.42 + 0.38 * e) * (1 - 0.25 * nf)
         let face = 0.85
         var steps: [Step] = []
@@ -223,6 +247,13 @@ enum WaddleRig {
             add(.peer(dir), 1.5)
             add(.turn(yaw, -yaw), 0.75); yaw = -yaw
             walk(xe, x1, yaw: &yaw, end: 0)
+        case .doze where ig != nil && hash(k, 15) < 0.6:
+            // over to the igloo, a doze beside it, then on to the next spot
+            let xs = ig! + 0.8
+            walk(x0, xs, yaw: &yaw, end: 0)
+            add(.act(.doze), 11 + 3 * nf)
+            add(.idle, 0.6)
+            walk(xs, x1, yaw: &yaw, end: 0)
         default:
             walk(x0, x1, yaw: &yaw, end: 0)
             let d: Double
@@ -258,16 +289,17 @@ enum WaddleRig {
 
     /// The episode's script, kept while frames stay in it (a frame's pose then allocates
     /// nothing): the last one worked out, shared by every renderer.
-    private struct ScriptKey: Equatable { var k: Int; var range, energy, night: Double }
+    private struct ScriptKey: Equatable { var k: Int; var range, energy, night, igloo: Double }
     private static let scriptLock = NSLock()
     private static var lastScript: (key: ScriptKey, steps: [Step], act: Act)?
 
-    private static func cachedScript(_ k: Int, range R: Double, energy e: Double, night nf: Double) -> ([Step], Act) {
-        let key = ScriptKey(k: k, range: R, energy: e, night: nf)
+    private static func cachedScript(_ k: Int, range R: Double, energy e: Double, night nf: Double,
+                                     igloo ig: Double?) -> ([Step], Act) {
+        let key = ScriptKey(k: k, range: R, energy: e, night: nf, igloo: ig ?? .infinity)
         scriptLock.lock()
         if let l = lastScript, l.key == key { scriptLock.unlock(); return (l.steps, l.act) }
         scriptLock.unlock()
-        let (steps, a) = script(k, range: R, energy: e, night: nf)
+        let (steps, a) = script(k, range: R, energy: e, night: nf, igloo: ig)
         scriptLock.lock()
         lastScript = (key, steps, a)
         scriptLock.unlock()
@@ -277,20 +309,24 @@ enum WaddleRig {
     private static func smooth(_ x: Double) -> Double { let t = min(max(x, 0), 1); return t * t * (3 - 2 * t) }
     private static func bump(_ x: Double) -> Double { x <= 0 || x >= 1 ? 0 : sin(.pi * x) }
 
-    /// The pose at stepped time `ts` for a stage `range` heights either side of the centre.
-    static func pose(at ts: Double, range R: Double, energy e: Double, night nf: Double) -> Pose {
+    /// The pose at stepped time `ts` for a stage `range` heights either side of the centre (and
+    /// an igloo at `igloo`, if it plays round one).
+    static func pose(at ts: Double, range R: Double, energy e: Double, night nf: Double,
+                     igloo ig: Double? = nil) -> Pose {
         let k = Int((ts / episode).rounded(.down))
         let tau = ts - Double(k) * episode
-        let (steps, a) = cachedScript(k, range: R, energy: e, night: nf)
+        let (steps, a) = cachedScript(k, range: R, energy: e, night: nf, igloo: ig)
         var p = Pose()
         p.act = a
-        p.x = home(k, range: R)
+        // now and then its way passes behind the igloo (never a slide, nor a doze beside it)
+        p.behind = ig != nil && a != .slide && a != .doze && hash(k, 16) < 0.45
+        p.x = home(k, range: R, igloo: ig)
         var dozing = false
 
         // the step tau falls in (past the last: resting at the next spot)
         var cur: Step?
         for s in steps where tau >= s.t0 && tau < s.t0 + s.dur { cur = s; break }
-        if cur == nil, tau >= (steps.last.map { $0.t0 + $0.dur } ?? 0) { p.x = home(k + 1, range: R) }
+        if cur == nil, tau >= (steps.last.map { $0.t0 + $0.dur } ?? 0) { p.x = home(k + 1, range: R, igloo: ig) }
         // x and yaw where each earlier step left them
         for s in steps where s.t0 + s.dur <= tau {
             switch s.seg {
@@ -531,8 +567,13 @@ enum WaddleRig {
         let energy = min(max(fin(u.p0.w, 0.5), 0), 1)
         let st = stage(width: W, height: H, size: fin(u.p1.y, 1), cell: fin(u.p0.y, 13))
         let ts = (fin(u.time, 0) * stepFPS).rounded(.down) / stepFPS
-        let nf = u.p1.z > 0.5 ? nightFactor(hour: Double(u.clock.x)) : 0
-        let p = pose(at: ts, range: st.range, energy: energy, night: nf)
+        let follow = u.p1.z > 0.5
+        let nf = follow ? nightFactor(hour: Double(u.clock.x)) : 0
+        let backdrop = Int(min(max(fin(u.p1.w, 1), 0), 2).rounded())
+        let ig = backdrop > 0 ? st.igloo : nil
+        let p = pose(at: ts, range: st.range, energy: energy, night: nf, igloo: ig)
+        // the backdrop's night: the clock's when following it, else the one picked
+        let sky = follow ? nf : (backdrop == 1 ? 1 : 0)
         let snowAmt = u.p1.x > 0.5 ? snow(at: ts) : 0
 
         var tex: MTLTexture?
@@ -556,6 +597,7 @@ enum WaddleRig {
         u.scene.5 = SIMD4(f(snowAmt), f(1 - 0.3 * nf), f(p.tuft), f(p.beak))
         u.scene.6 = custom
         u.scene.7 = SIMD4(margin.x, margin.y, f(p.slideDir), f(p.spray))
+        u.scene.8 = SIMD4(f(st.iglooX * st.hp), f(iglooR * st.hp), p.behind ? 1 : 0, f(sky))
         return tex
     }
 }

@@ -153,7 +153,7 @@ var scenarios: [Scenario] = [
     // the saver's cost cap (a smaller drawable under the rain) and stepped pacing (24 fps steps)
     Scenario(name: "Meadow (live wx)", preset: preset("Meadow"), weather: true),
     Scenario(name: "Bloom", preset: preset("Blue Bloom")),
-    Scenario(name: "Waddle", preset: preset("Waddle")),
+    Scenario(name: "Penguin", preset: preset("Penguin")),
     Scenario(name: "Zen Garden", preset: preset("Zen Garden")),
     Scenario(name: "Flip Clock", preset: preset("Flip Clock")),
     Scenario(name: "Chronometer", preset: preset("Chronometer")),
