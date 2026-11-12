@@ -122,6 +122,11 @@ enum CustomSceneCompiler {
         }
         // The package's source (a film has none: its engine's wrapper is the whole shader).
         let entry = m.entry ?? ""
+        if let exts = engine.manifest.entryExtensions, !exts.isEmpty, engine.kind != "film",
+           !exts.contains((entry as NSString).pathExtension.lowercased()) {
+            diags.append(Diagnostic(message: "the \(engine.id) engine expects a .\(exts.joined(separator: " / ."))) entry, not \"\(entry)\" — is this the right engine?",
+                                    severity: .warning, file: "scene.json"))
+        }
         if engine.kind == "film" {
             // (falls through to the wrapper)
         } else if let raw = readText(dir, entry) {
@@ -357,6 +362,22 @@ enum CustomScenePipelines {
         guard let d = try? Data(contentsOf: packageDir.appendingPathComponent(".gpu-fault.json")),
               let o = try? JSONSerialization.jsonObject(with: d) as? [String: String], o["hash"] == hash else { return nil }
         return o["reason"] ?? "faulted on the GPU"
+    }
+
+    /// The state of `hash` on whichever GPU / format built it (the Inspector's flag): ready if any
+    /// build succeeded, failed with its diagnostics if one failed, else building (or never asked).
+    static func anyState(_ hash: String) -> State {
+        lock.lock(); defer { lock.unlock() }
+        if let r = disabled[hash] { return .disabled(r) }
+        var failed: [Diagnostic]?
+        for (k, v) in slots where k.hasSuffix("/" + hash) {
+            switch v {
+            case .ready: return .ready
+            case .failed(let d): failed = d
+            case .building: break
+            }
+        }
+        return failed.map { .failed($0) } ?? .building
     }
 
     static func markDisabled(hash: String, reason: String) {

@@ -84,6 +84,29 @@ final class CustomSceneLink {
         case disabled(String)              // faulted on the GPU: off until edited
     }
 
+    /// One link per store for status queries outside a renderer (the Inspector).
+    private static let sharedLock = NSLock()
+    private static var sharedLinks: [String: CustomSceneLink] = [:]
+    static func shared(store: URL) -> CustomSceneLink {
+        sharedLock.lock(); defer { sharedLock.unlock() }
+        if let l = sharedLinks[store.path] { return l }
+        let l = CustomSceneLink(store: store)
+        sharedLinks[store.path] = l
+        return l
+    }
+
+    /// The status on any GPU / format a renderer built it for (the Inspector's flag).
+    func status(_ id: String) -> Status {
+        guard let p = prepared(id) else { return .missing }
+        if p.source == nil { return .failed(p.diagnostics) }
+        switch CustomScenePipelines.anyState(p.hash) {
+        case .ready: return .ready
+        case .building: return .compiling
+        case .failed(let d): return .failed(d)
+        case .disabled(let r): return .disabled(r)
+        }
+    }
+
     func status(_ id: String, device: MTLDevice, format: MTLPixelFormat) -> Status {
         guard let p = prepared(id) else { return .missing }
         switch CustomScenePipelines.state(p, device: device, format: format) {

@@ -202,6 +202,8 @@ final class Thumbnailer {
             hasher.combine(loc?.lon)
         }
         if WeatherLink.followsLive(preset) { hasher.combine(weatherRevision()) }
+        // A Custom Scene's card follows its package (an edit reinstalls it) and its compile.
+        for id in preset.customSceneIDs { hasher.combine(CustomScenes.revisionKey(id: id, store: store.baseDir)) }
         let bucket = period.map { Int((Date().timeIntervalSince1970 / $0).rounded(.down)) } ?? 0
         return Job(preset: preset, source: source, poster: poster, settings: settings, music: music,
                    location: loc, time: thumbTime(preset, source), period: period,
