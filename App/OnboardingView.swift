@@ -1,8 +1,10 @@
 //  OnboardingView.swift — first-launch welcome sheet (also Help ▸ Welcome to DotStudio…).
 //
-//  Four short steps: what DotStudio is, pick a preset or create your own, turn the
+//  Five short steps: what DotStudio is, pick a preset or create your own, turn the
 //  screensaver on in System Settings (the guided setup: an illustrated walkthrough of System
-//  Settings beside a live checklist — SetupGuide*.swift), and where to go to keep creating.
+//  Settings beside a live checklist — SetupGuide*.swift), showing what's playing in Spotify or
+//  Apple Music (how it connects, how it's controlled, what stays private), and where to go to
+//  keep creating.
 //  ContentView presents it and records completion (`hasCompletedOnboarding`) when the sheet
 //  goes away, however that happens.
 
@@ -10,7 +12,7 @@ import SwiftUI
 
 struct OnboardingView: View {
     enum Step: Int, CaseIterable {
-        case welcome, pick, enable, done
+        case welcome, pick, enable, music, done
     }
 
     /// The pick step's two on-screen tabs.
@@ -21,6 +23,7 @@ struct OnboardingView: View {
 
     @EnvironmentObject var model: AppModel
     @Environment(\.layout) private var layout
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var step: Step
     @State private var forward = true
@@ -79,7 +82,8 @@ struct OnboardingView: View {
             ZStack {
                 page(step)
                     .id(step)
-                    .transition(.asymmetric(
+                    // Reduce Motion: the pages cross-fade instead of sliding.
+                    .transition(reduceMotion ? .opacity : .asymmetric(
                         insertion: .offset(x: forward ? 36 : -36).combined(with: .opacity),
                         removal: .offset(x: forward ? -36 : 36).combined(with: .opacity)))
             }
@@ -113,6 +117,7 @@ struct OnboardingView: View {
         case .welcome: WelcomePage(livePreview: livePreview)
         case .pick: PickPage(mode: $pickMode, draft: $draft, nameEdited: $nameEdited, livePreview: livePreview)
         case .enable: EnablePage(guide: guide, frozenStep: walkthroughStep, forceStill: stillWalkthrough)
+        case .music: MusicPage()
         case .done: DonePage(status: status, createdName: createdName, onCreate: openEditor)
         }
     }
@@ -125,7 +130,7 @@ struct OnboardingView: View {
             Spacer(minLength: layout.itemGap)
             if step == .enable && status != .ready {
                 // A link sits apart from the push buttons: two control gaps.
-                Button(scaled: "Skip for Now") { guide.commit(); go(to: .done) }
+                Button(scaled: "Skip for Now") { guide.commit(); go(to: .music) }
                     .buttonStyle(.link)
                     .padding(.trailing, layout.controlGap)
             }
@@ -160,14 +165,17 @@ struct OnboardingView: View {
         case .enable:
             // Until it's on, the step's own Install / Open button holds the Return key.
             if status == .ready {
-                Button(scaled: "Continue") { guide.commit(); go(to: .done) }
+                Button(scaled: "Continue") { guide.commit(); go(to: .music) }
                     .defaultPrimary()
             } else {
-                Button(scaled: "Continue") { guide.commit(); go(to: .done) }
+                Button(scaled: "Continue") { guide.commit(); go(to: .music) }
                     .adaptiveControlSize(.large)
                     .disabled(true)
                     .help("Turn on the screensaver above, or skip for now")
             }
+        case .music:
+            Button(scaled: "Continue") { go(to: .done) }
+                .defaultPrimary()
         case .done:
             Button(scaled: "Start Using DotStudio") { close() }
                 .defaultPrimary()
@@ -177,8 +185,9 @@ struct OnboardingView: View {
     private func go(to next: Step) {
         // Set the direction first, so the outgoing page's removal transition sees it.
         forward = next.rawValue > step.rawValue
+        let animation = Motion.pick(.spring(response: 0.38, dampingFraction: 0.9), reduceMotion: reduceMotion)
         DispatchQueue.main.async {
-            withAnimation(.spring(response: 0.38, dampingFraction: 0.9)) { step = next }
+            withAnimation(animation) { step = next }
         }
     }
 
@@ -691,7 +700,122 @@ private struct EnablePage: View {
     }
 }
 
-// MARK: - 4. Done
+// MARK: - 4. Music
+
+/// Show what's playing: what it does, with the one choice that matters here (Show music, and
+/// Full Screen's layout), then how it connects, how it's controlled, what stays on the Mac and
+/// why DotStudio has to keep running. The player rows are Settings › Music's own: each one's
+/// status and, for a running player macOS hasn't asked about (or one that was refused), its
+/// "Allow…" — MusicNow.allowControl, so macOS's prompt comes only from that click (or System
+/// Settings › Automation opens). The page itself never prompts: on appear it only re-checks,
+/// silently, like Settings › Music.
+private struct MusicPage: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.layout) private var layout
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject private var now = MusicNow.shared
+    /// The tips' icon column, as on the Done step.
+    @ScaledLength(relativeTo: .headline) private var iconColumn: CGFloat = 44
+
+    var body: some View {
+        let spec = model.library.musicSettings
+        PageScroll {
+            VStack(spacing: layout.sectionGap) {
+                PageHeader(title: "Show What's Playing",
+                           subtitle: "While a song plays in Spotify or Apple Music, your screensaver shows it. When the music stops, it goes away.")
+
+                VStack(alignment: .leading, spacing: layout.sectionGap) {
+                    displayCard(spec)
+                    VStack(alignment: .leading, spacing: layout.itemGap) {
+                        Tip(symbol: "link", tint: .green, iconColumn: iconColumn,
+                            title: "Connects on this Mac",
+                            detail: "No account or sign-in: DotStudio reads the Spotify and Music apps. The first time a song plays, macOS asks if DotStudio may control the app — allow it. Without it, songs still show but the controls don't work. Change it in System Settings › Privacy & Security › Automation.")
+                        if now.isMonitoring {
+                            players
+                                .padding(.leading, iconColumn + layout.itemGap)
+                                .transition(.opacity)
+                        }
+                        Tip(symbol: "playpause.fill", tint: .blue, iconColumn: iconColumn,
+                            title: "Play, pause and skip",
+                            detail: "From the menu bar, the song on the Screensaver card, or Settings › Music — which also has the source and the live wallpaper option.")
+                        Tip(symbol: "lock.fill", tint: .gray, iconColumn: iconColumn,
+                            title: "Stays on your Mac",
+                            detail: "Song details come from the players on this Mac. When a player doesn't hand over the cover, DotStudio looks it up in Spotify's or Apple's public catalog — only the song's ID, or its artist and album, is sent.")
+                        Tip(symbol: "menubar.rectangle", tint: .orange, iconColumn: iconColumn,
+                            title: "Keep DotStudio running",
+                            detail: "It only knows what's playing while it runs. Closing its window keeps it in the menu bar; turn on Open DotStudio at login in Settings › General.")
+                    }
+                    .padding(.horizontal, layout.cardPadding)
+                }
+                .readableWidth(layout)
+                .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: spec.displayMode)
+                .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: now.isMonitoring)
+            }
+        }
+        // A silent re-check (never a prompt), as Settings › Music does.
+        .onAppear { now.refreshAutomation() }
+    }
+
+    /// Show music (Off / Corner / Full Screen) — the same setting as Settings › Music and the
+    /// Screensaver card's Music key — with Full Screen's layouts and one line on the mode.
+    private func displayCard(_ spec: MusicSpec) -> some View {
+        let shape = RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
+        return VStack(alignment: .leading, spacing: layout.itemGap) {
+            ReflowStack(rowAlignment: .center, columnAlignment: .leading, spacing: layout.itemGap) {
+                Text("Show music")
+                    .textRole(.headline)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                ScaledSegmentedPicker(title: "Show music",
+                                      selection: Binding(get: { model.library.musicSettings.displayMode },
+                                                         set: { model.setMusicDisplay($0) }),
+                                      options: MusicSpec.Display.allCases.map { ($0.label, $0) })
+            }
+            if spec.displayMode == .fullScreen {
+                MusicLayoutChoice(selection: Binding(get: { model.library.musicSettings.layout },
+                                                     set: { l in model.updateMusic { $0.fullLayout = l } }),
+                                  backdrop: spec.backdrop)
+                    .transition(.opacity)
+            }
+            Text(modeLine(spec))
+                .textRole(.callout)
+                .foregroundStyle(.secondary)
+                .wrapping()
+        }
+        .padding(layout.cardPadding)
+        .background(shape.fill(Color.primary.opacity(0.04)))
+        .overlay(shape.strokeBorder(Color.primary.opacity(0.08)))
+    }
+
+    private func modeLine(_ spec: MusicSpec) -> String {
+        let paused = "A paused song stays for \(MusicSettingsSection.lingerLabel(spec.linger))."
+        switch spec.displayMode {
+        case .off:
+            return "Nothing shows. Turn it on any time with the Music key on the Screensaver card."
+        case .corner:
+            return "The song sits in a corner of your screensaver. \(paused)"
+        case .fullScreen:
+            let over = !spec.layout.usesBackdrop ? "The cover itself fills the screen."
+                : spec.backdrop == .albumArt ? "The song fills the screen, over the album's living art."
+                : "The song fills the screen, over your screensaver, softly blurred."
+            return "\(over) \(paused)"
+        }
+    }
+
+    /// Each player's status and permission, as in Settings › Music.
+    private var players: some View {
+        let shape = RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
+        return VStack(alignment: .leading, spacing: layout.itemGap) {
+            MusicPlayerRow(status: now.spotify, now: now)
+            Divider()
+            MusicPlayerRow(status: now.music, now: now)
+        }
+        .padding(layout.cardPadding)
+        .background(shape.fill(Color.primary.opacity(0.04)))
+        .overlay(shape.strokeBorder(Color.primary.opacity(0.08)))
+    }
+}
+
+// MARK: - 5. Done
 
 private struct DonePage: View {
     @Environment(\.layout) private var layout
@@ -729,9 +853,6 @@ private struct DonePage: View {
                         Tip(symbol: "cursorarrow.click.2", tint: .purple, iconColumn: iconColumn,
                             title: "Edit anything",
                             detail: "Double-click any tile to change its effects, colors and motion.")
-                        Tip(symbol: "music.note", tint: .pink, iconColumn: iconColumn,
-                            title: "Show what's playing",
-                            detail: "Play a song in Spotify or Apple Music and the screensaver shows it in a corner — or full screen, in Settings › Music.")
                     }
                     .padding(.horizontal, layout.cardPadding)
                 }

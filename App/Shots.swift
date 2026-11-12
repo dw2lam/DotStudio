@@ -383,10 +383,25 @@ enum UIShots {
             AnyView(OnboardingView(initialStep: .enable, livePreview: false, statusOverride: .notChosen,
                                    guide: SetupDemo.notChosen.guide, stillWalkthrough: true))
         }))
-        s.append(Screen(name: "onboarding-4-done", frame: .fixed(sheet), view: { _ in
+        // "Show What's Playing": watching with nothing playing (Corner, the default); a song
+        // playing before macOS has asked (the player row's Allow…); Automation refused; Full
+        // Screen (its layouts); Show music Off (not watching: no player rows)
+        for (scenario, tag) in [(MusicDemo.Scenario.idle, ""), (.ask, "-ask"), (.denied, "-denied"),
+                                (.playing, "-full"), (.off, "-off")] {
+            s.append(Screen(name: "onboarding-4-music\(tag)", frame: .fixed(sheet), prepare: { st in
+                MusicDemo.apply(scenario)
+                var m = MusicSpec()
+                if scenario == .off { m.setDisplay(.off) }
+                if tag == "-full" { m.setDisplay(.fullScreen) }
+                if scenario == .off || tag == "-full" { st.model.library.music = m }
+            }, view: { _ in
+                AnyView(OnboardingView(initialStep: .music, livePreview: false))
+            }))
+        }
+        s.append(Screen(name: "onboarding-5-done", frame: .fixed(sheet), view: { _ in
             AnyView(OnboardingView(initialStep: .done, livePreview: false, statusOverride: .ready))
         }))
-        s.append(Screen(name: "onboarding-4-done-skipped", frame: .fixed(sheet), view: { _ in
+        s.append(Screen(name: "onboarding-5-done-skipped", frame: .fixed(sheet), view: { _ in
             AnyView(OnboardingView(initialStep: .done, livePreview: false, statusOverride: .notInstalled))
         }))
 

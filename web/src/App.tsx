@@ -6,6 +6,7 @@ import { Studio } from "./sections/Studio";
 import { Packs } from "./sections/Packs";
 import { Looks } from "./sections/Looks";
 import { Steps } from "./sections/Steps";
+import { Questions } from "./sections/Questions";
 import { Download } from "./sections/Download";
 
 export default function App() {
@@ -19,6 +20,7 @@ export default function App() {
       <Packs />
       <Looks />
       <Steps />
+      <Questions />
       <Download />
 
       <footer className="border-t border-white/5 bg-black px-6 py-10">
