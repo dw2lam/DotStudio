@@ -27,6 +27,7 @@ struct WaddlePose {
     float2 look;
     float footL, footR;
     float snow, bright, tuft, beak;
+    float spray;                 // snow kicked up behind a belly slide, 0…1
     bool custom;
     float2 spr;                  // the custom character: (half width, height), heights
     float lod;
@@ -58,6 +59,7 @@ static inline WaddlePose waddle_pose(constant FXUniforms& u, float2 res) {
     P.lod = u.scene[6].w;
     P.inset = u.scene[7].xy;
     P.slideDir = u.scene[7].z < 0.0 ? -1.0 : 1.0;
+    P.spray = saturate(u.scene[7].w);
     return P;
 }
 
@@ -103,7 +105,7 @@ constant float3 WADDLE_WHITE = float3(0.92, 0.94, 1.0);
 constant float3 WADDLE_INK   = float3(0.006, 0.007, 0.016);
 constant float3 WADDLE_BILL  = float3(1.0, 0.62, 0.07);
 constant float3 WADDLE_FEET  = float3(1.0, 0.42, 0.05);
-constant float3 WADDLE_CHEEK = float3(1.0, 0.36, 0.46);
+constant float3 WADDLE_CHEEK = float3(1.0, 0.34, 0.50);
 
 /// A flipper (side s = −1 the viewer's left when it faces them, +1 right) at pose P: its
 /// distance, and how far round toward the viewer its shoulder is (cos of its angle).
@@ -117,7 +119,7 @@ static inline float waddle_flipper(float2 p, WaddlePose P, float s, thread float
     float ox = o + (1.0 - abs(o)) * back;
     float al = s < 0.0 ? P.flipL : P.flipR;
     float2 dir = float2(ox * sin(al), -cos(al));
-    return waddle_limb(p, S, S + dir * 0.30, 0.066, 0.028);
+    return waddle_limb(p, S, S + dir * (0.33 + 0.16 * P.slide), 0.074, 0.040);
 }
 /// A foot (f = ±1): distance, and its facing.
 static inline float waddle_foot(float2 p, WaddlePose P, float f, thread float& facing) {
@@ -130,9 +132,10 @@ static inline float waddle_foot(float2 p, WaddlePose P, float f, thread float& f
     return waddle_ell(p - c, mix(float2(0.070 + 0.04 * abs(sp), 0.040), float2(0.04, 0.08), P.slide));
 }
 
-/// The penguin at local point q (heights from its feet, y up), edges `aa` wide; `lod` skips
-/// the face (the glow pass). Back to front: far flipper and foot, body with its bib and face,
-/// near flippers and feet, bill, tuft.
+/// The penguin at local point q (heights from its feet, y up), edges `aa` wide; `lod`: the glow
+/// pass (no tuft). Back to front: far flipper and foot, body with its bib, near flippers and
+/// feet, bill (the glow's only: the cells get theirs from waddle_face), tuft. The eyes and
+/// cheeks are waddle_face's, on whole cells.
 static inline CellLayer waddle_penguin(float2 q, WaddlePose P, float3 body, float aa, bool lod) {
     CellLayer o; o.c = 0.0; o.a = 0.0;
     float2 p = q;
@@ -176,65 +179,18 @@ static inline CellLayer waddle_penguin(float2 q, WaddlePose P, float3 body, floa
         float dBib = waddle_ell(float2(th * 0.36, p.y - 0.305), float2(0.255, 0.318));
         dBib *= mix(1.0, max(cphi, 0.25), 0.6);
         c = mix(c, WADDLE_WHITE * (0.86 + 0.14 * lit), cellkit_cov(dBib, aa));
-        if (!lod) {
-            // rosy cheeks
-            for (int i = 0; i < 2; ++i) {
-                float s = i == 0 ? -1.0 : 1.0;
-                float pc = s * 0.98 + P.psi;
-                if (cos(pc) < 0.15) continue;
-                float2 cc = float2(waddle_prof(0.655) * sin(pc) * 0.94, 0.655);
-                float dc = length((p - cc) / float2(mix(0.6, 1.0, cos(pc)), 1.0)) - 0.042;
-                c = mix(c, WADDLE_CHEEK * 0.9, 0.85 * cellkit_cov(dc, aa));
-            }
-            // eyes: big dark ovals with a glint, looking about; ^ ^ when happy, a closed curve
-            // asleep
-            for (int i = 0; i < 2; ++i) {
-                float s = i == 0 ? -1.0 : 1.0;
-                float pe = s * 0.52 + P.psi;
-                float ce = cos(pe);
-                if (ce < 0.06) continue;
-                float fx = mix(0.5, 1.0, ce);
-                float2 ec = float2(waddle_prof(0.775) * sin(pe) * 0.95, 0.775);
-                float2 d = p - ec;
-                float h;
-                if (P.happy > 0.5) {
-                    float dl = min(cellkit_seg(d, float2(-0.058 * fx, -0.022), float2(0.0, 0.030), h),
-                                   cellkit_seg(d, float2(0.0, 0.030), float2(0.058 * fx, -0.022), h));
-                    c = mix(c, WADDLE_INK, cellkit_line(dl, 0.017, aa));
-                } else if (P.eyeOpen < 0.16) {
-                    float dl = min(cellkit_seg(d, float2(-0.060 * fx, 0.006), float2(0.0, -0.020), h),
-                                   cellkit_seg(d, float2(0.0, -0.020), float2(0.060 * fx, 0.006), h));
-                    c = mix(c, WADDLE_INK, cellkit_line(dl, 0.016, aa));
-                } else {
-                    // white, lit LEDs (a dark eye on the blue reads as a hole), a big pupil
-                    // toward where it looks, a glint in it
-                    float op = min(P.eyeOpen, 1.25);
-                    float2 r = float2(0.068 * fx, 0.084 * op);
-                    float2 dd = d + float2(0.0, (1.0 - min(op, 1.0)) * 0.03);   // the lid comes down
-                    float dS = waddle_ell(dd, r);
-                    c = mix(c, WADDLE_WHITE, cellkit_cov(dS, aa));
-                    float2 po = float2(clamp(P.look.x, -1.0, 1.0) * 0.022 + sin(pe) * 0.016,
-                                       clamp(P.look.y, -1.0, 1.0) * 0.020 - 0.008);
-                    float2 pq = dd - po;
-                    float dP = max(waddle_ell(pq, float2(0.046 * fx, min(0.060, r.y * 0.8))), dS + 0.012);
-                    c = mix(c, WADDLE_INK, cellkit_cov(dP, aa));
-                    float gl = cellkit_cov(length(pq - float2(-0.016 * fx, 0.022)) - 0.012, aa) * step(0.6, op);
-                    c = mix(c, WADDLE_WHITE, gl);
-                }
-            }
-        }
         cellkit_over(o, c, aB);
     }
     // ---- in front of the body
     for (int i = 0; i < 2; ++i) {
-        if (ff[i] >= -0.2) {
+        if (ff[i] >= -0.2) {                                 // darker over the body, bright out of it
             float a = cellkit_cov(fd[i], aa);
-            cellkit_over(o, dark, a);
+            cellkit_over(o, mix(mix(body, WADDLE_WHITE, 0.12), dark, aB), a);
         }
         if (lf[i] >= -0.25) cellkit_over(o, WADDLE_FEET, cellkit_cov(ld[i], aa));
     }
     // the bill: small, pointing down at the viewer, forward in profile
-    {
+    if (lod) {
         float sp = sin(P.psi), cp = cos(P.psi);
         float2 B = float2(waddle_prof(0.675) * sp * 0.96, 0.675);
         float2 T = B + mix(float2(0.105 * sp, -0.030 - 0.022 * cp), float2(0.03 * sp, 0.09), P.slide);
@@ -260,6 +216,106 @@ static inline CellLayer waddle_penguin(float2 q, WaddlePose P, float3 body, floa
         cellkit_over(o, body * 1.08, cellkit_line(dt, 0.012, aa));
     }
     return o;
+}
+
+/// A point on the penguin (heights, its rest frame) → where it lands in the LED grid (cells from
+/// the anchor, y down) through the pose: the inverse of waddle_penguin's head tilt, squash,
+/// lean, slide and hop.
+static inline float2 waddle_toGrid(float2 e, WaddlePose P, float2 anchor) {
+    float2 p = e;
+    if (abs(P.headTilt) > 1e-4) p = waddle_rot(p - float2(0.0, 0.62), -P.headTilt) + float2(0.0, 0.62);
+    p *= float2(P.sx, P.sy);
+    p = waddle_rot(p, -P.lean);
+    if (P.slide > 0.001) {
+        float2 c0 = float2(0.0, mix(0.42, 0.375, P.slide));
+        p = waddle_rot(p - float2(0.0, 0.42), -P.slideDir * P.slide * 1.32) + c0;
+    }
+    p.y += P.hop;
+    return (P.feet + float2(p.x, -p.y) * P.hp - anchor) / P.cellPx;
+}
+
+/// The face, on whole cells (pixel-art crisp at any cell size): this cell's LED if it is part of
+/// an eye, a cheek or the bill (`col`; black = unlit), else false. Eyes: a white oval a few
+/// cells across with a near-black pupil toward where it looks (and a catch-light when there's
+/// room); ^ ^ happy, ‿ ‿ asleep, the lid coming down from the top when drowsy. Cheeks: a
+/// pink cell. Bill: a small block, or a short beak pointing forward in profile or on the belly.
+static inline bool waddle_face(float2 cell, WaddlePose P, float2 anchor, float cw, thread float3& col) {
+    float sp = sin(P.psi);
+    int cx = int(cell.x), cy = int(cell.y);
+    // eyes
+    int n = clamp(int(round(0.13 / cw)), 3, 8);
+    for (int i = 0; i < 2; ++i) {
+        float s = i == 0 ? -1.0 : 1.0;
+        float pe = s * 0.52 + P.psi;
+        float ce = cos(pe);
+        if (ce < 0.15) continue;
+        float2 g = waddle_toGrid(float2(waddle_prof(0.775) * sin(pe) * 0.95, 0.775), P, anchor);
+        int w = max(2, int(round(float(n) * mix(0.55, 1.0, ce))));
+        int h = n + (n >= 4 ? 1 : 0);
+        int dx = cx - int(round(g.x - 0.5 * float(w))), dy = cy - int(round(g.y - 0.5 * float(h)));
+        if (dx < 0 || dx >= w || dy < 0 || dy >= h) continue;
+        int arm = int(floor(abs(float(dx) - 0.5 * float(w - 1))));      // 0 in the middle, out to the ends
+        if (P.happy > 0.5) {                                             // ^
+            int row = h / 2 - 1 + arm;
+            if (dy == row || (n >= 6 && dy == row + 1)) { col = float3(0.0); return true; }
+            return false;
+        }
+        if (P.eyeOpen < 0.2) {                                           // ‿
+            int row = h / 2 + 1 - (arm >= w / 2 - 1 && w >= 3 ? 1 : 0);
+            if (dy == row || (n >= 6 && dy == row + 1)) { col = float3(0.0); return true; }
+            return false;
+        }
+        bool corner = w >= 4 && h >= 4 && (dx == 0 || dx == w - 1) && (dy == 0 || dy == h - 1);
+        int lid = int(round(float(h) * (1.0 - saturate(P.eyeOpen))));
+        if (corner || dy < lid) return false;
+        int pw = max(2, int(round(float(w) * 0.5))), ph = max(2, int(round(float(h) * 0.5)));
+        float lx = clamp(0.85 * P.look.x + 0.35 * sin(pe), -1.0, 1.0), ly = clamp(P.look.y, -1.0, 1.0);
+        int px0 = clamp(int(round(float(w - pw) * (0.5 + 0.5 * lx))), 0, w - pw);
+        int py0 = clamp(int(round(float(h - ph) * (0.6 - 0.5 * ly))), max(lid, 0), max(h - ph, 0));
+        if (dx >= px0 && dx < px0 + pw && dy >= py0 && dy < py0 + ph) {
+            bool glint = pw >= 3 && ph >= 3 && dx == px0 && dy == py0;     // a catch-light, when there's room
+            col = glint ? WADDLE_WHITE : float3(0.0);
+            return true;
+        }
+        col = WADDLE_WHITE;
+        return true;
+    }
+    // cheeks: one pink cell each (a square of them at small cell sizes)
+    int cs = max(1, int(round(0.035 / cw)));
+    for (int i = 0; i < 2; ++i) {
+        float s = i == 0 ? -1.0 : 1.0;
+        float pc = s * 1.0 + P.psi;
+        if (cos(pc) < 0.3 || P.slide > 0.5) continue;
+        float2 g = waddle_toGrid(float2(waddle_prof(0.65) * sin(pc) * 0.90, 0.65), P, anchor);
+        int dx = cx - int(floor(g.x - 0.5 * float(cs - 1))), dy = cy - int(floor(g.y - 0.5 * float(cs - 1)));
+        if (dx >= 0 && dx < cs && dy >= 0 && dy < cs) { col = WADDLE_CHEEK * 0.9; return true; }
+    }
+    // the bill
+    bool side = abs(sp) > 0.55 || P.slide > 0.5;
+    // (on its belly: from the front of the head, which leads)
+    // (in profile from the face's edge — the blended outline bulges past waddle_prof there)
+    float2 B = waddle_toGrid(P.slide > 0.5 ? float2(0.31 * sp, 0.72)
+                                           : float2(waddle_prof(0.68) * sp * (side ? 1.08 : 0.96), 0.68), P, anchor);
+    if (!side) {
+        int bw = max(2, int(round(0.065 / cw))), bh = max(1, int(round(0.05 / cw)));
+        int dx = cx - int(round(B.x - 0.5 * float(bw))), dy = cy - int(round(B.y - 0.5));
+        int open = P.beak > 0.35 ? 1 : 0;
+        if (dx < 0 || dx >= bw || dy < 0 || dy >= bh + 2 * open) return false;
+        if (open == 1 && dy == bh) { col = float3(0.0); return true; }     // the open mouth
+        int r = dy > bh ? dy - bh - 1 : dy;                                  // (the lower half)
+        int inset = (bw >= 4) ? r : 0;                                       // a point, when wide
+        if (dx < inset || dx >= bw - inset) return false;
+        col = WADDLE_BILL;
+        return true;
+    }
+    float dir = P.slide > 0.5 ? P.slideDir : (sp >= 0.0 ? 1.0 : -1.0);
+    int L = max(2, int(round(0.12 / cw))), th = max(1, int(round(0.035 / cw)));
+    float f = (cell.x + 0.5 - B.x) * dir;                                   // cells forward of its base
+    int dy = cy - int(floor(B.y)) + (th > 1 ? 1 : 0);
+    if (f < -0.5 || f >= float(L) - 0.5 || dy < 0 || dy >= th) return false;
+    if (th > 1 && dy == th - 1 && f >= float(L) - 1.5) return false;        // the tip tapers
+    col = WADDLE_BILL;
+    return true;
 }
 
 /// The custom character (slot 6): the user's image as a whole sprite, `half` = (half width,
@@ -353,13 +409,17 @@ static inline float3 waddle_scene(float2 px, float2 res, float t, constant FXUni
 
     CellLayer sharp, soft;
     sharp.c = 0.0; sharp.a = 0.0; soft = sharp;
-    if (abs(qp.x) < 1.15 && qp.y > -0.35 && qp.y < 1.85) {
+    if (abs(qp.x) < 1.3 && qp.y > -0.45 && qp.y < 1.95) {
         if (P.custom) {
             sharp = waddle_sprite(qc, P, A, s, false);
             soft = waddle_sprite(qp, P, A, s, true);
         } else {
             sharp = waddle_penguin(qc, P, body, cw, false);
-            soft = waddle_penguin(qp, P, body, cw * 2.6, true);
+            soft = waddle_penguin(qp, P, body, cw * 6.0, true);
+            float3 fc;
+            if (qc.y > -0.1 && abs(qc.x) < 1.0 && waddle_face(cell, P, anchor, cw, fc)) {
+                sharp.c = fc; sharp.a = 1.0;
+            }
         }
         if (P.zz >= 0.0) {
             float2 top = P.custom ? float2(0.35 * P.spr.x, P.spr.y * P.sy + P.hop)
@@ -378,15 +438,28 @@ static inline float3 waddle_scene(float2 px, float2 res, float t, constant FXUni
             float h1 = hash21(float2(c, 13.7));
             if (h1 > 0.16 * P.snow) continue;
             float h2 = hash21(float2(c, 5.3)), h3 = hash21(float2(c, 9.1));
-            float drift = round(0.9 * sin(ts * 0.55 + h2 * 6.2831 + cell.y * 0.19));
+            // a column either way as it falls (and the sway itself drifts with time)
+            float drift = round(1.1 * sin(ts * 0.9 + h2 * 6.2831 + cell.y * 0.23));
             if (abs(c + drift - cell.x) > 0.5) continue;
             float per = 13.0 + floor(h2 * 22.0);
-            float head = floor(ts * (1.5 + 2.0 * h3) + h1 * 977.0);
+            float head = floor(ts * (3.0 + 3.0 * h3) + h1 * 977.0);       // 3–6 cells a second
             float m = cell.y - head;
             m -= per * floor(m / per);
-            if (m < 0.5) bgLvl = max(bgLvl, 0.07 + 0.12 * h3);
+            if (m < 0.5) bgLvl = max(bgLvl, 0.09 + 0.14 * h3);
         }
-    } else if (abs(cell.y) < 0.5) {
+    }
+    // a belly slide kicks up a spray of snow behind it: a short fan of dim, flickering dots
+    if (P.spray > 0.01 && cell.y < -0.5 && cell.y > -8.5) {
+        float back = (P.feet.x - cpx.x) * P.slideDir / P.hp;              // heights behind its middle
+        float up = (anchor.y - cpx.y) / P.hp;
+        float reach = 0.9 * P.spray;
+        float f = (back - (P.custom ? 0.85 * P.spr.x : 0.45)) / max(reach, 1e-3);
+        if (f > 0.0 && f < 1.0 && up < 0.05 + 0.22 * f) {
+            float hk = hash21(cell * 1.37 + floor(ts * 12.0) * 0.731);
+            if (hk < 0.45 * (1.0 - f)) bgLvl = max(bgLvl, 0.30 * (1.0 - 0.6 * f));
+        }
+    }
+    if (abs(cell.y) < 0.5) {
         bgLvl = 0.030 + 0.030 * hash21(float2(cell.x, 3.3));
     } else if (abs(cell.y - 1.0) < 0.5 && hash21(float2(cell.x, 4.4)) < 0.28) {
         bgLvl = 0.010;
@@ -400,18 +473,20 @@ static inline float3 waddle_scene(float2 px, float2 res, float t, constant FXUni
     if (render < 2) {
         // LED DOTS — a tight grid of round dots — or PIXELS — rounded cells: each lit one with a
         // soft halo of its own, the figure's light spilling round it, the dark ones faintly there
-        float dd = cellkit_led(lp, render == 0);
+        // (fat dots, ≈ 80 % of the pitch, like a real panel's; the figure in a coloured halo a few
+        // cells deep, kept out of the gaps inside it so the dots stay distinct)
+        float dd = cellkit_led(lp, render == 0, 0.40);
         float m = saturate(0.5 - dd * cp);
         float r = length(lp);
-        col += spill * glow * 0.32;
-        col += E * glow * 0.60 * (1.0 - smoothstep(0.28, 0.58, r));
-        float3 led = E * cellkit_dome(lp) * (1.0 + 0.3 * glow);
-        led += saturate(luma(E) - 0.25) * 0.35 * glow * (1.0 - smoothstep(0.0, 0.32, r));   // a hot core
+        col += spill * glow * (0.85 - 0.70 * fig);
+        col += E * glow * 0.55 * (1.0 - smoothstep(0.30, 0.62, r));
+        float3 led = E * cellkit_dome(lp) * (1.0 + 0.35 * glow);
+        led += saturate(luma(E) - 0.25) * 0.25 * glow * (1.0 - smoothstep(0.0, 0.28, r));   // a hot core
         float3 ghost = bg + float3(0.0020, 0.0022, 0.0030);
         col = mix(col, max(led, ghost), m);
     } else {
         // GLYPHS — the figure blurred into the dark, glyphs in its colours on top
-        col += spill * (0.12 + 0.14 * glow);
+        col += spill * (0.06 + 0.08 * glow);
         float lit = max(fig, bgLvl > 0.0 ? 1.0 : 0.0);
         if (lit > 0.02) {
             int gi = waddle_pick(linearToSrgb(sc), cell, fig > 0.02);

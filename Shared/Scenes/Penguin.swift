@@ -28,7 +28,7 @@
 //    [4] (foot lift left, right (heights), head tilt rad, seconds into the Zz (< 0 none))
 //    [5] (snow 0…1, brightness, tuft sway, bill open 0…1)
 //    [6] (custom character 0/1, its half width, height (heights), mip level)
-//    [7] (its texture's clear margin in uv (x, y), slide direction ±1, 0)
+//    [7] (its texture's clear margin in uv (x, y), slide direction ±1, snow spray 0…1)
 
 import Foundation
 import Metal
@@ -44,7 +44,7 @@ extension SceneCatalog {
             shaderID: 80,
             params: [ParamSpec(menu: "render", "Render", ["LED Dots", "Pixels", "Glyphs"], def: 0),
                      ParamSpec("cell", "Cell Size", 8, 22, def: 13),
-                     ParamSpec("glow", "Glow", 0, 1, def: 0.7),
+                     ParamSpec("glow", "Glow", 0, 1, def: 0.85),
                      ParamSpec("energy", "Energy", 0, 1, def: 0.5),
                      ParamSpec("snow", "Snow", 0, 1, def: 1, toggle: true),
                      ParamSpec("size", "Size", 0.6, 1.3, def: 1),
@@ -86,7 +86,11 @@ enum WaddleRig {
         var zz = -1.0                    // seconds into a doze's Zz (< 0 none)
         var beak = 0.0                   // bill open 0…1
         var tuft = 0.0
+        var spray = 0.0                  // snow kicked up behind a belly slide
         var act = Act.stroll
+        /// What part of the episode this is: 0 rest, 1 turn, 2 walk, 3 run, 4 dive, 5 glide,
+        /// 6 getting up, 7 peering over the edge, 8 the behaviour, 9 a fidget.
+        var phase = 0
     }
 
     /// Screen geometry (px): the penguin's height, the cell, where the ground is, and how far
@@ -298,6 +302,18 @@ enum WaddleRig {
         if let s = cur {
             let l = tau - s.t0, u = l / s.dur
             switch s.seg {
+            case .idle: p.phase = 0
+            case .turn: p.phase = 1
+            case .walk: p.phase = 2
+            case .run: p.phase = 3
+            case .dive: p.phase = 4
+            case .glide: p.phase = 5
+            case .getUp: p.phase = 6
+            case .peer: p.phase = 7
+            case .act: p.phase = 8
+            case .fidget: p.phase = 9
+            }
+            switch s.seg {
             case .idle:
                 // a glance to one side now and then
                 let g = hash(k, 31) * 2 - 1
@@ -326,23 +342,25 @@ enum WaddleRig {
                 let dir = b > a0 ? 1.0 : -1.0
                 p.x = a0 + (b - a0) * u
                 p.slide = smooth(u); p.slideDir = dir
-                p.headTilt = -dir * 0.42 * p.slide                   // head up, looking ahead
+                p.headTilt = -dir * 0.30 * p.slide                   // head up, looking ahead
                 p.hop = 0.14 * bump(u)
-                p.flipL = 1.3; p.flipR = 1.3
+                p.flipL = 0.9; p.flipR = 0.9
                 p.happy = 1
+                p.spray = 0.7 * smooth(u)
             case .glide(let a0, let b):
                 let dir = b > a0 ? 1.0 : -1.0
                 p.x = a0 + (b - a0) * (1 - (1 - u) * (1 - u))
                 p.slide = 1; p.slideDir = dir
-                p.headTilt = -dir * 0.42
+                p.headTilt = -dir * 0.30
                 p.hop = 0.008 * sin(2 * .pi * 3 * l)
-                p.flipL = 1.45; p.flipR = 1.45
+                p.flipL = 1.25; p.flipR = 1.25                       // swept back, off its back
                 p.footL = 0.02 * max(sin(2 * .pi * 5 * l), 0); p.footR = 0.02 * max(-sin(2 * .pi * 5 * l), 0)
                 p.lookX = dir; p.eyeOpen = 1.15
+                p.spray = 1 - u * u
             case .getUp:
                 p.slide = 1 - smooth(u)
                 p.slideDir = p.yaw >= 0 ? 1 : -1
-                p.headTilt = -p.slideDir * 0.42 * p.slide
+                p.headTilt = -p.slideDir * 0.30 * p.slide
                 p.hop = 0.08 * bump(u)
                 p.flipL = 1.0; p.flipR = 1.0
             case .peer(let dir):
@@ -537,7 +555,7 @@ enum WaddleRig {
         u.scene.4 = SIMD4(f(p.footL), f(p.footR), f(p.headTilt), f(p.zz))
         u.scene.5 = SIMD4(f(snowAmt), f(1 - 0.3 * nf), f(p.tuft), f(p.beak))
         u.scene.6 = custom
-        u.scene.7 = SIMD4(margin.x, margin.y, f(p.slideDir), 0)
+        u.scene.7 = SIMD4(margin.x, margin.y, f(p.slideDir), f(p.spray))
         return tex
     }
 }

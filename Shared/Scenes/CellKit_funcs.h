@@ -97,14 +97,16 @@ static inline float cellkit_glyph(int g, float2 p) {
 
 // ============================================================ LED cells
 /// Signed distance (cells) to an LED cell's edge at cell-local lp (−0.5…0.5): a round dot, every
-/// dot the same size, ≈ 74 % of the pitch (`round`, Nothing-style), or a rounded square with a
+/// dot the same size, `radius` of the pitch (`round`, Nothing-style), or a rounded square with a
 /// gap ≈ 18 % of the cell.
-static inline float cellkit_led(float2 lp, bool round) {
-    if (round) return length(lp) - 0.37;
+static inline float cellkit_led(float2 lp, bool round, float radius) {
+    if (round) return length(lp) - radius;
     float2 q = abs(lp) - 0.5 + 0.09;
     float rr = 0.22;
     return length(max(q + rr, 0.0)) + min(max(q.x + rr, q.y + rr), 0.0) - rr;
 }
+/// …with Bloom's dots, ≈ 74 % of the pitch.
+static inline float cellkit_led(float2 lp, bool round) { return cellkit_led(lp, round, 0.37); }
 /// A faint dome on each cell: brighter at its middle.
 static inline float cellkit_dome(float2 lp) { return 0.88 + 0.16 * (1.0 - dot(lp, lp) * 2.0); }
 

@@ -41,7 +41,8 @@
 //  Bounce: --logo builtin | text:WORD | file:/path/to/image (copied into the store's media folder,
 //  as the app imports one) sets the logo of every Bounce preset; each Bounce render prints its
 //  corner period and the next corner hits (render one with --times). file: also gives every
-//  Waddle preset that image as its custom character.
+//  Waddle preset that image as its custom character. --waddlepeaks prints the time each Waddle
+//  behaviour is at its fullest, the first time it plays.
 //  --checks runs the live-renderer checks (wall-clock time base, synced slideshow, held-frame
 //  track change, rapid skips) through MetalRenderer.renderFrame, the format, Bounce and retirement
 //  checks, params from a shared file (1e20 / 1e300 / NaN / ±inf: clamped on load, and every kind
@@ -1047,6 +1048,33 @@ func waddleInfo(_ p: Preset) {
                      p.name, t, "\(q.act)", q.x, q.yaw, q.lean, q.slide, q.hop, q.zz, q.eyeOpen, q.happy, nf))
     }
 }
+/// --waddlepeaks: the moment each behaviour is at its fullest, the first time it plays (to
+/// render with --times and check every pose reads at a glance).
+func waddlePeaks() {
+    let st = WaddleRig.stage(width: Double(W), height: Double(H), size: 1, cell: 13)
+    var best: [WaddleRig.Act: (score: Double, t: Double, k: Int)] = [:]
+    for i in 0..<(480 * 24) {
+        let t = (Double(i) + 0.5) / 24
+        let q = WaddleRig.pose(at: t, range: st.range, energy: 0.5, night: 0)
+        let k = Int(t / WaddleRig.episode)
+        if let b = best[q.act], b.k != k { continue }                  // its first episode only
+        var s = 0.0
+        switch q.act {
+        case .wave: s = q.phase == 8 ? max(q.flipL, q.flipR) : 0
+        case .dance: s = q.phase == 8 ? q.hop : 0
+        case .slide: s = q.phase == 5 ? q.spray : 0
+        case .doze: s = q.phase == 8 && q.zz > 0 ? 3 - abs(q.zz - 3) : 0
+        case .look, .stroll: s = q.phase == 8 ? abs(q.yaw) : 0
+        case .shake: s = q.phase == 8 ? abs(q.lean) : 0
+        case .edge: s = q.phase == 7 ? abs(q.lean) : 0
+        }
+        if s > (best[q.act]?.score ?? 0) { best[q.act] = (s, t, k) }
+    }
+    for a in WaddleRig.Act.allCases {
+        if let b = best[a] { print(String(format: "waddle peak %@ t=%.3f", "\(a)", b.t)) }
+    }
+}
+if CommandLine.arguments.contains("--waddlepeaks") { waddlePeaks(); exit(0) }
 for p in presets { bounceInfo(p); waddleInfo(p) }
 
 var source = lib.source
