@@ -60,9 +60,10 @@ Every frame here is rendered by the app.
 | | | |
 |:--:|:--:|:--:|
 | <img src="docs/gallery/liquid-chrome.jpg" alt="Liquid Chrome"><br>**Liquid Chrome** | <img src="docs/gallery/topography.jpg" alt="Topography"><br>**Topography** | <img src="docs/gallery/universe.jpg" alt="Universe"><br>**Universe** |
-| <img src="docs/gallery/zen-garden.jpg" alt="Zen Garden"><br>**Zen Garden** | <img src="docs/gallery/tidewater.jpg" alt="Golden Hour at sunset"><br>**Golden Hour** | <img src="docs/gallery/aurora.jpg" alt="Aurora"><br>**Aurora** |
+| <img src="docs/gallery/zen-garden.jpg" alt="Zen Garden"><br>**Zen Garden** | <img src="docs/gallery/golden-hour.jpg" alt="Golden Hour at sunset"><br>**Golden Hour** | <img src="docs/gallery/aurora.jpg" alt="Aurora"><br>**Aurora** |
 | <img src="docs/gallery/black-hole.jpg" alt="Black Hole"><br>**Black Hole** | <img src="docs/gallery/standby.jpg" alt="StandBy clock"><br>**StandBy** | <img src="docs/gallery/chronometer.jpg" alt="Chronometer clock"><br>**Chronometer** |
 | <img src="docs/gallery/minimal.jpg" alt="Minimal clock"><br>**Minimal** | <img src="docs/gallery/bounce.jpg" alt="Bounce with the DotStudio logo"><br>**Bounce** | <img src="docs/gallery/word-clock.jpg" alt="Word Clock"><br>**Word Clock** |
+| <img src="docs/gallery/meadow.jpg" alt="Meadow at golden hour"><br>**Meadow** | <img src="docs/gallery/tall-grass.jpg" alt="Tall Grass, backlit at golden hour"><br>**Tall Grass** | <img src="docs/gallery/blue-bloom.jpg" alt="Blue Bloom: a blue poppy set in tiny glyphs"><br>**Blue Bloom** |
 
 ### What's playing
 
