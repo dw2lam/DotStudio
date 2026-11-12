@@ -93,12 +93,11 @@ extension Toolbox {
                 if let id = m["id"] as? String, self.scenes.installed().contains(where: { $0["id"] as? String == id }) {
                     throw ToolError("A scene with id \(id) is installed already: use update_custom_scene, or omit id for a new one.")
                 }
-                let (dir, id) = try self.stage(m, source: src, files: a["files"] as? JSONObject, existingID: nil)
+                let (dir, _) = try self.stage(m, source: src, files: a["files"] as? JSONObject, existingID: nil)
                 defer { try? FileManager.default.removeItem(at: dir) }
                 let report = try self.scenes.validate(packageAt: dir)
                 guard report.ok else { return self.reportResult(report, source: src, installed: nil) }
                 let installed = try self.scenes.install(packageAt: dir)
-                assert(installed == id || true)
                 return self.reportResult(report, source: src, installed: installed)
             },
             Tool(name: "update_custom_scene", title: "Update a custom scene",
@@ -361,6 +360,6 @@ extension Toolbox {
             }
         }
         if st == .failed { text += ". Log tail:\n" + FilmJobs.logTail(store, job, lines: 12) }
-        return ToolResult(text: text + (text.hasSuffix(".") ? "" : "."), structured: o, images: images, isError: false)
+        return ToolResult(text: text + (st == .failed || text.hasSuffix(".") ? "" : "."), structured: o, images: images, isError: false)
     }
 }

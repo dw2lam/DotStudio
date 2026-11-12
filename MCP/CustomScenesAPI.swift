@@ -97,7 +97,9 @@ struct FakeCustomScenes: CustomScenesAPI {
         for (i, line) in src.components(separatedBy: "\n").enumerated() where line.contains("#error") {
             diags.append(CSDiagnostic(line: i + 1, column: 1, message: "planted error", severity: "error"))
         }
-        if !src.contains("dsScene(") { diags.append(CSDiagnostic(line: 1, column: 1, message: "no dsScene(uv, ctx) function", severity: "error")) }
+        if !src.contains("dsScene("), !src.contains("mainImage(") {
+            diags.append(CSDiagnostic(line: 1, column: 1, message: "no dsScene(uv, ctx) function", severity: "error"))
+        }
         return CSReport(ok: diags.isEmpty, diagnostics: diags, gpuMsAt5K: diags.isEmpty ? 2.5 : nil, warnings: [])
     }
 

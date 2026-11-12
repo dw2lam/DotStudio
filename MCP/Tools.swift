@@ -144,7 +144,7 @@ final class Toolbox {
                  readOnly: true, idempotent: true) { [unowned self] a in
                 let l = try self.lib.library()
                 let created = AICreatedStyles.load(store: self.store)
-                var items = l.presets.map { self.styleJSON($0, l, created: created) }
+                var items = (l.presets + l.unknownPresets.map(\.preset)).map { self.styleJSON($0, l, created: created) }
                 switch a["filter"] as? String ?? "all" {
                 case "scenes": items = items.filter { $0["type"] as? String == "scene" }
                 case "looks": items = items.filter { $0["type"] as? String == "look" }
@@ -250,8 +250,8 @@ final class Toolbox {
             Tool(name: "preview_style", title: "Preview a style",
                  description: "Render a style (saved, or an unsaved `draft`) offscreen to a PNG you can look at: at a moment `t` (seconds into its motion), a wall-clock time (clocks, Follow the Sun), a weather condition (live-weather scenes), with or without the music card. `frames` > 1 makes a contact sheet over `span` seconds to judge the motion (slow? looping? burn-in-prone static parts?). Look at every preview critically against style/dotstudio before showing the user.",
                  input: S.obj(["style": Self.styleRef, "draft": Self.draftSchema,
-                               "width": S.num("Pixels (default 1280).", min: 160, max: 2560, integer: true),
-                               "height": S.num("Pixels (default 800).", min: 100, max: 1600, integer: true),
+                               "width": S.num("Pixels (default 1024).", min: 160, max: 2560, integer: true),
+                               "height": S.num("Pixels (default 640).", min: 100, max: 1600, integer: true),
                                "t": S.num("Seconds into the motion (default 4).", min: 0, max: 86_400),
                                "clock": S.str("Local wall-clock time HH:mm (clocks and Follow the Sun), default now.", pattern: "^([01]?[0-9]|2[0-3]):[0-5][0-9]$"),
                                "date": S.str("YYYY-MM-DD for `clock` (default today).", pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"),
@@ -358,8 +358,8 @@ final class Toolbox {
         let p = try previewTarget(a)
         let l = try lib.library()
         var o = PreviewRenderer.Options()
-        o.width = a["width"] as? Int ?? 1280
-        o.height = a["height"] as? Int ?? 800
+        o.width = a["width"] as? Int ?? 1024
+        o.height = a["height"] as? Int ?? 640
         o.time = (a["t"] as? NSNumber)?.doubleValue ?? 4
         o.weather = a["weather"] as? String
         o.musicCard = a["music_card"] as? Bool ?? false

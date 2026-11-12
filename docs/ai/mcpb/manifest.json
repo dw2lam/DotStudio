@@ -1,0 +1,68 @@
+{
+  "manifest_version": "0.3",
+  "name": "dotstudio",
+  "display_name": "DotStudio",
+  "version": "1.5.0",
+  "description": "Design calm, living screensavers and live wallpapers for your Mac with DotStudio.",
+  "long_description": "Connects Claude to DotStudio (the macOS screensaver and live-wallpaper app). Claude reads DotStudio's style guide and your own brand guides, builds styles from DotStudio's scenes and looks, previews them as images, checks their GPU cost, and — only when you ask — sets them as your screensaver or live wallpaper. Needs DotStudio.app installed; the extension runs the server that ships inside it.",
+  "author": {
+    "name": "DotStudio",
+    "url": "https://github.com/dw2lam/DotStudio"
+  },
+  "homepage": "https://github.com/dw2lam/DotStudio",
+  "documentation": "https://github.com/dw2lam/DotStudio/tree/main/docs/ai",
+  "support": "https://github.com/dw2lam/DotStudio/issues",
+  "icon": "icon.png",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/launch.sh",
+    "mcp_config": {
+      "command": "/bin/sh",
+      "args": ["${__dirname}/server/launch.sh"],
+      "env": {}
+    }
+  },
+  "tools": [
+    { "name": "get_started", "description": "Orientation, guides to read, and this Mac's state." },
+    { "name": "list_guides", "description": "DotStudio's guides and the user's own." },
+    { "name": "read_guide", "description": "Read one guide." },
+    { "name": "list_scenes", "description": "The scenes and looks styles are built from." },
+    { "name": "describe_scene", "description": "A scene's params, colours, reactions and cost." },
+    { "name": "list_styles", "description": "The user's library of styles." },
+    { "name": "get_style", "description": "One style in full." },
+    { "name": "create_style", "description": "Add a style to the library." },
+    { "name": "update_style", "description": "Change a style." },
+    { "name": "duplicate_style", "description": "Copy a style." },
+    { "name": "delete_style", "description": "Remove a style the AI made (or one the user confirms)." },
+    { "name": "preview_style", "description": "Render a style to a PNG or a contact sheet." },
+    { "name": "benchmark_style", "description": "GPU milliseconds per frame at 5K." },
+    { "name": "export_style", "description": "Write a .dotstudiopreset share file." },
+    { "name": "import_style", "description": "Add a style from a share file." },
+    { "name": "list_displays", "description": "Connected displays and what they show." },
+    { "name": "set_screensaver", "description": "Change the screensaver (the user's Mac)." },
+    { "name": "set_wallpaper", "description": "Change the live wallpaper (the user's Mac)." },
+    { "name": "list_engines", "description": "Engines for custom scenes." },
+    { "name": "pull_engine", "description": "Install an optional engine." },
+    { "name": "list_custom_scenes", "description": "Installed custom scenes." },
+    { "name": "validate_custom_scene", "description": "Compile-check a custom scene." },
+    { "name": "create_custom_scene", "description": "Write a new shader scene." },
+    { "name": "update_custom_scene", "description": "Change a custom scene." },
+    { "name": "film_status", "description": "Can this Mac make photoreal film scenes?" },
+    { "name": "create_film_scene", "description": "Save a film scene draft." },
+    { "name": "render_film_stills", "description": "Ray-traced stills for approval." },
+    { "name": "render_film_loop", "description": "Render a seamless loop in the background." },
+    { "name": "film_job_status", "description": "A film render's progress." },
+    { "name": "cancel_film_job", "description": "Stop a film render." }
+  ],
+  "prompts": [
+    { "name": "design-a-screensaver", "description": "Design a screensaver from a mood, colours and a subject.", "arguments": ["mood", "colours", "subject"], "text": "Design a DotStudio screensaver that feels ${arguments.mood}, in ${arguments.colours}, showing ${arguments.subject}. Call get_started first and follow DotStudio's style guide; preview and benchmark before showing me." },
+    { "name": "match-my-wallpaper", "description": "A screensaver that matches your desktop picture.", "arguments": ["description"], "text": "Make a DotStudio screensaver that belongs with my wallpaper: ${arguments.description}. Call get_started first and follow DotStudio's style guide." },
+    { "name": "brand-screensaver", "description": "A screensaver from a brand guide in DotStudio's guides folder.", "arguments": ["guide"], "text": "Read the guide ${arguments.guide} and make a DotStudio screensaver in that brand's colours and tone. Call get_started first." }
+  ],
+  "keywords": ["screensaver", "wallpaper", "macos", "design", "metal"],
+  "license": "MIT",
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin"]
+  }
+}
