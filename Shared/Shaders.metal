@@ -681,6 +681,7 @@ static inline float3 uniShade(int i, float3 c, float3 n0, float3 rd, float fp, f
 #include "Scenes/Standby_funcs.h"
 #include "Scenes/Meadow_funcs.h"
 #include "Scenes/Bloom_funcs.h"
+#include "Scenes/Penguin_funcs.h"
 
 // ---------------------------------------------------------------- slideshow source
 

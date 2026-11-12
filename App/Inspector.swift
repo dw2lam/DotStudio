@@ -473,7 +473,8 @@ struct EffectRow: View {
     let isFirst: Bool
     let onDuplicate: () -> Void
     let onRemove: () -> Void
-    /// For a Bounce layer's Logo section (importing an image into the shared media folder).
+    /// For a Bounce layer's Logo section and Waddle's Character (importing an image into the
+    /// shared media folder).
     var model: AppModel? = nil
     @Environment(\.layout) private var layout
     @ScaledLength(relativeTo: .body) private var eyeColumn: CGFloat = InspectorMetrics.eyeColumn
@@ -491,7 +492,7 @@ struct EffectRow: View {
                     if effect.kind.usesColors {
                         ColorWellsRow(wells: wells)
                     }
-                    if effect.kind == .bounce, let model {
+                    if effect.kind == .bounce || effect.kind == .waddle, let model {
                         BounceLogoSection(effect: $effect, model: model)
                     }
                 }
@@ -622,6 +623,8 @@ struct EffectRow: View {
 /// of theirs — copied into the shared media folder, where the sandboxed screensaver can read it.
 /// The choice lives on the effect (EffectInstance.logoKind / logoText / logoFile); the word and
 /// the image are both kept while another kind is picked, so switching back restores them.
+/// Waddle's Character is the same section without the word: its penguin, or an image of the
+/// user's that becomes the dot-matrix character (WaddleRig.prepare).
 struct BounceLogoSection: View {
     @Binding var effect: EffectInstance
     @ObservedObject var model: AppModel
@@ -630,18 +633,24 @@ struct BounceLogoSection: View {
     @State private var choosing = false
     @State private var thumb: NSImage?
 
-    private var kind: BounceLogoKind { effect.logoKind ?? .builtIn }
+    private var kind: BounceLogoKind {
+        let k = effect.logoKind ?? .builtIn
+        return character && k == .text ? .builtIn : k
+    }
+    /// Waddle's Character rather than Bounce's Logo.
+    private var character: Bool { effect.kind == .waddle }
 
     var body: some View {
         VStack(alignment: .leading, spacing: layout.inspectorRowGap) {
-            InspectorRow(label: "Logo") {
-                SegmentedChoice(title: "Logo",
+            InspectorRow(label: character ? "Character" : "Logo") {
+                SegmentedChoice(title: character ? "Character" : "Logo",
                                 selection: Binding(get: { kind }, set: { effect.logoKind = $0 == .builtIn ? nil : $0 }),
-                                options: [("Built-in", .builtIn), ("Text", .text), ("Image", .image)])
+                                options: character ? [("Penguin", .builtIn), ("Image", .image)]
+                                                   : [("Built-in", .builtIn), ("Text", .text), ("Image", .image)])
             }
             switch kind {
             case .builtIn:
-                note("The DotStudio mark.")
+                note(character ? "The little penguin." : "The DotStudio mark.")
             case .text:
                 InspectorRow(label: "Text") {
                     TextField("Your name", text: Binding(get: { effect.logoText ?? "" },
@@ -686,8 +695,11 @@ struct BounceLogoSection: View {
                     }
                 }
             }
-            note(has ? "Transparent images bounce off their visible edges; opaque ones show as a card."
-                     : "Choose an image — until then the DotStudio mark bounces.")
+            note(character
+                 ? (has ? "Drawn in dots; a PNG with transparency works best — it waddles, hops and dozes like the penguin."
+                        : "Choose an image — until then the penguin plays.")
+                 : (has ? "Transparent images bounce off their visible edges; opaque ones show as a card."
+                        : "Choose an image — until then the DotStudio mark bounces."))
         }
     }
 
@@ -708,21 +720,24 @@ struct BounceLogoSection: View {
         }
         .frame(width: thumbHeight * 1.4, height: thumbHeight)
         .overlay(shape.strokeBorder(Color.primary.opacity(0.1)))
-        .accessibilityLabel(has ? "Logo image" : "No logo image")
+        .accessibilityLabel(has ? (character ? "Character image" : "Logo image")
+                                : (character ? "No character image" : "No logo image"))
     }
 
     @ViewBuilder private func imageButtons(_ has: Bool) -> some View {
         Button { choosing = true } label: {
             ScaledControlLabel(title: has ? "Replace…" : "Choose Image…", role: .inspectorSmallControl)
         }
-        .help("Choose a logo image (PNG with transparency works best, or JPEG, HEIC, SVG, PDF)")
+        .help(character ? "Choose a character image (PNG with transparency works best, or JPEG, HEIC, SVG, PDF)"
+                        : "Choose a logo image (PNG with transparency works best, or JPEG, HEIC, SVG, PDF)")
         .adaptiveControlSize(.small)
         .fixedSize()
         if has {
             Button { effect.logoFile = nil } label: {
                 ScaledControlLabel(title: "Remove", role: .inspectorSmallControl)
             }
-            .help("Remove the image (the DotStudio mark bounces until you choose another)")
+            .help(character ? "Remove the image (the penguin plays until you choose another)"
+                            : "Remove the image (the DotStudio mark bounces until you choose another)")
             .adaptiveControlSize(.small)
             .fixedSize()
         }

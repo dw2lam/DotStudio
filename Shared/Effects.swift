@@ -113,6 +113,7 @@ enum EffectKind: String, Codable, CaseIterable {
 
     case meadow                                               // Meadow pack (Nature) 78 (Meadow.swift)
     case flowerBloom                                          // Bloom pack (Nature) 79 (Bloom.swift)
+    case waddle                                               // Penguin pack (Retro) 80 (Penguin.swift)
 
     var displayName: String {
         switch self {
