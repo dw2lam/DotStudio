@@ -46,8 +46,11 @@
 //  checks, params from a shared file (1e20 / 1e300 / NaN / ±inf: clamped on load, and every kind
 //  renders unsanitized without trapping), Time Lapse across the hourly wrap, and Meadow's Landscape
 //  changing under live weather — and exits non-zero on a failure.
+//  --video clip.mov [--videofor 12] [--videostep 0.5] plays a clip through the live renderer as the
+//  saver/wallpaper do (a Look over a Video source) and reports playing / black / frozen / looping.
 
 import AppKit
+import AVFoundation
 import Metal
 import MetalKit
 
@@ -92,6 +95,9 @@ var textCheckFailures = 0
 var textCheckBuildMs = 0.0
 var textCheckWarmMs = 0.0
 var logoArg: String?
+var videoArg: String?
+var videoFor = 12.0
+var videoStep = 0.5
 while !args.isEmpty {
     let a = args.removeFirst()
     switch a {
@@ -144,6 +150,9 @@ while !args.isEmpty {
     case "--marquee": MusicOverlayLayer.stillMarqueePose = CGFloat(Double(args.removeFirst()) ?? 0)
     case "--textcheck": textCheck = true
     case "--logo": logoArg = args.removeFirst()
+    case "--video": videoArg = args.removeFirst()
+    case "--videofor": videoFor = Double(args.removeFirst()) ?? videoFor
+    case "--videostep": videoStep = Double(args.removeFirst()) ?? videoStep
     case "--size":
         let p = args.removeFirst().split(separator: "x").compactMap { Int($0) }
         if p.count == 2 { W = p[0]; H = p[1] }
@@ -942,6 +951,83 @@ if runChecks {
     let retirement = retirementChecks()
     let hardening = hardeningChecks(), lapse = lapseChecks(), landscape = meadowLandscapeChecks()
     exit(live && format && bounce && retirement && hardening && lapse && landscape ? 0 : 1)
+}
+
+// --video FILE: plays a clip through the live renderer exactly as a Look over a Video source does in
+// the saver and the wallpaper (VideoSource -> source pass, Fill/cover). The file is imported into the
+// store's media folder — run with DOTSTUDIO_STORE_DIR=$(mktemp -d). A frame is rendered every
+// --videostep s of wall time for --videofor s (give more than the clip's length to see it loop) and
+// written as Video@<s>.png once a second; each sample prints its mean level and whether it changed
+// since the last, then a verdict: playing (and looping), black, frozen, or stopped after one pass.
+if let videoArg {
+    let url = URL(fileURLWithPath: videoArg)
+    let dur = CMTimeGetSeconds(AVURLAsset(url: url).duration)
+    guard let name = try? store.importMedia(from: url),
+          let r = MetalRenderer(pixelFormat: .bgra8Unorm, store: store) else { print("video: import/renderer failed"); exit(1) }
+    var s = SourceSpec(); s.kind = .video; s.mediaFilename = name; s.fillMode = 1
+    r.apply(Preset(name: "Video"), source: s)
+    // The decoder on its own first: does VideoSource hand out frames at all (else the renderer
+    // silently draws its gradient fallback, which also moves)?
+    if let dev = MTLCreateSystemDefaultDevice(), let probe = VideoSource(url: store.mediaURL(name), device: dev) {
+        var got = 0
+        for _ in 0..<8 { RunLoop.main.run(until: Date().addingTimeInterval(0.25)); if probe.currentTexture() != nil { got += 1 } }
+        print("video: VideoSource textures in 2 s: \(got)/8")
+        probe.setPaused(true)
+    }
+    print(String(format: "video: %@  %.2f s -> %dx%d, sampling %.1f s every %.2f s", url.lastPathComponent, dur, W, H, videoFor, videoStep))
+    /// 64x40 grey thumbnail, aspect-filled (as the source pass's Fill draws the clip).
+    func tiny(_ cg: CGImage) -> [Float] {
+        let w = 64, h = 40
+        var px = [UInt8](repeating: 0, count: w * h)
+        guard let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+                                  space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return [] }
+        let s = max(Double(w) / Double(cg.width), Double(h) / Double(cg.height))
+        let dw = Double(cg.width) * s, dh = Double(cg.height) * s
+        ctx.interpolationQuality = .medium
+        ctx.draw(cg, in: CGRect(x: (Double(w) - dw) / 2, y: (Double(h) - dh) / 2, width: dw, height: dh))
+        return px.map { Float($0) }
+    }
+    func diff(_ a: [Float], _ b: [Float]) -> Float {
+        guard a.count == b.count, !a.isEmpty else { return .infinity }
+        return zip(a, b).reduce(0) { $0 + abs($1.0 - $1.1) } / Float(a.count)
+    }
+    // the clip's own frames every 1/8 s, to tell where in the clip each rendered frame is
+    let gen = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+    gen.appliesPreferredTrackTransform = true
+    gen.requestedTimeToleranceBefore = .zero
+    gen.requestedTimeToleranceAfter = .zero
+    gen.maximumSize = CGSize(width: 320, height: 320)
+    var ref: [(t: Double, px: [Float])] = []
+    var rt = 0.0
+    while rt < dur - 0.01 {
+        if let cg = try? gen.copyCGImage(at: CMTime(seconds: rt, preferredTimescale: 600), actualTime: nil) { ref.append((rt, tiny(cg))) }
+        rt += 0.125
+    }
+    let start = Date()
+    var positions: [(wall: Double, clip: Double, err: Float)] = []
+    var nextPNG = 0.0
+    while Date().timeIntervalSince(start) < videoFor {
+        RunLoop.main.run(until: Date().addingTimeInterval(videoStep))
+        let t = Date().timeIntervalSince(start)
+        guard let cg = r.renderFrame(width: W, height: H) else { print(String(format: "t=%5.2f  no frame", t)); continue }
+        let px = tiny(cg)
+        let best = ref.map { ($0.t, diff(px, $0.px)) }.min { $0.1 < $1.1 } ?? (-1, .infinity)
+        positions.append((t, best.0, best.1))
+        print(String(format: "t=%5.2f  clip position %5.2f s  (match error %.1f/255)", t, best.0, best.1))
+        if t >= nextPNG, let d = NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]) {
+            try? d.write(to: URL(fileURLWithPath: outDir).appendingPathComponent(String(format: "Video@%02d.png", Int(t))))
+            nextPNG = floor(t) + 1
+        }
+    }
+    // verdict: frames must match the clip (else it's the renderer's gradient fallback), advance,
+    // and — sampled past the clip's length — wrap back to the start
+    let matched = positions.filter { $0.err < 12 }
+    let advancing = zip(matched, matched.dropFirst()).filter { $1.clip > $0.clip }.count
+    let wraps = zip(matched, matched.dropFirst()).filter { $1.clip < $0.clip - dur / 2 }.count
+    let verdict = matched.count < positions.count / 2 ? "NOT SHOWING THE CLIP" : advancing == 0 ? "FROZEN"
+        : videoFor > dur + 1 && wraps == 0 ? "STOPPED AFTER ONE PASS" : "PLAYING" + (wraps > 0 ? " AND LOOPING (\(wraps) wrap\(wraps == 1 ? "" : "s"))" : "")
+    print("video: \(verdict)  (\(matched.count)/\(positions.count) frames match the clip)")
+    exit(verdict.hasPrefix("PLAYING") ? 0 : 1)
 }
 
 if let tzArg, let tz = TimeZone(identifier: tzArg) { NSTimeZone.default = tz }
