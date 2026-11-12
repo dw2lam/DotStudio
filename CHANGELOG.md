@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **Penguin.** A little penguin on a glowing LED panel: it waddles, waves, belly-slides, dances
+  and dozes off by its igloo, under snow, stars and a rippling aurora at night or a bright sun by
+  day. Every part of the scene can be switched off, and you can swap in your own character image.
+
 ## 1.4.6 — A style for each display
 
 ### New
