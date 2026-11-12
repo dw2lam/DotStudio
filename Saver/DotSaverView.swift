@@ -1,5 +1,9 @@
 //  DotSaverView.swift — the universal screensaver. Renders whichever preset is
 //  marked active in the shared library, and live-reloads when that changes.
+//
+//  The host makes one view per display. Each finds its display (window → screen →
+//  NSScreenNumber → the display's UUID, DisplayIdentity) and plays that display's own style
+//  when it has one (Library.displayStyles), else the lineup every display shares.
 
 import ScreenSaver
 import MetalKit
@@ -39,6 +43,14 @@ final class DotSaverView: ScreenSaverView {
     private var musicSettings = MusicSpec()
     private var lastMusicTick: CFTimeInterval = 0
     private var shownPreset: Preset?           // what reload() last applied (a legacy Now Playing style?)
+    /// The display this view plays on, for its own style (Library.displayStyles): resolved from
+    /// the window's screen, which the host may only attach after init — so re-checked on every
+    /// frame until known, then each reload (~1 Hz) and when the view moves windows. nil = not
+    /// known yet, or the System Settings thumbnail (which shows the shared lineup).
+    private var displayNumber: CGDirectDisplayID?
+    private var displayKey: String?
+    /// The view's screen has been looked at (resolveDisplay), whatever it said.
+    private var displayChecked = false
     private var fadedIn = false                // the Metal view has started fading in (fadeInIfDrawn)
 
     /// Every live instance in this host process. The host leaks instances (see
@@ -97,7 +109,23 @@ final class DotSaverView: ScreenSaverView {
         if window == nil {
             store.debug("[\(logID)] detached from window — tearing down Metal stack")
             teardownMetalStack()
+        } else if metalView != nil {
+            reload(force: false)          // a new window may be on another display: its own style
         }
+    }
+
+    /// Re-read which display this view is on; true when its key changed (a different style
+    /// may belong here — reload cuts to it).
+    private func resolveDisplay() -> Bool {
+        let number: CGDirectDisplayID? = isPreview ? nil : (window?.screen).flatMap(DisplayIdentity.displayID)
+        if window?.screen != nil { displayChecked = true }
+        guard number != displayNumber else { return false }
+        displayNumber = number
+        let key = number.flatMap(DisplayIdentity.key)
+        guard key != displayKey else { return false }
+        displayKey = key
+        store.debug("[\(logID)] display \(number.map(String.init) ?? "-") key=\(key ?? "-")")
+        return true
     }
 
     /// Create the MTKView + renderer. Split out of commonInit because the whole
@@ -204,6 +232,9 @@ final class DotSaverView: ScreenSaverView {
         shownPreset = nil
         activeID = nil
         lastModified = nil
+        displayNumber = nil
+        displayKey = nil
+        displayChecked = false
         // The leaked window is hidden, so nothing else commits our layer removal
         // to the render server — without a flush WindowServer keeps the drawable
         // IOSurfaces pinned in this process forever.
@@ -249,13 +280,18 @@ final class DotSaverView: ScreenSaverView {
         renderer?.musicLingerMinutes = musicSettings.linger
         // Match Screensaver: the same wall-clock time base as a wallpaper that follows us.
         renderer?.timeBase = lib.rendererTimeBase
-        let target = DotSaverView.effectivePreset(in: lib, now: Date())
+        let moved = resolveDisplay()
+        let target = Playback.effectivePreset(in: lib, now: Date(), display: displayKey)
+        // A different display (its own style, or back to the shared one) cuts; same style, nothing.
         let changed = force || target.id != activeID || mod != lastModified
         if force { store.debug("reload active=\(target.name) effects=\(target.effects.count) sourceKind=\(lib.source.kind.rawValue)") }
         if changed {
             // Crossfade on rotation/schedule switches; hard cut on first load and edits.
             let automatic = (lib.rotation?.enabled ?? false) || (lib.schedule?.enabled ?? false)
-            let fade = !force && target.id != activeID && automatic
+            let fade = !force && !moved && target.id != activeID && automatic
+            if target.id != activeID {
+                store.debug("[\(logID)] showing \(target.name) on display \(displayKey ?? "-")\(fade ? " (fade)" : "")")
+            }
             activeID = target.id
             lastModified = mod
             if let la = lib.locationLat, let lo = lib.locationLon {
@@ -440,7 +476,9 @@ final class DotSaverView: ScreenSaverView {
             }
             // ~1×/sec whatever the frame rate (it was every 30th frame: 4×/sec at 120 fps):
             // a stat of library.json, a decode only after an edit, the rotation/schedule clock.
-            if lastFrameAt - lastReload >= 1 {
+            // Until the display is known (the host attaches the window after init), check every
+            // frame, so a display with a style of its own never shows the shared one first.
+            if lastFrameAt - lastReload >= 1 || (!displayChecked && !isPreview && window?.screen != nil) {
                 reload(force: false)
                 updateInterval()                                    // track battery/power changes
             }

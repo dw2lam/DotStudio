@@ -3,6 +3,7 @@
 //
 //      [music — MenuBarMusicSlot, MusicSlots.swift]
 //      Screensaver: <what plays now>          Play as Screensaver ▸ (Scenes / Looks)
+//        (several displays, some with a style of their own: "<display>: <style>" per display)
 //        | Screensaver: Not installed / Not selected   Set Up Screensaver… (the main window)
 //      ───
 //      Wallpaper: <style> | Off  (+ status)   ✓ Same as Screensaver, Set as Wallpaper ▸, Pause, Stop
@@ -53,6 +54,7 @@ struct DotStudioMenu: View {
 /// leads to the main window's setup strip instead (picking a style there would seem to do nothing).
 struct ScreensaverMenu: View {
     @EnvironmentObject var model: AppModel
+    @ObservedObject private var roster = DisplayRoster.shared
 
     var body: some View {
         let _ = Perf.body("ScreensaverMenu")
@@ -60,7 +62,17 @@ struct ScreensaverMenu: View {
         case .ready:
             let lineup = model.screensaverLineup
             let now = model.nowPlayingID.flatMap(model.preset)?.name ?? "—"
-            Text("Screensaver: \(menuName(now))")
+            let pins = model.screensaverPins
+            if roster.isMulti, roster.displays.contains(where: { pins[$0.key] != nil }) {
+                // Some displays play a style of their own: one line per display.
+                Text("Screensaver")
+                ForEach(roster.displays) { d in
+                    let style = pins[d.key].flatMap { model.preset($0.presetID) }?.name ?? now
+                    Text("\(menuName(d.name, limit: 24)): \(menuName(style, limit: 26))")
+                }
+            } else {
+                Text("Screensaver: \(menuName(now))")
+            }
             if lineup.rotates {
                 Text("Rotating \(lineup.playlist.count) styles")
             }

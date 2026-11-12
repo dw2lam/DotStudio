@@ -13,6 +13,10 @@
 //  pause) every link and timer is parked and the process does no work at all; the last
 //  frame stays on screen, so resuming never flashes or rebuilds anything.
 //
+//  Displays: each display can play a style of its own (WallpaperSettings.displayStyles, or —
+//  following the screensaver — the screensaver's style for that display; WallpaperPick). Pacing,
+//  resolution, music and the lock-screen picture are worked out per display from its style.
+//
 //  Threads: this controller, the windows and the policy live on the main thread. All
 //  per-frame work — display links, uniforms, encoding, drawables, media decode and
 //  upload — runs on WallpaperRenderLoop's own thread (user-initiated while animating,
@@ -41,15 +45,18 @@ final class WallpaperController: ObservableObject {
 
     /// The wallpaper is on and its style still exists.
     var isActive: Bool { settings.enabled && currentPreset != nil }
-    /// The style on the desktop: the chosen one, or — while matching the screensaver —
-    /// exactly what the screensaver would show now (rotation slot, night style).
+    /// The style on the desktop (every display without one of its own): the chosen one, or —
+    /// while matching the screensaver — exactly what the screensaver would show now (rotation
+    /// slot, night style).
     var currentPreset: Preset? {
         guard let lib = model?.library else { return nil }
-        if settings.followsScreensaver {
-            return lib.presets.isEmpty ? nil : Playback.effectivePreset(in: lib, now: Date())
-        }
-        guard let id = settings.presetID else { return nil }
-        return lib.presets.first { $0.id == id }
+        return WallpaperPick.shared(settings, lib)
+    }
+
+    /// The style one display shows (its own, or the shared one).
+    private func preset(for h: WallpaperHost, now: Date = Date()) -> Preset? {
+        guard let lib = model?.library else { return nil }
+        return WallpaperPick.preset(display: h.key, settings, lib, now: now)
     }
 
     // Music: the shared feed (MusicFeedHub), followed only while something on the desktop
@@ -60,8 +67,10 @@ final class WallpaperController: ObservableObject {
     private var musicSubscribing = false
     private var musicSnapshot = MusicSnapshot.empty
     private var musicVisible = false
-    /// What MusicPresentation last said for the desktop (the renderer's backdrop follows it).
-    private var musicPresentation = MusicPresentation.none
+    /// What MusicPresentation last said for each display (its renderer's backdrop follows it),
+    /// and for a display without a host yet (the render loop's fallback).
+    private var presentations: [CGDirectDisplayID: MusicPresentation] = [:]
+    private var fallbackBackdrop = MusicBackdrop.none
     /// Re-evaluates the followed lineup at rotation slot boundaries (and each minute for the
     /// night schedule) while matching the screensaver.
     private var slotTimer: Timer?
@@ -76,14 +85,22 @@ final class WallpaperController: ObservableObject {
     /// (no GPU for a display yet, every surface failed) — tearDown must still end the session.
     private var running = false
     private var librarySub: AnyCancellable?
-    private var applied: (preset: Preset, source: SourceSpec, location: (lat: Double, lon: Double)?)?
-    private var profile: WallpaperPacing.Profile = .still
+    /// What the render loop was last handed: the shared style and each display's.
+    private struct Applied {
+        var fallback: Preset
+        var styles: [CGDirectDisplayID: Preset]
+        var source: SourceSpec
+        var location: (lat: Double, lon: Double)?
+    }
+    private var applied: Applied?
+    /// Each display's pacing profile (its style's, continuous behind the Album Art backdrop).
+    private var profiles: [CGDirectDisplayID: WallpaperPacing.Profile] = [:]
     private var openMainWindowAction: (() -> Void)?
     private var nextToken: UInt64 = 0
     private var lastLoggedState = ""
-    /// The multiplier on Quality's pixels per point the drawables are sized with
-    /// (WallpaperBudget.renderScale; reevaluate resizes them when it changes).
-    private var renderScale: CGFloat = 1
+    /// Per display, the multiplier on Quality's pixels per point its drawable is sized with
+    /// (WallpaperBudget.renderScale; reevaluate resizes them when it changes). Missing = 1.
+    private var renderScales: [CGDirectDisplayID: CGFloat] = [:]
 
     /// The render thread, started the first time a wallpaper turns on, then kept
     /// (an idle run loop costs nothing).
@@ -110,7 +127,12 @@ final class WallpaperController: ObservableObject {
                 styleID: { [weak self] in self?.isActive == true ? self?.currentPreset?.id : nil },
                 set: { [weak self] in self?.use($0) },
                 stop: { [weak self] in self?.stop() },
-                changes: objectWillChange.map { _ in }.eraseToAnyPublisher()))
+                changes: objectWillChange.map { _ in }.eraseToAnyPublisher(),
+                pins: { [weak self] in self?.settings.displayStyles ?? [:] },
+                setPin: { [weak self] key, pin in self?.setDisplayStyle(pin, display: key) },
+                clearPins: { [weak self] in self?.clearDisplayStyles() },
+                forget: { [weak self] id in self?.forgetDisplayStyles(of: id) },
+                follows: { [weak self] in self?.settings.followsScreensaver ?? false }))
         }
     }
 
@@ -180,13 +202,50 @@ final class WallpaperController: ObservableObject {
 
     var followsScreensaver: Bool { settings.followsScreensaver }
 
+    // MARK: Per display
+
+    /// Give one display a style of its own (nil: back to the shared pick). Picking one starts
+    /// the wallpaper when it's off (the other displays play the shared pick — the last one, or
+    /// the screensaver's style) and, like any wallpaper pick, stops following the screensaver.
+    func setDisplayStyle(_ pin: DisplayPin?, display key: String) {
+        let keep = (pin != nil && settings.followsScreensaver) ? styleToKeep() : nil
+        let fallback = model?.library.activeID ?? pin?.presetID
+        update {
+            $0.displayStyles[key] = pin
+            guard let pin else { return }
+            if $0.followsScreensaver {
+                $0.followsScreensaver = false
+                if let keep { $0.presetID = keep }
+            }
+            if !$0.enabled {
+                $0.enabled = true
+                if $0.presetID.flatMap({ id in self.model?.preset(id) }) == nil { $0.presetID = fallback ?? pin.presetID }
+            }
+        }
+        if pin != nil {
+            userPaused = false
+            start()
+        }
+    }
+
+    /// Every display plays the shared pick again.
+    func clearDisplayStyles() {
+        update { $0.displayStyles = [:] }
+    }
+
+    /// A deleted style's pins go (those displays play the shared pick).
+    func forgetDisplayStyles(of id: UUID) {
+        guard settings.displayStyles.values.contains(where: { $0.presetID == id }) else { return }
+        update { $0.displayStyles = $0.displayStyles.filter { $0.value.presetID != id } }
+    }
+
     /// Leaving Match Screensaver: keep the chosen style if it still exists, else the style
     /// the desktop shows now (when it's a library style), else the active one.
     private func styleToKeep() -> UUID? {
         guard let lib = model?.library else { return nil }
         func exists(_ id: UUID?) -> UUID? { id.flatMap { id in lib.presets.contains { $0.id == id } ? id : nil } }
         if exists(settings.presetID) != nil { return nil }
-        return exists(applied?.preset.id) ?? exists(lib.activeID) ?? lib.presets.first?.id
+        return exists(applied?.fallback.id) ?? exists(lib.activeID) ?? lib.presets.first?.id
     }
 
     /// `Library.syncTimeBase` mirrors "a wallpaper is matching the screensaver": the saver uses
@@ -234,7 +293,7 @@ final class WallpaperController: ObservableObject {
         if let url = settingsURL { s.save(to: url) }
         syncLibraryTimeBase()
         if s.lockScreen != old.lockScreen || s.enabled != old.enabled || s.presetID != old.presetID
-            || s.followsScreensaver != old.followsScreensaver {
+            || s.followsScreensaver != old.followsScreensaver || s.displayStyles != old.displayStyles {
             syncLockPicture("settings", after: s.lockScreen != old.lockScreen || !s.enabled ? 0 : 1)
         }
         guard s.enabled, !hosts.isEmpty else { return }
@@ -242,7 +301,8 @@ final class WallpaperController: ObservableObject {
             applyTimeBase()
             scheduleSlotTimer()
         }
-        if s.presetID != old.presetID || s.followsScreensaver != old.followsScreensaver { applyStyle() }
+        if s.presetID != old.presetID || s.followsScreensaver != old.followsScreensaver
+            || s.displayStyles != old.displayStyles { applyStyle() }
         if s.quality != old.quality {
             hosts.values.forEach { configure($0) }
             reevaluate(forceDraw: true)
@@ -299,10 +359,9 @@ final class WallpaperController: ObservableObject {
         let snap = MusicFeedHub.shared.snapshot(store: model.store)
         musicSnapshot = snap
         renderLoop?.setMusic(snap, lingerMinutes: model.library.musicSettings.linger)
-        musicPresentation = MusicPresentation.resolve(settings: model.library.musicSettings, music: snap,
-                                                      preset: currentPreset, surface: .wallpaper)
         musicVisible = snap.isVisible(settings: model.library.musicSettings)
-        renderLoop?.setMusicBackdrop(musicPresentation.backdrop, animated: false)
+        presentations = [:]
+        updateMusicOverlays(animated: false)
         applyStyle()
         scheduleSlotTimer()
         reevaluate(forceDraw: true)
@@ -316,9 +375,12 @@ final class WallpaperController: ObservableObject {
         for h in hosts.values { h.close() }
         hosts.removeAll(); hiddenSince.removeAll()
         applied = nil
+        profiles.removeAll()
+        renderScales.removeAll()
         musicToken = nil
         musicSnapshot = .empty
-        musicPresentation = .none
+        presentations.removeAll()
+        fallbackBackdrop = .none
         slotTimer?.invalidate()
         slotTimer = nil
         power.stop()
@@ -376,6 +438,7 @@ final class WallpaperController: ObservableObject {
             self.log("display \(id): no renderer")
             h.close()
             self.hosts.removeValue(forKey: id)
+            self.forgetDisplay(id)
         }
         renderLoop = loop
         return loop
@@ -389,6 +452,7 @@ final class WallpaperController: ObservableObject {
             guard let id = screen.displayID else { continue }
             seen.insert(id)
             if let h = hosts[id] {
+                h.key = DisplayIdentity.key(id)   // a reconnect can hand an ID to another display
                 h.follow(screen)
                 configure(h)
                 continue
@@ -396,23 +460,34 @@ final class WallpaperController: ObservableObject {
             guard let device = WallpaperGPU.device(for: id) else { continue }
             nextToken += 1
             let h = WallpaperHost(screen: screen, displayID: id, device: device, token: nextToken)
+            h.key = DisplayIdentity.key(id)
             hosts[id] = h
             let link = h.view.displayLink(target: WallpaperRenderLoop.linkTarget(loop, display: id),
                                           selector: WallpaperRenderLoop.linkSelector)
             loop.addDisplay(id, token: h.token, layer: h.metalLayer, link: link, device: device,
-                            config: h.surfaceConfig(quality: settings.quality, scale: renderScale))
+                            config: h.surfaceConfig(quality: settings.quality, scale: renderScales[id] ?? 1))
         }
         for (id, h) in hosts where !seen.contains(id) {
             loop.removeDisplay(id)
             h.close()
             hosts.removeValue(forKey: id)
+            forgetDisplay(id)
         }
         applied = nil   // new hosts need the style
     }
 
+    /// A display's host went: drop what was worked out for it.
+    private func forgetDisplay(_ id: CGDirectDisplayID) {
+        profiles[id] = nil
+        renderScales[id] = nil
+        presentations[id] = nil
+        hiddenSince[id] = nil
+    }
+
     /// Hand a display's current drawable size and refresh rate to the render thread.
     private func configure(_ h: WallpaperHost) {
-        renderLoop?.configure(h.displayID, h.surfaceConfig(quality: settings.quality, scale: renderScale))
+        renderLoop?.configure(h.displayID, h.surfaceConfig(quality: settings.quality,
+                                                           scale: renderScales[h.displayID] ?? 1))
     }
 
     // MARK: Style
@@ -432,30 +507,55 @@ final class WallpaperController: ObservableObject {
         updateMusicSubscription()
     }
 
-    /// Push the current style + shared source to every display (only when it changed).
+    /// Push each display's style + the shared source to the render thread (only when something
+    /// changed).
     /// - fade: a lineup-driven switch while matching the screensaver (rotation slot, night)
-    ///   crossfades like the saver — when both styles animate continuously (a held frame
-    ///   can't play a crossfade); edits and manual picks cut.
+    ///   crossfades like the saver — on a display whose old and new styles both animate
+    ///   continuously (a held frame can't play a crossfade); edits and manual picks cut.
     private func applyStyle(fade: Bool = false) {
-        guard let model, let preset = currentPreset else { return }
+        guard let model, let fallback = currentPreset else { return }
         let source = model.library.source
         let location = model.locationTuple
+        let now = Date()
+        var styles: [CGDirectDisplayID: Preset] = [:]
+        for h in hosts.values { styles[h.displayID] = preset(for: h, now: now) ?? fallback }
         // The location matters too (live sky, Universe marker): it is refreshed about daily.
-        if let a = applied, a.preset == preset, a.source == source,
+        if let a = applied, a.fallback == fallback, a.styles == styles, a.source == source,
            a.location?.lat == location?.lat, a.location?.lon == location?.lon { return }
-        let styleChanged = applied?.preset.id != preset.id
-        let newProfile = pacingProfile(preset, source: source)
-        var seconds = 0.0
-        if fade, styleChanged, applied != nil, profile == .motion, newProfile == .motion, stillReason == nil {
-            seconds = model.library.rotation?.transitionSeconds ?? 1.5
+        var fades: [CGDirectDisplayID: Double] = [:]
+        var changes: [String] = []
+        for (id, p) in styles where applied?.styles[id]?.id != p.id {
+            let next = pacingProfile(p, source: source, backdrop: presentations[id]?.backdrop ?? .none)
+            var seconds = 0.0
+            if fade, applied?.styles[id] != nil, profiles[id] == .motion, next == .motion, stillReason == nil {
+                seconds = model.library.rotation?.transitionSeconds ?? 1.5
+                fades[id] = seconds
+            }
+            changes.append("\(id)=\(p.name) profile=\(next)\(seconds > 0 ? " fade=\(seconds)" : "")")
         }
-        renderLoop?.setStyle(preset, source: source, location: location, fade: seconds)
-        applied = (preset, source, location)
-        profile = newProfile
-        if styleChanged { log("style \(preset.name) profile=\(profile)\(seconds > 0 ? " fade=\(seconds)" : "")") }
+        renderLoop?.setStyles(styles, fallback: fallback, source: source, location: location, fades: fades)
+        applied = Applied(fallback: fallback, styles: styles, source: source, location: location)
+        updateProfiles()
+        if !changes.isEmpty { log("style " + changes.sorted().joined(separator: ", ")) }
         syncLockPicture("style", after: 2)    // edits come in bursts: the last one wins
         reevaluate(forceDraw: true)   // an edit shows even when holding a still
         updateMusicOverlays(animated: true)
+    }
+
+    /// Each display's pacing profile, from its style and its music backdrop.
+    private func updateProfiles() {
+        guard let a = applied else { profiles.removeAll(); return }
+        var next: [CGDirectDisplayID: WallpaperPacing.Profile] = [:]
+        for id in hosts.keys {
+            next[id] = pacingProfile(a.styles[id] ?? a.fallback, source: a.source,
+                                     backdrop: presentations[id]?.backdrop ?? .none)
+        }
+        profiles = next
+    }
+
+    /// The styles on the desktop now, one per display.
+    private var shownPresets: [Preset] {
+        hosts.keys.compactMap { applied?.styles[$0] ?? applied?.fallback }
     }
 
     private func applyTimeBase() {
@@ -487,13 +587,13 @@ final class WallpaperController: ObservableObject {
     /// Whether anything on the desktop depends on what's playing.
     private var needsMusic: Bool {
         guard settings.enabled, !hosts.isEmpty, let lib = model?.library else { return false }
-        return (currentPreset?.isMusicScene ?? false) || lib.musicSettings.drawsOnWallpaper
+        return shownPresets.contains(where: \.isMusicScene) || lib.musicSettings.drawsOnWallpaper
     }
 
     /// The display-link pacing for a style — continuous while the Album Art backdrop (living
     /// art) is up behind Full Screen music, whatever the style itself needs.
-    private func pacingProfile(_ preset: Preset, source: SourceSpec) -> WallpaperPacing.Profile {
-        if case .albumArt = musicPresentation.backdrop { return .motion }
+    private func pacingProfile(_ preset: Preset, source: SourceSpec, backdrop: MusicBackdrop) -> WallpaperPacing.Profile {
+        if case .albumArt = backdrop { return .motion }
         return WallpaperPacing.profile(for: preset, source: source)
     }
 
@@ -522,8 +622,8 @@ final class WallpaperController: ObservableObject {
         musicVisible = visible
         // A new cover — or music starting, or the paused linger running out — shows even
         // while the background holds a frame (that forced frame is drawn settled).
-        let artBehind: Bool = { if case .albumArt = musicPresentation.backdrop { return true }; return false }()
-        if changed || flipped, currentPreset?.isMusicScene == true || artBehind { reevaluate(forceDraw: true) }
+        let artBehind = presentations.values.contains { if case .albumArt = $0.backdrop { return true }; return false }
+        if changed || flipped, shownPresets.contains(where: \.isMusicScene) || artBehind { reevaluate(forceDraw: true) }
         updateMusicOverlays(animated: true)
     }
 
@@ -531,21 +631,33 @@ final class WallpaperController: ObservableObject {
     /// a legacy Now Playing style's own foreground): the overlays' mode, and the renderer's
     /// Full Screen backdrop — which eases in and out while frames run, and shows its end
     /// state on a held frame.
+    /// Per display: a legacy Now Playing style on one display is its own background there.
     private func updateMusicOverlays(animated: Bool) {
         guard let lib = model?.library else { return }
         let ms = lib.musicSettings
-        let p = settings.enabled
-            ? MusicPresentation.resolve(settings: ms, music: musicSnapshot, preset: currentPreset, surface: .wallpaper)
-            : .none
-        if p.backdrop != musicPresentation.backdrop {
-            musicPresentation = p
-            renderLoop?.setMusicBackdrop(p.backdrop, animated: animated)
-            if let a = applied { profile = pacingProfile(a.preset, source: a.source) }
-            log("music backdrop \(p.backdrop)")
-            reevaluate(forceDraw: true)
+        func resolve(_ preset: Preset?) -> MusicPresentation {
+            settings.enabled
+                ? MusicPresentation.resolve(settings: ms, music: musicSnapshot, preset: preset, surface: .wallpaper)
+                : .none
         }
-        musicPresentation = p
-        for h in hosts.values { h.setMusic(mode: p.overlay, music: musicSnapshot, settings: ms, animated: animated) }
+        let now = Date()
+        var next: [CGDirectDisplayID: MusicPresentation] = [:]
+        for h in hosts.values { next[h.displayID] = resolve(applied?.styles[h.displayID] ?? preset(for: h, now: now)) }
+        let fallback = resolve(applied?.fallback ?? currentPreset).backdrop
+        let backdrops = next.mapValues(\.backdrop)
+        let changed = backdrops != presentations.mapValues(\.backdrop) || fallback != fallbackBackdrop
+        presentations = next
+        if changed {
+            fallbackBackdrop = fallback
+            renderLoop?.setMusicBackdrops(backdrops, fallback: fallback, animated: animated)
+            updateProfiles()
+            log("music backdrop " + backdrops.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " "))
+            // (At start the styles aren't handed over yet: applyStyle draws the first frame.)
+            if applied != nil { reevaluate(forceDraw: true) }
+        }
+        for h in hosts.values {
+            h.setMusic(mode: next[h.displayID]?.overlay ?? .hidden, music: musicSnapshot, settings: ms, animated: animated)
+        }
     }
 
     // MARK: Policy
@@ -566,10 +678,10 @@ final class WallpaperController: ObservableObject {
     /// On Battery: Still.
     private var stillReason: String? { WallpaperBudget.stillReason(settings, power.state) }
 
-    /// Frames per second asked of the display links (WallpaperBudget.fps: 30, Smooth's display
-    /// rate, 30 / 20 on battery; less only if the style itself asks for fewer).
-    private var targetFPS: Double {
-        WallpaperBudget.fps(settings, presetFPS: currentPreset?.fps ?? 0, onBattery: power.state.onBattery)
+    /// Frames per second asked of a display's link (WallpaperBudget.fps: 30, Smooth's display
+    /// rate, 30 / 20 on battery; less only if its style itself asks for fewer).
+    private func targetFPS(_ preset: Preset?) -> Double {
+        WallpaperBudget.fps(settings, presetFPS: preset?.fps ?? 0, onBattery: power.state.onBattery)
     }
 
     /// How long a desktop must stay covered before the wallpaper pauses: Space switches and
@@ -600,22 +712,32 @@ final class WallpaperController: ObservableObject {
         else { status = WallpaperBudget.batteryStatus(settings, onBattery: onBattery) }
         if status != statusText { statusText = status }
 
-        // Efficient on battery draws fewer pixels: resize the drawables (the next frame — forced,
-        // so a held frame redraws at the new size too — fills them).
+        // Efficient on battery draws fewer pixels (moving styles only): resize those displays'
+        // drawables (the next frame — forced, so a held frame redraws at the new size too —
+        // fills them). Each display's pacing follows its own style.
         var force = forceDraw
-        let scale = WallpaperBudget.renderScale(settings, onBattery: onBattery, profile: profile)
-        if scale != renderScale {
-            renderScale = scale
-            hosts.values.forEach { configure($0) }
-            force = true
+        var pacing: [CGDirectDisplayID: WallpaperFrameState.Pacing] = [:]
+        for h in hosts.values {
+            let id = h.displayID
+            let profile = profiles[id] ?? .still
+            let scale = WallpaperBudget.renderScale(settings, onBattery: onBattery, profile: profile)
+            if scale != (renderScales[id] ?? 1) {
+                renderScales[id] = scale
+                configure(h)
+                force = true
+            }
+            let preset = applied?.styles[id] ?? applied?.fallback
+            pacing[id] = .init(profile: profile, fps: targetFPS(preset), stepFPS: preset.flatMap(WallpaperPacing.steppedFPS))
         }
 
-        let stateLine = "hard=\(hard ?? "-") visible=\(visible.count)/\(hosts.count) still=\(still ?? "-") fps=\(targetFPS) scale=\(renderScale)"
+        let perDisplay = pacing.keys.sorted().map { id in
+            "\(id):\(pacing[id]!.fps)@\(renderScales[id] ?? 1)"
+        }.joined(separator: ",")
+        let stateLine = "hard=\(hard ?? "-") visible=\(visible.count)/\(hosts.count) still=\(still ?? "-") fps@scale=\(perDisplay)"
         if stateLine != lastLoggedState { lastLoggedState = stateLine; log("state \(stateLine)") }
 
-        renderLoop?.update(WallpaperFrameState(canDraw: hard == nil, visible: visible, profile: profile,
-                                               fps: targetFPS, still: still != nil,
-                                               stepFPS: applied.flatMap { WallpaperPacing.steppedFPS($0.preset) }),
+        renderLoop?.update(WallpaperFrameState(canDraw: hard == nil, visible: visible, still: still != nil,
+                                               displays: pacing),
                            forceDraw: force)
         updateMusicSubscription()
     }
@@ -674,7 +796,10 @@ final class WallpaperController: ObservableObject {
             update { $0.savedDesktopPictures = saved }
             return
         }
-        scheduleLockTimer(preset)
+        // Each screen's still is of its own display's style.
+        let library = model.library, store = model.store, settingsNow = settings
+        let styleOf: (String) -> Preset = { key in WallpaperPick.preset(display: key, settingsNow, library) ?? preset }
+        scheduleLockTimer(pic.desktop.screens().map { styleOf($0.key) } + [preset])
         let s = power.state
         if running, s.displayAsleep || s.systemAsleep { log("lock picture: skipped (\(reason)) — display asleep"); return }
         // Low Power Mode: still one frame at each lock and change, but no clock-driven refreshes.
@@ -686,28 +811,31 @@ final class WallpaperController: ObservableObject {
         guard !screens.isEmpty else { log("lock picture: no screen with a picture on record"); return }
         lockGeneration += 1
         let gen = lockGeneration
-        let library = model.library, store = model.store
         let time = Float(MetalRenderer.wallPhase(Date().timeIntervalSince1970))   // the shared wall-clock frame
         let t0 = CACurrentMediaTime()
+        var styles: [String: Preset] = [:]
+        for screen in screens { styles[screen.key] = styleOf(screen.key) }
+        let names = Set(styles.values.map(\.name)).sorted().joined(separator: ", ")
         lockQueue.async { [weak self] in
             let prepared = autoreleasepool {
-                pic.prepare(screens: screens) { w, h in
-                    Exporter.renderImage(preset: preset, library: library, store: store, width: w, height: h, time: time)
+                pic.prepare(screens: screens, style: { styles[$0.key]?.id.uuidString ?? "" }) { screen in
+                    Exporter.renderImage(preset: styles[screen.key] ?? preset, library: library, store: store,
+                                         width: screen.pixelWidth, height: screen.pixelHeight, time: time)
                 }
             }
             DispatchQueue.main.async {
                 guard let self, gen == self.lockGeneration, self.settings.lockScreen, self.settings.enabled else { return }
                 let done = pic.set(prepared)
-                self.log(String(format: "lock picture: %@ — %@ on %d screen(s) in %.0f ms", reason, preset.name,
+                self.log(String(format: "lock picture: %@ — %@ on %d screen(s) in %.0f ms", reason, names,
                                 done.count, (CACurrentMediaTime() - t0) * 1000))
             }
         }
     }
 
-    /// Every 15 minutes while the style follows the time of day (a clock, the live weather, the
-    /// real sun); no timer otherwise.
-    private func scheduleLockTimer(_ preset: Preset) {
-        guard WallpaperPacing.changesWithTimeOfDay(preset) else {
+    /// Every 15 minutes while a screen's style follows the time of day (a clock, the live
+    /// weather, the real sun); no timer otherwise.
+    private func scheduleLockTimer(_ presets: [Preset]) {
+        guard presets.contains(where: WallpaperPacing.changesWithTimeOfDay) else {
             lockTimer?.invalidate()
             lockTimer = nil
             return
@@ -778,6 +906,8 @@ final class WallpaperMetalView: NSView {
 /// the drawing into `metalLayer`; this side only places the window and sizes things.
 final class WallpaperHost {
     let displayID: CGDirectDisplayID
+    /// The display's stable identity (DisplayIdentity.key): which of its own styles it plays.
+    var key: String?
     let token: UInt64
     let device: MTLDevice
     let window: WallpaperWindow

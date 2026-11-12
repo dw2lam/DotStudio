@@ -1,7 +1,8 @@
 //  Playback.swift — which style the screensaver shows, as a pure function of the library.
 //
 //  Shared by the saver (what to render) and the app (what the gallery says is playing),
-//  so the two can never disagree. Precedence: day/night schedule > rotation > active.
+//  so the two can never disagree. Precedence: a display's own style (Library.displayStyles) >
+//  day/night schedule > rotation > active.
 //
 //  Music never changes the lineup: it is a presentation over whatever style plays here
 //  (MusicPresentation), and the style keeps playing behind it.
@@ -47,6 +48,13 @@ enum Playback {
         let slot = Int(now.timeIntervalSince1970 / interval)
         let idx = rot.shuffle ? shuffledIndex(slot: slot, count: pool.count) : slot % pool.count
         return pool[idx]
+    }
+
+    /// The style on screen at `now` on one display (DisplayIdentity.key): its own style when
+    /// it has one that still exists (Library.displayStyles), else the lineup's, as above. nil
+    /// (a display not known yet, the System Settings thumbnail) = the lineup's.
+    static func effectivePreset(in lib: Library, now: Date, display: String?) -> Preset {
+        lib.pinnedPreset(display: display) ?? effectivePreset(in: lib, now: now)
     }
 
     /// Seconds until the rotation (or nothing) next changes what's on screen; nil = static.

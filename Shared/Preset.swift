@@ -156,6 +156,14 @@ struct Library: Codable, Equatable {
     /// shared wall-clock time base (MetalRenderer.TimeBase.wallClock), so the screensaver
     /// starts on exactly the frame the desktop was showing. nil/false = per-instance time.
     var syncTimeBase: Bool?
+    /// A style of its own on some displays (Shared/DisplayPins.swift), keyed by display UUID;
+    /// nil/missing = every display plays the lineup (activeID / rotation / schedule). Additive:
+    /// a build without it ignores the field.
+    var displayStyles: [String: DisplayPin]?
+
+    /// Top-level fields this build doesn't know (a library written by a newer DotStudio), kept
+    /// verbatim and written back on save, so a newer build's settings survive a round trip here.
+    var unknownFields: [String: JSONValue] = [:]
 
     /// Styles made only of effects this build doesn't know (Preset.isUnknownToThisBuild), with
     /// their place in the stored list: left out of `presets` (nothing here can draw them), but
@@ -226,11 +234,15 @@ extension Preset {
 extension Library {
     private enum CodingKeys: String, CodingKey {
         case presets, source, activeID, version, locationLat, locationLon, renderScale, rotation,
-             schedule, music, seenBuiltIns, syncTimeBase
+             schedule, music, seenBuiltIns, syncTimeBase, displayStyles
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        let all = try decoder.container(keyedBy: JSONValue.AnyKey.self)
+        for k in all.allKeys where CodingKeys(stringValue: k.stringValue) == nil {
+            unknownFields[k.stringValue] = try all.decode(JSONValue.self, forKey: k)
+        }
         let stored = try c.decode([Preset].self, forKey: .presets)
         for (i, p) in stored.enumerated() {
             if p.isUnknownToThisBuild { unknownPresets.append(UnknownPreset(index: i, preset: p)) }
@@ -247,6 +259,8 @@ extension Library {
         music = try c.decodeIfPresent(MusicSpec.self, forKey: .music)
         seenBuiltIns = try c.decodeIfPresent([String].self, forKey: .seenBuiltIns)
         syncTimeBase = try c.decodeIfPresent(Bool.self, forKey: .syncTimeBase)
+        // Tolerant: a malformed map never costs the user the whole library.
+        displayStyles = (try? c.decodeIfPresent([String: DisplayPin].self, forKey: .displayStyles)) ?? nil
     }
 
     func encode(to encoder: Encoder) throws {
@@ -265,6 +279,11 @@ extension Library {
         try c.encodeIfPresent(music, forKey: .music)
         try c.encodeIfPresent(seenBuiltIns, forKey: .seenBuiltIns)
         try c.encodeIfPresent(syncTimeBase, forKey: .syncTimeBase)
+        if let pins = displayStyles, !pins.isEmpty { try c.encode(pins, forKey: .displayStyles) }
+        if !unknownFields.isEmpty {
+            var extra = encoder.container(keyedBy: JSONValue.AnyKey.self)
+            for (k, v) in unknownFields { try extra.encode(v, forKey: JSONValue.AnyKey(k)) }
+        }
     }
 
     /// The effects and styles this build skipped (a library written by a newer DotStudio).
@@ -320,7 +339,7 @@ enum JSONValue: Codable, Equatable, Hashable {
         }
     }
 
-    private struct AnyKey: CodingKey {
+    struct AnyKey: CodingKey {
         var stringValue: String
         var intValue: Int? { nil }
         init(_ s: String) { stringValue = s }

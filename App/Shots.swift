@@ -304,6 +304,72 @@ enum UIShots {
             WallpaperSlot.shared.set(st.model.nowPlayingID ?? st.hero)
         }, view: main))
 
+        // Several displays (DisplayStyles.swift): a made-up second display, "LG HDR 4K", beside
+        // the real one(s) — only the menus and cards see it. Same on all; the LG with a
+        // screensaver and a wallpaper style of its own; synced (the LG's wallpaper follows its
+        // screensaver style); the Displays menu; the tile's per-display submenus; the badges
+        // on a hovered tile; and the menu-bar lines.
+        let lg = DisplayRoster.demoDisplay
+        s.append(Screen(name: "dest-displays-same", frame: .window, prepare: { st in
+            DisplayRoster.shared.setDemo(true)
+            WallpaperSlot.shared.set(st.wallpaper)
+        }, view: main))
+        s.append(Screen(name: "dest-displays", frame: .window, prepare: { st in
+            DisplayRoster.shared.setDemo(true)
+            st.model.setScreensaverStyle(st.night, on: lg)
+            WallpaperSlot.shared.set(st.wallpaper)
+            WallpaperSlot.shared.set(st.scene, on: lg)
+        }, view: main))
+        s.append(Screen(name: "dest-displays-synced", frame: .window, prepare: { st in
+            DisplayRoster.shared.setDemo(true)
+            st.lineup(st.playlist)
+            st.model.setScreensaverStyle(st.night, on: lg)
+            WallpaperController.shared.update { $0.enabled = true; $0.followsScreensaver = true }
+            WallpaperSlot.shared.set(st.model.nowPlayingID ?? st.hero)
+        }, view: main))
+        s.append(Screen(name: "dest-displays-menu", frame: .fit(width: 320), prepare: { st in
+            DisplayRoster.shared.setDemo(true)
+            st.model.setScreensaverStyle(st.night, on: lg)
+        }, view: { st in
+            AnyView(MenuPreview {
+                DisplayStylesMenuItems(displays: DisplayRoster.shared.displays,
+                                       pins: st.model.library.displayStyles ?? [:], set: { _, _ in }, clearAll: {})
+            })
+        }))
+        s.append(Screen(name: "tile-menu-displays", frame: .fit(width: 320), prepare: { st in
+            DisplayRoster.shared.setDemo(true)
+            st.model.setScreensaverStyle(st.firstScene, on: lg)
+            WallpaperSlot.shared.set(st.wallpaper)
+        }, view: { st in
+            let id = st.firstScene
+            let p = st.model.preset(id) ?? Preset(name: "?")
+            return AnyView(MenuPreview {
+                TileMenu(model: st.model, preset: p, lineup: st.model.screensaverLineup, confirmDelete: .constant(false))
+                Divider()
+                Text("Set as Screensaver on \u{25B8}").textRole(.calloutEmphasis)
+                ChoiceColumn(choices: DisplayChoices.screensaver(id, model: st.model, displays: DisplayRoster.shared.displays))
+                Text("Set as Wallpaper on \u{25B8}").textRole(.calloutEmphasis)
+                ChoiceColumn(choices: DisplayChoices.wallpaper(id, model: st.model, slot: WallpaperSlot.shared,
+                                                               displays: DisplayRoster.shared.displays))
+            })
+        }))
+        s.append(Screen(name: "library-displays-hover", frame: .window, prepare: { st in
+            DisplayRoster.shared.setDemo(true)
+            let first = st.firstScene
+            st.model.setScreensaverStyle(first, on: lg)
+            WallpaperSlot.shared.set(st.wallpaper)
+            WallpaperSlot.shared.set(first, on: lg)
+            DemoHooks.hoverName = st.name(first)
+        }, view: main))
+        s.append(Screen(name: "menu-displays", frame: .fit(width: 320), prepare: { st in
+            DisplayRoster.shared.setDemo(true)
+            st.model.setScreensaverStyle(st.night, on: lg)
+            WallpaperController.shared.update {
+                $0.enabled = true; $0.presetID = st.wallpaper
+                $0.displayStyles = [lg.key: DisplayPin(presetID: st.scene, name: lg.name)]
+            }
+        }, view: { _ in AnyView(MenuPreview { DotStudioMenu() }) }))
+
         // Editor (preview + destination bar + inspector with every effect expanded)
         s.append(Screen(name: "editor-scene", frame: .window, prepare: { st in
             st.lineup([st.scene])
@@ -578,8 +644,10 @@ enum UIShots {
             DemoHooks.expandAllEffects = false
             SyncMorphHook.progress = nil
             setup(.ready)
+            DisplayRoster.shared.setDemo(false)
+            WallpaperSlot.shared.clearPins()
             WallpaperSlot.shared.stop()
-            WallpaperController.shared.update { $0.enabled = false; $0.followsScreensaver = false }
+            WallpaperController.shared.update { $0.enabled = false; $0.followsScreensaver = false; $0.displayStyles = [:] }
             MusicDemo.apply(.idle)   // watching, nothing playing (music screens set their own)
             if WallpaperController.shared.userPaused { WallpaperController.shared.togglePause() }
             AppPresence.shared.menuBarMode = true   // the default (prefs are in-memory here)
@@ -879,6 +947,19 @@ private struct MenuPreview<Items: View>: View {
         .padding(Space.s)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.regularMaterial)
+    }
+}
+
+/// A per-display submenu's items as a column, checked like the menu (DisplayChoices).
+private struct ChoiceColumn: View {
+    let choices: [DisplayChoice]
+
+    var body: some View {
+        ForEach(Array(choices.enumerated()), id: \.offset) { _, c in
+            Label(c.title, systemImage: c.checked ? "checkmark" : "circle.dotted")
+                .symbolRenderingMode(.hierarchical)
+                .padding(.leading, Space.s)
+        }
     }
 }
 

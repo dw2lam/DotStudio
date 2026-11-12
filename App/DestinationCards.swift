@@ -10,11 +10,14 @@ struct GalleryState {
     let lineup: ScreensaverLineup
     let nowPlaying: UUID?
     let wallpaperID: UUID?
+    /// With more than one display: what each one shows (DisplayStyles.swift).
+    let displays: DisplayLineup
 
-    init(model: AppModel, wallpaperID: UUID?) {
+    init(model: AppModel, wallpaperID: UUID?, displays: DisplayLineup = .single) {
         lineup = model.screensaverLineup
         nowPlaying = model.nowPlayingID
         self.wallpaperID = wallpaperID
+        self.displays = displays
     }
 
     /// Styles on any destination (the "Playing" filter).
@@ -22,6 +25,8 @@ struct GalleryState {
         var s = Set(lineup.playlist)
         if let n = lineup.night { s.insert(n) }
         if let w = wallpaperID { s.insert(w) }
+        s.formUnion(displays.screensaverPinned.compactMap { displays.screensaver[$0] })
+        s.formUnion(displays.wallpaperPinned.compactMap { displays.wallpaper[$0] })
         return s
     }
 
@@ -30,7 +35,11 @@ struct GalleryState {
                    inRotation: lineup.rotates && lineup.playlist.contains(id),
                    playingNow: nowPlaying == id,
                    night: lineup.night == id,
-                   wallpaper: wallpaperID == id)
+                   wallpaper: wallpaperID == id,
+                   pinnedScreensaver: !displays.pinned(id, screensaver: true).isEmpty,
+                   pinnedWallpaper: !displays.pinned(id, screensaver: false).isEmpty,
+                   screensaverDisplay: displays.onlyDisplay(id, in: displays.screensaver)?.shortName,
+                   wallpaperDisplay: displays.onlyDisplay(id, in: displays.wallpaper)?.shortName)
     }
 }
 
@@ -40,7 +49,13 @@ struct TileBadges: Equatable {
     var playingNow = false
     var night = false
     var wallpaper = false
-    var isEmpty: Bool { !onScreensaver && !night && !wallpaper }
+    /// Some display plays it as a style of its own (DisplayStyles.swift).
+    var pinnedScreensaver = false
+    var pinnedWallpaper = false
+    /// With several displays: the one display it plays on, when that's not all of them ("LG").
+    var screensaverDisplay: String? = nil
+    var wallpaperDisplay: String? = nil
+    var isEmpty: Bool { !onScreensaver && !night && !wallpaper && !pinnedScreensaver && !pinnedWallpaper }
 }
 
 // MARK: - Row geometry
@@ -501,6 +516,7 @@ struct ScreensaverCard: View {
     @Environment(\.layout) private var layout
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.controlActiveState) private var activeState
+    @ObservedObject private var roster = DisplayRoster.shared
     let state: GalleryState
     let geometry: DestinationGeometry
     var mirrored = false
@@ -526,6 +542,7 @@ struct ScreensaverCard: View {
             playlistKey
             nightKey
             musicKey
+            if roster.isMulti { displaysKey }
             if showsSong {
                 NowPlayingKey()
                     .transition(.lift(reduceMotion: reduceMotion))
@@ -715,6 +732,24 @@ struct ScreensaverCard: View {
         .help("Show what's playing: while Spotify or Apple Music plays, nothing, the song in a corner of the screensaver, or the song full screen over it — with that mode's options")
         .accessibilityLabel("Show what's playing")
         .accessibilityValue(mode.label)
+    }
+
+    /// Displays · "Same on all" / "LG: Golden Hour": a style of its own on any display (only
+    /// with more than one display connected). See DisplayStyles.swift.
+    private var displaysKey: some View {
+        let pins = model.library.displayStyles ?? [:]
+        let (values, on) = displayKeyValues(displays: roster.displays, pins: pins, model: model)
+        return Menu {
+            DisplayStylesMenuItems(displays: roster.displays, pins: pins,
+                                   set: { id, d in model.setScreensaverStyle(id, on: d) },
+                                   clearAll: { model.clearScreensaverPins() })
+        } label: {
+            PanelKeyLabel(symbol: "display.2", title: "Displays", values: values, indicator: .menuLED(on))
+        }
+        .panelKeyMenu()
+        .help(on ? "Some displays play a style of their own — \(values[0])" : "Every display plays the same — or give a display a style of its own")
+        .accessibilityLabel("Style on each display")
+        .accessibilityValue(values[0])
     }
 
     private var intervalOptions: [Double] {
@@ -1499,6 +1534,7 @@ struct WallpaperCard: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var slot = WallpaperSlot.shared
     @ObservedObject private var controller = WallpaperController.shared
+    @ObservedObject private var roster = DisplayRoster.shared
     @Environment(\.layout) private var layout
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let state: GalleryState
@@ -1528,6 +1564,10 @@ struct WallpaperCard: View {
             // Synced, the zone's own style recedes: it's following the driver.
             styleKey
                 .opacity(1 - 0.4 * progress)
+            if roster.isMulti {
+                displaysKey
+                    .opacity(1 - 0.4 * progress)
+            }
         } aside: {
             WallpaperTransport(mode: mode) { select($0) }
         } banner: {
@@ -1625,6 +1665,37 @@ struct WallpaperCard: View {
               ?? "Choose a style to play behind your windows")
         .accessibilityLabel("Wallpaper style")
         .accessibilityValue(synced ? "Same as Screensaver" : (style?.name ?? "None"))
+    }
+
+    /// Displays · "Same on all" / "LG: Golden Hour": a style of its own on any display (only with
+    /// more than one display connected). Synced, every display follows its screensaver; a pick
+    /// here plays a style of its own instead (like the Style menu). Beside the transport the key
+    /// is narrow: "Displays" folds away before the value shortens (as the Style key's word does).
+    private var displaysKey: some View {
+        // Synced, each display shows what its screensaver shows: the screensaver's pins.
+        let (values, on) = displayKeyValues(displays: roster.displays,
+                                            pins: synced ? (model.library.displayStyles ?? [:]) : slot.pins, model: model)
+        return Menu {
+            DisplayStylesMenuItems(displays: roster.displays, pins: synced ? [:] : slot.pins,
+                                   note: synced ? "Following the screensaver on every display" : nil,
+                                   set: { id, d in slot.set(id, on: d) },
+                                   clearAll: { slot.clearPins() })
+        } label: {
+            ViewThatFits(in: .horizontal) {
+                ForEach(values, id: \.self) { v in
+                    PanelKeyLabel(symbol: "display.2", title: "Displays", values: [v], indicator: .menuLED(on))
+                    PanelKeyLabel(symbol: "display.2", title: "", values: [v], indicator: .menuLED(on))
+                }
+                PanelKeyLabel(symbol: "display.2", title: "", values: [values[values.count - 1]],
+                              indicator: .menuLED(on))
+            }
+        }
+        .panelKeyMenu()
+        .help(synced ? "Every display follows its screensaver — pick a style for a display to play one of its own"
+              : on ? "Some displays play a wallpaper of their own — \(values[0])"
+              : "Every display plays the same wallpaper — or give a display a style of its own")
+        .accessibilityLabel("Wallpaper on each display")
+        .accessibilityValue(values[0])
     }
 
     /// The transport (WallpaperTransport): Play starts the wallpaper when it's off — what it
