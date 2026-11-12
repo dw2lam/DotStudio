@@ -7,9 +7,10 @@
 //               It breathes and blinks, waddles across the panel and turns around, looks about,
 //               waves, belly-slides, hops a little dance, shakes itself off, and now and then
 //               sits down and dozes (Zz). The screen's bottom edge is the floor.
-//               Backdrop (dimmer, in the same cells): Snowy Night — drifts, two pines, an igloo
-//               it passes behind or dozes beside, distant peaks, a crescent moon, stars — or Day
-//               (a pale sky and the sun); None. Snow comes and goes.
+//               Backdrop (dimmer, in the same cells, behind it): Snowy Night — drifts, two
+//               pines, an igloo it dozes beside, distant peaks, an aurora, a crescent moon, stars
+//               — or Day (the sun and its rays); None. Each part has its own toggle. Snow comes
+//               and goes.
 //               Follow the Clock: Night or Day by the local time; it dozes more at night and the
 //               panel dims.
 //               Custom character: the user's own image (Inspector, the same section as Bounce's
@@ -35,7 +36,7 @@
 //    [5] (snow 0…1, brightness, tuft sway, bill open 0…1)
 //    [6] (custom character 0/1, its half width, height (heights), mip level)
 //    [7] (its texture's clear margin in uv (x, y), slide direction ±1, snow spray 0…1)
-//    [8] (igloo x px from the centre, its radius px, behind it 0/1, night 0 day … 1 night)
+//    [8] (igloo x px from the centre, its radius px (0 = none), 0, night 0 day … 1 night)
 //    [9] (camera px (the penguin's [0].x is already on screen), burst age s (< 0 none), its seed, 0)
 
 import Foundation
@@ -45,7 +46,8 @@ import simd
 extension SceneCatalog {
     /// Packed in order into p0.xyzw, p1.xyzw.
     static let penguinPack: [EffectKind: SceneSpec] = [
-        // p0 = (render, cell size, glow, energy), p1 = (snow, size, follow the clock, backdrop)
+        // p0 = (render, cell size, glow, energy), p1 = (snow, size, follow the clock, backdrop),
+        // p2.x = the toggles after them, as bits (WaddleRig.pack: more params than slots)
         .waddle: SceneSpec(
             name: "Penguin",
             blurb: "A little penguin on an LED panel: it waddles, waves, belly-slides, dances and dozes.",
@@ -57,7 +59,16 @@ extension SceneCatalog {
                      ParamSpec("snow", "Snow", 0, 1, def: 1, toggle: true),
                      ParamSpec("size", "Size", 0.6, 1.3, def: 1),
                      ParamSpec("night", "Follow the Clock", 0, 1, def: 1, toggle: true),
-                     ParamSpec(menu: "backdrop", "Backdrop", ["None", "Snowy Night", "Day"], def: 1)],
+                     ParamSpec(menu: "backdrop", "Backdrop", ["None", "Snowy Night", "Day"], def: 1),
+                     // the backdrop's parts, and the extras: packed as bits of p2.x (WaddleRig.pack)
+                     ParamSpec("mountains", "Mountains", 0, 1, def: 1, toggle: true),
+                     ParamSpec("trees", "Trees", 0, 1, def: 1, toggle: true),
+                     ParamSpec("igloo", "Igloo", 0, 1, def: 1, toggle: true),
+                     ParamSpec("aurora", "Aurora", 0, 1, def: 1, toggle: true),
+                     ParamSpec("sky", "Moon, Sun & Stars", 0, 1, def: 1, toggle: true),
+                     ParamSpec("drifts", "Snow Drifts", 0, 1, def: 1, toggle: true),
+                     ParamSpec("bursts", "Bursts", 0, 1, def: 1, toggle: true),
+                     ParamSpec("shadow", "Shadow", 0, 1, def: 1, toggle: true)],
             colorA: RGBA(0.16, 0.44, 1.0), colorB: RGBA(0.010, 0.012, 0.020),
             colorALabel: "Penguin", colorBLabel: "Background"),
     ]
@@ -72,6 +83,20 @@ extension SceneCatalog {
 
 /// Penguin's behaviour: where the penguin is and what it is doing at scene time t.
 enum WaddleRig {
+    /// The on/off params after the first eight, bit i of p2.x each (the scene packing has twelve
+    /// slots; Penguin has more params). The shader reads them as WADDLE_* bits.
+    static let toggleKeys = ["mountains", "trees", "igloo", "aurora", "sky", "drifts", "bursts", "shadow"]
+
+    /// EffectInstance.pack for Penguin: the first eight params into p0 / p1, the toggles as bits.
+    static func pack(_ e: EffectInstance, into u: inout FXUniforms) {
+        // (by name, no arrays: this runs every frame)
+        u.p0 = .init(e.g("render"), e.g("cell"), e.g("glow"), e.g("energy"))
+        u.p1 = .init(e.g("snow"), e.g("size"), e.g("night"), e.g("backdrop"))
+        var mask = 0
+        for i in toggleKeys.indices where e.g(toggleKeys[i]) > 0.5 { mask |= 1 << i }
+        u.p2 = .init(Float(mask), 0, 0, 0)
+    }
+
     /// The 24 fps cadence (FramePacing.steppedFPS asks the hosts for it).
     static let stepFPS = 24.0
     /// Seconds per episode: walk to the next spot, do one thing, then fidget until the next.
@@ -96,7 +121,6 @@ enum WaddleRig {
         var beak = 0.0                   // bill open 0…1
         var tuft = 0.0
         var spray = 0.0                  // snow kicked up behind a belly slide
-        var behind = false               // passing behind the igloo (it hides what it covers)
         var burst = -1.0, burstSeed = 0.0 // seconds into a burst of hearts and stars (< 0 none)
         var act = Act.stroll
         /// What part of the episode this is: 0 rest, 1 turn, 2 walk, 3 run, 4 dive, 5 glide,
@@ -320,8 +344,6 @@ enum WaddleRig {
         let (steps, a) = cachedScript(k, range: R, energy: e, night: nf, igloo: ig)
         var p = Pose()
         p.act = a
-        // now and then its way passes behind the igloo (never a slide, nor a doze beside it)
-        p.behind = ig != nil && a != .slide && a != .doze && hash(k, 16) < 0.45
         p.x = home(k, range: R, igloo: ig)
         var dozing = false
 
@@ -577,7 +599,9 @@ enum WaddleRig {
         let follow = u.p1.z > 0.5
         let nf = follow ? nightFactor(hour: Double(u.clock.x)) : 0
         let backdrop = Int(min(max(fin(u.p1.w, 1), 0), 2).rounded())
-        let ig = backdrop > 0 ? st.igloo : nil
+        let mask = Int(fin(u.p2.x, 255).rounded())
+        let iglooOn = backdrop > 0 && mask & 4 != 0
+        let ig = iglooOn ? st.igloo : nil
         let p = pose(at: ts, range: st.range, energy: energy, night: nf, igloo: ig)
         // the backdrop's night: the clock's when following it, else the one picked
         let sky = follow ? nf : (backdrop == 1 ? 1 : 0)
@@ -612,7 +636,7 @@ enum WaddleRig {
         u.scene.5 = SIMD4(f(snowAmt), f(1 - 0.3 * nf), f(p.tuft), f(p.beak))
         u.scene.6 = custom
         u.scene.7 = SIMD4(margin.x, margin.y, f(p.slideDir), f(p.spray))
-        u.scene.8 = SIMD4(f(st.iglooX * st.hp), f(iglooR * st.hp), p.behind ? 1 : 0, f(sky))
+        u.scene.8 = SIMD4(f(st.iglooX * st.hp), iglooOn ? f(iglooR * st.hp) : 0, 0, f(sky))
         u.scene.9 = SIMD4(f(cam * st.hp), f(p.burst), f(p.burstSeed), 0)
         return tex
     }

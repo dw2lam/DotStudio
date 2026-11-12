@@ -1048,11 +1048,11 @@ func waddleInfo(_ p: Preset) {
     let nf = inst.g("night") > 0.5 ? WaddleRig.nightFactor(hour: Double(MetalRenderer.wallClock(wall).0.x)) : 0
     for t in times {
         let ts = (Double(t) * WaddleRig.stepFPS).rounded(.down) / WaddleRig.stepFPS
-        let ig = inst.g("backdrop") > 0.5 ? st.igloo : nil
+        let ig = inst.g("backdrop") > 0.5 && inst.g("igloo") > 0.5 ? st.igloo : nil
         let q = WaddleRig.pose(at: ts, range: st.range, energy: Double(inst.g("energy")), night: nf, igloo: ig)
-        print(String(format: "waddle %@ t=%.2f: %@ x %.2f yaw %.2f lean %.2f slide %.2f hop %.3f zz %.1f eye %.2f happy %.0f night %.2f igloo %.2f behind %d",
+        print(String(format: "waddle %@ t=%.2f: %@ x %.2f yaw %.2f lean %.2f slide %.2f hop %.3f zz %.1f eye %.2f happy %.0f night %.2f igloo %.2f",
                      p.name, t, "\(q.act)", q.x, q.yaw, q.lean, q.slide, q.hop, q.zz, q.eyeOpen, q.happy, nf,
-                     ig ?? .nan, q.behind ? 1 : 0))
+                     ig ?? .nan))
     }
 }
 /// --waddlepeaks: the moment each behaviour is at its fullest, the first time it plays (to
