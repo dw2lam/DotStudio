@@ -1,0 +1,15 @@
+{
+  "scene": "commute",
+  "variant": "day",
+  "loop": {"seconds": 48, "fps": 24},
+  "params": {"penguin_color": [0.0, 0.30, 0.47], "sway": 1.0},
+  "render": {"engine": "cycles", "res": [1600, 1000], "samples": 384, "exposure": 0.0, "motion_blur": true},
+  "stills": [
+    {"name": "day_wide", "camera": "wide", "frame": 1, "variant": "day"},
+    {"name": "day_close", "camera": "close", "frame": 1, "variant": "day"},
+    {"name": "golden_wide", "camera": "wide", "frame": 1, "variant": "golden"},
+    {"name": "night_wide", "camera": "wide", "frame": 1, "variant": "night"},
+    {"name": "rain_wide", "camera": "wide", "frame": 1, "variant": "rain"}
+  ],
+  "animation": {"camera": "wide", "engine": "eevee", "res": [2560, 1600], "samples": 64}
+}
