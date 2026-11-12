@@ -643,7 +643,7 @@ private final class MusicOverlayGroup: CALayer {
             return
         }
         let e = st.elapsed(at: now)
-        let sec = Int(e)
+        let sec = Int(saturating: e)
         guard sec != lastSecond else { return }
         lastSecond = sec
         let elapsed = MusicState.timeString(e)

@@ -118,7 +118,7 @@ enum TextAtlas {
     /// typeface choices in Scenes/Clocks_cases.h — keep the two in step. (A face missing here
     /// isn't fatal: the shader then draws with a face that is built.)
     static func faces(for u: FXUniforms) -> UInt8 {
-        func menu(_ v: Float) -> Int { Int((v + 0.5).rounded(.down)) }
+        func menu(_ v: Float) -> Int { Int(saturating: v + 0.5, .down) }
         func face(_ sel: Int, _ w: Float) -> UInt8 {
             switch sel {
             case 1: return 1 << 2                                    // New York

@@ -823,9 +823,10 @@ enum SandGarden {
         /// u.resolution and u.time at the wall-clock instant `wall`; fills u.scene; returns the
         /// data texture.
         func prepare(_ u: inout FXUniforms, wall: Date = Date(), device: MTLDevice) -> MTLTexture? {
-            let speed = max(u.p0.x, 0)
-            let menu = Int((u.p0.y + 0.5).rounded(.down))
-            let groove = min(max(u.p0.z, 0.6), 1.6)
+            // (a NaN param — never from the app, but a hand-made file — would carry into the plan)
+            let speed = u.p0.x.isNaN ? 0 : max(u.p0.x, 0)
+            let menu = Int(saturating: u.p0.y + 0.5, .down)
+            let groove = u.p0.z.isNaN ? 1 : min(max(u.p0.z, 0.6), 1.6)
             let aspect = u.resolution.y > 0 ? u.resolution.x / u.resolution.y : 1.6
             let t = u.time
             let epoch = wall.timeIntervalSince1970
@@ -833,21 +834,21 @@ enum SandGarden {
             // falls on — epoch hours, rounded to the nearest, so it holds steady in any time zone
             // (+5:45 too) and runs on across the hourly wrap (the outgoing frame at t ≥ 3600 with
             // the new hour finds the same index) — and never repeats.
-            let hourIx = Int(((epoch - Double(t)) / 3600).rounded())
+            let hourIx = Int(saturating: (epoch - Double(t)) / 3600, .toNearestOrAwayFromZero)
             var gi: Int, phase: Float
             var n = 0                                       // compositions an hour (0: still)
             if speed < 0.02 {
                 // still: today's garden, finished (local days, counted on: no jump at New Year)
                 let local = epoch + Double(TimeZone.current.secondsFromGMT(for: wall))
-                gi = Int((local / 86400).rounded(.down)) * 5 + 1; phase = 0.9999
+                gi = Int(saturating: local / 86400, .down) &* 5 &+ 1; phase = 0.9999
             } else {
-                n = Int(min(max((SandGarden.compositionsPerHour * speed).rounded(), 1), 15))
+                n = min(max(Int(saturating: SandGarden.compositionsPerHour * speed, .toNearestOrAwayFromZero), 1), 15)
                 let tp = t * Float(n) / 3600
-                gi = hourIx * n + Int(tp.rounded(.down)); phase = tp - tp.rounded(.down)
+                gi = hourIx &* n &+ Int(saturating: tp, .down); phase = tp - tp.rounded(.down)
             }
             // (speeds that run the same compositions share a state; two that don't — both
             // chains of a crossfade — each keep their own rather than rebuilding every frame)
-            let key = [menu, Int(groove.bitPattern), Int((aspect * 100).rounded()), n]
+            let key = [menu, Int(groove.bitPattern), Int(saturating: aspect * 100, .toNearestOrAwayFromZero), n]
             lock.lock(); defer { lock.unlock() }
             let st: State
             if let s = states[key] { st = s; order.removeAll { $0 == key } }

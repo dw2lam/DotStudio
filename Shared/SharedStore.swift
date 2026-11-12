@@ -120,7 +120,11 @@ final class SharedStore {
     func loadLibrary() -> LibraryLoad {
         guard let data = try? Data(contentsOf: libraryURL) else { return .missing }
         do {
-            return .loaded(try JSONDecoder().decode(Library.self, from: data))
+            var lib = try JSONDecoder().decode(Library.self, from: data)
+            // Params from any build, or a hand-edited file: clamped to their ranges (in-range
+            // values untouched), so no renderer converts or loops on 1e300 / NaN (SafeNumbers).
+            lib.sanitize()
+            return .loaded(lib)
         } catch {
             let backup = backupCorruptLibrary()
             debug("library.json corrupt (\(error)) — backup: \(backup?.lastPathComponent ?? "FAILED")")

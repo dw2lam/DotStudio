@@ -116,6 +116,35 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// Tools only: puts the instance time base's t at `t` now.
     func setInstanceTime(_ t: Double) { startTime = CACurrentMediaTime() - t }
 
+    /// The Time Lapse clock (s) a scene's simulated sun runs on (fillLiveSky). Unlike t it never
+    /// wraps, so a lapse carries on across the hourly wrap: on the wall clock, epoch seconds
+    /// (every synced host — screensaver, wallpaper — reads the same value at the same moment);
+    /// else seconds since this renderer's source was applied (`slideOrigin`, which the wrap
+    /// never moves). A Double: fillLiveSky reduces it before anything becomes a Float.
+    func lapseClock(at now: CFTimeInterval = CACurrentMediaTime()) -> Double {
+        timeBase == .wallClock ? timeBaseEpoch() : now - slideOrigin
+    }
+
+    /// A style that steps its own time (FramePacing.steppedFPS: Bloom's 24 fps): its rate, and
+    /// the clock that places each draw mid-step (StepClock).
+    private var stepRate: Double?
+    private var stepClock = StepClock()
+
+    /// Estimated GPU cost of the last frame's heavy passes, in ns per drawn pixel on an Apple GPU
+    /// (WeatherLink.costNsPerPixel: Meadow's skies); 0 = nothing heavy. The screensaver caps its
+    /// drawable by it (MetalRenderer.costCapScale).
+    private(set) var lastFrameCostNsPerPixel: Double = 0
+    private var frameCostNsPerPixel: Double = 0
+
+    /// The largest render scale (per axis, ≤ 1) at which `pixels` drawn pixels of a frame costing
+    /// `nsPerPixel` stay within `budgetMs` of GPU time, in 0.05 steps (no resize for a sliver).
+    static func costCapScale(nsPerPixel: Double, pixels: Double, budgetMs: Double) -> Double {
+        guard nsPerPixel > 0, pixels > 0, budgetMs > 0 else { return 1 }
+        let cost = nsPerPixel * pixels / 1e6
+        guard cost > budgetMs else { return 1 }
+        return max((((budgetMs / cost).squareRoot()) / 0.05).rounded(.down) * 0.05, 0.25)
+    }
+
     // Per-effect uniforms packed once at apply(); per frame only the dynamic
     // fields (time/resolution/srcSize/astro) are overwritten on a copy.
     private var packedUniforms: [FXUniforms] = []
@@ -283,7 +312,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         if preset != self.preset {
             WeatherLink.prewarm(for: preset, device: device, format: pixelFormat)
             pipelines.prewarmScenes(ScenePipelines.ids(for: preset))
+            stepClock.reset()
         }
+        stepRate = FramePacing.steppedFPS(preset)
         self.preset = preset
         self.source = source
         // Pack static uniforms (effect id, params, palette) once per preset change
@@ -562,7 +593,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             return simd_float4(Float(pal[i].r), Float(pal[i].g), Float(pal[i].b), 1)
         }
         u.musicPal0 = slot(0); u.musicPal1 = slot(1); u.musicPal2 = slot(2)
-        let layout = MusicLayoutKind(rawValue: Int(u.p0.x.rounded())) ?? .album
+        let layout = MusicLayoutKind(rawValue: Int(saturating: u.p0.x, .toNearestOrAwayFromZero)) ?? .album
         let r = MusicGeometry.artUV(layout, size: size, options: options)
         u.musicRect = simd_float4(r.x, r.y, r.w, r.h)
         if reduceMotion { u.p0.z *= 0.33 }
@@ -685,7 +716,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                             size: CGSize, amount: Double, art: MTLTexture?, pyramid: inout [MTLTexture]) {
         let w = Int(size.width), h = Int(size.height)
         let blur = amount * Self.veilBlurLevels(height: h)
-        let need = Int(ceil(blur - 1e-6))
+        let need = Int(saturating: blur - 1e-6, .up)
         if need > 0 {
             pyramid = veilPyramid(w, h, levels: need, format: style.pixelFormat, reuse: pyramid)
         }
@@ -701,7 +732,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
         // Composite: blend level ⌊blur⌋ (0 = the sharp frame) with the next.
         let b = min(blur, Double(levels))
-        let lo = Int(b.rounded(.down)), frac = b - Double(lo)
+        let lo = Int(saturating: b, .down), frac = b - Double(lo)
         let loTex = lo == 0 ? style : pyramid[lo - 1]
         let hiTex: MTLTexture? = lo < levels ? pyramid[lo] : nil
         var u = FXUniforms()
@@ -872,8 +903,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     ///   one shortly: finish any crossfade in progress (style, time-base wrap, track change)
     ///   and show the end state, instead of a first fade frame that would stay on screen.
     /// - Returns: whether a frame was encoded and committed.
+    /// - presentAt: when the frame will be on screen (a display link's targetTimestamp), if the
+    ///   host knows it: a stepped style's steps then land on the draws exactly (StepClock).
     @discardableResult
-    func draw(to layer: CAMetalLayer, settled: Bool = false) -> Bool {
+    func draw(to layer: CAMetalLayer, settled: Bool = false, presentAt: CFTimeInterval? = nil) -> Bool {
         autoreleasepool {
             let ds = layer.drawableSize
             // fastStart (the saver): nothing, not even a drawable, until this frame's pipelines exist.
@@ -886,7 +919,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             // Every pass writes every pixel (fullscreen triangle, no blending), so the old
             // contents never need loading or clearing (a `.texture` target's actions).
             return encodeFrame(final: .texture(drawable.texture), drawable: drawable, size: ds,
-                               format: layer.pixelFormat, settled: settled) != nil
+                               format: layer.pixelFormat, settled: settled, presentAt: presentAt) != nil
         }
     }
 
@@ -913,8 +946,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// Encode and commit one frame of the current preset into `final` (presenting
     /// `drawable` when there is one). Returns the committed command buffer.
     @discardableResult
-    private func encodeFrame(final: PassTarget, drawable: MTLDrawable?,
-                             size ds: CGSize, format: MTLPixelFormat, settled: Bool = false) -> MTLCommandBuffer? {
+    private func encodeFrame(final: PassTarget, drawable: MTLDrawable?, size ds: CGSize, format: MTLPixelFormat,
+                             settled: Bool = false, presentAt: CFTimeInterval? = nil) -> MTLCommandBuffer? {
         guard framePipelinesReady() else { return nil }
         startPendingTransition(CACurrentMediaTime(), settled: settled)
         guard let preset = preset, let texA = texA, let texB = texB else { return nil }
@@ -935,7 +968,16 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         if timeBase == .wallClock { syncWallClockOrigin(now, allowWrapFade: drewOnce && !settled) }
         else { wrapInstanceOrigin(now, allowFade: drewOnce && !settled) }
         drewOnce = true
-        let t = Float(now - startTime)
+        let tFree = Float(now - startTime)       // (the Album Art backdrop's own motion: never stepped)
+        var t = tFree
+        if let rate = stepRate {
+            // (the presentation time, else now; never behind now: a late link callback)
+            let at = max(presentAt ?? now, now)
+            t = Float(stepClock.time(at - startTime, rate: rate, at: at))
+        }
+        let lapse = lapseClock(at: now)
+        frameCostNsPerPixel = 0
+        defer { lastFrameCostNsPerPixel = frameCostNsPerPixel }
         // Full Screen music's backdrop: a held frame shows where its ease ends.
         if settled, musicBackdropAmountOverride == nil {
             musicBackdropFrom = musicBackdropTo
@@ -971,9 +1013,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 fadeOld = nil; fadeNew = nil
             }
             let chain = MetalRenderer.artChain(artLayout, art)
-            encodePasses(cmd, final: final, pingA: texA, pingB: texB, size: drawableSize, time: t,
+            encodePasses(cmd, final: final, pingA: texA, pingB: texB, size: drawableSize, time: tFree,
                          preset: art, source: MetalRenderer.noSource, sourceTex: nil, effects: chain.effects,
-                         packedUniforms: chain.packed, wall: wall)
+                         packedUniforms: chain.packed, wall: wall, lapse: lapse)
             if let drawable {
                 if let onPresented { drawable.addPresentedHandler { onPresented($0.presentedTime) } }
                 cmd.present(drawable)
@@ -988,8 +1030,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
            let tex = ensureVeilArt(width: Int(ds.width), height: Int(ds.height), format: format) {
             let chain = MetalRenderer.artChain(artLayout, art)
             encodePasses(cmd, final: .texture(tex), pingA: texA, pingB: texB,
-                         size: drawableSize, time: t, preset: art, source: MetalRenderer.noSource, sourceTex: nil,
-                         effects: chain.effects, packedUniforms: chain.packed, wall: wall)
+                         size: drawableSize, time: tFree, preset: art, source: MetalRenderer.noSource, sourceTex: nil,
+                         effects: chain.effects, packedUniforms: chain.packed, wall: wall, lapse: lapse)
             artTex = tex
         } else {
             veilArt = nil
@@ -1040,13 +1082,13 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                                  preset: out.preset, source: source,
                                  sourceTex: media?.currentTexture() ?? outSlides?.texA,
                                  slides: outSlides, effects: out.effects, packedUniforms: out.packed,
-                                 chain: out.chain, wall: wall)
+                                 chain: out.chain, wall: wall, lapse: lapse)
                     // Incoming chain → fadeNew. The shared ping-pong is safe: the chains
                     // encode sequentially and each result is parked before the next starts.
                     encodePasses(cmd, final: .texture(fn), pingA: texA, pingB: texB,
                                  size: drawableSize, time: t, preset: preset, source: source,
                                  sourceTex: sTex, slides: slides, effects: enabledEffects,
-                                 packedUniforms: packedUniforms, chain: chainID, wall: wall)
+                                 packedUniforms: packedUniforms, chain: chainID, wall: wall, lapse: lapse)
                     // Both chains are parked: texA is free for the blend when veiled.
                     encodeBlend(cmd, final: veiled ? .texture(texA) : final, newTex: fn, oldTex: fo,
                                 progress: Float(progress), size: drawableSize)
@@ -1059,7 +1101,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             encodePasses(cmd, final: veiled ? .texture(chainOut) : final, pingA: texA, pingB: texB,
                          size: drawableSize, time: t, preset: preset, source: source,
                          sourceTex: sTex, slides: slides, effects: enabledEffects,
-                         packedUniforms: packedUniforms, chain: chainID, wall: wall)
+                         packedUniforms: packedUniforms, chain: chainID, wall: wall, lapse: lapse)
         }
         if veiled {
             encodeVeil(cmd, style: styleTex, final: final, size: drawableSize, amount: backdrop,
@@ -1195,7 +1237,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                               pingA: MTLTexture, pingB: MTLTexture, size: CGSize, time: Float,
                               preset: Preset, source: SourceSpec, sourceTex: MTLTexture?,
                               slides: SlideFrame? = nil, effects inEffects: [EffectInstance]? = nil,
-                              packedUniforms packed: [FXUniforms]? = nil, chain: Int = -1, wall inWall: Date? = nil) {
+                              packedUniforms packed: [FXUniforms]? = nil, chain: Int = -1, wall inWall: Date? = nil,
+                              lapse inLapse: Double? = nil) {
         let res = simd_float2(Float(size.width), Float(size.height))
         let useGradient = (source.kind == .gradient) || (sourceTex == nil)
         let effects = inEffects ?? preset.effects.filter { $0.enabled }
@@ -1203,6 +1246,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         let firstPass = effects.first?.kind.isScene == true ? 1 : 0
         let wall = inWall ?? clockOverride ?? Date()
         let (clock, date) = wallClockUniforms(wall)
+        let lapse = inLapse ?? Double(time)            // (a thumbnail: its own time)
 
         for i in firstPass..<passCount {
             let isLast = (i == passCount - 1)
@@ -1270,9 +1314,13 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                     let orbits: Float = (inst!.params["orbits"] ?? 1) > 0.5 ? 1 : 0
                     u.p2 = simd_float4(a.userLon, a.userLat, a.hasLoc ? 1 : 0, orbits)
                 }
-                MetalRenderer.fillLiveSky(&u, inst: inst!, now: wall, time: time, location: location)
+                MetalRenderer.fillLiveSky(&u, inst: inst!, now: wall, lapseClock: lapse, location: location)
                 weatherLink.fill(&u, inst: inst!, time: time, wall: wall, chain: chain,
                                  encoder: enc, format: target.pixelFormat)
+                if inst!.kind == .meadow,                // (the scene the saver's cost cap knows)
+                   let ns = WeatherLink.functionName(for: inst!.kind, uniforms: u).flatMap(WeatherLink.costNsPerPixel) {
+                    frameCostNsPerPixel += ns
+                }
                 if inst!.kind == .sandGarden { sceneData = sandGardens.prepare(&u, wall: wall, device: device) }
                 if inst!.kind == .bounce {          // the logo (cached per logo) + this frame's pose
                     sceneData = BounceLogo.prepare(&u, inst: inst!, mediaDir: store.mediaDir, device: device)
@@ -1366,32 +1414,54 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// Fills u.sun / u.moon / u.sky for a scene following the real sun (Ocean Horizon, Shallows,
     /// Pleats, Dichroic, Zen Garden in "Follow the Sun", Window Light following the sun); leaves
     /// them zero for anything else. Time Lapse (minutes per simulated day, 0 = real time) runs the
-    /// clock forward from `now` by the scene's own time.
-    static func fillLiveSky(_ u: inout FXUniforms, inst: EffectInstance, now: Date, time: Float,
+    /// clock forward by `lapseClock` (MetalRenderer.lapseClock: seconds that never wrap, so the
+    /// simulated hour runs on smoothly across the hourly wrap of t — see lapseHour / lapseDate).
+    static func fillLiveSky(_ u: inout FXUniforms, inst: EffectInstance, now: Date, lapseClock: Double,
                             location: (lat: Double, lon: Double)?) {
         let live: Bool
         switch inst.kind {                       // (a switch: no array built every pass)
         case .oceanHorizon, .shallows, .pleats, .dichroic, .sandGarden: live = (inst.params["live"] ?? 0) > 0.5
         case .windowLight: live = (inst.params["follow"] ?? 1) > 0.5
-        case .standbyClock: live = Int((inst.params["night"] ?? 0).rounded()) == 0   // Night Mode: Auto
+        case .standbyClock: live = Int(saturating: inst.params["night"] ?? 0, .toNearestOrAwayFromZero) == 0   // Night Mode: Auto
         case .watchClock: live = (inst.params["lume"] ?? 0) < 0.5                     // Lume: Auto
         case .meadow:                            // always a sky: the real one, or a fixed hour's
             live = (inst.params["live"] ?? 1) > 0.5
             if !live {
-                let lapse = inst.params["lapse"] ?? 0
-                let rate = lapse > 0.05 ? 24.0 / (lapse * 60.0) : 0.0          // simulated h per s
-                let s = fixedSky(hour: (inst.params["hour"] ?? 15.5) + Double(time) * rate)
+                let s = fixedSky(hour: lapseHour(hour: inst.params["hour"] ?? 15.5, lapse: inst.params["lapse"] ?? 0,
+                                                 lapseClock: lapseClock))
                 u.sun = s.sun; u.moon = s.moon; u.sky = s.sky
                 return
             }
         default: live = false
         }
         guard live else { return }
-        let lapse = inst.params["lapse"] ?? 0
-        let rate = lapse > 0.05 ? 1440.0 / lapse : 1.0           // simulated s per real s
-        let date = now.addingTimeInterval(Double(time) * (rate - 1))
-        let s = liveSky(at: date, location: location)
+        let s = liveSky(at: lapseDate(now: now, lapse: inst.params["lapse"] ?? 0, lapseClock: lapseClock), location: location)
         u.sun = s.sun; u.moon = s.moon; u.sky = s.sky
+    }
+
+    /// Meadow's fixed Time of Day under Time Lapse (`lapse` minutes a simulated day; 0 = none):
+    /// the simulated hour, 0 ..< 24, at `lapseClock` seconds. Reduced in Double, so it is
+    /// continuous for any lapse rate however large the clock (epoch seconds on the wall clock).
+    static func lapseHour(hour: Double, lapse: Double, lapseClock: Double) -> Double {
+        let rate = lapse > 0.05 ? 24.0 / (lapse * 60.0) : 0.0          // simulated h per s
+        let h = (hour + (lapseClock * rate).truncatingRemainder(dividingBy: 24)).truncatingRemainder(dividingBy: 24)
+        return h < 0 ? h + 24 : h
+    }
+
+    /// Whole days the Follow the Sun lapse's offset from now wraps at: the Metonic cycle (235
+    /// lunations ≈ 19 years), so the jump back — once every 19 simulated years — keeps the time of
+    /// day exactly and the season and the moon's phase to within half a day.
+    static let lapseCycle: Double = 6940 * 86400
+
+    /// Follow the Sun under Time Lapse: the simulated instant, running `1440 / lapse` times as
+    /// fast as real time from `now` by `lapseClock` seconds. Its offset from now is reduced by
+    /// whole Metonic cycles (lapseCycle), never by the hour: no jump when t wraps.
+    static func lapseDate(now: Date, lapse: Double, lapseClock: Double) -> Date {
+        guard lapse > 0.05 else { return now }
+        let rate = 1440.0 / lapse                                      // simulated s per real s
+        var offset = (lapseClock * (rate - 1)).truncatingRemainder(dividingBy: lapseCycle)
+        if offset < 0 { offset += lapseCycle }
+        return now.addingTimeInterval(offset.isFinite ? offset : 0)
     }
 
     /// Meadow's Time of Day (Follow the Sun off): the sun and moon at local solar hour `hour` of a
@@ -1470,7 +1540,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     // MARK: Error-diffusion dither (compute)
 
     private func isSerialDither(_ inst: EffectInstance) -> Bool {
-        inst.kind == .dither && Int((inst.params["algo"] ?? 1).rounded()) >= 4
+        inst.kind == .dither && Int(saturating: inst.params["algo"] ?? 1, .toNearestOrAwayFromZero) >= 4
     }
 
     /// Whole-pixel cell size for an error-diffusion dither: "Pixel Size" is in pixels of a
@@ -1478,7 +1548,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// collapse to whatever a 130k-cell cap allowed, at a fractional size that beat).
     static func ditherCellPixels(cell: Double, size: CGSize) -> Int {
         let k = max(size.height, 1) / 1000
-        var cp = max(1, Int((max(cell, 1) * k).rounded()))
+        // (at most the frame's longer side: a cell of 1e300 from a shared file is one cell)
+        let side = max(Int(saturating: max(size.width, size.height), .up), 1)
+        var cp = min(max(1, Int(saturating: max(cell, 1) * k, .toNearestOrAwayFromZero)), side)
         // Keep the grid small enough for one threadgroup's wavefront to stay ~1 ms.
         while Double(cp * cp) * 600_000 < Double(size.width * size.height) { cp += 1 }
         return cp
@@ -1517,7 +1589,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             ditherHistoryKey = key
         }
         guard let enc = cmd.makeComputeCommandEncoder() else { return }
-        let algo = Int((inst.params["algo"] ?? 4).rounded())
+        let algo = Int(saturating: inst.params["algo"] ?? 4, .toNearestOrAwayFromZero)
         let riemersma = algo == 16
         u.p1 = simd_float4(Float(riemersma ? 100 : algo - 4), Float(gw), Float(gh), Float(cp))
         u.p2 = MetalRenderer.ditherTuning
