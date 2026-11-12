@@ -85,6 +85,7 @@ final class WallpaperController: ObservableObject {
     /// (no GPU for a display yet, every surface failed) — tearDown must still end the session.
     private var running = false
     private var librarySub: AnyCancellable?
+    private var rosterSub: AnyCancellable?
     /// What the render loop was last handed: the shared style and each display's.
     private struct Applied {
         var fallback: Preset
@@ -121,6 +122,9 @@ final class WallpaperController: ObservableObject {
         librarySub = model.$library
             .receive(on: DispatchQueue.main)        // $library fires in willSet; read it after
             .sink { [weak self] _ in self?.libraryChanged() }
+        rosterSub = DisplayRoster.shared.$displays
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.reconcilePins($0) }
         // The gallery (tiles, Wallpaper card, editor) talks to WallpaperSlot; plug in.
         if DemoHooks.wallpaperStub == nil {
             WallpaperSlot.shared.connect(.init(
@@ -143,6 +147,13 @@ final class WallpaperController: ObservableObject {
         return WallpaperSettings.load(from: url).presetID
     }
 
+    /// The styles wallpaper.json gives displays of their own. For migrations.
+    static func pinnedPresetIDs(storeDir: URL) -> [UUID] {
+        let url = storeDir.appendingPathComponent("wallpaper.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        return WallpaperSettings.load(from: url).displayStyles.values.map(\.presetID)
+    }
+
     /// 1.4.2 retirement (DefaultPresets.retireUntouched, run by AppModel.migrate before `attach`):
     /// a wallpaper showing a removed style moves to its replacement. Rewrites wallpaper.json in
     /// `storeDir` only when its pick was removed; returns that move.
@@ -151,10 +162,19 @@ final class WallpaperController: ObservableObject {
         let url = storeDir.appendingPathComponent("wallpaper.json")
         guard !replacements.isEmpty, FileManager.default.fileExists(atPath: url.path) else { return nil }
         var s = WallpaperSettings.load(from: url)
-        guard let old = s.presetID, let new = replacements[old] else { return nil }
-        s.presetID = new
-        s.save(to: url)
-        return (old, new)
+        let before = s
+        // A display's own style moves too (no replacement: that display plays the shared pick).
+        for (key, pin) in s.displayStyles {
+            guard let new = replacements[pin.presetID] else { continue }
+            if let new { s.displayStyles[key]?.presetID = new } else { s.displayStyles[key] = nil }
+        }
+        var move: (old: UUID, new: UUID?)?
+        if let old = s.presetID, let new = replacements[old] {
+            s.presetID = new
+            move = (old, new)
+        }
+        if s != before { s.save(to: url) }
+        return move
     }
 
     /// Bring back the wallpaper the user left on (applicationDidFinishLaunching).
@@ -208,15 +228,18 @@ final class WallpaperController: ObservableObject {
     /// the wallpaper when it's off (the other displays play the shared pick — the last one, or
     /// the screensaver's style) and, like any wallpaper pick, stops following the screensaver.
     func setDisplayStyle(_ pin: DisplayPin?, display key: String) {
-        let keep = (pin != nil && settings.followsScreensaver) ? styleToKeep() : nil
         let fallback = model?.library.activeID ?? pin?.presetID
+        if let pin, settings.followsScreensaver, let lib = model?.library {
+            // Leaving sync this way changes nothing else on screen (WallpaperPick.leavingSync).
+            let next = WallpaperPick.leavingSync(settings, lib, pin: pin, display: key)
+            update { $0 = next; $0.enabled = true }
+            userPaused = false
+            start()
+            return
+        }
         update {
             $0.displayStyles[key] = pin
             guard let pin else { return }
-            if $0.followsScreensaver {
-                $0.followsScreensaver = false
-                if let keep { $0.presetID = keep }
-            }
             if !$0.enabled {
                 $0.enabled = true
                 if $0.presetID.flatMap({ id in self.model?.preset(id) }) == nil { $0.presetID = fallback ?? pin.presetID }
@@ -235,8 +258,17 @@ final class WallpaperController: ObservableObject {
 
     /// A deleted style's pins go (those displays play the shared pick).
     func forgetDisplayStyles(of id: UUID) {
-        guard settings.displayStyles.values.contains(where: { $0.presetID == id }) else { return }
-        update { $0.displayStyles = $0.displayStyles.filter { $0.value.presetID != id } }
+        guard let lib = model?.library else { return }
+        let next = WallpaperPick.pruned(settings, lib)
+        if next != settings { update { $0 = next } }
+    }
+
+    /// The connected displays changed (DisplayRoster): a display that came back under a new UUID
+    /// adopts its pin, and old unplugged displays' pins are capped (DisplayPins.reconcile).
+    private func reconcilePins(_ displays: [DisplayInfo]) {
+        guard let next = DisplayPins.reconcile(settings.displayStyles, connected: displays.map { ($0.key, $0.name) })
+        else { return }
+        update { $0.displayStyles = next }
     }
 
     /// Leaving Match Screensaver: keep the chosen style if it still exists, else the style
@@ -447,12 +479,13 @@ final class WallpaperController: ObservableObject {
     /// One host per connected display; existing ones follow moves and resolution changes.
     private func rebuildHosts(store: SharedStore) {
         let loop = makeRenderLoop(store: store)
+        let keys = DisplayIdentity.keys(NSScreen.screens)   // identical monitors told apart
         var seen = Set<CGDirectDisplayID>()
         for screen in NSScreen.screens {
             guard let id = screen.displayID else { continue }
             seen.insert(id)
             if let h = hosts[id] {
-                h.key = DisplayIdentity.key(id)   // a reconnect can hand an ID to another display
+                h.key = keys[id]   // a reconnect can hand an ID to another display
                 h.follow(screen)
                 configure(h)
                 continue
@@ -460,7 +493,7 @@ final class WallpaperController: ObservableObject {
             guard let device = WallpaperGPU.device(for: id) else { continue }
             nextToken += 1
             let h = WallpaperHost(screen: screen, displayID: id, device: device, token: nextToken)
-            h.key = DisplayIdentity.key(id)
+            h.key = keys[id]
             hosts[id] = h
             let link = h.view.displayLink(target: WallpaperRenderLoop.linkTarget(loop, display: id),
                                           selector: WallpaperRenderLoop.linkSelector)
@@ -495,6 +528,14 @@ final class WallpaperController: ObservableObject {
     private func libraryChanged() {
         guard settings.enabled, running else { return }
         guard currentPreset != nil else {
+            // A display still playing its own style keeps the wallpaper going.
+            if let lib = model?.library,
+               let id = WallpaperPick.sharedReplacement(pins: settings.displayStyles, lib,
+                                                        connected: hosts.values.compactMap(\.key)) {
+                log("style deleted — the other displays move to \(lib.presets.first { $0.id == id }?.name ?? "?")")
+                update { $0.presetID = id }
+                return
+            }
             log("style deleted — stopping")
             stop()
             return

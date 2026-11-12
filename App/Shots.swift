@@ -370,6 +370,36 @@ enum UIShots {
             }
         }, view: { _ in AnyView(MenuPreview { DotStudioMenu() }) }))
 
+        // One display connected that still has a style of its own (an unplugged external, a
+        // closed lid): the Displays keys, the hero, the badges and the menu all say what it
+        // plays — its own screensaver style and its own wallpaper style.
+        let alone: (Stage) -> Void = { st in
+            DisplayRoster.shared.setDemoSingle()
+            guard let d = DisplayRoster.shared.displays.first else { return }
+            st.model.setScreensaverStyle(st.night, on: d)
+            WallpaperSlot.shared.setShared(st.wallpaper)
+            WallpaperSlot.shared.set(st.scene, on: d)
+        }
+        s.append(Screen(name: "dest-display-alone", frame: .window, prepare: alone, view: main))
+        s.append(Screen(name: "menu-display-alone", frame: .fit(width: 320), prepare: { st in
+            alone(st)
+            guard let d = DisplayRoster.shared.displays.first else { return }
+            WallpaperController.shared.update {
+                $0.enabled = true; $0.presetID = st.wallpaper
+                $0.displayStyles = [d.key: DisplayPin(presetID: st.scene, name: d.name)]
+            }
+        }, view: { _ in AnyView(MenuPreview { DotStudioMenu() }) }))
+        s.append(Screen(name: "tile-menu-display-alone", frame: .fit(width: 320), prepare: alone, view: { st in
+            let id = st.firstScene
+            let p = st.model.preset(id) ?? Preset(name: "?")
+            return AnyView(MenuPreview {
+                TileMenu(model: st.model, preset: p, lineup: st.model.screensaverLineup, confirmDelete: .constant(false))
+                Divider()
+                Text("Set as Screensaver on \u{25B8}").textRole(.calloutEmphasis)
+                ChoiceColumn(choices: DisplayChoices.screensaver(id, model: st.model, displays: DisplayRoster.shared.displays))
+            })
+        }))
+
         // Editor (preview + destination bar + inspector with every effect expanded)
         s.append(Screen(name: "editor-scene", frame: .window, prepare: { st in
             st.lineup([st.scene])

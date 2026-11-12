@@ -472,8 +472,20 @@ case "saverpin":
     let first = shown()
     expect(first.last?.contains("Flip Clock") == true && first.last?.contains(key) == true,
            "pinned display plays its own style from the first frames: \(first)")
-    expect(!first.contains { $0.contains("Liquid Chrome") && $0.contains(key) },
-           "never shows the shared style first on the pinned display")
+    expect(!first.contains { $0.contains("Liquid Chrome") },
+           "never loads the shared style first (the first load waits for the screen)")
+    // A view whose window never gets a screen still draws, after the short wait.
+    let lost = DotSaverView(frame: NSRect(x: 0, y: 0, width: 320, height: 200), isPreview: false)!
+    let before = shown().count
+    for _ in 0..<3 { lost.animateOneFrame(); runLoop(until: CACurrentMediaTime() + 1 / 30) }
+    expect(shown().count == before, "no window: nothing loaded")
+    let lostWin = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 200), styleMask: [.borderless],
+                           backing: .buffered, defer: false)
+    lostWin.isReleasedWhenClosed = false
+    lostWin.contentView = lost
+    for _ in 0..<30 { lost.animateOneFrame(); runLoop(until: CACurrentMediaTime() + 1 / 30) }
+    expect(shown().count > before, "a view in a window loads its style within the wait (\(shown().last ?? "-"))")
+    lostWin.contentView = nil
     write(nil)
     frames(45)                                   // the 1 Hz reload
     expect(shown().last?.contains("Liquid Chrome") == true, "pin removed: back to the lineup (\(shown().last ?? "-"))")

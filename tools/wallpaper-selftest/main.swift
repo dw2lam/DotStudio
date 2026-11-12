@@ -202,6 +202,125 @@ do {
     let rawNone = (try? JSONSerialization.jsonObject(with: Data(contentsOf: wurl))) as? [String: Any] ?? [:]
     check(rawNone["displayStyles"] == nil, "no displayStyles key while there are no pins")
 
+    // 1. One display connected with a style of its own: that's what the app names as playing.
+    check(Playback.shownPreset(in: lib, now: now, displays: [lg]).id == aurora,
+          "one display, pinned: the app names its own style as playing")
+    check(Playback.shownPreset(in: lib, now: now, displays: [builtIn]).id == chrome,
+          "one display, unpinned: the lineup")
+    check(Playback.shownPreset(in: lib, now: now, displays: [builtIn, lg]).id == chrome,
+          "two displays, one pinned: the lineup (it's on screen)")
+    var allPinned = lib
+    allPinned.displayStyles?[builtIn] = DisplayPin(presetID: standby, name: "Built-in Retina Display")
+    check(Playback.shownPreset(in: allPinned, now: now, displays: [builtIn, lg]).id == standby,
+          "every display pinned: the first display's style")
+    check(Playback.shownPreset(in: lib, now: now, displays: []).id == chrome, "no displays known: the lineup")
+
+    // 3. Leaving sync by giving one display a wallpaper of its own changes nothing else.
+    var syncedStale = WallpaperSettings()
+    syncedStale.enabled = true
+    syncedStale.followsScreensaver = true
+    syncedStale.presetID = standby                                   // the old own pick, not on screen
+    syncedStale.displayStyles = [builtIn: DisplayPin(presetID: universe, name: "Built-in")]   // stale
+    let left = WallpaperPick.leavingSync(syncedStale, rot, now: now,
+                                         pin: DisplayPin(presetID: universe, name: "Studio"), display: unplugged)
+    check(!left.followsScreensaver && left.presetID == Playback.effectivePreset(in: rot, now: now).id,
+          "leaving sync: the shared pick becomes what the lineup shows now")
+    check(left.displayStyles[lg]?.presetID == aurora && left.displayStyles[builtIn] == nil
+          && left.displayStyles[unplugged]?.presetID == universe,
+          "…the screensaver's pins become wallpaper pins, stale wallpaper pins go, the pick is added")
+    for d in [builtIn, lg] {
+        check(WallpaperPick.preset(display: d, left, rot, now: now)?.id == WallpaperPick.preset(display: d, syncedStale, rot, now: now)?.id,
+              "…display \(d.prefix(4)) shows the same style before and after")
+    }
+
+    // 4. Deleting the shared wallpaper style while another display has its own.
+    var afterDelete = lib
+    afterDelete.presets.removeAll { $0.id == universe }
+    let pinsLG = [lg: DisplayPin(presetID: standby, name: "LG")]
+    check(WallpaperPick.sharedReplacement(pins: pinsLG, afterDelete, connected: [builtIn, lg]) == chrome,
+          "shared pick deleted, LG has its own: the others move to the active style (no stop)")
+    var noActive = afterDelete
+    noActive.activeID = UUID()
+    check(WallpaperPick.sharedReplacement(pins: pinsLG, noActive, connected: [builtIn, lg]) == standby,
+          "…no active style: the surviving pin's style")
+    check(WallpaperPick.sharedReplacement(pins: [:], afterDelete, connected: [builtIn]) == nil
+          && WallpaperPick.sharedReplacement(pins: pinsLG, afterDelete, connected: [builtIn]) == nil,
+          "nothing survives on a connected display: stop, as before")
+    check(WallpaperPick.sharedReplacement(pins: [lg: DisplayPin(presetID: universe, name: "LG")], afterDelete,
+                                          connected: [builtIn, lg]) == nil, "a pin to the deleted style doesn't count")
+
+    // 5. Identical monitors sharing a UUID get distinct, stable keys.
+    let u = "11111111-2222-3333-4444-555555555555"
+    let twins: [DisplayIdentity.Entry] = [.init(id: 9, uuid: u, x: 1920, y: 0), .init(id: 4, uuid: u, x: 0, y: 0),
+                                         .init(id: 1, uuid: "B", x: -1500, y: 0)]
+    let tk = DisplayIdentity.keys(twins)
+    check(tk[4] == u && tk[9] == u + "#2" && tk[1] == "B", "twin monitors: left one keeps the UUID, the right one \"#2\"")
+    check(DisplayIdentity.keys(twins.reversed()) == tk && Set(tk.values).count == 3, "…deterministic, all keys unique")
+
+    // 6. Pins of displays that come back under a new UUID, and the cap on unplugged ones.
+    let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+    let moved = DisplayPins.reconcile([unplugged: DisplayPin(presetID: aurora, name: "DELL U2720Q", seen: 1)],
+                                      connected: [(lg, "DELL U2720Q"), (builtIn, "Built-in Retina Display")], now: t0)
+    check(moved?[lg]?.presetID == aurora && moved?[unplugged] == nil && moved?[lg]?.seen == t0.timeIntervalSince1970,
+          "a display back under a new UUID adopts its pin (same name, the only candidate)")
+    let ambiguous = [unplugged: DisplayPin(presetID: aurora, name: "DELL", seen: 1),
+                     "OTHER": DisplayPin(presetID: standby, name: "DELL", seen: 2)]
+    let amb = DisplayPins.reconcile(ambiguous, connected: [(lg, "DELL")], now: t0)
+    check(amb == nil || (amb?[lg] == nil && amb?.count == 2), "two unplugged pins with that name: nothing adopted")
+    check(DisplayPins.reconcile([lg: DisplayPin(presetID: aurora, name: "LG", seen: t0.timeIntervalSince1970 - 60)],
+                                connected: [(lg, "LG")], now: t0) == nil, "connected and recently seen: no write")
+    var many: [String: DisplayPin] = [:]
+    for i in 0..<12 { many["GONE-\(i)"] = DisplayPin(presetID: aurora, name: "Display \(i)", seen: Double(i)) }
+    many[lg] = DisplayPin(presetID: standby, name: "LG", seen: t0.timeIntervalSince1970)
+    let capped = DisplayPins.reconcile(many, connected: [(lg, "LG")], now: t0) ?? many
+    check(capped.count == 9 && capped[lg] != nil && capped["GONE-11"] != nil && capped["GONE-3"] == nil,
+          "unplugged pins capped at the 8 most recently seen (\(capped.count - 1) kept); connected ones untouched")
+
+    // 8. Unknown fields keep big integers exactly.
+    let bigJSON = #"{"n":9007199254740993,"f":0.25,"neg":-42}"#
+    let bigVal = try! JSONDecoder().decode(JSONValue.self, from: Data(bigJSON.utf8))
+    let bigBack = String(data: try! JSONEncoder().encode(bigVal), encoding: .utf8)!
+    check(bigBack.contains("9007199254740993") && bigBack.contains("0.25") && bigBack.contains("-42"),
+          "JSONValue: 2^53+1 survives a round trip (\(bigBack))")
+    var futureBig = oldJSON
+    futureBig["stamp"] = NSNumber(value: Int64(9_007_199_254_740_993))
+    let fb = try! JSONDecoder().decode(Library.self, from: JSONSerialization.data(withJSONObject: futureBig))
+    check(String(data: try! enc.encode(fb), encoding: .utf8)!.contains("\"stamp\":9007199254740993"),
+          "…as an unknown library field too")
+
+    // 9. A new library has been through the Tidewater fold; the fold and the 1.4.2 retirement
+    // move display pins too.
+    check(DefaultPresets.makeLibrary().seenBuiltIns?.contains(DefaultPresets.tidewaterMarker) == true,
+          "makeLibrary records the Tidewater fold as done")
+    if let tideDef = DefaultPresets.builtInDefinition("Tidewater") {
+        var tl = base
+        tl.presets.append(tideDef)
+        tl.activeID = chrome
+        tl.rotation = nil
+        tl.schedule = nil
+        let gold = tl.presets.first { $0.name == "Golden Hour" }!.id
+        tl.displayStyles = [lg: DisplayPin(presetID: tideDef.id, name: "LG")]
+        let (folded, report) = DefaultPresets.foldTidewater(tl, wallpaperPick: nil)
+        let goldOn = folded.presets.first { $0.id == gold }?.effects.first { $0.kind == .oceanHorizon }?.params["live"]
+        check(folded.displayStyles?[lg]?.presetID == gold && goldOn == 1 && report.removed == ["Tidewater"],
+              "fold: a display pinned to Tidewater moves to Golden Hour, which follows the sun (in use)")
+        var tw = tl
+        tw.displayStyles = nil
+        let (folded2, _) = DefaultPresets.foldTidewater(tw, wallpaperPick: nil, wallpaperPins: [tideDef.id])
+        let gold2 = folded2.presets.first { $0.id == gold }?.effects.first { $0.kind == .oceanHorizon }?.params["live"]
+        check(gold2 == 1, "fold: a wallpaper pin to Tidewater counts as in use")
+    } else { check(false, "Tidewater's definition exists") }
+    if let sunray = DefaultPresets.builtInDefinition("Sunray"), let blue = DefaultPresets.builtInDefinition("Blue Hour") {
+        var rl = base
+        rl.presets += [sunray, blue]
+        rl.displayStyles = [lg: DisplayPin(presetID: sunray.id, name: "LG"), builtIn: DisplayPin(presetID: blue.id, name: "B")]
+        let (retired, _) = DefaultPresets.retireUntouched(rl)
+        let chrono = retired.presets.first { $0.name == "Chronometer" }?.id
+        check(retired.displayStyles?[lg]?.presetID == chrono && retired.displayStyles?[builtIn] != nil
+              && retired.displayStyles?[builtIn]?.presetID != blue.id,
+              "retirement: pins move to the replacement (Sunray → Chronometer)")
+    } else { check(false, "the retired definitions exist") }
+
     // Identity: a display's key is stable (read only; nothing is shown)
     let main = CGMainDisplayID()
     let k1 = DisplayIdentity.key(main), k2 = DisplayIdentity.key(main)

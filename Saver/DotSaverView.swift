@@ -51,6 +51,11 @@ final class DotSaverView: ScreenSaverView {
     private var displayKey: String?
     /// The view's screen has been looked at (resolveDisplay), whatever it said.
     private var displayChecked = false
+    /// The first style waits for the view's screen (so a display with a style of its own never
+    /// loads the shared one first) — at most `firstLoadWait` after the stack was built.
+    private var firstLoadPending = false
+    private var builtAt: CFTimeInterval = 0
+    private static let firstLoadWait: CFTimeInterval = 0.5
     private var fadedIn = false                // the Metal view has started fading in (fadeInIfDrawn)
 
     /// Every live instance in this host process. The host leaks instances (see
@@ -181,7 +186,12 @@ final class DotSaverView: ScreenSaverView {
         addSubview(ov, positioned: .above, relativeTo: view)
         musicOverlay = ov
         store.debug("renderer ready, store base=\(store.baseDir.path)")
-        reload(force: true)
+        if isPreview || window?.screen != nil {
+            reload(force: true)
+        } else {
+            firstLoadPending = true         // animateOneFrame loads it once the screen is known
+            builtAt = CACurrentMediaTime()
+        }
     }
 
     override func startAnimation() {
@@ -235,6 +245,7 @@ final class DotSaverView: ScreenSaverView {
         displayNumber = nil
         displayKey = nil
         displayChecked = false
+        firstLoadPending = false
         // The leaked window is hidden, so nothing else commits our layer removal
         // to the render server — without a flush WindowServer keeps the drawable
         // IOSurfaces pinned in this process forever.
@@ -478,7 +489,13 @@ final class DotSaverView: ScreenSaverView {
             // a stat of library.json, a decode only after an edit, the rotation/schedule clock.
             // Until the display is known (the host attaches the window after init), check every
             // frame, so a display with a style of its own never shows the shared one first.
-            if lastFrameAt - lastReload >= 1 || (!displayChecked && !isPreview && window?.screen != nil) {
+            if firstLoadPending {
+                // The first style, once the screen is known (or after a short wait for a view
+                // whose screen never resolves, which then plays the shared lineup).
+                guard window?.screen != nil || lastFrameAt - builtAt > Self.firstLoadWait else { return }
+                firstLoadPending = false
+                reload(force: true)
+            } else if lastFrameAt - lastReload >= 1 || (!displayChecked && !isPreview && window?.screen != nil) {
                 reload(force: false)
                 updateInterval()                                    // track battery/power changes
             }

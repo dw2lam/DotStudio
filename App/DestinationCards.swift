@@ -39,7 +39,9 @@ struct GalleryState {
                    pinnedScreensaver: !displays.pinned(id, screensaver: true).isEmpty,
                    pinnedWallpaper: !displays.pinned(id, screensaver: false).isEmpty,
                    screensaverDisplay: displays.onlyDisplay(id, in: displays.screensaver)?.shortName,
-                   wallpaperDisplay: displays.onlyDisplay(id, in: displays.wallpaper)?.shortName)
+                   wallpaperDisplay: displays.onlyDisplay(id, in: displays.wallpaper)?.shortName,
+                   lineupOffScreen: displays.lineupOffScreen,
+                   sharedWallpaperOffScreen: displays.sharedWallpaperOffScreen)
     }
 }
 
@@ -55,7 +57,14 @@ struct TileBadges: Equatable {
     /// With several displays: the one display it plays on, when that's not all of them ("LG").
     var screensaverDisplay: String? = nil
     var wallpaperDisplay: String? = nil
-    var isEmpty: Bool { !onScreensaver && !night && !wallpaper && !pinnedScreensaver && !pinnedWallpaper }
+    /// Every connected display plays a style of its own: the lineup / the shared wallpaper is on
+    /// no screen, so it isn't announced (the actions still go by `onScreensaver` / `wallpaper`).
+    var lineupOffScreen = false
+    var sharedWallpaperOffScreen = false
+    var isEmpty: Bool {
+        !((onScreensaver || night) && !lineupOffScreen) && !(wallpaper && !sharedWallpaperOffScreen)
+            && !pinnedScreensaver && !pinnedWallpaper
+    }
 }
 
 // MARK: - Row geometry
@@ -542,7 +551,7 @@ struct ScreensaverCard: View {
             playlistKey
             nightKey
             musicKey
-            if roster.isMulti { displaysKey }
+            if roster.showsControls(model.screensaverPins) { displaysKey }
             if showsSong {
                 NowPlayingKey()
                     .transition(.lift(reduceMotion: reduceMotion))
@@ -1547,7 +1556,10 @@ struct WallpaperCard: View {
 
     /// What the desktop shows: its own style, or — synced — the screensaver's right now
     /// (the slot reports WallpaperController.currentPreset).
-    private var style: Preset? { slot.styleID.flatMap(model.preset) }
+    private var style: Preset? {
+        // With every connected display on a style of its own (one display, pinned), that's it.
+        slot.styleID == nil ? nil : (state.displays.wallpaperNow ?? slot.styleID).flatMap(model.preset)
+    }
     /// Live and showing whatever the screensaver shows (WallpaperController.setFollowsScreensaver).
     private var synced: Bool { controller.followsScreensaver && style != nil }
     /// The zone's own readout: its style, or nothing (off).
@@ -1564,7 +1576,7 @@ struct WallpaperCard: View {
             // Synced, the zone's own style recedes: it's following the driver.
             styleKey
                 .opacity(1 - 0.4 * progress)
-            if roster.isMulti {
+            if roster.showsControls(slot.pins, synced ? model.screensaverPins : [:], alive: { model.preset($0) != nil }) {
                 displaysKey
                     .opacity(1 - 0.4 * progress)
             }
@@ -1676,10 +1688,16 @@ struct WallpaperCard: View {
         let (values, on) = displayKeyValues(displays: roster.displays,
                                             pins: synced ? (model.library.displayStyles ?? [:]) : slot.pins, model: model)
         return Menu {
-            DisplayStylesMenuItems(displays: roster.displays, pins: synced ? [:] : slot.pins,
-                                   note: synced ? "Following the screensaver on every display" : nil,
-                                   set: { id, d in slot.set(id, on: d) },
-                                   clearAll: { slot.clearPins() })
+            // Synced, the menu is the screensaver's per-display styles (what each display's
+            // wallpaper shows): "Same on All" and "Same as Other Displays" clear those; picking
+            // a style gives that display a wallpaper of its own (and ends sync, the others
+            // keeping what they show — WallpaperController.setDisplayStyle).
+            DisplayStylesMenuItems(displays: roster.displays, pins: synced ? model.screensaverPins : slot.pins,
+                                   note: synced ? "Following the screensaver on each display" : nil,
+                                   set: { id, d in
+                                       if synced && id == nil { model.setScreensaverStyle(nil, on: d) } else { slot.set(id, on: d) }
+                                   },
+                                   clearAll: { synced ? model.clearScreensaverPins() : slot.clearPins() })
         } label: {
             ViewThatFits(in: .horizontal) {
                 ForEach(values, id: \.self) { v in

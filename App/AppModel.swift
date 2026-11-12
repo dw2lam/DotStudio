@@ -74,7 +74,8 @@ final class AppModel: ObservableObject {
         switch store.loadLibrary() {
         case .loaded(let loaded):
             let (migrated, retirement) = AppModel.migrateReporting(
-                loaded, wallpaperPick: WallpaperController.pickedPresetID(storeDir: store.baseDir))
+                loaded, wallpaperPick: WallpaperController.pickedPresetID(storeDir: store.baseDir),
+                wallpaperPins: WallpaperController.pinnedPresetIDs(storeDir: store.baseDir))
             library = migrated
             // The wallpaper's own pick (wallpaper.json, read by WallpaperController.attach
             // after this) follows a style the 1.4.2 retirement removed.
@@ -101,6 +102,20 @@ final class AppModel: ObservableObject {
         } else {
             resolveLocation()
         }
+        // A display back under a new UUID adopts its pin; old unplugged ones are capped.
+        rosterSub = DisplayRoster.shared.$displays
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.reconcileDisplayPins($0) }
+    }
+
+    private var rosterSub: AnyCancellable?
+
+    /// The screensaver's per-display styles against the displays connected now (DisplayPins.reconcile).
+    private func reconcileDisplayPins(_ displays: [DisplayInfo]) {
+        guard let pins = library.displayStyles,
+              let next = DisplayPins.reconcile(pins, connected: displays.map { ($0.key, $0.name) }) else { return }
+        library.displayStyles = next.isEmpty ? nil : next
+        save()
     }
 
     /// Persist the library, surfacing a write failure instead of dropping it silently.
@@ -184,7 +199,7 @@ final class AppModel: ObservableObject {
     /// migrate, plus what the 1.4.2 retirement did (nil: it had already run on this library).
     /// `wallpaperPick`: the live wallpaper's own style (wallpaper.json), so the 1.4.5 Tidewater
     /// fold knows it was in use there too.
-    static func migrateReporting(_ lib: Library, wallpaperPick: UUID? = nil)
+    static func migrateReporting(_ lib: Library, wallpaperPick: UUID? = nil, wallpaperPins: [UUID] = [])
         -> (library: Library, retirement: DefaultPresets.Retirement?) {
         var lib = lib
         if lib.version < 2 {
@@ -246,7 +261,7 @@ final class AppModel: ObservableObject {
         // 1.4.5, once per library: Tidewater (Golden Hour with Follow the Sun on) folds into
         // Golden Hour. Its moves join the report, so the wallpaper's pick follows them too.
         if !(lib.seenBuiltIns ?? []).contains(DefaultPresets.tidewaterMarker) {
-            let (folded, report) = DefaultPresets.foldTidewater(lib, wallpaperPick: wallpaperPick)
+            let (folded, report) = DefaultPresets.foldTidewater(lib, wallpaperPick: wallpaperPick, wallpaperPins: wallpaperPins)
             lib = folded
             lib.seenBuiltIns = (lib.seenBuiltIns ?? []) + [DefaultPresets.tidewaterMarker]
             if !report.removed.isEmpty || !report.remapped.isEmpty || !report.kept.isEmpty {
@@ -326,7 +341,8 @@ final class AppModel: ObservableObject {
         switch store.loadLibrary() {
         case .loaded(let before):
             let (migrated, retirement) = migrateReporting(
-                before, wallpaperPick: WallpaperController.pickedPresetID(storeDir: store.baseDir))
+                before, wallpaperPick: WallpaperController.pickedPresetID(storeDir: store.baseDir),
+                wallpaperPins: WallpaperController.pinnedPresetIDs(storeDir: store.baseDir))
             result = migrated
             let old = Set(before.presets.map(\.name))
             out += "version: \(before.version) → \(result.version)\n"
@@ -520,10 +536,18 @@ final class AppModel: ObservableObject {
             if after.night == id { after.night = nil }
             applyLineup(after, persist: false)
         }
-        // A wallpaper showing exactly this style stops. Not one matching the screensaver: its
-        // style is whatever the lineup shows now (WallpaperController.libraryChanged moves it on).
-        if !WallpaperController.shared.followsScreensaver, WallpaperSlot.shared.styleID == id {
-            WallpaperSlot.shared.stop()
+        // A wallpaper showing exactly this style stops — unless a connected display still plays a
+        // wallpaper of its own: then the others move on (WallpaperPick.sharedReplacement). Not
+        // one matching the screensaver: its style is whatever the lineup shows now
+        // (WallpaperController.libraryChanged moves it on).
+        let slot = WallpaperSlot.shared
+        if !WallpaperController.shared.followsScreensaver, slot.styleID == id {
+            if let next = WallpaperPick.sharedReplacement(pins: slot.pins, library,
+                                                          connected: DisplayRoster.shared.displays.map(\.key)) {
+                slot.setShared(next)
+            } else {
+                slot.stop()
+            }
         }
         // Displays that played it as a style of their own go back to the shared pick (the
         // screensaver's pins are dropped by save()).

@@ -300,7 +300,9 @@ extension Library {
 /// Any JSON value, kept verbatim: what this build can't model but must write back unchanged
 /// (UnknownEffect).
 enum JSONValue: Codable, Equatable, Hashable {
-    case null, bool(Bool), number(Double), string(String), array([JSONValue]), object([String: JSONValue])
+    /// `integer` before `number`: an integer beyond 2^53 (an ID, a timestamp in µs) would lose
+    /// digits as a Double.
+    case null, bool(Bool), integer(Int64), number(Double), string(String), array([JSONValue]), object([String: JSONValue])
 
     init(from decoder: Decoder) throws {
         if var a = try? decoder.unkeyedContainer() {
@@ -315,6 +317,7 @@ enum JSONValue: Codable, Equatable, Hashable {
             let v = try decoder.singleValueContainer()
             if v.decodeNil() { self = .null }
             else if let b = try? v.decode(Bool.self) { self = .bool(b) }
+            else if let i = try? v.decode(Int64.self) { self = .integer(i) }
             else if let n = try? v.decode(Double.self) { self = .number(n) }
             else { self = .string(try v.decode(String.self)) }
         }
@@ -332,6 +335,8 @@ enum JSONValue: Codable, Equatable, Hashable {
             var c = encoder.singleValueContainer(); try c.encodeNil()
         case .bool(let b):
             var c = encoder.singleValueContainer(); try c.encode(b)
+        case .integer(let i):
+            var c = encoder.singleValueContainer(); try c.encode(i)
         case .number(let n):
             var c = encoder.singleValueContainer(); try c.encode(n)
         case .string(let s):

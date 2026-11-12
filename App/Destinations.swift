@@ -42,8 +42,11 @@ extension AppModel {
 
     /// What the screensaver would show this very moment (same answer as the saver; music is
     /// presented over it, never instead of it).
+    /// With every connected display on a style of its own (one display, pinned), that style
+    /// (Playback.shownPreset).
     var nowPlayingID: UUID? {
-        library.presets.isEmpty ? nil : Playback.effectivePreset(in: library, now: Date()).id
+        library.presets.isEmpty ? nil
+            : Playback.shownPreset(in: library, now: Date(), displays: DisplayRoster.shared.displays.map(\.key)).id
     }
 
     var isNightNow: Bool { Playback.isNight(library) }
@@ -81,6 +84,12 @@ extension AppModel {
 
     /// Play only this style (the night pick, if any, stays).
     func playAsScreensaver(_ id: UUID) {
+        // One display connected, with a style of its own: playing a style means there.
+        let roster = DisplayRoster.shared.displays
+        if roster.count == 1, library.displayStyles?[roster[0].key] != nil {
+            library.displayStyles?[roster[0].key] = nil
+            if library.displayStyles?.isEmpty == true { library.displayStyles = nil }
+        }
         var l = screensaverLineup
         l.playlist = [id]
         if l.night == id { l.night = nil }

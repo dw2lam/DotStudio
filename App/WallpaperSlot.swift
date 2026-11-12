@@ -64,7 +64,17 @@ final class WallpaperSlot: ObservableObject {
         hookUp()
     }
 
-    func set(_ id: UUID) { Breadcrumbs.note("wallpaper start \(id.uuidString.prefix(8))"); backend.set(id); refresh() }
+    func set(_ id: UUID) {
+        Breadcrumbs.note("wallpaper start \(id.uuidString.prefix(8))")
+        // One display connected, with a style of its own: setting a wallpaper means there.
+        let roster = DisplayRoster.shared.displays
+        if roster.count == 1, backend.pins()[roster[0].key] != nil { backend.setPin(roster[0].key, nil) }
+        backend.set(id)
+        refresh()
+    }
+
+    /// The shared pick moves (a deleted style's replacement), every display's own style kept.
+    func setShared(_ id: UUID) { backend.set(id); refresh() }
     func stop() { Breadcrumbs.note("wallpaper stop"); backend.stop(); refresh() }
     func toggle(_ id: UUID) { styleID == id ? stop() : set(id) }
 

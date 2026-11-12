@@ -181,7 +181,35 @@ enum WallpaperPick {
         return shared(settings, lib, now: now)
     }
 
-    /// The pins whose style still exists (a deleted style's pin is dropped on the next save).
+    /// Leaving "Same as Screensaver" by giving one display a wallpaper of its own: nothing else on
+    /// screen changes. The shared pick becomes what the lineup shows now, every display whose
+    /// screensaver has a style of its own keeps it as its wallpaper (replacing wallpaper pins left
+    /// from before syncing, which weren't on screen), and then `display` gets `pin`. Pure.
+    static func leavingSync(_ settings: WallpaperSettings, _ lib: Library, now: Date = Date(),
+                            pin: DisplayPin, display: String) -> WallpaperSettings {
+        var s = settings
+        if let shown = shared(settings, lib, now: now) { s.presetID = shown.id }
+        s.followsScreensaver = false
+        let ids = Set(lib.presets.map(\.id))
+        var pins = (lib.displayStyles ?? [:]).filter { ids.contains($0.value.presetID) }
+        pins[display] = pin
+        s.displayStyles = pins
+        return s
+    }
+
+    /// The shared pick was just deleted (`lib`: after the delete). While a connected display still
+    /// plays a wallpaper of its own, the others move to the screensaver's active style (else to
+    /// that surviving style) rather than the whole wallpaper stopping. nil = nothing survives:
+    /// stop, as before. Pure.
+    static func sharedReplacement(pins: [String: DisplayPin], _ lib: Library, connected: [String]) -> UUID? {
+        let ids = Set(lib.presets.map(\.id))
+        let survivors = connected.compactMap { pins[$0]?.presetID }.filter(ids.contains)
+        guard let first = survivors.first else { return nil }
+        return lib.activeID.flatMap { ids.contains($0) ? $0 : nil } ?? first
+    }
+
+    /// The pins whose style still exists (WallpaperController drops a deleted style's pins with
+    /// it: forgetDisplayStyles).
     static func pruned(_ settings: WallpaperSettings, _ lib: Library) -> WallpaperSettings {
         var s = settings
         let ids = Set(lib.presets.map(\.id))
