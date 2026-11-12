@@ -221,33 +221,107 @@ extension Toolbox {
         let variants = S.arr(S.str("variant", enum: ["day", "golden", "night", "rain"]), "Lighting/weather variants (default all four).", min: 1, max: 4)
         return [
             Tool(name: "film_status", title: "Film status",
-                 description: "Can this Mac make film scenes (photoreal, ray-traced Blender renders played as seamless video loops)? Reports Blender (installed? version), whether the film engine/toolkit is pulled, the GPU, and recent film jobs. Film scenes are big: renders take tens of minutes to hours and clips are hundreds of MB — tell the user before starting one.",
+                 description: "START HERE for film scenes (photoreal, ray-traced Blender renders played as seamless video loops). Reports Blender (installed? version — with install steps for the user if it's missing or too old; DotStudio never installs it), whether the film engine/toolkit is pulled, the GPU, recent film jobs, and the steps. Film scenes are big: stills take about a minute each, a loop hours, and clips are 150–250 MB per variant — tell the user before starting.",
                  input: S.obj([:]), readOnly: true, idempotent: true) { [unowned self] _ in
                 let s = self.film.status()
                 let jobs = FilmJobs.all(self.store).prefix(10).map { j -> JSONObject in
                     ["id": j.id, "kind": j.kind, "state": FilmJobs.state(self.store, j).0.rawValue]
                 }
-                var text = "Blender: \(s.blenderPath.map { "\($0) (\(s.blenderVersion ?? "version unknown"))" } ?? "not installed (blender.org; DotStudio looks in /Applications)"). "
+                let found = s.blenderPath.map { ($0, s.blenderVersion) }
+                let advice = FilmPaths.installAdvice(found: found)
+                var text = "Blender: \(s.blenderPath.map { "\($0) (\(s.blenderVersion ?? "version unknown"))" } ?? "not installed"). "
                 text += "Film engine: \(s.toolkitPulled ? "pulled v\(s.toolkitVersion ?? "?")" : "not pulled (pull_engine \"film\")"). GPU: \(s.gpu)."
+                if let advice { text += "\n" + advice }
                 if !s.notes.isEmpty { text += "\n" + s.notes.joined(separator: "\n") }
+                text += "\nSteps: list_film_templates → create_film_scene → render_film_stills (approve) → render_film_loop → film_job_status → create_style."
                 return .ok(text, ["available": self.film.isAvailable, "blender": s.blenderPath ?? NSNull(), "blenderVersion": s.blenderVersion ?? NSNull(),
+                                  "blenderReady": advice == nil, "installAdvice": advice ?? NSNull(), "minimumBlender": FilmPaths.minimumBlender,
                                   "toolkitPulled": s.toolkitPulled, "gpu": s.gpu, "jobs": Array(jobs)])
             },
-            Tool(name: "create_film_scene", title: "Create a film scene",
-                 description: "Save a film scene draft from a scene spec in the film toolkit's format (read_guide engines/film for the schema: camera, set, assets (CC0), lighting, motion that loops). Validates the spec; returns a draft id for render_film_stills → render_film_loop. Nothing renders yet.",
-                 input: S.obj(["spec": ["type": "object", "description": "The toolkit's scene spec (engines/film)."],
-                               "name": S.str("Name for the scene.", max: 60)], required: ["spec"])) { [unowned self] a in
+            Tool(name: "list_film_templates", title: "List film templates",
+                 description: "The film scenes to start from (Commute — a train interior with an original penguin dozing in a suit — is the first): their variants (day/golden/night/rain), cameras, loop length, editable params with defaults, and the full starting spec. Film scenes are built by editing a template's spec, not from scratch.",
+                 input: S.obj([:]), readOnly: true, idempotent: true) { [unowned self] _ in
                 guard self.film.isAvailable else { throw ToolError(UnavailableFilmToolkit.message) }
-                var spec = a["spec"] as! JSONObject
-                if let n = a["name"] as? String { spec["name"] = n }
-                let r = self.film.validate(spec: spec)
-                guard r.ok else { return self.reportResult(r, source: JSON.string(spec, pretty: true), installed: nil) }
+                let t = self.film.templates()
+                return .ok(t.isEmpty ? "No templates (pull_engine \"film\" first)." : t.map { "- \($0["id"] ?? "?"): \($0["summary"] ?? "")" }.joined(separator: "\n"),
+                           ["templates": t])
+            },
+            Tool(name: "create_film_scene", title: "Create a film scene",
+                 description: "Start a film scene draft from a template (list_film_templates), with your edits: params (the template's own, e.g. colours), variants, loop length, and the LOOK — bloom, halation (warm red-orange edge glow, like film stock) and live film grain (added by DotStudio at playback, never baked, so it doesn't loop; the scene package carries it as the default). Or pass a full `spec` in the toolkit's format. Validates; returns the draft id and its spec. Nothing renders yet. Read read_guide(\"engines/film\") first (budgets, CC0-only assets, loop rules, original characters only).",
+                 input: S.obj(["template": S.str("Template id (list_film_templates), e.g. \"commute\"."),
+                               "spec": ["type": "object", "description": "A full spec instead of a template (toolkit format)."],
+                               "name": S.str("Name for the scene.", max: 60),
+                               "params": ["type": "object", "description": "Template params to change (merged into spec.params)."],
+                               "variants": variants,
+                               "loop_seconds": S.num("Loop length; whole-number periods of every motion must fit it (default: the template's).", min: 8, max: 120),
+                               "look": FilmLook.schema,
+                               "scene_files": ["type": "object", "maxProperties": 12,
+                                               "description": "A NEW set instead of a template: the toolkit scene module's files by name — scene.py (ASSETS, VARIANTS, CAMERAS, build(ctx); see engines/film and the toolkit guide), assets.json (CC0 refs only), optional helper .py modules. Use with `spec` whose `scene` is \"local\".",
+                                               "additionalProperties": ["type": "string", "maxLength": 400_000]]])) { [unowned self] a in
+                guard self.film.isAvailable else { throw ToolError(UnavailableFilmToolkit.message) }
+                var spec: JSONObject
+                if let s = a["spec"] as? JSONObject {
+                    if a["template"] != nil { throw ToolError("Pass `template` or `spec`, not both.") }
+                    spec = s
+                } else if let tid = a["template"] as? String {
+                    guard let t = self.film.templates().first(where: { $0["id"] as? String == tid }), let s = t["spec"] as? JSONObject else {
+                        throw ToolError("No film template \"\(tid)\". list_film_templates shows them.")
+                    }
+                    spec = s
+                } else { throw ToolError("Pass `template` (list_film_templates) or a full `spec`.") }
+                spec = self.editFilmSpec(spec, a)
                 let id = "film-" + String(UUID().uuidString.prefix(8)).lowercased()
-                let dir = FilmPaths.draftsDir(self.store).appendingPathComponent(id)
-                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                try JSON.data(spec, pretty: true).write(to: dir.appendingPathComponent("spec.json"))
-                return .ok("Saved film draft \(id). Next: render_film_stills(draft: \"\(id)\") and show the stills to the user before animating.",
-                           ["draft": id, "warnings": r.warnings])
+                if let files = a["scene_files"] as? JSONObject {
+                    guard files["scene.py"] is String else { throw ToolError("scene_files needs scene.py.") }
+                    let dir = FilmPaths.draftsDir(self.store).appendingPathComponent(id).appendingPathComponent("scene")
+                    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                    for (name, v) in files {
+                        guard name.range(of: "^[a-z][a-z0-9_]{0,40}\\.(py|json)$", options: .regularExpression) != nil, let text = v as? String else {
+                            try? FileManager.default.removeItem(at: dir.deletingLastPathComponent())
+                            throw ToolError("scene_files: \"\(name)\" isn't allowed (lowercase name.py / name.json, no folders).")
+                        }
+                        try Data(text.utf8).write(to: dir.appendingPathComponent(name))
+                    }
+                    spec["scene"] = "local"
+                    spec["scene_dir"] = dir.path
+                }
+                let draftDir = FilmPaths.draftsDir(self.store).appendingPathComponent(id)
+                do {
+                    let res = try self.saveFilmDraft(spec, id: id, isNew: true)
+                    if res.isError { try? FileManager.default.removeItem(at: draftDir) }   // nothing half-made stays
+                    return res
+                } catch {
+                    try? FileManager.default.removeItem(at: draftDir)
+                    throw error
+                }
+            },
+            Tool(name: "get_film_scene", title: "Get a film scene draft",
+                 description: "A film draft's current spec (to read before editing it), and its jobs.",
+                 input: S.obj(["draft": S.str("Draft id.", pattern: "^film-[0-9a-f]{8}$")], required: ["draft"]),
+                 readOnly: true, idempotent: true) { [unowned self] a in
+                let draft = a["draft"] as! String
+                let spec = JSON.parse(try Data(contentsOf: try self.draftSpecURL(draft))) as? JSONObject ?? [:]
+                let jobs = FilmJobs.all(self.store).filter { $0.draft == draft }.map { j -> JSONObject in
+                    ["id": j.id, "kind": j.kind, "state": FilmJobs.state(self.store, j).0.rawValue]
+                }
+                return .ok("Film draft \(draft).", ["draft": draft, "spec": spec, "jobs": jobs])
+            },
+            Tool(name: "update_film_scene", title: "Edit a film scene draft",
+                 description: "Edit a film draft after looking at its stills: params, variants, loop length, look (bloom/halation/grain), or `spec_patch` (deep-merged into the spec; null removes a key). Re-validated; render_film_stills again to check.",
+                 input: S.obj(["draft": S.str("Draft id.", pattern: "^film-[0-9a-f]{8}$"),
+                               "name": S.str("New name.", max: 60),
+                               "params": ["type": "object", "description": "Template params to change."],
+                               "variants": variants,
+                               "loop_seconds": S.num("Loop length.", min: 8, max: 120),
+                               "look": FilmLook.schema,
+                               "spec_patch": ["type": "object", "description": "Deep-merged into the spec."]],
+                              required: ["draft"])) { [unowned self] a in
+                guard self.film.isAvailable else { throw ToolError(UnavailableFilmToolkit.message) }
+                let draft = a["draft"] as! String
+                var spec = JSON.parse(try Data(contentsOf: try self.draftSpecURL(draft))) as? JSONObject ?? [:]
+                if let p = a["spec_patch"] as? JSONObject { spec = Self.deepMerge(spec, p) }
+                spec = self.editFilmSpec(spec, a)
+                return try self.saveFilmDraft(spec, id: draft)
             },
             Tool(name: "render_film_stills", title: "Render film stills",
                  description: "Ray-traced (Cycles) stills of a film draft, one per variant, so the user can approve the base scene BEFORE the long loop render. Runs as a background job; waits up to `wait_seconds` (default 60) and returns the images if done, else the job id for film_job_status.",
@@ -260,7 +334,7 @@ extension Toolbox {
                 guard self.film.isAvailable else { throw ToolError(UnavailableFilmToolkit.message) }
                 let draft = a["draft"] as! String
                 let spec = try self.draftSpecURL(draft)
-                let vs = a["variants"] as? [String] ?? ["day", "golden", "night", "rain"]
+                let vs = a["variants"] as? [String] ?? self.draftVariants(spec)
                 let job = try FilmJobs.start(store: self.store, kind: "stills", draft: draft, variants: vs) { out in
                     try self.film.stillsCommand(spec: spec, outDir: out, variants: vs,
                                                 width: a["width"] as? Int ?? 1280, height: a["height"] as? Int ?? 720,
@@ -274,7 +348,7 @@ extension Toolbox {
             Tool(name: "render_film_loop", title: "Render a film loop",
                  description: "Start the long render: a seamless video loop per variant (Blender headless, nice'd, in the background — it keeps going if this chat ends). Returns a job id at once; poll film_job_status (progress, ETA, log tail). When it finishes, the clips are packaged as a film scene and installed; its id goes into create_style {\"kind\": \"custom\", \"scene\": id}. Confirm with the user first: it can take hours and hundreds of MB.",
                  input: S.obj(["draft": S.str("Draft id.", pattern: "^film-[0-9a-f]{8}$"), "variants": variants,
-                               "seconds": S.num("Loop length (default 20).", min: 4, max: 120),
+                               "seconds": S.num("Loop length (default: the draft's loop.seconds).", min: 4, max: 120),
                                "fps": ["type": "integer", "enum": [24, 30], "description": "Default 24."],
                                "width": S.num("Default 3840.", min: 640, max: 7680, integer: true),
                                "height": S.num("Default 2160.", min: 360, max: 4320, integer: true),
@@ -283,10 +357,10 @@ extension Toolbox {
                 guard self.film.isAvailable else { throw ToolError(UnavailableFilmToolkit.message) }
                 let draft = a["draft"] as! String
                 let spec = try self.draftSpecURL(draft)
-                let vs = a["variants"] as? [String] ?? ["day", "golden", "night", "rain"]
+                let vs = a["variants"] as? [String] ?? self.draftVariants(spec)
                 let job = try FilmJobs.start(store: self.store, kind: "loop", draft: draft, variants: vs) { out in
                     try self.film.loopCommand(spec: spec, outDir: out, variants: vs,
-                                              seconds: (a["seconds"] as? NSNumber)?.doubleValue ?? 20, fps: a["fps"] as? Int ?? 24,
+                                              seconds: (a["seconds"] as? NSNumber)?.doubleValue ?? self.draftLoopSeconds(spec), fps: a["fps"] as? Int ?? 24,
                                               width: a["width"] as? Int ?? 3840, height: a["height"] as? Int ?? 2160,
                                               quality: a["quality"] as? String ?? "standard")
                 }
@@ -312,6 +386,50 @@ extension Toolbox {
                 return .ok("Cancelled \(job.id).", ["job": job.id, "state": "cancelled"])
             },
         ]
+    }
+
+    /// The edits create/update_film_scene share: name, params, variants, loop length, look.
+    func editFilmSpec(_ spec: JSONObject, _ a: JSONObject) -> JSONObject {
+        var s = spec
+        if let n = a["name"] as? String { s["name"] = n }
+        if let p = a["params"] as? JSONObject { s["params"] = Self.deepMerge(s["params"] as? JSONObject ?? [:], p) }
+        if let v = a["variants"] as? [String] {
+            s["variants"] = v
+            if let cur = s["variant"] as? String, !v.contains(cur) { s["variant"] = v[0] }
+        }
+        if let secs = (a["loop_seconds"] as? NSNumber)?.doubleValue {
+            var loop = s["loop"] as? JSONObject ?? ["fps": 24]
+            loop["seconds"] = secs
+            s["loop"] = loop
+        }
+        s["look"] = FilmLook.merged(s["look"], a["look"])
+        return s
+    }
+
+    func saveFilmDraft(_ spec: JSONObject, id: String, isNew: Bool = false) throws -> ToolResult {
+        let r = film.validate(spec: spec)
+        guard r.ok else { return reportResult(r, source: JSON.string(spec, pretty: true), installed: nil) }
+        let dir = FilmPaths.draftsDir(store).appendingPathComponent(id)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try JSON.data(spec, pretty: true).write(to: dir.appendingPathComponent("spec.json"), options: .atomic)
+        let look = spec["look"] as? JSONObject ?? [:]
+        let lookText = ["bloom", "halation", "grain"].map { "\($0) \(Schema.fmt((look[$0] as? NSNumber)?.doubleValue ?? 0))" }.joined(separator: ", ")
+        return .ok("\(isNew ? "Saved" : "Updated") film draft \(id) (\(spec["scene"] as? String ?? "custom"), look: \(lookText)). Next: render_film_stills(draft: \"\(id)\") and show the stills to the user before animating.",
+                   ["draft": id, "spec": spec, "warnings": r.warnings])
+    }
+
+    func draftSpec(_ url: URL) -> JSONObject { (try? Data(contentsOf: url)).flatMap { JSON.parse($0) as? JSONObject } ?? [:] }
+    func draftVariants(_ url: URL) -> [String] { draftSpec(url)["variants"] as? [String] ?? ["day", "golden", "night", "rain"] }
+    func draftLoopSeconds(_ url: URL) -> Double { ((draftSpec(url)["loop"] as? JSONObject)?["seconds"] as? NSNumber)?.doubleValue ?? 48 }
+
+    static func deepMerge(_ base: JSONObject, _ patch: JSONObject) -> JSONObject {
+        var out = base
+        for (k, v) in patch {
+            if v is NSNull { out[k] = nil }
+            else if let pv = v as? JSONObject, let bv = out[k] as? JSONObject { out[k] = deepMerge(bv, pv) }
+            else { out[k] = v }
+        }
+        return out
     }
 
     func draftSpecURL(_ draft: String) throws -> URL {

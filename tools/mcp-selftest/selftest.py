@@ -24,6 +24,7 @@ def env_for(store, **extra):
     e = dict(os.environ)
     e["DOTSTUDIO_STORE_DIR"] = store
     e["DOTSTUDIO_MCP_FAKE_DISPLAYS"] = "DISPLAY-A=Built-in Retina Display,DISPLAY-B=LG HDR 4K"
+    e["DOTSTUDIO_MCP_FAKE_BLENDER"] = "/fake/Blender"   # never look at (or launch) a real Blender
     e.update({k: str(v) for k, v in extra.items()})
     return e
 
@@ -149,7 +150,7 @@ expected = ["get_started", "list_guides", "read_guide", "list_scenes", "describe
             "create_style", "update_style", "duplicate_style", "delete_style", "preview_style", "benchmark_style",
             "export_style", "import_style", "list_displays", "set_screensaver", "set_wallpaper", "list_engines",
             "pull_engine", "list_custom_scenes", "validate_custom_scene", "create_custom_scene", "update_custom_scene",
-            "film_status", "create_film_scene", "render_film_stills", "render_film_loop", "film_job_status", "cancel_film_job"]
+            "film_status", "list_film_templates", "create_film_scene", "get_film_scene", "update_film_scene", "render_film_stills", "render_film_loop", "film_job_status", "cancel_film_job"]
 check(sorted(tnames) == sorted(expected), f"tools/list has the {len(expected)} tools")
 check(all(t["inputSchema"]["type"] == "object" and t["inputSchema"].get("additionalProperties") is False
           and len(t["description"]) > 40 and "annotations" in t for t in tools), "every tool: strict object schema, description, annotations")
@@ -400,15 +401,47 @@ err(c.call("create_style", {"name": "Lake", "effects": [{"kind": "custom", "scen
 err(c.call("create_style", {"name": "Lake", "effects": [{"kind": "custom", "scene": "nope-12345678"}]}), "unknown custom scene", "no installed")
 # film
 err(c.call("render_film_stills", {"draft": "film-00000000"}), "stills for a missing draft", "no film draft")
-res = c.call("create_film_scene", {"spec": {"scene": {"set": "cafe-window"}}, "name": "Rainy Café"})
-ok(res, "create_film_scene")
+nb = Client(F, DOTSTUDIO_MCP_TEST_FAKES=1, DOTSTUDIO_MCP_FAKE_BLENDER="none")
+nb.init()
+st = nb.call("film_status")
+check(st["structuredContent"]["blenderReady"] is False and "blender.org" in st["structuredContent"]["installAdvice"]
+      and "never installs" in text(st), "no Blender → install steps for the user, never installs it")
+nb.close()
+check(c.call("film_status")["structuredContent"]["blenderReady"] is True, "fake Blender 5.1 is ready")
+res = c.call("list_film_templates")
+ok(res, "list_film_templates")
+check(res["structuredContent"]["templates"][0]["id"] == "commute", "Commute is the first template")
+err(c.call("create_film_scene", {"template": "nope"}), "unknown template", "list_film_templates")
+err(c.call("create_film_scene", {}), "template or spec needed", "template")
+err(c.call("create_film_scene", {"template": "commute", "look": {"halation": 3}}), "look out of range", "maximum")
+res = c.call("create_film_scene", {"template": "commute", "name": "Rainy Commute", "variants": ["night", "rain"],
+                                   "params": {"sway": 0.6}, "look": {"halation": 0.3, "grain": 0.25}})
+ok(res, "create_film_scene from a template with a look")
 draft = res["structuredContent"]["draft"]
+spec = res["structuredContent"]["spec"]
+check(spec["look"] == {"bloom": 0.25, "halation": 0.3, "grain": 0.25} and spec["params"]["sway"] == 0.6
+      and spec["params"]["penguin_color"] == [0.0, 0.30, 0.47] and spec["variants"] == ["night", "rain"], "look + params merged into the template spec")
+res = c.call("update_film_scene", {"draft": draft, "look": {"bloom": 0.1}, "spec_patch": {"render": {"samples": 128}}, "loop_seconds": 24})
+ok(res, "update_film_scene")
+sp = c.call("get_film_scene", {"draft": draft})["structuredContent"]["spec"]
+check(sp["look"]["bloom"] == 0.1 and sp["look"]["halation"] == 0.3 and sp["render"]["samples"] == 128 and sp["render"]["engine"] == "cycles"
+      and sp["loop"] == {"seconds": 24, "fps": 24}, "get_film_scene: edits deep-merged")
+err(c.call("create_film_scene", {"spec": {"scene": "warehouse"}}), "spec for a scene the toolkit lacks", "no scene module")
+before = set(os.listdir(os.path.join(F, "film")))
+err(c.call("create_film_scene", {"spec": {"scene": "local"}, "scene_files": {"scene.py": "ASSETS = []\n"}}), "new set without build(ctx)", "build(ctx)")
+err(c.call("create_film_scene", {"spec": {"scene": "local"}, "scene_files": {"scene.py": "x", "../evil.py": "x"}}), "scene file names checked", "isn't allowed")
+check(set(os.listdir(os.path.join(F, "film"))) == before, "failed drafts leave nothing behind")
+res = c.call("create_film_scene", {"spec": {"scene": "local", "loop": {"seconds": 24, "fps": 24}}, "name": "Café",
+                                   "scene_files": {"scene.py": "ASSETS = ['ph:hdri:x']\nVARIANTS = ['night']\nCAMERAS = ['wide']\ndef build(ctx):\n    return {'cameras': {}}\n",
+                                                   "assets.json": "{}"}})
+ok(res, "create_film_scene with a new set (scene_files)")
+check(os.path.exists(os.path.join(res["structuredContent"]["spec"]["scene_dir"], "scene.py")), "scene module stored in the draft")
 err(c.call("render_film_stills", {"draft": draft}), "stills need the film engine", "pull")
 ok(c.call("pull_engine", {"id": "film"}), "pull_engine film")
 check(c.call("film_status")["structuredContent"]["toolkitPulled"] is True, "film_status sees the toolkit")
 t0 = time.time()
-res = c.call("render_film_stills", {"draft": draft, "variants": ["day", "rain"], "wait_seconds": 30})
-ok(res, "render_film_stills")
+res = c.call("render_film_stills", {"draft": draft, "wait_seconds": 30})
+ok(res, "render_film_stills (the draft's own variants)")
 imgs = [cc for cc in res["content"] if cc["type"] == "image"]
 check(res["structuredContent"]["state"] == "done" and len(imgs) == 2 and png_ok(base64.b64decode(imgs[0]["data"]))[0], "stills returned as PNG images")
 res = c.call("render_film_loop", {"draft": draft, "variants": ["day", "night"], "seconds": 8})
@@ -425,6 +458,10 @@ ok(res, "film_job_status after the server died")
 check(res["structuredContent"]["state"] == "done" and res["structuredContent"].get("scene", "").startswith(draft), "loop finished without the server and installed a film scene")
 fscene = res["structuredContent"].get("scene", "")
 check(os.path.exists(os.path.join(F, "scenes", fscene, "clips", "night.mov")), "film package has its clips")
+man = json.load(open(os.path.join(F, "scenes", fscene, "scene.json")))
+check(man["engine"]["id"] == "film" and man["look"]["grain"] == 0.25 and man["look"]["bloom"] == 0.1
+      and man["params"][0]["key"] == "grain" and man["params"][0]["default"] == 0.25, "film package carries the look and a default grain")
+ok(c.call("create_style", {"name": "Rainy Commute", "effects": [{"kind": "custom", "scene": fscene, "params": {"grain": 0.15}}]}), "create_style with the film scene")
 check(job in [j["id"] for j in c.call("film_job_status")["structuredContent"]["jobs"]], "film_job_status lists jobs")
 c.close()
 c = Client(F, DOTSTUDIO_MCP_TEST_FAKES=1, DOTSTUDIO_MCP_FAKE_RENDER_SECONDS=60)

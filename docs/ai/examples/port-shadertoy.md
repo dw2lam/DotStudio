@@ -48,5 +48,5 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 ```text
 Compiles.
 GPU ≈ 2.50 ms per frame at 5K.
-Installed as slow-tide-ae8bdbb2. Use it: create_style(effects: [{"kind": "custom", "scene": "slow-tide-ae8bdbb2"}]).
+Installed as slow-tide-cde85544. Use it: create_style(effects: [{"kind": "custom", "scene": "slow-tide-cde85544"}]).
 ```

@@ -98,7 +98,7 @@ resulting style JSON and its previews.
 | [Match my wallpaper](examples/match-my-wallpaper.md) | A scene + a look, weather and time of day |
 | [A pixel cat on an LED panel](examples/pixel-cat-led.md) | A custom scene on the `cells` engine (scene-engine update) |
 | [Port a Shadertoy I wrote](examples/port-shadertoy.md) | Pulling the `shadertoy` engine, licence in the manifest |
-| [A photoreal rainy café window](examples/rainy-cafe-film.md) | Film scenes: stills for approval, a background loop render, install |
+| [A photoreal rainy café window](examples/rainy-cafe-film.md) | Film scenes: Blender check, a new set with CC0 assets, the look (bloom, halation, live grain), stills for approval, a background loop render, install |
 
 ## Your own guides
 
@@ -117,7 +117,7 @@ apply.
 | Seeing it | `preview_style` (PNG, or a contact sheet over time), `benchmark_style` (GPU ms at 5K) |
 | What plays | `list_displays`, `set_screensaver`, `set_wallpaper` (per display too) — these change your Mac |
 | Custom scenes | `list_engines`, `pull_engine`, `create_custom_scene`, `update_custom_scene`, `validate_custom_scene`, `list_custom_scenes` |
-| Film scenes | `film_status`, `create_film_scene`, `render_film_stills`, `render_film_loop`, `film_job_status`, `cancel_film_job` |
+| Film scenes | `film_status`, `list_film_templates`, `create_film_scene` (template + params + look: bloom, halation, live grain — or a new set), `get_film_scene`, `update_film_scene`, `render_film_stills`, `render_film_loop`, `film_job_status`, `cancel_film_job` |
 
 Custom and film scenes need DotStudio's scene-engine update and the film engine; until then those tools say so.
 

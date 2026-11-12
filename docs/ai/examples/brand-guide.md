@@ -30,12 +30,12 @@ Secondary: Fog #C9D3DD. Tone: calm, precise, maritime. Never use the orange as a
 → create_style({"name": "Northwind Tide", "fps": 24, "effects": [{"kind": "meshGradient", "params": {"speed": 0.25, "scale": 1.6, "hue": 0.12, "grain": 0.06}, "colorA": {"r": 0.055, "g": 0.106, "b": 0.2}, "colorB": {"r": 0.949, "g": 0.42, "b": 0.227}}]})
 ```
 ```text
-Created “Northwind Tide” (47F631E4-5849-48DB-82A7-191A4D79C3A3). DotStudio isn't running: library.json was updated; the app shows it next time it opens.
-Next: preview_style(style: "47F631E4-5849-48DB-82A7-191A4D79C3A3") — and a contact sheet over time (frames: 6) to check the motion.
+Created “Northwind Tide” (B780A858-0AA0-4D53-B4F1-1100EBED2077). DotStudio isn't running: library.json was updated; the app shows it next time it opens.
+Next: preview_style(style: "B780A858-0AA0-4D53-B4F1-1100EBED2077") — and a contact sheet over time (frames: 6) to check the motion.
 ```
 
 ```
-→ preview_style({"style": "47F631E4-5849-48DB-82A7-191A4D79C3A3", "t": 30, "width": 1280, "height": 800})
+→ preview_style({"style": "B780A858-0AA0-4D53-B4F1-1100EBED2077", "t": 30, "width": 1280, "height": 800})
 ```
 ```text
 “Northwind Tide” at t = 30.0 s.
@@ -46,14 +46,14 @@ Next: preview_style(style: "47F631E4-5849-48DB-82A7-191A4D79C3A3") — and a con
 **Assistant:** The orange reads a little strong for “sparingly” — I'll take it down toward the navy and soften the field so the orange is a glow, not a wall.
 
 ```
-→ update_style({"style": "47F631E4-5849-48DB-82A7-191A4D79C3A3", "patch": [{"index": 0, "params": {"hue": 0.05, "scale": 1.9}, "colorB": {"r": 0.5, "g": 0.29, "b": 0.24}}]})
+→ update_style({"style": "B780A858-0AA0-4D53-B4F1-1100EBED2077", "patch": [{"index": 0, "params": {"hue": 0.05, "scale": 1.9}, "colorB": {"r": 0.5, "g": 0.29, "b": 0.24}}]})
 ```
 ```text
 Updated “Northwind Tide”. DotStudio isn't running: library.json was updated; the app shows it next time it opens.
 ```
 
 ```
-→ preview_style({"style": "47F631E4-5849-48DB-82A7-191A4D79C3A3", "t": 30, "width": 1280, "height": 800})
+→ preview_style({"style": "B780A858-0AA0-4D53-B4F1-1100EBED2077", "t": 30, "width": 1280, "height": 800})
 ```
 ```text
 “Northwind Tide” at t = 30.0 s.
@@ -62,7 +62,7 @@ Updated “Northwind Tide”. DotStudio isn't running: library.json was updated;
 ![brand-guide-2.jpg](img/brand-guide-2.jpg)
 
 ```
-→ export_style({"style": "47F631E4-5849-48DB-82A7-191A4D79C3A3", "path": "/var/folders/zl/ljs1svhj5px24269ln0rxvgm0000gn/T//ai-mcp/examples/Northwind Tide.dotstudiopreset"})
+→ export_style({"style": "B780A858-0AA0-4D53-B4F1-1100EBED2077", "path": "/var/folders/zl/ljs1svhj5px24269ln0rxvgm0000gn/T//ai-mcp/examples/Northwind Tide.dotstudiopreset"})
 ```
 ```text
 Exported “Northwind Tide” to /var/folders/zl/ljs1svhj5px24269ln0rxvgm0000gn/T//ai-mcp/examples/Northwind Tide.dotstudiopreset.
@@ -82,7 +82,7 @@ Resulting style (as stored in `library.json`):
         "g": 0.106,
         "a": 1
       },
-      "id": "9AEB016D-F241-4329-82BB-5BBABA996866",
+      "id": "099E1545-373C-43C1-9461-620281D8E00C",
       "colorB": {
         "r": 0.5,
         "b": 0.24,
@@ -99,7 +99,7 @@ Resulting style (as stored in `library.json`):
       }
     }
   ],
-  "id": "47F631E4-5849-48DB-82A7-191A4D79C3A3",
+  "id": "B780A858-0AA0-4D53-B4F1-1100EBED2077",
   "fps": 24,
   "name": "Northwind Tide"
 }

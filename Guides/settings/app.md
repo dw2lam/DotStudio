@@ -134,6 +134,11 @@ When you design a style, leave room for the corner card (bottom left by default)
 - **Weather** (`weather` menu on Ocean Horizon, Shallows, Meadow): 0 = Live, then Clear, Partly Cloudy, Overcast, Fog, Rain, Storm, Snow. Live needs Settings > Weather > Live weather on in the app; the app fetches Open-Meteo every 20 minutes for the approximate location (about 10 km) and stale readings fade back to clear. Weather costs 60-75 % more GPU on Meadow.
 - Clocks follow the local time; StandBy's Night Mode and the night style follow the real sunset.
 
+## Custom and film scenes
+
+- Custom scenes (`create_custom_scene`) are small shader packages in `<store>/scenes/`; styles use them as `{"kind": "custom", "scene": "<id>"}` like any scene. They need DotStudio's scene-engine update.
+- Film scenes are photoreal video loops rendered in Blender (`read_guide engines/film`). They are BIG: Blender itself (about 1 GB, installed by the user), the film engine pack, about a minute per approval still, hours per loop, and 150–250 MB of video per variant (0.6–1 GB for all four). Always tell the user the time and disk cost before rendering, render only the variants they want, and never start a render they haven't agreed to. Playback is cheap (hardware video decode), so a finished film scene suits the live wallpaper well.
+
 ## Sharing
 
 A `.dotstudiopreset` file is JSON (Shared/AI/PresetShare.swift, `PresetExport`):
