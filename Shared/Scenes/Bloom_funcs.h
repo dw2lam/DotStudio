@@ -1,5 +1,6 @@
 //  Bloom_funcs.h — the Bloom pack: Bloom (79). Every symbol is "bloom_". Uses Clocks_funcs.h for
-//  the captions' type (TextAtlas face 0, SF Pro Light).
+//  the captions' type (TextAtlas face 0, SF Pro Light), and CellKit_funcs.h for the layers, the
+//  glyphs and the LED cells it shares with Waddle (80).
 //
 //  One flower drawn procedurally — SDF petals with crinkled edges, a stamen boss, a stem and
 //  leaves (or a sprig of gypsophila) — evaluated twice a pixel:
@@ -12,36 +13,9 @@
 //  Frame: p in screen heights, x right from the centre, y UP from the bottom edge (the flower
 //  grows from below the frame). Colours are linear inside, display sRGB out.
 
+#include "CellKit_funcs.h"
+
 constant float BLOOM_FPS = 24.0;
-
-/// A layer: premultiplied linear colour and coverage.
-struct BloomOut { float3 c; float a; };
-
-static inline void bloom_over(thread BloomOut& o, float3 col, float a) {
-    o.c = col * a + o.c * (1.0 - a);
-    o.a = a + o.a * (1.0 - a);
-}
-/// Front-to-back: `col` goes under what is already there.
-static inline void bloom_under(thread BloomOut& o, float3 col, float a) {
-    o.c += (1.0 - o.a) * a * col;
-    o.a += (1.0 - o.a) * a;
-}
-
-/// Coverage of a shape at signed distance d (scene units) for an edge `aa` wide.
-static inline float bloom_cov(float d, float aa) { return saturate(0.5 - d / aa); }
-
-/// Coverage of a line `w` half-wide at distance `dist` from its axis: never thinner than about
-/// a cell (a sub-cell twig still reads as a chain of dim cells, rather than flickering out).
-static inline float bloom_line(float dist, float w, float aa) {
-    float we = max(w, 0.36 * aa);
-    return bloom_cov(dist - we, aa) * saturate(0.45 + 1.6 * w / aa);
-}
-
-static inline float bloom_seg(float2 p, float2 a, float2 b, thread float& h) {
-    float2 pa = p - a, ba = b - a;
-    h = saturate(dot(pa, ba) / max(dot(ba, ba), 1e-8));
-    return length(pa - ba * h);
-}
 
 /// A slow, never-repeating breeze in −1…1 (three incommensurate swells).
 static inline float bloom_wind(float t, float seed) {
@@ -89,9 +63,9 @@ static inline float bloom_leaf(float2 p, float2 at, float ang, float L, float W,
 /// Blue poppy (anemone = false: five crinkled, cupped sky-blue petals, a golden stamen boss) or
 /// white anemone (six slimmer petals in `petal`, a dark boss). `br` breeze 0…1. `aa` edge width;
 /// `lod` drops the fine texture (the haze / glow pass).
-static inline BloomOut bloom_poppy(float2 p, float ts, float br, float3 petal, bool anemone,
+static inline CellLayer bloom_poppy(float2 p, float ts, float br, float3 petal, bool anemone,
                                    float aa, bool lod) {
-    BloomOut o; o.c = 0.0; o.a = 0.0;
+    CellLayer o; o.c = 0.0; o.a = 0.0;
     float gust = bloom_gust(ts);
     float w0 = bloom_wind(ts, 0.0) * (0.6 + 0.6 * gust);
     float sway = br * w0 * 0.10;
@@ -154,7 +128,7 @@ static inline BloomOut bloom_poppy(float2 p, float ts, float br, float3 petal, b
             float rs = (anemone ? 0.27 : 0.30) * R;
             float d = rb - rs;
             if (!lod && abs(d) < 0.08 * R + aa) d += 0.05 * R * gnoise(qb / R * 12.0 + 3.0);
-            float a = bloom_cov(d, aa);
+            float a = cellkit_cov(d, aa);
             if (a > 0.0) {
                 float tb = saturate(rb / rs);
                 float lit = 0.88 + 0.22 * dot(qb / max(rs, 1e-5), Lq);
@@ -169,7 +143,7 @@ static inline BloomOut bloom_poppy(float2 p, float ts, float br, float3 petal, b
                     c *= 0.72 + 0.5 * tx;
                     c = mix(c, bloom_lin(150.0, 160.0, 82.0), smoothstep(0.24, 0.14, tb));
                 }
-                bloom_under(o, c * lit, a);
+                cellkit_under(o, c * lit, a);
             }
             shade *= 1.0 - 0.25 * smoothstep(0.08 * R, 0.0, d) * (1.0 - a);
         }
@@ -202,7 +176,7 @@ static inline BloomOut bloom_poppy(float2 p, float ts, float br, float3 petal, b
             if (!lod && abs(d) < 0.09 * R + aa)          // the noise only matters near the edge
                 crink += 0.045 * gnoise(nq * 3.4 + float2(fi * 7.3, ts * 0.04)) + 0.02 * gnoise(nq * 8.5 + fi * 3.1);
             d += crink * R * (anemone ? 0.6 : 1.0) * smoothstep(0.2, 0.7, t);
-            float a = bloom_cov(d, aa);
+            float a = cellkit_cov(d, aa);
             if (a > 0.0) {
                 float3 c = petal;
                 if (anemone) c *= mix(0.86, 1.0, smoothstep(0.15, 0.55, t));
@@ -220,7 +194,7 @@ static inline BloomOut bloom_poppy(float2 p, float ts, float br, float3 petal, b
                 // translucent rim: the edge glows where the light comes through
                 float rim = smoothstep(-0.10 * R, 0.0, d) * (anemone ? 0.25 : 0.45);
                 c = mix(c * cupL * tex, petal * 1.25 + 0.06, rim) * mix(0.72, 1.0, facing);
-                bloom_under(o, c * shade, a);
+                cellkit_under(o, c * shade, a);
             }
             shade *= 1.0 - 0.45 * smoothstep(0.13 * R, 0.0, d) * (1.0 - a);
         }
@@ -244,11 +218,11 @@ static inline BloomOut bloom_poppy(float2 p, float ts, float br, float3 petal, b
             float ang = side * ((i == 2) ? 0.52 : 0.62) + br * 0.09 * bloom_wind(1.3 * ts, 2.1 * fi + 1.0) + dd * 0.5;
             float vv, xx;
             float d = bloom_leaf(p, at, ang, L, W, 0.22, vv, xx);
-            float a = bloom_cov(d, aa);
+            float a = cellkit_cov(d, aa);
             if (a > 0.0) {
                 float sh = 0.78 + 0.16 * (-vv * side * sign(ang)) + 0.12 * xx;
                 float rib = lod ? 1.0 : 1.0 + 0.25 * exp(-vv * vv * 40.0);     // a paler midrib
-                bloom_under(o, green * float3(1.05, 1.08, 0.9) * sh * rib * shade, a);
+                cellkit_under(o, green * float3(1.05, 1.08, 0.9) * sh * rib * shade, a);
             }
         }
     }
@@ -256,11 +230,11 @@ static inline BloomOut bloom_poppy(float2 p, float ts, float br, float3 petal, b
     if (nearStem) {
         float dist = abs(p.x - sx) / sqrt(1.0 + stemDx * stemDx) + max(p.y - st.y1, 0.0);
         float w = mix(0.0062, 0.0048, saturate((p.y - st.y0) / (st.y1 - st.y0)));
-        float a = bloom_line(dist, w, aa);
+        float a = cellkit_line(dist, w, aa);
         if (a > 0.0) {
             float across = clamp((p.x - sx) / max(w, 1e-4), -1.0, 1.0);
             float3 c = green * (0.82 - 0.28 * across) * (0.9 + 0.1 * saturate(p.y));
-            bloom_under(o, c * shade, a);
+            cellkit_under(o, c * shade, a);
         }
     }
     return o;
@@ -286,7 +260,7 @@ static inline float bloom_gypSway(float ts, float br) {
 }
 
 /// Puff of florets round c (radius scale sc), composited over o.
-static inline void bloom_puff(thread BloomOut& o, float2 p, float2 c, float sc, float seed,
+static inline void bloom_puff(thread CellLayer& o, float2 p, float2 c, float sc, float seed,
                               float3 white, float aa, bool lod) {
     float2 dc = p - c;
     if (dot(dc, dc) > pow(0.036 * sc + aa, 2.0)) return;
@@ -299,32 +273,32 @@ static inline void bloom_puff(thread BloomOut& o, float2 p, float2 c, float sc, 
         float rr = (0.0080 + 0.0040 * hash21(float2(seed, fk + 3.3))) * sc;
         float2 dq = dc - hh * float2(0.032, 0.027) * sc;
         float dist = length(dq);
-        float a = bloom_cov(dist - rr, aa);
+        float a = cellkit_cov(dist - rr, aa);
         if (a <= 0.0) continue;
         // a floret: bright on the upper left, a cool grey under it, a faint green eye
         float lit = 0.84 + 0.22 * dot(dq / max(rr, 1e-4), float2(-0.6, 0.8));
         float3 col = white * clamp(lit, 0.66, 1.06) * depth;
         if (!lod) col = mix(col, col * float3(0.86, 0.90, 0.80), smoothstep(0.3, 0.0, dist / rr) * 0.3);
-        bloom_over(o, col, a);
+        cellkit_over(o, col, a);
     }
 }
 
 /// One spray element at both points: a twig from a to b (half-width w, colour col) and the puff
 /// at b (scale sc, 0 = none).
-struct BloomGyp { BloomOut sS, sW, fS, fW; float glow; };   // stems / florets, sharp / soft
+struct BloomGyp { CellLayer sS, sW, fS, fW; float glow; };   // stems / florets, sharp / soft
 
 static inline void bloom_gypPiece(thread BloomGyp& G, float2 ps, float2 pw, bool inS, bool inW, bool inG,
                                   float2 a, float2 b, float w, float3 col, float sc, float seed,
                                   float3 white, float aaS, float aaW) {
     float h;
     if (inS) {
-        float c = bloom_line(bloom_seg(ps, a, b, h), w, aaS);
-        if (c > 0.0) bloom_over(G.sS, col, c);
+        float c = cellkit_line(cellkit_seg(ps, a, b, h), w, aaS);
+        if (c > 0.0) cellkit_over(G.sS, col, c);
         if (sc > 0.0) bloom_puff(G.fS, ps, b, sc, seed, white, aaS, false);
     }
     if (inW) {
-        float c = bloom_line(bloom_seg(pw, a, b, h), w, aaW);
-        if (c > 0.0) bloom_over(G.sW, col, c);
+        float c = cellkit_line(cellkit_seg(pw, a, b, h), w, aaW);
+        if (c > 0.0) cellkit_over(G.sW, col, c);
         if (sc > 0.0) bloom_puff(G.fW, pw, b, sc, seed, white, aaW, true);
     }
     if (inG && sc > 0.0) {
@@ -381,7 +355,7 @@ static inline float2 bloom_turn(float2 D, float d) {          // dir(a) → dir(
     return float2(D.x * c + D.y * d, D.y * c - D.x * d);
 }
 static inline void bloom_gyp(float2 ps, float2 pw, float ts, float br, float3 white, float aaS,
-                             float aaW, bool wantSoft, thread BloomOut& S, thread BloomOut& W,
+                             float aaW, bool wantSoft, thread CellLayer& S, thread CellLayer& W,
                              thread float& glow) {
     BloomGyp G;
     G.sS.c = 0.0; G.sS.a = 0.0; G.sW = G.sS; G.fS = G.sS; G.fW = G.sS; G.glow = 0.0;
@@ -452,64 +426,12 @@ static inline void bloom_gyp(float2 ps, float2 pw, float ts, float br, float3 wh
         }
     }
     // the florets over the stems
-    S = G.sS; bloom_over(S, G.fS.a > 1e-4 ? G.fS.c / G.fS.a : float3(0.0), G.fS.a);
-    W = G.sW; bloom_over(W, G.fW.a > 1e-4 ? G.fW.c / G.fW.a : float3(0.0), G.fW.a);
+    S = G.sS; cellkit_over(S, G.fS.a > 1e-4 ? G.fS.c / G.fS.a : float3(0.0), G.fS.a);
+    W = G.sW; cellkit_over(W, G.fW.a > 1e-4 ? G.fW.c / G.fW.a : float3(0.0), G.fW.a);
     glow = G.glow;
 }
 
-// ============================================================ glyphs
-static inline float bloom_tri(float2 p, float r) {
-    const float k = 1.7320508;
-    p.x = abs(p.x) - r;
-    p.y = p.y + r / k;
-    if (p.x + k * p.y > 0.0) p = float2(p.x - k * p.y, -k * p.x - p.y) / 2.0;
-    p.x -= clamp(p.x, -2.0 * r, 0.0);
-    return -length(p) * sign(p.y);
-}
-static inline float bloom_star(float2 p, float r, float rf) {
-    const float2 k1 = float2(0.809016994375, -0.587785252292);
-    const float2 k2 = float2(-k1.x, k1.y);
-    p.x = abs(p.x);
-    p -= 2.0 * max(dot(k1, p), 0.0) * k1;
-    p -= 2.0 * max(dot(k2, p), 0.0) * k2;
-    p.x = abs(p.x);
-    p.y -= r;
-    float2 ba = rf * float2(-k1.y, k1.x) - float2(0, 1);
-    float h = clamp(dot(p, ba) / dot(ba, ba), 0.0, r);
-    return length(p - ba * h) * sign(p.y * ba.x - p.x * ba.y);
-}
-/// Stroke distance (cell units) of glyph g at g-local p (−0.5…0.5, y up):
-/// 0 △  1 ▽  2 C  3 Z  4 O  5 ☆  6 ·  7 ( )
-static inline float bloom_glyph(int g, float2 p) {
-    const float lw = 0.055;
-    float h;
-    switch (g) {
-    case 0: return abs(bloom_tri(p - float2(0.0, -0.05), 0.35)) - lw;
-    case 1: return abs(bloom_tri(float2(p.x, -p.y) - float2(0.0, -0.05), 0.35)) - lw;
-    case 2: {
-        float2 q = p * float2(1.0, 0.86);
-        if (q.x > 0.0 && abs(q.y) < q.x * 0.95) {
-            float2 e = 0.31 * float2(0.725, 0.689);
-            return min(length(q - e), length(q - float2(e.x, -e.y))) - lw;
-        }
-        return abs(length(q) - 0.31) - lw;
-    }
-    case 3: {
-        float d = bloom_seg(p, float2(-0.25, 0.33), float2(0.25, 0.33), h);
-        d = min(d, bloom_seg(p, float2(0.25, 0.33), float2(-0.25, -0.33), h));
-        d = min(d, bloom_seg(p, float2(-0.25, -0.33), float2(0.25, -0.33), h));
-        return d - lw;
-    }
-    case 4: return abs(length(p * float2(1.0, 0.84)) - 0.29) - lw;
-    case 5: return abs(bloom_star(p - float2(0.0, -0.02), 0.38, 0.45)) - lw * 0.85;
-    case 6: return length(p) - 0.075;
-    default: {
-        float2 q = float2(abs(p.x) - 0.36, p.y * 0.8);
-        return (q.x < 0.0) ? abs(length(q) - 0.24) - lw : length(q - float2(0.0, sign(q.y) * min(abs(q.y), 0.17))) - lw;
-    }
-    }
-}
-
+// ============================================================ glyphs (CellKit_funcs.h)
 /// Which glyph a cell shows: by what it covers (stem greens set in letters, the golden heart in
 /// rings and stars, petals by brightness — triangles where light, letters where deep).
 static inline int bloom_pick(float3 s, float2 cell, float ts) {
@@ -654,7 +576,7 @@ static inline float3 bloom_scene(float2 px, float2 res, float t, constant FXUnif
 
     // soft pass (the haze / glow) at the pixel, sharp pass at the cell centre
     float softAA = cw * (render == 0 ? 1.5 : 2.6);
-    BloomOut soft, sharp;
+    CellLayer soft, sharp;
     float gypGlow = 0.0;
     sharp.c = 0.0; sharp.a = 0.0; soft = sharp;
     if (flower == 1) {
@@ -680,7 +602,7 @@ static inline float3 bloom_scene(float2 px, float2 res, float t, constant FXUnif
         if (sharp.a > 0.02) {
             float3 ss = linearToSrgb(sc);
             int gi = bloom_pick(ss, cell, ts);
-            float d = bloom_glyph(gi, lp);
+            float d = cellkit_glyph(gi, lp);
             float ink = saturate(0.5 - d / cellPxAA) * smoothstep(0.02, 0.45, sharp.a);
             float gl = dot(ss, float3(0.3, 0.55, 0.15));
             float3 gcol = srgbToLinear(saturate(mix(ss, float3(0.93, 0.96, 1.0), 0.55 + 0.3 * smoothstep(0.15, 0.6, gl))));
@@ -693,16 +615,9 @@ static inline float3 bloom_scene(float2 px, float2 res, float t, constant FXUnif
         float3 gl = (flower == 1) ? petal * gypGlow * 0.17 : hc * soft.a * 0.22;
         col += gl * glow;
         if (sharp.a > 0.01) {
-            float dd;
-            if (render == 2) {
-                dd = length(lp) - 0.37;                       // a round dot, ≈ 74 % of the pitch
-            } else {
-                float2 q = abs(lp) - 0.5 + 0.09;              // gap ≈ 18 % of the cell
-                float rr = 0.22;
-                dd = length(max(q + rr, 0.0)) + min(max(q.x + rr, q.y + rr), 0.0) - rr;
-            }
+            float dd = cellkit_led(lp, render == 2);
             float m = saturate(0.5 - dd / cellPxAA);
-            float led = 0.88 + 0.16 * (1.0 - dot(lp, lp) * 2.0);  // a faint dome on each cell
+            float led = cellkit_dome(lp);
             float3 lc = sc * led * (1.0 + 0.25 * glow);
             col = mix(col, lc, m * smoothstep(0.0, 0.6, sharp.a));
         }
