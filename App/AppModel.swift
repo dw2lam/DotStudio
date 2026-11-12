@@ -9,14 +9,6 @@ extension UTType {
     static let dotstudioPreset = UTType(exportedAs: "com.davidlam.dotstudio.preset")
 }
 
-/// On-disk format of a .dotstudiopreset share file.
-struct PresetExport: Codable {
-    var formatVersion: Int = 1
-    var preset: Preset
-    /// Included only for gradient sources — media files don't travel with presets.
-    var source: SourceSpec?
-}
-
 /// A user-facing problem worth an alert (corrupt library, failed import/save).
 struct StoreAlert: Identifiable {
     let id = UUID()
@@ -523,19 +515,10 @@ final class AppModel: ObservableObject {
 
     func delete(_ id: UUID) {
         guard let idx = library.presets.firstIndex(where: { $0.id == id }) else { return }
-        // Read the lineup before the style disappears, then write it back without it.
-        let before = screensaverLineup
-        library.presets.remove(at: idx)
-        if library.activeID == id { library.activeID = library.presets.first?.id }
-        library.rotation?.presetIDs?.removeAll { $0 == id }
-        if library.schedule?.dayPresetID == id { library.schedule?.dayPresetID = nil }
-        if library.schedule?.nightPresetID == id { library.schedule?.nightPresetID = nil }
-        if before.contains(id), !library.presets.isEmpty {
-            var after = before
-            after.playlist.removeAll { $0 == id }
-            if after.night == id { after.night = nil }
-            applyLineup(after, persist: false)
-        }
+        Breadcrumbs.note("delete \(crumbName(id))")
+        // The style goes, and every reference with it: active, rotation, schedule, lineup, pins
+        // (Shared/AI/LibraryEdits.swift — dotstudio-mcp deletes the same way).
+        library.removePreset(id)
         // A wallpaper showing exactly this style stops — unless a connected display still plays a
         // wallpaper of its own: then the others move on (WallpaperPick.sharedReplacement). Not
         // one matching the screensaver: its style is whatever the lineup shows now
@@ -622,18 +605,7 @@ final class AppModel: ObservableObject {
     /// newer app versions import instead of failing outright) — and kept with the style
     /// (Preset.unknownEffects) for a newer build; a style made only of those can't import.
     static func decodeShared(_ data: Data) throws -> (Preset, skippedEffects: Int, source: SourceSpec?) {
-        let doc = try JSONDecoder().decode(PresetExport.self, from: data)
-        if doc.preset.isUnknownToThisBuild {
-            throw CocoaError(.fileReadCorruptFile, userInfo: [NSLocalizedDescriptionKey:
-                "“\(doc.preset.name)” was made with a newer version of DotStudio: none of its effects are available in this version."])
-        }
-        // A shared file can say anything: every param clamped to its range (SafeNumbers).
-        var preset = doc.preset
-        preset.sanitize()
-        var source = doc.source
-        if let s = source?.slideSeconds, !s.isFinite { source?.slideSeconds = nil }
-        if let m = source?.motion, !m.isFinite { source?.motion = nil }
-        return (preset, preset.unknownEffects.count, source)
+        try PresetExport.decodeShared(data)   // Shared/AI/PresetShare.swift (dotstudio-mcp uses it too)
     }
 
     // MARK: Still-image export / wallpaper
