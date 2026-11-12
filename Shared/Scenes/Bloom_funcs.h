@@ -1,6 +1,6 @@
 //  Bloom_funcs.h — the Bloom pack: Bloom (79). Every symbol is "bloom_". Uses Clocks_funcs.h for
 //  the captions' type (TextAtlas face 0, SF Pro Light), and CellKit_funcs.h for the layers, the
-//  glyphs and the LED cells it shares with Waddle (80).
+//  glyphs and the LED cells it shares with Penguin (80).
 //
 //  One flower drawn procedurally — SDF petals with crinkled edges, a stamen boss, a stem and
 //  leaves (or a sprig of gypsophila) — evaluated twice a pixel:

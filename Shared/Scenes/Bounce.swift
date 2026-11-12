@@ -188,7 +188,7 @@ enum BounceLogo {
         let inset: SIMD2<Float>     // the clear margin round it, in texture uv
         let lumLo: Float, lumHi: Float   // luma spread of its opaque pixels (lumHi < 0: one tone)
         let card: Bool              // an opaque image: drawn as a rounded card
-        /// The built-in mark standing in for a logo that couldn't be made (Waddle's custom
+        /// The built-in mark standing in for a logo that couldn't be made (Penguin's custom
         /// character draws its penguin instead).
         let fallback: Bool
         init(tex: MTLTexture, aspect: Double, height: Int, inset: SIMD2<Float>, lumLo: Float, lumHi: Float, card: Bool,

@@ -1,4 +1,4 @@
-//  CellKit_funcs.h — what the cell-grid scenes share: Bloom (79, Bloom_funcs.h) and Waddle (80,
+//  CellKit_funcs.h — what the cell-grid scenes share: Bloom (79, Bloom_funcs.h) and Penguin (80,
 //  Penguin_funcs.h). A subject drawn as SDF layers, sampled once per cell, and shown as glyphs,
 //  rounded LED cells or round LED dots. Every symbol is "cellkit_". Included by each scene's
 //  funcs header (guarded, so whichever comes first defines it).

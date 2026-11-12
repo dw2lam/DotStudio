@@ -473,7 +473,7 @@ struct EffectRow: View {
     let isFirst: Bool
     let onDuplicate: () -> Void
     let onRemove: () -> Void
-    /// For a Bounce layer's Logo section and Waddle's Character (importing an image into the
+    /// For a Bounce layer's Logo section and Penguin's Character (importing an image into the
     /// shared media folder).
     var model: AppModel? = nil
     @Environment(\.layout) private var layout
@@ -623,7 +623,7 @@ struct EffectRow: View {
 /// of theirs — copied into the shared media folder, where the sandboxed screensaver can read it.
 /// The choice lives on the effect (EffectInstance.logoKind / logoText / logoFile); the word and
 /// the image are both kept while another kind is picked, so switching back restores them.
-/// Waddle's Character is the same section without the word: its penguin, or an image of the
+/// Penguin's Character is the same section without the word: its penguin, or an image of the
 /// user's that becomes the dot-matrix character (WaddleRig.prepare).
 struct BounceLogoSection: View {
     @Binding var effect: EffectInstance
@@ -637,7 +637,7 @@ struct BounceLogoSection: View {
         let k = effect.logoKind ?? .builtIn
         return character && k == .text ? .builtIn : k
     }
-    /// Waddle's Character rather than Bounce's Logo.
+    /// Penguin's Character rather than Bounce's Logo.
     private var character: Bool { effect.kind == .waddle }
 
     var body: some View {
