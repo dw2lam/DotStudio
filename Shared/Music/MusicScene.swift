@@ -143,8 +143,9 @@ enum MusicGeometry {
     static func unit(_ size: CGSize) -> CGFloat { max(min(size.height, size.width / 1.6), 1) }
 
     /// Album layout: artwork square + gap + text column, centred as one composition. The
-    /// type is sized to be read from across a room (title cap height ≈ 4.5 % of a 16:10
-    /// screen's height), so the column is wide enough for it and the art gives a little.
+    /// type is sized to be read from across a room (title cap height ≈ 3.7 % of a 16:10
+    /// screen's height: 0.053 u × SF Pro's 0.705 cap height), so the column is wide enough
+    /// for it and the art gives a little.
     static let albumArt: CGFloat = 0.48       // artwork side, in units
     static let albumGap: CGFloat = 0.075      // artwork → text column
     static let albumText: CGFloat = 0.64      // text column width
@@ -175,8 +176,8 @@ enum MusicGeometry {
     /// Stage layout (Spotify TV): the type scale and gaps of the block the artwork heads, in
     /// units — the overlay draws with these, and `stageBlock` sums them, so the reserved
     /// block is measured, not guessed. Read from across a room like Album: the title's cap
-    /// height ≈ 4 % of a 16:10 screen's height (Album's 4.5 % has a column to itself; here
-    /// the type shares the height with the artwork, which gives a little for it).
+    /// height ≈ 3.45 % of a 16:10 screen's height (0.049 u × 0.705; Album's 3.7 % has a column
+    /// to itself, here the type shares the height with the artwork, which gives a little for it).
     enum Stage {
         static let art: CGFloat = 0.42
         static let artGap: CGFloat = 0.052               // artwork → title
@@ -209,18 +210,20 @@ enum MusicGeometry {
 
     /// The artwork rect in the screen's own units, top-left origin (y down). For Cover the
     /// artwork is the whole screen. `insets` (menu bar, Dock — the overlay's safe insets)
-    /// only move Stage, which centres its block between them; the shader passes none (its
-    /// glow behind the art is soft enough not to mind the few points).
+    /// move Album, which centres its composition in the area inside them, and Stage, which
+    /// centres its block between the top and bottom ones; the shader passes none (its glow
+    /// behind the art is soft enough not to mind the few points).
     static func artRect(_ layout: MusicLayoutKind, size: CGSize, options: MusicSceneOptions = MusicSceneOptions(),
-                        insets: (top: CGFloat, bottom: CGFloat) = (0, 0)) -> CGRect {
+                        insets: MusicOverlayLayer.Insets = MusicOverlayLayer.Insets()) -> CGRect {
         let u = unit(size)
         switch layout {
         case .album:
             let s = albumArt * u
             // Centre the composition on the text's visual width (titles rarely fill the column).
             let comp = s + albumGap * u + albumText * u * 0.82
-            let x = (size.width - comp) / 2
-            let y = (size.height - s) / 2 - 0.01 * u      // optical centre: a hair above
+            let x = insets.left + (size.width - insets.left - insets.right - comp) / 2
+            let y = insets.top + (size.height - insets.top - insets.bottom - s) / 2
+                - 0.01 * u                                  // optical centre: a hair above
             return CGRect(x: x, y: y, width: s, height: s)
         case .stage:
             let s = Stage.art * u
