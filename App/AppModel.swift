@@ -288,7 +288,7 @@ final class AppModel: ObservableObject {
     // folded it into Golden Hour (DefaultPresets.foldTidewater).
     static let promotedBuiltIns = ["Zen Garden", "Shallows", "Bounce",
                                    "StandBy", "Minimal", "Chronometer", "Meadow", "Tall Grass",
-                                   "Blue Bloom", "Baby's Breath"]
+                                   "Blue Bloom", "Baby's Breath", "Penguin"]
 
     /// New built-in styles reach existing libraries exactly once (runs on every launch):
     ///  • no `seenBuiltIns` (a library from before 1.4): everything shipping now counts as

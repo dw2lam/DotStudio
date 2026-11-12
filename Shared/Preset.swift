@@ -69,8 +69,9 @@ struct EffectInstance: Codable, Identifiable, Equatable, Hashable {
     var colorA: RGBA?                     // overrides palette default when set
     var colorB: RGBA?
 
-    // Bounce (Retro pack): the logo that bounces (BounceLogo in Scenes/Bounce.swift). All nil
-    // (and never written) for every other effect, and for Bounce's built-in DotStudio mark.
+    // Bounce (Retro pack): the logo that bounces (BounceLogo in Scenes/Bounce.swift); Penguin
+    // (Penguin pack): its custom character (.image; nil = the penguin). All nil (and never
+    // written) for every other effect, and for Bounce's built-in DotStudio mark.
     // Optional and add-only, so older libraries decode and save back unchanged.
     /// Which logo: nil = the built-in mark.
     var logoKind: BounceLogoKind?

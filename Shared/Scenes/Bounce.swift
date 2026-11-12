@@ -188,9 +188,13 @@ enum BounceLogo {
         let inset: SIMD2<Float>     // the clear margin round it, in texture uv
         let lumLo: Float, lumHi: Float   // luma spread of its opaque pixels (lumHi < 0: one tone)
         let card: Bool              // an opaque image: drawn as a rounded card
-        init(tex: MTLTexture, aspect: Double, height: Int, inset: SIMD2<Float>, lumLo: Float, lumHi: Float, card: Bool) {
+        /// The built-in mark standing in for a logo that couldn't be made (Penguin's custom
+        /// character draws its penguin instead).
+        let fallback: Bool
+        init(tex: MTLTexture, aspect: Double, height: Int, inset: SIMD2<Float>, lumLo: Float, lumHi: Float, card: Bool,
+             fallback: Bool = false) {
             self.tex = tex; self.aspect = aspect; self.height = height; self.inset = inset
-            self.lumLo = lumLo; self.lumHi = lumHi; self.card = card
+            self.lumLo = lumLo; self.lumHi = lumHi; self.card = card; self.fallback = fallback
         }
     }
 
@@ -227,9 +231,12 @@ enum BounceLogo {
         if let e = cache[key] { last = (key, e); lock.unlock(); return e }
         lock.unlock()
 
-        let img = makeImage(kind: kind, text: key.text, file: key.file, mediaDir: mediaDir)
-            ?? (kind == .builtIn ? nil : makeImage(kind: .builtIn, text: "", file: "", mediaDir: mediaDir))
-        guard let img, let e = upload(img, device: device) else { return nil }
+        var img = makeImage(kind: kind, text: key.text, file: key.file, mediaDir: mediaDir)
+        var fallback = false
+        if img == nil, kind != .builtIn {
+            img = makeImage(kind: .builtIn, text: "", file: "", mediaDir: mediaDir); fallback = true
+        }
+        guard let img, let e = upload(img, device: device, fallback: fallback) else { return nil }
 
         lock.lock(); defer { lock.unlock() }
         cache[key] = e
@@ -395,7 +402,7 @@ enum BounceLogo {
     ///  • Luma spread of its solid pixels (5th–95th percentile): under 0.18 it is one tone
     ///    (a white or black logo), tinted flat; else the tint keeps its shading.
     ///  • Uploaded inside a clear margin (Entry.inset) for the flourish's glow.
-    static func upload(_ img: CGImage, device: MTLDevice) -> Entry? {
+    static func upload(_ img: CGImage, device: MTLDevice, fallback: Bool = false) -> Entry? {
         let W = img.width, H = img.height
         guard W > 0, H > 0, let ctx = context(W, H), let data = ctx.data else { return nil }
         ctx.clear(CGRect(x: 0, y: 0, width: W, height: H))
@@ -471,7 +478,7 @@ enum BounceLogo {
         }
         return Entry(tex: tex, aspect: Double(crop.w) / Double(crop.h), height: crop.h,
                      inset: SIMD2(Float(mg) / Float(tw), Float(mg) / Float(th)),
-                     lumLo: lo, lumHi: hi, card: !transparent)
+                     lumLo: lo, lumHi: hi, card: !transparent, fallback: fallback)
     }
 
     private static func queue(_ device: MTLDevice) -> MTLCommandQueue? {

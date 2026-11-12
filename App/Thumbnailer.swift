@@ -310,6 +310,7 @@ final class Thumbnailer {
             if [.oceanHorizon, .shallows, .pleats, .dichroic, .sandGarden].contains(e.kind),
                (e.params["live"] ?? 0) > 0.5 { take(600) }
             if e.kind == .meadow, (e.params["live"] ?? 1) > 0.5 { take(600) }
+            if e.kind == .waddle, (e.params["night"] ?? 1) > 0.5 { take(600) }   // dozes and dims at night
             if WeatherLink.usesWeather(e.kind), WeatherLink.fixedCondition(e) == nil { take(300) }
         }
         return best
