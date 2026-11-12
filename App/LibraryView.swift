@@ -19,6 +19,7 @@ import UniformTypeIdentifiers
 struct LibraryView: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var wallpaper = WallpaperSlot.shared
+    @ObservedObject private var roster = DisplayRoster.shared
     @State private var filter: GalleryFilter = DemoHooks.filter ?? .all
     @State private var query = DemoHooks.search ?? ""
     @FocusState private var searchFocused: Bool
@@ -28,7 +29,11 @@ struct LibraryView: View {
         // Re-read once a minute so "playing now" follows the rotation and the sun. (Music never
         // changes what plays: it's presented over the style.)
         TimelineView(.everyMinute) { _ in
-            GalleryPage(state: GalleryState(model: model, wallpaperID: wallpaper.styleID),
+            GalleryPage(state: GalleryState(model: model, wallpaperID: wallpaper.styleID,
+                                            displays: DisplayLineup(model: model, displays: roster.displays,
+                                                                    wallpaperShared: wallpaper.styleID,
+                                                                    wallpaperPins: wallpaper.pins,
+                                                                    synced: wallpaper.follows)),
                         filter: $filter, query: $query, searchFocused: $searchFocused)
         }
         .windowScaledType()
