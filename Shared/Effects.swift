@@ -114,6 +114,11 @@ enum EffectKind: String, Codable, CaseIterable {
     case meadow                                               // Meadow pack (Nature) 78 (Meadow.swift)
     case flowerBloom                                          // Bloom pack (Nature) 79 (Bloom.swift)
 
+    /// A scene package the user made (an installed package in <store>/scenes/<id>/, compiled at
+    /// runtime by its engine: Shared/CustomScenes.swift). Shader id 90 is its calm stand-in
+    /// (Scenes/Custom_cases.h) while the package compiles, or when it can't.
+    case custom
+
     var displayName: String {
         switch self {
         case .dither: return "Dithering"
@@ -164,6 +169,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .risograph: return "Risograph"
         case .grainWash: return "Grain Wash"
         case .glass: return "Glass"
+        case .custom: return "Custom Scene"
         default: return SceneCatalog.spec(self)?.name ?? rawValue
         }
     }
@@ -219,6 +225,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .risograph: return "Two-ink riso print with grain and misregistration."
         case .grainWash: return "Dreamy soft focus with film grain and an optional color wash."
         case .glass:     return "Looks through fluted, tiled or liquid glass."
+        case .custom:    return "A scene package of your own, compiled by its engine."
         default: return SceneCatalog.spec(self)?.blurb ?? ""
         }
     }
@@ -291,6 +298,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .ascii:     return 18
         case .matrix:    return 19
         case .pixelSort: return 20
+        case .custom:    return 90           // the stand-in; the package's own pipeline draws it (CustomScenes)
         default: return SceneCatalog.spec(self)?.shaderID ?? 0
         }
     }
@@ -445,6 +453,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .silk:         return RGBA(0.03, 0.03, 0.06)       // shadow
         case .risograph:    return RGBA(1.0, 0.28, 0.53)        // fluorescent pink ink
         case .grainWash:    return RGBA(0.12, 0.08, 0.24)       // shadow wash
+        case .custom:       return RGBA(0.06, 0.07, 0.10)       // (a package's manifest sets its own)
         default: return SceneCatalog.spec(self)?.colorA
         }
     }
@@ -462,6 +471,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .silk:         return RGBA(0.98, 0.78, 0.55)       // champagne satin
         case .risograph:    return RGBA(0.0, 0.47, 0.75)        // riso medium blue
         case .grainWash:    return RGBA(1.0, 0.80, 0.64)        // highlight wash
+        case .custom:       return RGBA(0.85, 0.88, 0.95)
         default: return SceneCatalog.spec(self)?.colorB
         }
     }
@@ -499,7 +509,7 @@ enum EffectKind: String, Codable, CaseIterable {
     var isScene: Bool {
         switch self {
         case .starfield, .universe, .blackhole,
-             .meshGradient, .aurora, .topography, .liquidChrome, .silk: return true
+             .meshGradient, .aurora, .topography, .liquidChrome, .silk, .custom: return true
         default: return SceneCatalog.spec(self) != nil
         }
     }
@@ -518,8 +528,10 @@ enum EffectKind: String, Codable, CaseIterable {
                                           // (MusicPresentation); 66 lives on as Album Art
              .dialClock,                  // Sunray / Opaline: superseded by the Standby clocks (1.4.2)
              .pipes, .demoTunnel,         // Pipeworks, Light Tunnel: dated, glossy "Vista" look (1.4.2)
-             .fireflies:                  // Fireflies / Blue Hour (1.4.2)
+             .fireflies,                  // Fireflies / Blue Hour (1.4.2)
                                           // (DefaultPresets.retiredStyles: an edited copy keeps working)
+             .custom:                     // not retired, but never offered bare: it needs a package
+                                          // (a custom style is made from one: CustomScenes)
             return true
         default: return false
         }
