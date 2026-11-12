@@ -1,0 +1,23 @@
+{
+  "format": 1,
+  "id": "music-bloom-71f4c8e3",
+  "name": "Music Bloom",
+  "author": "DotStudio",
+  "licence": "MIT",
+  "engine": { "id": "metal", "version": ">=1" },
+  "entry": "scene.metal",
+  "fps": 30,
+  "stepped": false,
+  "params": [
+    { "key": "speed", "label": "Speed", "kind": "slider", "min": 0, "max": 1, "default": 0.4 },
+    { "key": "softness", "label": "Softness", "kind": "slider", "min": 0, "max": 1, "default": 0.5 },
+    { "key": "grain", "label": "Grain", "kind": "slider", "min": 0, "max": 1, "default": 0.5 }
+  ],
+  "colors": {
+    "a": { "label": "Deep", "default": [0.10, 0.08, 0.22, 1] },
+    "b": { "label": "Light", "default": [0.95, 0.52, 0.45, 1] }
+  },
+  "uses": ["music"],
+  "description": "Soft fields of colour that take the album art's palette while music plays.",
+  "guides": ["style/dotstudio"]
+}

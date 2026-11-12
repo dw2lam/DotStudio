@@ -1,0 +1,23 @@
+{
+  "format": 1,
+  "id": "solar-dial-0d6a52f9",
+  "name": "Solar Dial",
+  "author": "DotStudio",
+  "licence": "MIT",
+  "engine": { "id": "metal", "version": ">=1" },
+  "entry": "scene.metal",
+  "fps": 10,
+  "stepped": false,
+  "params": [
+    { "key": "size", "label": "Size", "kind": "slider", "min": 0, "max": 1, "default": 0.5 },
+    { "key": "ticks", "label": "Ticks", "kind": "slider", "min": 0, "max": 1, "default": 0.6 },
+    { "key": "drift", "label": "Drift", "kind": "toggle", "default": 1 }
+  ],
+  "colors": {
+    "a": { "label": "Background", "default": [0.035, 0.036, 0.045, 1] },
+    "b": { "label": "Sun", "default": [1.0, 0.72, 0.36, 1] }
+  },
+  "uses": ["sun"],
+  "description": "A quiet 24-hour dial: the sun walks round it with the clock, today's daylight arc above the horizon.",
+  "guides": ["style/dotstudio"]
+}

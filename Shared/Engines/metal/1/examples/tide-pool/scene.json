@@ -1,0 +1,23 @@
+{
+  "format": 1,
+  "id": "tide-pool-8c4f17a2",
+  "name": "Tide Pool",
+  "author": "DotStudio",
+  "licence": "MIT",
+  "engine": { "id": "metal", "version": ">=1" },
+  "entry": "scene.metal",
+  "fps": 30,
+  "stepped": false,
+  "params": [
+    { "key": "speed", "label": "Speed", "kind": "slider", "min": 0, "max": 1, "default": 0.4 },
+    { "key": "caustics", "label": "Caustics", "kind": "slider", "min": 0, "max": 1, "default": 0.55 },
+    { "key": "scale", "label": "Scale", "kind": "slider", "min": 0, "max": 1, "default": 0.4 }
+  ],
+  "colors": {
+    "a": { "label": "Water", "default": [0.18, 0.62, 0.66, 1] },
+    "b": { "label": "Sunlight", "default": [1.0, 0.96, 0.82, 1] }
+  },
+  "uses": ["weather"],
+  "description": "Sunlight caustics drifting over rippled sand in clear shallow water; the wind stirs them.",
+  "guides": ["style/dotstudio"]
+}
