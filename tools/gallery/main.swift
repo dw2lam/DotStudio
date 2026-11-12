@@ -48,6 +48,10 @@
 //  checks, params from a shared file (1e20 / 1e300 / NaN / ±inf: clamped on load, and every kind
 //  renders unsanitized without trapping), Time Lapse across the hourly wrap, and Meadow's Landscape
 //  changing under live weather — and exits non-zero on a failure.
+//  Custom Scenes: --scene <packageDir> (repeatable; a folder holding packages adds each) validates
+//  the package (compile diagnostics, GPU ms at 5120×2880), installs it into the temp store
+//  (DOTSTUDIO_STORE_DIR required) and renders it like a built-in style — only the scenes, unless
+//  --only picks built-ins too. --checks also runs the Custom Scene checks (customSceneChecks).
 
 import AppKit
 import Metal
@@ -94,6 +98,9 @@ var textCheckFailures = 0
 var textCheckBuildMs = 0.0
 var textCheckWarmMs = 0.0
 var logoArg: String?
+/// --scene <package dir> (repeatable; a folder of packages works too): installed into the temp
+/// store and rendered / benched like a built-in style (CustomScenes).
+var sceneArgs: [String] = []
 while !args.isEmpty {
     let a = args.removeFirst()
     switch a {
@@ -146,6 +153,7 @@ while !args.isEmpty {
     case "--marquee": MusicOverlayLayer.stillMarqueePose = CGFloat(Double(args.removeFirst()) ?? 0)
     case "--textcheck": textCheck = true
     case "--logo": logoArg = args.removeFirst()
+    case "--scene": sceneArgs.append(args.removeFirst())
     case "--size":
         let p = args.removeFirst().split(separator: "x").compactMap { Int($0) }
         if p.count == 2 { W = p[0]; H = p[1] }
@@ -977,7 +985,8 @@ if runChecks {
     let live = liveChecks(), format = formatChecks(), bounce = bounceChecks()
     let retirement = retirementChecks()
     let hardening = hardeningChecks(), lapse = lapseChecks(), landscape = meadowLandscapeChecks()
-    exit(live && format && bounce && retirement && hardening && lapse && landscape ? 0 : 1)
+    let custom = customSceneChecks()                           // tools/gallery/CustomChecks.swift
+    exit(live && format && bounce && retirement && hardening && lapse && landscape && custom ? 0 : 1)
 }
 
 if let tzArg, let tz = TimeZone(identifier: tzArg) { NSTimeZone.default = tz }
@@ -998,6 +1007,36 @@ func wallDate(_ hhmm: String) -> Date? {
 }
 let lib = DefaultPresets.makeLibrary()
 var presets = lib.presets
+if !sceneArgs.isEmpty {
+    guard ProcessInfo.processInfo.environment["DOTSTUDIO_STORE_DIR"] != nil else {
+        print("--scene installs into the store: set DOTSTUDIO_STORE_DIR to a temp dir"); exit(2)
+    }
+    var custom: [Preset] = []
+    for arg in sceneArgs {
+        let url = URL(fileURLWithPath: arg, isDirectory: true)
+        let fm = FileManager.default
+        var dirs = [url]
+        if !fm.fileExists(atPath: url.appendingPathComponent("scene.json").path) {
+            dirs = ((try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)) ?? [])
+                .filter { fm.fileExists(atPath: $0.appendingPathComponent("scene.json").path) }
+                .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        }
+        for dir in dirs {
+            let r = CustomScenes.validate(packageAt: dir, device: renderer.device, store: store.baseDir)
+            print(String(format: "scene %@: %@  engine %@  %@ at 5120×2880", dir.lastPathComponent, r.ok ? "OK" : "FAILED",
+                         r.engine ?? "-", r.gpuMsAt5K.map { String(format: "%.2f ms", $0) } ?? "-"))
+            for d in r.diagnostics { print("  " + d.formatted) }
+            for w in r.warnings where !r.diagnostics.contains(where: { $0.formatted == w }) { print("  warning: " + w) }
+            do {
+                let id = try CustomScenes.install(packageAt: dir, into: store.baseDir)
+                if let m = CustomScenes.manifest(id: id, store: store.baseDir) { custom.append(.customScene(m)) }
+            } catch {
+                print("  install failed: \(error.localizedDescription)")
+            }
+        }
+    }
+    presets = only == nil ? custom : presets + custom
+}
 if includePack { presets += DefaultPresets.coolPack() }
 if legacy { presets += SceneCatalog.musicPresets }
 if let only { presets = presets.filter { $0.name.lowercased().contains(only) } }
@@ -1306,6 +1345,17 @@ if gpuBench {
     if let wname { WeatherLink.forced = weatherMix(wname) }
     for p in presets {
         guard let inst = p.effects.first(where: { $0.enabled }) else { continue }
+        if inst.kind == .custom, let id = inst.custom?.id {
+            // A Custom Scene: its own runtime-compiled pipeline (CustomSceneBench, as validate times it).
+            let prep = CustomSceneCompiler.prepare(packageAt: CustomScenes.packageDir(id: id, store: store.baseDir), store: store.baseDir)
+            if case .success(let pso) = CustomSceneCompiler.build(prep, device: dev, format: .bgra8Unorm),
+               let ms = CustomSceneBench(device: dev, pso: pso, prepared: prep).median5K(width: W, height: H) {
+                print(String(format: "%6.2f ms GPU  (median)  %@ [Custom Scene, %@]", ms, p.name, prep.engine?.id ?? "?"))
+            } else {
+                print("   —  %@ [Custom Scene]: doesn't compile")
+            }
+            continue
+        }
         let (u, wall) = benchUniforms(inst)
         // The pipeline the renderer binds (rendererPipeline); --uber: fx_fragment, always.
         let (lo, med) = benchPass(u, kind: inst.kind, wall: wall, pso: uberOnly ? pso : rendererPipeline(inst, u), inst: inst)

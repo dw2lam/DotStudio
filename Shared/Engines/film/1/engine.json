@@ -1,0 +1,17 @@
+{
+  "id": "film",
+  "version": "1",
+  "kind": "film",
+  "name": "Film",
+  "summary": "Looping video clips (day, golden hour, night, rain) that follow the real sun and weather, crossfading between them.",
+  "base": { "id": "metal", "version": ">=1" },
+  "headers": [],
+  "wrapper": "film.metal",
+  "params": [
+    { "key": "ds.grain", "label": "Grain", "kind": "slider", "min": 0, "max": 1, "default": 0.35 },
+    { "key": "ds.halation", "label": "Halation", "kind": "slider", "min": 0, "max": 1, "default": 0 }
+  ],
+  "guide": "guide.md",
+  "examples": [],
+  "minApp": "1.4.6"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "metal",
+  "version": "1",
+  "kind": "metal-source",
+  "name": "Metal",
+  "summary": "Write a scene as one Metal function, float4 dsScene(float2 uv, DSContext ctx), with DotStudio's clock, sun, weather, music, params and helpers.",
+  "headers": ["DotStudio.h", "Runtime.h"],
+  "wrapper": "wrapper.metal",
+  "entryExtensions": ["metal"],
+  "guide": "guide.md",
+  "examples": ["examples/aurora-lake", "examples/paper-moon", "examples/tide-pool", "examples/rain-window", "examples/solar-dial", "examples/music-bloom"],
+  "minApp": "1.4.6"
+}

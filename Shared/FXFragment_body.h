@@ -1464,6 +1464,7 @@
 #include "Scenes/Meadow_cases.h"
 #include "Scenes/Bloom_cases.h"
 #include "Scenes/Penguin_cases.h"
+#include "Scenes/Custom_cases.h"
 
     case 41: { // INTERNAL crossfade — set by the renderer during preset rotation,
                // never by an EffectInstance. src = incoming frame, fadePrev = outgoing.

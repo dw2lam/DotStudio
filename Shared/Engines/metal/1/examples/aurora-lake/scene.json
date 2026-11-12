@@ -1,0 +1,24 @@
+{
+  "format": 1,
+  "id": "aurora-lake-a17e0c01",
+  "name": "Aurora Lake",
+  "author": "DotStudio",
+  "licence": "MIT",
+  "engine": { "id": "metal", "version": ">=1" },
+  "entry": "scene.metal",
+  "fps": 30,
+  "stepped": false,
+  "params": [
+    { "key": "speed", "label": "Speed", "kind": "slider", "min": 0, "max": 1, "default": 0.4 },
+    { "key": "glow", "label": "Glow", "kind": "slider", "min": 0, "max": 1, "default": 0.55 },
+    { "key": "stars", "label": "Stars", "kind": "toggle", "default": 1 },
+    { "key": "curtains", "label": "Curtains", "kind": "menu", "options": ["Quiet", "Dancing"], "default": 0 }
+  ],
+  "colors": {
+    "a": { "label": "Night", "default": [0.012, 0.022, 0.05, 1] },
+    "b": { "label": "Aurora", "default": [0.25, 1.0, 0.55, 1] }
+  },
+  "uses": [],
+  "description": "Curtains of northern light ripple over a dark ridge, mirrored in a still lake.",
+  "guides": ["style/dotstudio"]
+}

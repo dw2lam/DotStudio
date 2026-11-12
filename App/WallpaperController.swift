@@ -761,7 +761,11 @@ final class WallpaperController: ObservableObject {
         var pacing: [CGDirectDisplayID: WallpaperFrameState.Pacing] = [:]
         for h in hosts.values {
             let id = h.displayID
-            let profile = profiles[id] ?? .still
+            var profile = profiles[id] ?? .still
+            // A film (video clips) holds a still on battery Efficient: its decoder runs at the
+            // clip's own rate however few frames are drawn (Low Power / Still hold one anyway).
+            if onBattery, settings.batteryMode == .efficient,
+               (applied?.styles[id] ?? applied?.fallback)?.isFilmScene == true { profile = .still }
             let scale = WallpaperBudget.renderScale(settings, onBattery: onBattery, profile: profile)
             if scale != (renderScales[id] ?? 1) {
                 renderScales[id] = scale

@@ -106,6 +106,15 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private var thumbCollections: [Int: CollectionSource] = [:]
     private let store: SharedStore
     private lazy var weatherLink = WeatherLink(baseDir: store.baseDir)   // Shared/Weather
+    /// Custom Scenes: their packages, uniforms and runtime-compiled pipelines (CustomSceneLink.swift).
+    private(set) lazy var customLink = CustomSceneLink(store: store.baseDir)
+    /// The custom pipelines this frame's passes drew with (their hashes), watched for a GPU fault.
+    private var frameCustomHashes: [String] = []
+    /// While renderThumbnail draws: one-off frames (a film shows posters; compiles are waited for).
+    private var thumbnailing = false
+    /// DSMusic.level: eases toward 1 while music plays (CustomSceneLink).
+    private var customMusicLevel: Double = 0
+    private var customMusicAt: CFTimeInterval = 0
     var location: (lat: Double, lon: Double)?      // resolved device location (Universe marker, live sky)
     /// Renders as if the wall clock read this instead of now (offscreen gallery only).
     var clockOverride: Date?
@@ -312,6 +321,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         if preset != self.preset {
             WeatherLink.prewarm(for: preset, device: device, format: pixelFormat)
             pipelines.prewarmScenes(ScenePipelines.ids(for: preset))
+            _ = customLink.pipelinesReady(for: preset, device: device, format: pixelFormat)   // starts their compiles
             stepClock.reset()
         }
         stepRate = FramePacing.steppedFPS(preset)
@@ -428,6 +438,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             for id in ScenePipelines.ids(for: preset) where pipelines.scene(id, wait: false) == nil {
                 if pipelines.sceneState(id) != .failed { ready = false }
             }
+            // A Custom Scene's runtime-compiled pipeline likewise (later ones draw their stand-in
+            // until compiled — a style change never freezes the screen on a compile).
+            if !customLink.pipelinesReady(for: preset, device: device, format: pixelFormat) { ready = false }
         }
         if ready { readyConfig = pipelineConfig }
         return ready
@@ -509,6 +522,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// wallpaper's pause must stop the decoder too, not just the draws).
     func setMediaPaused(_ paused: Bool) {
         (media as? VideoSource)?.setPaused(paused)
+        customLink.setFilmsPaused(paused)          // a film scene's clips (CustomFilm)
     }
 
     // MARK: Music (Now Playing)
@@ -958,6 +972,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         // (blocks made once: a Swift closure handed to addCompletedHandler is a new block per frame)
         cmd.addCompletedHandler(signalInFlight)
         if measuresGPUTime { cmd.addCompletedHandler(accumulateGPUTime) }
+        frameCustomHashes.removeAll(keepingCapacity: true)
 
         let now = CACurrentMediaTime()
         let wall = clockOverride ?? Date()          // one wall-clock reading for every pass of the frame
@@ -999,7 +1014,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         musicArtHeld = artPreset != nil && musicBackdropTo <= 0
         // Now Playing (a style, or the Album Art backdrop): poll / upload artwork before any
         // pass samples it.
-        if preset.isMusicScene || (outgoing?.preset.isMusicScene ?? false) || artPreset != nil {
+        if preset.isMusicScene || (outgoing?.preset.isMusicScene ?? false) || artPreset != nil
+            || preset.customUses("music") {
             prepareMusic(cmd, now: now, wall: wall, fade: !settled)
         } else {
             releaseMusic()
@@ -1020,6 +1036,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 if let onPresented { drawable.addPresentedHandler { onPresented($0.presentedTime) } }
                 cmd.present(drawable)
             }
+            watchCustomFaults(cmd)
             cmd.commit()
             return cmd
         }
@@ -1111,8 +1128,44 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             if let onPresented { drawable.addPresentedHandler { onPresented($0.presentedTime) } }
             cmd.present(drawable)
         }
+        watchCustomFaults(cmd)
         cmd.commit()
         return cmd
+    }
+
+    /// A frame that drew Custom Scene pipelines: if its command buffer fails on the GPU (a
+    /// timeout, a page fault), those scenes are switched to their stand-in until edited.
+    private func watchCustomFaults(_ cmd: MTLCommandBuffer) {
+        guard !frameCustomHashes.isEmpty else { return }
+        let hashes = frameCustomHashes
+        let link = customLink
+        let log = store.debugEnabled ? store : nil
+        cmd.addCompletedHandler { cb in
+            guard cb.status == .error else { return }
+            let reason = cb.error?.localizedDescription ?? "GPU error"
+            for h in hashes {
+                CustomScenePipelines.reportGPUFault(hash: h, packageDir: link.packageDir(forHash: h), reason: reason)
+            }
+            log?.debug("custom scene GPU fault (\(reason)): disabled \(hashes.count) pipeline(s)")
+        }
+        frameCustomHashes.removeAll(keepingCapacity: true)
+    }
+
+    /// The music a Custom Scene reads (DSMusic): playing, its eased level, the artwork's palette.
+    private func fillCustomMusic(_ u: inout FXUniforms, now: CFTimeInterval, wall: Date) -> (Bool, Double) {
+        let snap = currentMusic
+        let playing = snap.state?.isPlaying == true && snap.state?.isVisible(at: wall, lingerMinutes: musicLingerMinutes) == true
+        let dt = min(max(now - customMusicAt, 0), 0.5)
+        customMusicAt = now
+        let target = playing ? 1.0 : 0.0
+        customMusicLevel += (target - customMusicLevel) * min(dt / 0.5, 1)    // ~1.5 s to settle
+        let pal = musicPalette
+        func slot(_ i: Int) -> simd_float4 {
+            guard i < pal.count else { return .zero }
+            return simd_float4(Float(pal[i].r), Float(pal[i].g), Float(pal[i].b), 1)
+        }
+        u.musicPal0 = slot(0); u.musicPal1 = slot(1); u.musicPal2 = slot(2)
+        return (playing, customMusicLevel)
     }
 
     // MARK: Crossfade helpers
@@ -1330,6 +1383,18 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 }
                 if inst!.kind == .nowPlaying {
                     fillMusic(&u, options: MusicSceneOptions(inst!), size: size, now: CACurrentMediaTime(), wall: wall)
+                }
+                if inst!.kind == .custom {
+                    // The package's own pipeline (bound over fx_scene_90, its stand-in, once built).
+                    let now = CACurrentMediaTime()
+                    let music = fillCustomMusic(&u, now: now, wall: wall)
+                    if let hash = customLink.fill(&u, inst: inst!, wall: wall, location: location,
+                                                  weather: weatherLink.live(now: now, wall: wall),
+                                                  musicPlaying: music.0, musicLevel: music.1, encoder: enc,
+                                                  format: target.pixelFormat ?? pixelFormat,
+                                                  wait: waitsForScenePipelines || thumbnailing, live: !thumbnailing, now: now) {
+                        frameCustomHashes.append(hash)
+                    }
                 }
             }
 
@@ -1653,6 +1718,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             else { artPreset = MusicPresentation.albumArtPreset(layout) }
         }
         guard let cmd = queue.makeCommandBuffer() else { return nil }
+        thumbnailing = true
+        defer { thumbnailing = false }
+        frameCustomHashes.removeAll(keepingCapacity: true)
         let (a, b) = makeOffscreen(width: width, height: height, format: fmt)
         guard let pingA = a, let pingB = b else { return nil }
 
@@ -1682,7 +1750,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
 
         // Now Playing: the current artwork, settled (no cross-fade in a still).
-        if preset.isMusicScene || artPreset != nil {
+        if preset.isMusicScene || artPreset != nil || preset.customUses("music") {
             prepareMusic(cmd, now: CACurrentMediaTime(), wall: clockOverride ?? Date(), fade: false)
         }
 
@@ -1709,6 +1777,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             encodePasses(cmd, final: .descriptor(desc), pingA: pingA, pingB: pingB, size: size, time: time,
                          preset: preset, source: source, sourceTex: thumbTex, slides: slides)
         }
+        watchCustomFaults(cmd)
         cmd.commit()
         cmd.waitUntilCompleted()
         return readBack(outTex)

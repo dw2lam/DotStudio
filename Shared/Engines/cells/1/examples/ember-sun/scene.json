@@ -1,0 +1,21 @@
+{
+  "format": 1,
+  "id": "ember-sun-c311a0e5",
+  "name": "Ember Sun",
+  "author": "DotStudio",
+  "licence": "MIT",
+  "engine": { "id": "cells", "version": ">=1" },
+  "entry": "scene.metal",
+  "fps": 24,
+  "stepped": true,
+  "params": [
+    { "key": "drift", "label": "Drift", "kind": "slider", "min": 0, "max": 1, "default": 0.35 },
+    { "key": "shimmer", "label": "Shimmer", "kind": "slider", "min": 0, "max": 1, "default": 0.5 }
+  ],
+  "colors": {
+    "a": { "label": "Sky", "default": [0.07, 0.03, 0.12, 1] },
+    "b": { "label": "Sun", "default": [1.0, 0.72, 0.28, 1] }
+  },
+  "description": "A low sun sliced by drifting bands, its light shivering on a dark sea — in LED dots.",
+  "guides": ["style/dotstudio"]
+}
