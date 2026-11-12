@@ -1,0 +1,14 @@
+{
+  "id": "shadertoy",
+  "version": "1",
+  "kind": "glsl-source",
+  "name": "Shadertoy (GLSL)",
+  "summary": "Run Shadertoy-style GLSL — void mainImage(out vec4 fragColor, in vec2 fragCoord) with iTime, iResolution, iDate — as a DotStudio scene. Single pass, no texture channels.",
+  "base": { "id": "metal", "version": ">=1" },
+  "headers": ["ShadertoyCompat.h"],
+  "wrapper": "wrapper.metal",
+  "entryExtensions": ["glsl", "frag"],
+  "guide": "guide.md",
+  "examples": ["examples/dune-light", "examples/ink-drift", "examples/soft-orbit"],
+  "minApp": "1.4.6"
+}
