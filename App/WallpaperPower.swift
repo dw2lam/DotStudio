@@ -90,12 +90,16 @@ struct WallpaperSettings: Codable, Equatable {
     /// put back when the lock-screen picture turns off or the wallpaper stops. Empty while
     /// nothing of DotStudio's is set.
     var savedDesktopPictures: [String: SavedDesktopPicture] = [:]
+    /// A style of its own on some displays (keyed by display UUID — Shared/DisplayPins.swift);
+    /// the rest play `presetID`. Ignored while following the screensaver, where each display
+    /// plays the screensaver's pick for that display (WallpaperPick).
+    var displayStyles: [String: DisplayPin] = [:]
 
     init() {}
 
     private enum CodingKeys: String, CodingKey {
         case enabled, presetID, frameRate, quality, batteryMode, followsScreensaver
-        case lockScreen, savedDesktopPictures
+        case lockScreen, savedDesktopPictures, displayStyles
         /// The 1.4 on/off "Freeze on battery": read when `batteryMode` is missing (on → Still,
         /// off → Efficient), and still written (on ⇔ Still) so an older build reading this
         /// file keeps holding a frame for someone who asked for that.
@@ -118,6 +122,7 @@ struct WallpaperSettings: Codable, Equatable {
         followsScreensaver = (try? c.decode(Bool.self, forKey: .followsScreensaver)) ?? false
         lockScreen = (try? c.decode(Bool.self, forKey: .lockScreen)) ?? false
         savedDesktopPictures = (try? c.decode([String: SavedDesktopPicture].self, forKey: .savedDesktopPictures)) ?? [:]
+        displayStyles = (try? c.decode([String: DisplayPin].self, forKey: .displayStyles)) ?? [:]
     }
 
     func encode(to encoder: Encoder) throws {
@@ -131,6 +136,7 @@ struct WallpaperSettings: Codable, Equatable {
         try c.encode(followsScreensaver, forKey: .followsScreensaver)
         try c.encode(lockScreen, forKey: .lockScreen)
         if !savedDesktopPictures.isEmpty { try c.encode(savedDesktopPictures, forKey: .savedDesktopPictures) }
+        if !displayStyles.isEmpty { try c.encode(displayStyles, forKey: .displayStyles) }
     }
 
     static func load(from url: URL) -> WallpaperSettings {
@@ -143,6 +149,44 @@ struct WallpaperSettings: Codable, Equatable {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         if let data = try? enc.encode(self) { try? data.write(to: url, options: .atomic) }
+    }
+}
+
+/// What the live wallpaper shows, per display — pure functions of (settings, library, clock),
+/// shared by WallpaperController and the self-tests.
+enum WallpaperPick {
+    /// The shared pick (every display without a style of its own): the chosen style — or, while
+    /// following the screensaver, what the screensaver's lineup shows now. nil = none (no pick,
+    /// or the pick was deleted).
+    static func shared(_ settings: WallpaperSettings, _ lib: Library, now: Date = Date()) -> Preset? {
+        if settings.followsScreensaver {
+            return lib.presets.isEmpty ? nil : Playback.effectivePreset(in: lib, now: now)
+        }
+        guard let id = settings.presetID else { return nil }
+        return lib.presets.first { $0.id == id }
+    }
+
+    /// One display's style. Following the screensaver: exactly what the screensaver shows on
+    /// that display (its own screensaver style, else the lineup) — the wallpaper's own pins are
+    /// kept but unused. Otherwise the display's own wallpaper style while it still exists, else
+    /// the shared pick. nil = the wallpaper has nothing to show.
+    static func preset(display: String?, _ settings: WallpaperSettings, _ lib: Library, now: Date = Date()) -> Preset? {
+        if settings.followsScreensaver {
+            return lib.presets.isEmpty ? nil : Playback.effectivePreset(in: lib, now: now, display: display)
+        }
+        if let display, let id = settings.displayStyles[display]?.presetID,
+           let p = lib.presets.first(where: { $0.id == id }) {
+            return p
+        }
+        return shared(settings, lib, now: now)
+    }
+
+    /// The pins whose style still exists (a deleted style's pin is dropped on the next save).
+    static func pruned(_ settings: WallpaperSettings, _ lib: Library) -> WallpaperSettings {
+        var s = settings
+        let ids = Set(lib.presets.map(\.id))
+        s.displayStyles = s.displayStyles.filter { ids.contains($0.value.presetID) }
+        return s
     }
 }
 

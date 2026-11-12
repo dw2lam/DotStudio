@@ -435,6 +435,112 @@ case "wallpaper":
         rig.loop.removeAll()
         runLoop(until: CACurrentMediaTime() + 0.3)
     }
+case "saverpin":
+    // The screensaver view finds its display and plays that display's own style
+    // (Library.displayStyles): a view in a window on the main screen (never ordered in), its
+    // display pinned to Flip Clock while the lineup is Liquid Chrome; then the pin is removed,
+    // then a pin for another (unplugged) display only. Read back from the store's debug log.
+    let fm = FileManager.default
+    fm.createFile(atPath: store.baseDir.appendingPathComponent("debug.enabled").path, contents: Data())
+    let logURL = store.baseDir.appendingPathComponent("debug.log")
+    let screen = NSScreen.main!
+    let key = DisplayIdentity.key(screen)!
+    let chrome = preset("Liquid Chrome"), clock = preset("Flip Clock")
+    func write(_ pins: [String: DisplayPin]?) {
+        var l = Library()
+        l.presets = [chrome, clock]
+        l.activeID = chrome.id
+        l.displayStyles = pins
+        var m = MusicSpec(); m.setDisplay(.off); l.music = m
+        _ = store.save(l)
+    }
+    write([key: DisplayPin(presetID: clock.id, name: screen.localizedName)])
+    let win = NSWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false, screen: screen)
+    win.isReleasedWhenClosed = false
+    // never ordered in: nothing reaches the screen
+    guard let v = DotSaverView(frame: NSRect(origin: .zero, size: screen.frame.size), isPreview: false) else { exit(1) }
+    win.contentView = v
+    func frames(_ n: Int) { for _ in 0..<n { v.animateOneFrame(); runLoop(until: CACurrentMediaTime() + 1 / 30) } }
+    func shown() -> [String] {
+        ((try? String(contentsOf: logURL, encoding: .utf8)) ?? "").split(separator: "\n")
+            .filter { $0.contains("] showing ") }.map { String($0.split(separator: "]").last ?? "") }
+    }
+    var fails = 0
+    func expect(_ ok: Bool, _ what: String) { print((ok ? "ok    " : "FAIL  ") + what); if !ok { fails += 1 } }
+    print("saverpin: window.screen = \(win.screen?.localizedName ?? "nil"), key \(key)")
+    frames(3)
+    let first = shown()
+    expect(first.last?.contains("Flip Clock") == true && first.last?.contains(key) == true,
+           "pinned display plays its own style from the first frames: \(first)")
+    expect(!first.contains { $0.contains("Liquid Chrome") && $0.contains(key) },
+           "never shows the shared style first on the pinned display")
+    write(nil)
+    frames(45)                                   // the 1 Hz reload
+    expect(shown().last?.contains("Liquid Chrome") == true, "pin removed: back to the lineup (\(shown().last ?? "-"))")
+    write(["00000000-0000-0000-0000-00000000DEAD": DisplayPin(presetID: clock.id, name: "Unplugged")])
+    frames(45)
+    expect(shown().last?.contains("Liquid Chrome") == true, "a pin for another display changes nothing here")
+    var preview: DotSaverView? = DotSaverView(frame: NSRect(x: 0, y: 0, width: 300, height: 200), isPreview: true)
+    write([key: DisplayPin(presetID: clock.id, name: screen.localizedName)])
+    let pwin = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200), styleMask: [.borderless],
+                        backing: .buffered, defer: false, screen: screen)
+    pwin.contentView = preview
+    for _ in 0..<3 { preview?.animateOneFrame(); runLoop(until: CACurrentMediaTime() + 1 / 10) }
+    expect(shown().last?.contains("Liquid Chrome") == true && shown().last?.contains("display -") == true,
+           "the System Settings thumbnail shows the lineup, not a display's pin")
+    preview = nil
+    print(fails == 0 ? "saverpin: PASS" : "saverpin: \(fails) FAILED")
+    exit(fails == 0 ? 0 : 1)
+case "displays":
+    // Two displays with styles of their own on one render loop (WallpaperRenderLoop.setStyles):
+    // Liquid Chrome (motion, display-link paced) on one, Flip Clock (1 Hz ticks) on the other —
+    // each paced by its own plan. Two offscreen layers on the main screen's link (the second
+    // display ID is made up; nothing is shown). Then the motion display is covered: it stops,
+    // the clock keeps ticking.
+    let screen = NSScreen.main!
+    let realID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? CGMainDisplayID()
+    let a = realID, b = realID &+ 7777
+    let loop = WallpaperRenderLoop(store: store)
+    let device = WallpaperGPU.device(for: realID)!
+    var layers: [CAMetalLayer] = []
+    for id in [a, b] {
+        let layer = CAMetalLayer()
+        layer.device = device; layer.pixelFormat = .bgra8Unorm; layer.framebufferOnly = true
+        layer.maximumDrawableCount = 3; layer.allowsNextDrawableTimeout = true
+        layers.append(layer)
+        let link = screen.displayLink(target: WallpaperRenderLoop.linkTarget(loop, display: id),
+                                      selector: WallpaperRenderLoop.linkSelector)
+        loop.addDisplay(id, token: UInt64(id), layer: layer, link: link, device: device,
+                        config: WallpaperSurfaceConfig(drawableSize: CGSize(width: 1280, height: 800),
+                                                       refreshRate: Double(screen.maximumFramesPerSecond)))
+    }
+    let chrome = preset("Liquid Chrome"), clock = preset("Flip Clock")
+    loop.setStyles([a: chrome, b: clock], fallback: chrome, source: SourceSpec(), location: nil)
+    func pace(_ p: Preset) -> WallpaperFrameState.Pacing {
+        .init(profile: WallpaperPacing.profile(for: p, source: SourceSpec()), fps: 30, stepFPS: nil)
+    }
+    var fails = 0
+    func measure(_ label: String, visible: Set<CGDirectDisplayID>, expectA: ClosedRange<Double>, expectB: ClosedRange<Double>) {
+        loop.update(WallpaperFrameState(canDraw: true, visible: visible, still: false,
+                                        displays: [a: pace(chrome), b: pace(clock)]), forceDraw: true)
+        runLoop(until: CACurrentMediaTime() + 1.0)
+        let a0 = loop.framesDrawnPerDisplay[a] ?? 0, b0 = loop.framesDrawnPerDisplay[b] ?? 0
+        runLoop(until: CACurrentMediaTime() + seconds)
+        let ra = Double((loop.framesDrawnPerDisplay[a] ?? 0) - a0) / seconds
+        let rb = Double((loop.framesDrawnPerDisplay[b] ?? 0) - b0) / seconds
+        let ok = expectA.contains(ra) && expectB.contains(rb)
+        if !ok { fails += 1 }
+        print(String(format: "%@ %@: Liquid Chrome %.1f fps, Flip Clock %.1f fps", ok ? "ok  " : "FAIL", label, ra, rb))
+    }
+    print("displays: two styles on one render loop, 1280x800 each, \(Int(seconds)) s per step")
+    // A minute burst of the flip clock may fall in a window: allow it a few frames over 1/s.
+    measure("both visible", visible: [a, b], expectA: 25...31, expectB: 0.5...8)
+    measure("motion display covered", visible: [b], expectA: 0...0, expectB: 0.5...8)
+    measure("clock display covered", visible: [a], expectA: 25...31, expectB: 0...0)
+    loop.removeAll()
+    runLoop(until: CACurrentMediaTime() + 0.3)
+    print(fails == 0 ? "displays: PASS" : "displays: \(fails) FAILED")
+    exit(fails == 0 ? 0 : 1)
 case "idle":
     print("idle: per SECOND with nothing (or 1 Hz ticks) drawn  [call = render thread CPU]")
     let base = Snap()
