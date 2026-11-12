@@ -33,6 +33,8 @@ final class CustomFilm {
         let clip: CustomSceneManifest.Clip
         let video: VideoSource?
         let poster: MTLTexture?
+        /// The clip's frame rate (the grain steps with it).
+        let fps: Float
     }
     private var current: Playing?
     private var previous: Playing?
@@ -71,7 +73,7 @@ final class CustomFilm {
     /// mix (0 = all A). `live`: a host drawing continuously (plays video); else a still from the
     /// clips' posters (thumbnails, the gallery).
     func frame(device: MTLDevice, now: CFTimeInterval, wall: Date, location: (lat: Double, lon: Double)?,
-               weather: WeatherMix, live: Bool) -> (a: MTLTexture, b: MTLTexture, mix: Float)? {
+               weather: WeatherMix, live: Bool) -> (a: MTLTexture, b: MTLTexture, mix: Float, fps: Float)? {
         let clips = prepared.manifest.clips ?? []
         guard !clips.isEmpty else { return nil }
         lock.lock(); defer { lock.unlock() }
@@ -104,14 +106,15 @@ final class CustomFilm {
                 mix = Float(1 - k * k * (3 - 2 * k))
             }
         }
-        return (a, b, mix)
+        return (a, b, mix, cur.fps)
     }
 
     private func make(_ c: CustomSceneManifest.Clip, device: MTLDevice, live: Bool) -> Playing {
         let url = prepared.packageDir.appendingPathComponent(c.file)
         let v = live ? VideoSource(url: url, device: device) : nil
         if paused { v?.setPaused(true) }
-        return Playing(clip: c, video: v, poster: CustomFilm.poster(url, device: device))
+        let rate = AVURLAsset(url: url).tracks(withMediaType: .video).first?.nominalFrameRate ?? 24
+        return Playing(clip: c, video: v, poster: CustomFilm.poster(url, device: device), fps: rate > 1 ? rate : 24)
     }
 
     private static let posterLock = NSLock()
