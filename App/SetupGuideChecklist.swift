@@ -154,7 +154,7 @@ struct SetupChecklist: View {
             detail = "DotStudio can't check this on your Mac — follow the steps in the picture."
         default:
             title = "Choose DotStudio as your screensaver"
-            detail = s.installed ? "Follow the steps in the picture. This ticks itself when it's done."
+            detail = s.installed ? "Follow the steps above. This ticks itself when it's done."
                                  : "After installing, follow the steps in the picture."
         }
         return ChecklistRow(state: chooseState, title: title, detail: detail) { EmptyView() }
