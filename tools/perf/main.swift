@@ -150,6 +150,9 @@ func musicSpec(full: MusicSpec.Backdrop?) -> MusicSpec {
 var scenarios: [Scenario] = [
     Scenario(name: "Liquid Chrome", preset: preset("Liquid Chrome")),
     Scenario(name: "Tidewater (live wx)", preset: preset("Tidewater"), weather: true),
+    // the saver's cost cap (a smaller drawable under the rain) and stepped pacing (24 fps steps)
+    Scenario(name: "Meadow (live wx)", preset: preset("Meadow"), weather: true),
+    Scenario(name: "Bloom", preset: preset("Blue Bloom")),
     Scenario(name: "Zen Garden", preset: preset("Zen Garden")),
     Scenario(name: "Flip Clock", preset: preset("Flip Clock")),
     Scenario(name: "Chronometer", preset: preset("Chronometer")),

@@ -72,7 +72,7 @@ final class WeatherLink {
 
     /// The scene's fixed condition, or nil for Live.
     static func fixedCondition(_ inst: EffectInstance) -> WeatherCondition? {
-        let i = Int((inst.params["weather"] ?? 0).rounded())
+        let i = Int(saturating: inst.params["weather"] ?? 0, .toNearestOrAwayFromZero)
         guard i >= 1, i <= WeatherMix.menuConditions.count else { return nil }
         return WeatherMix.menuConditions[i - 1]
     }
@@ -189,10 +189,31 @@ final class WeatherLink {
         case .shallows:
             return wx ? "fx_wx_shallows" : "fx_shallows"
         case .meadow:                                    // (one per landscape: p2.x)
-            let land = min(max(Int(u.p2.x.rounded()), 0), 3)
+            let land = min(max(Int(saturating: u.p2.x, .toNearestOrAwayFromZero), 0), 3)
             return wx ? meadowWx[land] : meadowClear[land]
         default:
             return nil
+        }
+    }
+
+    /// Meadow's pipelines' GPU cost, ns per drawn pixel on an Apple GPU — the screensaver's cost
+    /// cap (MetalRenderer.costCapScale). Measured with tools/gallery --gpubench --solo at
+    /// 5120×2880 on an M5 Pro (2026-11-11), the median of the Meadow style (Wildflowers 0.8 — the
+    /// heaviest of the four presets' settings) per landscape; a weather pipeline at its worst
+    /// condition (heavy snow): Meadow 7.6 / 12.7 ms, Rolling Hills 4.4 / 9.0, Tall Grass 9.2 /
+    /// 16.0, Hillside 4.2 / 9.1. nil: not one of these (no cap).
+    static func costNsPerPixel(_ functionName: String) -> Double? {
+        let px = 5120.0 * 2880.0 / 1e6                  // ms at 5K → ns a pixel
+        switch functionName {
+        case "fx_meadow_0": return 7.6 / px
+        case "fx_meadow_1": return 4.4 / px
+        case "fx_meadow_2": return 9.2 / px
+        case "fx_meadow_3": return 4.2 / px
+        case "fx_wx_meadow_0": return 12.7 / px
+        case "fx_wx_meadow_1": return 9.0 / px
+        case "fx_wx_meadow_2": return 16.0 / px
+        case "fx_wx_meadow_3": return 9.1 / px
+        default: return nil
         }
     }
 

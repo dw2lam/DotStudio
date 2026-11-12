@@ -77,7 +77,8 @@ static inline float bloom_leaf(float2 p, float2 at, float ang, float L, float W,
     float u = dot(q, dir), v = dot(q, nrm) * sign(ang + 1e-4);
     v -= bend * u * u / L;
     float x = u / L;
-    float hw = W * pow(sin(M_PI_F * pow(saturate(x), 0.72)), 0.85);
+    // (sin(M_PI_F) is a hair below 0 in float: clamp, or pow gives NaN at and past the tip)
+    float hw = W * pow(max(sin(M_PI_F * pow(saturate(x), 0.72)), 0.0), 0.85);
     float d = abs(v) - hw;
     d = max(d, max(-u, u - L) * 0.7);
     vv = v / max(W, 1e-4); xx = x;
@@ -570,9 +571,25 @@ static inline float bloom_capDist(texture2d<float> A, sampler s, int line, float
     return d;
 }
 
-/// Ink of the corner captions at px (0 where there are none).
-static inline float bloom_captions(float2 px, float2 res, int flower, int render,
-                                   texture2d<float> A, sampler s) {
+/// How far the flower reaches either side of the centre (scene units) at height y: the envelope
+/// of every pose it sways, nods and turns through, at full breeze, with a margin — measured with
+/// the gallery over 60 random frames per flower and render (poppy ≤ 0.386 wide, top 0.9155,
+/// clipped at 0.92 by bloom_scene's guard; baby's breath ≤ 0.298, top 0.83; anemone ≤ 0.34,
+/// top 0.84). A sideways-swept disc: (half-spread, centre height, radius); non-increasing in y.
+static inline float bloom_reach(int flower, float y) {
+    float3 k = (flower == 0) ? float3(0.18, 0.70, 0.22)
+             : (flower == 1) ? float3(0.135, 0.68, 0.17)
+             :                 float3(0.19, 0.68, 0.18);
+    float dy = max(y - k.y, 0.0);
+    return dy < k.z ? k.x + sqrt(k.z * k.z - dy * dy) : 0.0;
+}
+
+/// Ink of the corner captions at px (0 where there are none). On a tall screen or at a large
+/// size the flower's head can rise into the caption band: a row shows only while both of its
+/// lines (and every row above it) stay clear of the flower's reach, so rows drop from the bottom
+/// up, and the whole block steps aside when even the first row would touch it.
+static inline float bloom_captions(float2 px, float2 res, int flower, int render, float size,
+                                   float cellPx, texture2d<float> A, sampler s) {
     float cap = max(0.0115 * res.y, 7.0);                // cap height, px
     float lead = 2.05 * cap;
     float mx = 0.05 * res.x, top = 0.11 * res.y + cap;
@@ -581,16 +598,20 @@ static inline float bloom_captions(float2 px, float2 res, int flower, int render
     bool left = px.x < 0.5 * res.x;
     if (px.y < top - 1.6 * cap || px.y > top + (rows - 1.0) * lead + 0.6 * cap) return 0.0;
     int row = clamp(int(floor((px.y - top + 1.3 * cap) / lead)), 0, 2);
+    if (left ? (px.x > mx + 14.0 * cap * 1.1) : (px.x < res.x - mx - 14.0 * cap * 1.1)) return 0.0;
+    // keep clear of the flower: this row and the rows above it
+    float gap = 0.6 * cap + 0.5 * cellPx;                 // air, and the cells' own reach
+    for (int r = 0; r <= row; ++r) {
+        float yLow = top + float(r) * lead + gap;         // the row's lowest ink, + air (px down)
+        float reach = bloom_reach(flower, (res.y - yLow) / res.y / size) * res.y * size + gap;
+        int lineL = (r == 0) ? 0 : (r == 1) ? 1 + flower : 4;
+        int lineR = (r == 0) ? 5 : (r == 1) ? 6 + min(render, 1) : 8;
+        float w = max(bloom_capWidth(A, lineL, track), bloom_capWidth(A, lineR, track)) * cap;
+        if (mx + w > 0.5 * res.x - reach) return 0.0;
+    }
     int line = left ? ((row == 0) ? 0 : (row == 1) ? 1 + flower : 4)
                     : ((row == 0) ? 5 : (row == 1) ? 6 + min(render, 1) : 8);
-    float x0;
-    if (left) {
-        x0 = mx;
-        if (px.x > mx + 14.0 * cap * 1.1) return 0.0;
-    } else {
-        if (px.x < res.x - mx - 14.0 * cap * 1.1) return 0.0;
-        x0 = res.x - mx - bloom_capWidth(A, line, track) * cap;
-    }
+    float x0 = left ? mx : res.x - mx - bloom_capWidth(A, line, track) * cap;
     float2 q = (px - float2(x0, top + float(row) * lead)) / cap;
     float d = bloom_capDist(A, s, line, track, q) - 0.035;  // a touch heavier than the Light master
     return clocks_cov(d, cap);
@@ -689,7 +710,7 @@ static inline float3 bloom_scene(float2 px, float2 res, float t, constant FXUnif
 
     float3 outc = linearToSrgb(max(col, 0.0));
     if (u.p1.z > 0.5 && A.get_width() == 4096) {
-        float ink = bloom_captions(px, res, flower, render, A, s);
+        float ink = bloom_captions(px, res, flower, render, size, cellPx, A, s);
         outc = mix(outc, float3(0.96, 0.97, 1.0), ink * 0.86);
     }
     return saturate(outc + bandDither(px));

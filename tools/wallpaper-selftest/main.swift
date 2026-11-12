@@ -85,9 +85,39 @@ do {
           "20 fps is an exact divisor of 60 and 120 Hz")
     // Bloom steps its time at 24 fps: drawn at the slowest exact divisor at or above that
     check(WallpaperPacing.rate(target: 24, step: 24, refresh: 120) == 24 && WallpaperPacing.rate(target: 24, step: 24, refresh: 60) == 30
-          && WallpaperPacing.rate(target: 120, step: 24, refresh: 120) == 24 && WallpaperPacing.rate(target: 20, step: 24, refresh: 60) == 20
-          && WallpaperPacing.rate(target: 24, step: nil, refresh: 60) == 20,
-          "stepped 24 fps: 24 on 120 Hz, 30 on 60 Hz, never skipping a step unless the battery asks for less")
+          && WallpaperPacing.rate(target: 120, step: 24, refresh: 120) == 24 && WallpaperPacing.rate(target: 24, step: nil, refresh: 60) == 20,
+          "stepped 24 fps: 24 on 120 Hz, 30 on 60 Hz, never skipping a step")
+    // …and below 24 (Efficient's 20, the saver's Low Power 15) every other step, evenly: 12, an
+    // exact divisor of 60, 120 and 144 Hz (20 or 15 would drop steps unevenly)
+    check(WallpaperPacing.rate(target: 20, step: 24, refresh: 60) == 12 && WallpaperPacing.rate(target: 15, step: 24, refresh: 120) == 12
+          && WallpaperPacing.rate(target: 15, step: 24, refresh: 144) == 12 && WallpaperPacing.rate(target: 15, step: 24, refresh: 50) == 16.666666666666668,
+          "stepped 24 fps under budget: 12 (on twos) on 60/120/144 Hz; 50 Hz has no such divisor (plain divisor rule)")
+    // StepClock: draws at exactly the step rate, encoded with up to ±3 ms of jitter around a
+    // boundary, show every step once (no repeat-then-skip); 30 draws/s never skip; 12/s advance 2.
+    do {
+        func steps(drawFPS: Double, jitter: Double, phase0: Double, n: Int = 600) -> [Int] {
+            var clock = StepClock(), out: [Int] = []
+            var seed: UInt64 = 0x9E3779B97F4A7C15
+            func rnd() -> Double { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Double(seed >> 11) / Double(1 << 53) }
+            for k in 0..<n {
+                let at = 1000 + Double(k) / drawFPS + (rnd() * 2 - 1) * jitter
+                let t = at - 1000 + phase0 / 24                 // draws land phase0 steps past a boundary
+                out.append(Int((clock.time(t, rate: 24, at: at) * 24).rounded(.down)))
+            }
+            return out
+        }
+        var worst24 = 0, worst30 = 0, worst12 = 0
+        for p in [0.0, 0.01, 0.05, 0.5, 0.95, 0.99] { for j in [0.0, 0.003] {
+            let a = steps(drawFPS: 24, jitter: j, phase0: p), b = steps(drawFPS: 30, jitter: j, phase0: p)
+            let c = steps(drawFPS: 12, jitter: j, phase0: p)
+            // after the first few draws (the lock), consecutive draws: 24/s → +1 each, 30/s → +0/+1, 12/s → +2
+            worst24 += zip(a.dropFirst(4), a.dropFirst(5)).filter { $1 - $0 != 1 }.count
+            worst30 += zip(b, b.dropFirst()).filter { $1 - $0 > 1 || $1 < $0 }.count
+            worst12 += zip(c.dropFirst(4), c.dropFirst(5)).filter { $1 - $0 != 2 }.count
+        } }
+        check(worst24 == 0 && worst30 == 0 && worst12 == 0,
+              "StepClock: 24 draws/s show each 24 fps step once, 12/s every other one, 30/s never skip (exact or ±3 ms jitter, at any phase; \(worst24)/\(worst12)/\(worst30) misses)")
+    }
 }
 
 print("time of day")

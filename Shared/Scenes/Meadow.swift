@@ -15,6 +15,8 @@
 //  Cost (tools/gallery --gpubench, M5 Pro, 5120×2880, clear): Meadow ~5.9 ms, Rolling Hills ~3.2,
 //  Tall Grass ~7.0, Hillside ~3.2 (Tidewater 4.7); 1920×1080 (the wallpaper's Balanced scale on a
 //  5K display) 0.4–1.0. Each landscape is its own pipeline, clear and weather (Weather_fragment.h).
+//  Weather adds ~60–75 % (Tall Grass under heavy snow ~16 ms at 5K), so the screensaver caps its
+//  drawable to keep a frame near 6 ms of GPU (WeatherLink.costNsPerPixel → MetalRenderer.costCapScale).
 //
 //  Time of day: Follow the Sun = the real sun and moon here (MetalRenderer.fillLiveSky, as
 //  Tidewater); off, the Time of Day slider picks an hour of a midsummer day (fillLiveSky works out

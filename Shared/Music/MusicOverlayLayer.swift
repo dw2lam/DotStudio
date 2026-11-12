@@ -48,8 +48,9 @@ final class MusicOverlayLayer: CALayer {
     }
 
     /// Screen areas to keep the type clear of, in points (menu bar and Dock on the wallpaper).
-    /// Album is centred with margins wider than both; Stage centres its block in the area
-    /// between them; the Cover type and the corner move off them.
+    /// Album centres its composition in the area inside them (and keeps its column within
+    /// it); Stage centres its block in the area between them; the Cover type and the corner
+    /// move off them.
     var safeInsets = Insets() { didSet { if safeInsets != oldValue { setNeedsLayout() } } }
     /// The camera housing's band at the top of a notched built-in display, in points (its
     /// safe-area top; 0 = no notch, or not a full-screen host). A top corner keeps out of it
@@ -61,6 +62,13 @@ final class MusicOverlayLayer: CALayer {
         didSet { if reduceMotion != oldValue { groupKey = nil; setNeedsLayout() } }
     }
     static var systemReduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    /// Accessibility Increase Contrast: the secondary lines (artist, album, times) at a higher
+    /// opacity. nil = follow the system setting, read on every refresh, so turning it on applies
+    /// within a host's tick (the saver reads it the same way — it's the process's NSWorkspace).
+    var increaseContrast: Bool? {
+        didSet { if increaseContrast != oldValue { groupKey = nil; setNeedsLayout() } }
+    }
+    static var systemIncreaseContrast: Bool { NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast }
     /// Continuous decoration: the progress bar gliding between ticks and the marquee of a line
     /// too long to fit. It keeps WindowServer compositing every refresh, so the live wallpaper
     /// turns it off (progress steps once a second, a long title takes a third line instead) —
@@ -157,8 +165,9 @@ final class MusicOverlayLayer: CALayer {
         guard bounds.width > 1, bounds.height > 1 else { return }
         let display = resolve(now: now)
         let cardSize = settings.cardSizePreference
+        let contrast = increaseContrast ?? Self.systemIncreaseContrast
         let key = display.map { GroupKey($0, size: bounds.size, scale: contentsScale, insets: safeInsets,
-                                         cardSize: cardSize) }
+                                         cardSize: cardSize, contrast: contrast) }
         // Nothing showing and nothing to show (a host's 1 Hz tick while music is off): no
         // transaction at all. (An unanimated update still sweeps leftovers below.)
         if display == nil, group == nil, groupKey == nil, animated || (sublayers?.isEmpty ?? true) { return }
@@ -180,7 +189,7 @@ final class MusicOverlayLayer: CALayer {
         if let d = display, let key {
             let g = MusicOverlayGroup(d, bounds: bounds, insets: safeInsets, scale: contentsScale,
                                       reduceMotion: reduceMotion, ambient: ambientMotion, cardSize: cardSize,
-                                      trueScale: trueScale, notch: notch)
+                                      trueScale: trueScale, notch: notch, contrast: contrast)
             g.tick(d, now: now, animated: false)
             addSublayer(g)
             group = g
@@ -223,13 +232,17 @@ final class MusicOverlayLayer: CALayer {
         var insets: Insets
         /// Corner only (nil otherwise, so a size change never rebuilds a full layout).
         var cardSize: MusicSpec.CardSize?
+        /// Increase Contrast (a change cross-fades to the new opacities).
+        var contrast: Bool
 
-        init(_ d: MusicDisplay, size: CGSize, scale: CGFloat, insets: Insets, cardSize: MusicSpec.CardSize) {
+        init(_ d: MusicDisplay, size: CGSize, scale: CGFloat, insets: Insets, cardSize: MusicSpec.CardSize,
+             contrast: Bool) {
             mode = d.mode; track = d.trackKey
             art = d.art.map { ObjectIdentifier($0) }
             title = d.title; artist = d.artist; album = d.album; hasDuration = d.hasDuration
             self.size = size; self.scale = scale; self.insets = insets
             if case .card = d.mode { self.cardSize = cardSize }
+            self.contrast = contrast
         }
 
         /// Same place, same mode, a different song (or new artwork for it) — a stream's next
@@ -301,6 +314,8 @@ private final class MusicOverlayGroup: CALayer {
     private var lastFill: CGFloat = -1
     private let display: MusicDisplay
     private let notch: CGFloat
+    /// Increase Contrast: the secondary lines at a higher opacity (typeSet, buildCover).
+    private let contrast: Bool
     /// Where the text and artwork landed (MusicOverlayLayer.debugRects).
     private(set) var debugRects: [(kind: String, rect: CGRect)] = []
 
@@ -309,9 +324,11 @@ private final class MusicOverlayGroup: CALayer {
     private var marquee: Bool { !reduceMotion && ambient }
 
     init(_ d: MusicDisplay, bounds: CGRect, insets: MusicOverlayLayer.Insets, scale: CGFloat, reduceMotion: Bool,
-         ambient: Bool, cardSize: MusicSpec.CardSize = .medium, trueScale: Bool = false, notch: CGFloat = 0) {
+         ambient: Bool, cardSize: MusicSpec.CardSize = .medium, trueScale: Bool = false, notch: CGFloat = 0,
+         contrast: Bool = false) {
         self.ambient = ambient
         self.notch = notch
+        self.contrast = contrast
         W = bounds.width; H = bounds.height
         u = MusicGeometry.unit(bounds.size)
         self.scale = scale
@@ -324,7 +341,7 @@ private final class MusicOverlayGroup: CALayer {
         switch d.mode {
         case .full(let o):
             switch o.layout {
-            case .album: buildAlbum(d, o)
+            case .album: buildAlbum(d, o, insets)
             case .stage: buildStage(d, o, insets)
             case .cover: buildCover(d, o, insets)
             }
@@ -341,6 +358,7 @@ private final class MusicOverlayGroup: CALayer {
         reduceMotion = g?.reduceMotion ?? false; ambient = g?.ambient ?? false; mode = g?.mode ?? .hidden
         display = g?.display ?? MusicDisplay(mode: .hidden, music: .empty)
         notch = g?.notch ?? 0
+        contrast = g?.contrast ?? false
         super.init(layer: layer)
     }
 
@@ -508,7 +526,8 @@ private final class MusicOverlayGroup: CALayer {
 
     /// The type of one layout. Titles are Medium (a Display cut at these sizes, with slightly
     /// tighter tracking), Semibold only where a corner title gets small; the artist is
-    /// Regular; album and times Regular at reduced opacity. Nothing Bold.
+    /// Regular; album and times Regular at reduced opacity (less reduced with Increase
+    /// Contrast). Nothing Bold.
     private struct TypeSet {
         var title: MusicTextStyle
         var artist: MusicTextStyle
@@ -521,10 +540,12 @@ private final class MusicOverlayGroup: CALayer {
         let t = MusicTextStyle(size: title, weight: title < 20 ? .semibold : .medium, color: Self.white(0.98),
                                tracking: title >= 28 ? -0.010 : -0.004, maxLines: titleLines, alignment: align,
                                leading: 1.10)
-        let ar = MusicTextStyle(size: artist, weight: .regular, color: Self.white(0.82), tracking: -0.002,
+        let ar = MusicTextStyle(size: artist, weight: .regular, color: Self.white(contrast ? 0.94 : 0.82),
+                                tracking: -0.002, maxLines: 1, alignment: align)
+        let al = MusicTextStyle(size: album, weight: .regular, color: Self.white(contrast ? 0.84 : 0.64),
                                 maxLines: 1, alignment: align)
-        let al = MusicTextStyle(size: album, weight: .regular, color: Self.white(0.64), maxLines: 1, alignment: align)
-        let tm = MusicTextStyle(size: time, weight: .regular, color: Self.white(0.64), monospacedDigits: true)
+        let tm = MusicTextStyle(size: time, weight: .regular, color: Self.white(contrast ? 0.84 : 0.64),
+                                monospacedDigits: true)
         return TypeSet(title: t, artist: ar, album: al, time: tm)
     }
 
@@ -643,7 +664,7 @@ private final class MusicOverlayGroup: CALayer {
             return
         }
         let e = st.elapsed(at: now)
-        let sec = Int(e)
+        let sec = Int(saturating: e)
         guard sec != lastSecond else { return }
         lastSecond = sec
         let elapsed = MusicState.timeString(e)
@@ -840,13 +861,15 @@ private final class MusicOverlayGroup: CALayer {
     static let titleToArtist: CGFloat = 0.007
     static let artistToAlbum: CGFloat = 0.004
 
-    /// Apple Music full screen: artwork left, type right, the group centred on the art.
-    private func buildAlbum(_ d: MusicDisplay, _ o: MusicSceneOptions) {
-        let art = MusicGeometry.artRect(.album, size: CGSize(width: W, height: H))
+    /// Apple Music full screen: artwork left, type right, the group centred on the art — the
+    /// whole composition centred in the safe area (inside the menu bar and the Dock), and the
+    /// column kept inside it and below a notch's band.
+    private func buildAlbum(_ d: MusicDisplay, _ o: MusicSceneOptions, _ insets: MusicOverlayLayer.Insets) {
+        let art = MusicGeometry.artRect(.album, size: CGSize(width: W, height: H), insets: insets)
         addArt(d, art, radius: 0.028, shadow: 1)
         debugRects.append(("art", art))
         let x = art.maxX + MusicGeometry.albumGap * u
-        let colW = max(min(MusicGeometry.albumText * u, W - x - 0.06 * u), 40)
+        let colW = max(min(MusicGeometry.albumText * u, W - insets.right - x - 0.06 * u), 40)
         // Readable across a room without shouting on a laptop: the title's cap height is
         // ≈ 3.7 % of a 16:10 screen's height (0.053 u); every other line in step with it.
         let ts = typeSet(title: 0.053 * u, artist: 0.033 * u, album: 0.025 * u, time: 0.0175 * u,
@@ -855,8 +878,12 @@ private final class MusicOverlayGroup: CALayer {
         let showBar = o.showProgress && d.hasDuration
         let rowGap = 0.046 * u
         let margin = 0.05 * u
-        // Measure, then centre the whole column on the artwork — within the screen's margins,
-        // with smaller type only if a Reduce Motion third line would otherwise leave them.
+        // The column's limits: the margins inside the safe insets, and on a notched display
+        // below the camera housing's band by half a margin (no change where there's neither).
+        let minY = max(insets.top + margin, notch > 0 ? notch + 0.5 * margin : 0)
+        let maxY = H - insets.bottom - margin
+        // Measure, then centre the whole column on the artwork — within those margins, with
+        // smaller type only if a Reduce Motion third line would otherwise leave them.
         var squeeze: CGFloat = 1
         var fitted = fitType(d, ts, column: colW, album: o.showAlbum)
         var h: CGFloat = 0
@@ -867,13 +894,13 @@ private final class MusicOverlayGroup: CALayer {
             if let lb, !lb.isEmpty { h += Self.artistToAlbum * u + lb.height }
             if showBar { h += rowGap + barH + 0.017 * u + ts.time.size * MusicGeometry.lineBox }
             else { h += rowGap + Self.glyphHeight(ts.time.size) }
-            if h <= H - 2 * margin || squeeze <= 0.7 { break }
+            if h <= maxY - minY || squeeze <= 0.7 { break }
             squeeze -= 0.05
             fitted = fitType(d, ts, column: colW, album: o.showAlbum, squeeze: squeeze)
         }
         let (tb, ab, lb) = fitted
         var y = max(art.midY - h / 2, art.minY)
-        y = max(min(y, H - margin - h), margin)
+        y = max(min(y, maxY - h), minY)
         y += addBlock(tb, x: x, top: y, width: colW)
         if !ab.isEmpty { y += Self.titleToArtist * u; y += addBlock(ab, x: x, top: y, width: colW) }
         if let lb, !lb.isEmpty { y += Self.artistToAlbum * u; y += addBlock(lb, x: x, top: y, width: colW) }
@@ -897,8 +924,7 @@ private final class MusicOverlayGroup: CALayer {
     /// rather than leave the screen.
     private func buildStage(_ d: MusicDisplay, _ o: MusicSceneOptions, _ insets: MusicOverlayLayer.Insets) {
         typealias S = MusicGeometry.Stage
-        let art = MusicGeometry.artRect(.stage, size: CGSize(width: W, height: H), options: o,
-                                        insets: (insets.top, insets.bottom))
+        let art = MusicGeometry.artRect(.stage, size: CGSize(width: W, height: H), options: o, insets: insets)
         addArt(d, art, radius: 0.024, shadow: 1)
         debugRects.append(("art", art))
         let colW = min(W - 0.16 * u - insets.left - insets.right, 1.3 * u)
@@ -949,7 +975,9 @@ private final class MusicOverlayGroup: CALayer {
                          align: .left, titleLines: 2)
         // Over full-bleed art the secondary lines need more weight than over the calm Album /
         // Stage backgrounds (the shader's scrim targets ≥ 7:1 for the title; these keep ≥ 4.5:1).
-        ts.artist.color = Self.white(0.86); ts.album.color = Self.white(0.70); ts.time.color = Self.white(0.72)
+        ts.artist.color = Self.white(contrast ? 0.95 : 0.86)
+        ts.album.color = Self.white(contrast ? 0.86 : 0.70)
+        ts.time.color = Self.white(contrast ? 0.86 : 0.72)
         let (tb, ab, lb) = fitType(d, ts, column: colW, album: o.showAlbum)
         // Bottom-up: times, bar, album, artist, title.
         var y = bottom
