@@ -87,6 +87,8 @@ do {
     check(WallpaperPacing.rate(target: 24, step: 24, refresh: 120) == 24 && WallpaperPacing.rate(target: 24, step: 24, refresh: 60) == 30
           && WallpaperPacing.rate(target: 120, step: 24, refresh: 120) == 24 && WallpaperPacing.rate(target: 24, step: nil, refresh: 60) == 20,
           "stepped 24 fps: 24 on 120 Hz, 30 on 60 Hz, never skipping a step")
+    check(!SceneCatalog.penguinPresets.isEmpty && SceneCatalog.penguinPresets.allSatisfy { WallpaperPacing.steppedFPS($0) == 24 },
+          "Waddle steps its time at 24 fps, like Bloom")
     // …and below 24 (Efficient's 20, the saver's Low Power 15) every other step, evenly: 12, an
     // exact divisor of 60, 120 and 144 Hz (20 or 15 would drop steps unevenly)
     check(WallpaperPacing.rate(target: 20, step: 24, refresh: 60) == 12 && WallpaperPacing.rate(target: 15, step: 24, refresh: 120) == 12

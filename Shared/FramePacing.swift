@@ -9,7 +9,7 @@ enum FramePacing {
     /// 24 fps film cadence: Bloom_funcs.h), else nil. See `rate(target:step:refresh:)`.
     static func steppedFPS(_ preset: Preset) -> Double? {
         guard let first = preset.effects.first(where: \.enabled) else { return nil }
-        return first.kind == .flowerBloom ? 24 : nil
+        return first.kind == .flowerBloom || first.kind == .waddle ? 24 : nil
     }
 
     /// The draw rate for `target` fps on a `refresh` Hz display.
