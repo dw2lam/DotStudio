@@ -19,26 +19,12 @@
 
 import Foundation
 
-struct ScreensaverLineup: Equatable {
-    /// What plays by day (or all day), in library order. Never empty for a non-empty library.
-    var playlist: [UUID]
-    /// A different single style after sunset; nil = the playlist plays all day.
-    var night: UUID?
-
-    var rotates: Bool { playlist.count > 1 }
-    func contains(_ id: UUID) -> Bool { playlist.contains(id) || night == id }
-}
+// ScreensaverLineup and the pure lineup read/write live in Shared/AI/LibraryEdits.swift, so
+// dotstudio-mcp edits a library exactly as these do.
 
 extension AppModel {
     /// The screensaver's lineup, derived from the stored fields exactly as the saver reads them.
-    var screensaverLineup: ScreensaverLineup {
-        let day = Playback.pool(in: library, night: false).map(\.id)
-        let nightPool = Playback.pool(in: library, night: true).map(\.id)
-        // A night pool that equals the day pool is "no night style". A multi-style night
-        // pool can't come out of any UI that ever shipped; show it as no night style.
-        let night = (nightPool != day && nightPool.count == 1) ? nightPool.first : nil
-        return ScreensaverLineup(playlist: day, night: night)
-    }
+    var screensaverLineup: ScreensaverLineup { library.screensaverLineup }
 
     /// What the screensaver would show this very moment (same answer as the saver; music is
     /// presented over it, never instead of it).
@@ -57,28 +43,8 @@ extension AppModel {
     func applyLineup(_ lineup: ScreensaverLineup, persist: Bool = true) {
         Breadcrumbs.note("screensaver lineup: \(lineup.playlist.map { crumbName($0) }.joined(separator: ", "))"
                          + (lineup.night.map { " · night \(crumbName($0))" } ?? ""))
-        guard let first = library.presets.first?.id else { return }
-        let wanted = Set(lineup.playlist)
-        var day = library.presets.map(\.id).filter(wanted.contains)   // library order, no strays
-        if day.isEmpty { day = [first] }
-
-        var rot = rotation
-        rot.presetIDs = day
-        rot.enabled = day.count > 1
-        library.rotation = rot
-        if day.count == 1 || !(library.activeID.map(day.contains) ?? false) {
-            library.activeID = day[0]
-        }
-
-        var sch = schedule
-        sch.dayPresetID = nil   // by day, fall through to the playlist
-        if let n = lineup.night, library.presets.contains(where: { $0.id == n }) {
-            sch.enabled = true
-            sch.nightPresetID = n
-        } else {
-            sch.enabled = false
-        }
-        library.schedule = sch
+        guard !library.presets.isEmpty else { return }
+        library.applyLineup(lineup)
         if persist { save() }
     }
 
@@ -86,14 +52,9 @@ extension AppModel {
     func playAsScreensaver(_ id: UUID) {
         // One display connected, with a style of its own: playing a style means there.
         let roster = DisplayRoster.shared.displays
-        if roster.count == 1, library.displayStyles?[roster[0].key] != nil {
-            library.displayStyles?[roster[0].key] = nil
-            if library.displayStyles?.isEmpty == true { library.displayStyles = nil }
-        }
-        var l = screensaverLineup
-        l.playlist = [id]
-        if l.night == id { l.night = nil }
-        applyLineup(l)
+        Breadcrumbs.note("screensaver lineup: \(crumbName(id))")
+        library.playAsScreensaver(id, onlyDisplay: roster.count == 1 ? roster[0].key : nil)
+        save()
     }
 
     func isInPlaylist(_ id: UUID) -> Bool { screensaverLineup.playlist.contains(id) }

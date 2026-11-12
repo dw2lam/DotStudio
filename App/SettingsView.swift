@@ -28,6 +28,7 @@ struct SettingsView: View {
             WeatherSettingsSection()   // live weather for the sea scenes (WeatherSettingsSection.swift)
             setupSection
             WallpaperSettingsSection()
+            AISettingsSection()        // assistants via dotstudio-mcp (AISettingsSection.swift)
             transitionsSection
             performanceSection
             updatesSection
