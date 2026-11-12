@@ -180,11 +180,11 @@ enum MusicGeometry {
     enum Stage {
         static let art: CGFloat = 0.42
         static let artGap: CGFloat = 0.052               // artwork → title
-        static let title: CGFloat = 0.058, titleLeading: CGFloat = 1.08, titleLines = 2
-        static let artist: CGFloat = 0.036, artistGap: CGFloat = 0.013
-        static let album: CGFloat = 0.023, albumGap: CGFloat = 0.008
+        static let title: CGFloat = 0.049, titleLeading: CGFloat = 1.08, titleLines = 2
+        static let artist: CGFloat = 0.031, artistGap: CGFloat = 0.006
+        static let album: CGFloat = 0.022, albumGap: CGFloat = 0.004
         static let barGap: CGFloat = 0.042, bar: CGFloat = 0.0058
-        static let times: CGFloat = 0.0158, timesGap: CGFloat = 0.014
+        static let times: CGFloat = 0.0152, timesGap: CGFloat = 0.013
     }
 
     /// Height of one line of the system font (ascent + descent) per point of size — how
