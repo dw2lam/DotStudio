@@ -110,7 +110,7 @@ struct FakeFilmToolkit: FilmToolkitAPI {
             : CSReport(ok: true, diagnostics: [], warnings: [])
     }
     private func worker(_ mode: String, _ outDir: URL, _ variants: [String], seconds: Double) -> FilmCommand {
-        let me = CommandLine.arguments[0]
+        let me = executablePath()   // absolute: the job runs from its own folder
         let dur = ProcessInfo.processInfo.environment["DOTSTUDIO_MCP_FAKE_RENDER_SECONDS"] ?? "2"
         return FilmCommand(executable: me, arguments: ["--test-film-worker", mode, outDir.path, variants.joined(separator: ","), dur])
     }

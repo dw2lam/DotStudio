@@ -64,8 +64,10 @@ final class LibraryAccess {
 
     func preset(_ idOrName: String) throws -> Preset {
         let lib = try library()
-        if let id = UUID(uuidString: idOrName), let p = lib.presets.first(where: { $0.id == id }) { return p }
-        let matches = lib.presets.filter { $0.name.compare(idOrName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }
+        // Styles this build can't draw (only custom effects, before the scene engine) still count.
+        let all = lib.presets + lib.unknownPresets.map(\.preset)
+        if let id = UUID(uuidString: idOrName), let p = all.first(where: { $0.id == id }) { return p }
+        let matches = all.filter { $0.name.compare(idOrName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }
         if matches.count == 1 { return matches[0] }
         if matches.count > 1 {
             throw ToolError("\(matches.count) styles are named “\(idOrName)”; pass the id instead.",
