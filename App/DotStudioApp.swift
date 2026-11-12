@@ -48,6 +48,7 @@ struct DotStudioApp: App {
         }
         PerfProbe.runIfRequested()    // DOTSTUDIO_PERF_PROBE: headless cost measurements, then exits
         ClickProbe.runIfRequested()   // DOTSTUDIO_CLICK_PROBE: the gallery's click paths, headless, then exits
+        SetupCoach.runSelfTestIfRequested()   // DOTSTUDIO_COACH_SELFTEST: the coach overlay's click-through checks, then exits
         if ProcessInfo.processInfo.environment["DOTSTUDIO_MIGRATE_ONLY"] != nil {
             // Headless migration check (pair with DOTSTUDIO_STORE_DIR): migrates library.json
             // the way a launch does, saves it, prints a summary, exits.
