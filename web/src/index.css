@@ -68,3 +68,39 @@ body {
     animation: none;
   }
 }
+
+/* AI hero: the typing caret, and film grain that moves (DotStudio adds it live at playback). */
+.caret-blink {
+  animation: caret-blink 1s steps(1) infinite;
+}
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+.grain-live {
+  animation: grain-shift 0.6s steps(1) infinite;
+}
+@keyframes grain-shift {
+  0% {
+    background-position: 0 0;
+  }
+  20% {
+    background-position: -71px 43px;
+  }
+  40% {
+    background-position: 53px -97px;
+  }
+  60% {
+    background-position: -128px -29px;
+  }
+  80% {
+    background-position: 89px 117px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .caret-blink,
+  .grain-live {
+    animation: none;
+  }
+}

@@ -1,6 +1,5 @@
 import { motion } from "framer-motion";
 import { ArrowRight } from "lucide-react";
-import { Navbar } from "../components/Navbar";
 import { HeroReel } from "../components/HeroReel";
 import { WordsPullUp } from "../components/animations/WordsPullUp";
 
@@ -10,7 +9,7 @@ const DOWNLOAD = "https://github.com/dw2lam/DotStudio/releases/latest/download/D
 
 export function Hero() {
   return (
-    <section className="h-screen p-4 md:p-6">
+    <section className="h-screen p-4 pt-0 md:p-6 md:pt-0">
       <div className="relative h-full w-full overflow-hidden rounded-2xl md:rounded-[2rem]">
         {/* Backdrop: the app's own scenes, crossfading, with a "Now showing" caption. */}
         <HeroReel />
@@ -20,8 +19,6 @@ export function Hero() {
         {/* Uniform scrim to dim the busy ASCII backdrop a touch. */}
         <div className="pointer-events-none absolute inset-0 bg-black/35" />
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/70" />
-
-        <Navbar />
 
         {/* Bottom-aligned content */}
         <div className="absolute bottom-0 left-0 right-0 p-5 sm:p-7 md:p-10">
