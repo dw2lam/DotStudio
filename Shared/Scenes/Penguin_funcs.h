@@ -10,9 +10,9 @@
 //  feet) sits at an angle round its vertical axis and is drawn where that angle faces the
 //  viewer — a turn from the front to a profile is just the yaw.
 //  The bottom edge of the screen is the floor. Behind it, in the same LED grid but dimmer, a
-//  backdrop (Snowy Night or Day: drifts along the bottom, two pines, an igloo it can pass
-//  behind or doze beside, distant peaks, a crescent moon and stars or the sun), and falling
-//  snow.
+//  backdrop, always behind it (Snowy Night or Day: drifts along the bottom, two pines, an
+//  igloo it dozes beside, distant peaks, an aurora, a crescent moon and stars or the sun; each
+//  part can be switched off), and falling snow.
 //
 //  Frame: q in penguin heights from its feet, x right, y UP. Colours linear inside, display
 //  sRGB out. Time is stepped to 24 fps (the pose arrives stepped; the snow steps here).
@@ -20,6 +20,10 @@
 #include "CellKit_funcs.h"
 
 constant float WADDLE_FPS = 24.0;
+
+// The toggles (p2.x bits, WaddleRig.toggleKeys)
+constant int WADDLE_MOUNTAINS = 1, WADDLE_TREES = 2, WADDLE_IGLOO = 4, WADDLE_AURORA = 8,
+             WADDLE_SKY = 16, WADDLE_DRIFTS = 32, WADDLE_BURSTS = 64, WADDLE_SHADOW = 128;
 
 struct WaddlePose {
     float2 feet;                 // px, y down (on whole cells)
@@ -32,7 +36,7 @@ struct WaddlePose {
     float snow, bright, tuft, beak;
     float spray;                 // snow kicked up behind a belly slide, 0…1
     float iglooX, iglooR;        // px (x from the centre)
-    bool behind;                 // passing behind the igloo
+    int mask;                    // the toggles (WADDLE_* bits)
     float night;                 // the backdrop: 0 day … 1 night
     float cam;                   // px the camera has followed it by (the layers' parallax)
     float burst, burstSeed;      // seconds into a burst of hearts and stars (< 0 none), its seed
@@ -69,7 +73,7 @@ static inline WaddlePose waddle_pose(constant FXUniforms& u, float2 res) {
     P.slideDir = u.scene[7].z < 0.0 ? -1.0 : 1.0;
     P.spray = saturate(u.scene[7].w);
     P.iglooX = u.scene[8].x; P.iglooR = u.scene[8].y;
-    P.behind = u.scene[8].z > 0.5;
+    P.mask = int(u.p2.x + 0.5);
     P.night = saturate(u.scene[8].w);
     P.cam = u.scene[9].x;
     P.burst = u.scene[9].y; P.burstSeed = u.scene[9].z;
@@ -442,8 +446,9 @@ static inline WaddleBack waddle_backdrop(float2 cpx, float2 res, float ts, float
     float gh = hash21(cell * 0.913 + floor(ts * 4.0) * 0.37);
     float glint = gh < mix(0.004, 0.014, day) ? sin(3.14159 * fract(ts * 4.0)) * 0.45 : 0.0;
 
-    // ---- foreground mounds at the corners, nearer than the penguin (it passes behind them)
-    {
+    // ---- snow mounds at the corners, nearer than the rest of the backdrop (moving more), but
+    // still behind the penguin
+    if ((P.mask & WADDLE_DRIFTS) != 0) {
         float xf = X + 1.35 * cam;
         float f1 = (xf + halfW + 0.02) / 0.20, f2 = (xf - halfW - 0.05) / 0.17;
         float hf = 0.085 * exp(-f1 * f1) + 0.075 * exp(-f2 * f2);
@@ -461,7 +466,7 @@ static inline WaddleBack waddle_backdrop(float2 cpx, float2 res, float ts, float
             o.ground = 1.0; o.depth = 0.75;
             o.c = mix(snowLo, snowHi, smoothstep(drift - 0.025, drift, Y)) + glint;
             float dx = (cpx.x - P.feet.x) / P.hp, w = 0.46 * (1.0 - min(P.hop * 2.5, 0.5));
-            if (P.hp > 1.0 && abs(dx) < w) {
+            if ((P.mask & WADDLE_SHADOW) != 0 && P.hp > 1.0 && abs(dx) < w) {
                 float sh = 1.0 - smoothstep(0.55, 1.0, abs(dx) / w);
                 o.c = mix(o.c, o.c * 0.25 + float3(0.0, 0.010, 0.035), sh);
             }
@@ -486,7 +491,7 @@ static inline WaddleBack waddle_backdrop(float2 cpx, float2 res, float ts, float
         }
     }
     // ---- two pines (mid distance)
-    {
+    if ((P.mask & WADDLE_TREES) != 0) {
         float xm = X + 0.65 * cam;
         for (int i = 0; i < 2; ++i) {
             float xt = (i == 0 ? 0.34 : 0.66) * halfW, h = i == 0 ? 0.30 : 0.22;
@@ -510,7 +515,7 @@ static inline WaddleBack waddle_backdrop(float2 cpx, float2 res, float ts, float
         }
     }
     // ---- distant peaks (far: dim), snow along their ridges
-    {
+    if ((P.mask & WADDLE_MOUNTAINS) != 0) {
         float xp0 = X + 0.25 * cam;
         float m = 0.0;
         for (int i = 0; i < 6; ++i) m = max(m, WADDLE_PEAKS[i].y - abs(xp0 - WADDLE_PEAKS[i].x) * 0.62);
@@ -528,8 +533,9 @@ static inline WaddleBack waddle_backdrop(float2 cpx, float2 res, float ts, float
     // then a shooting star.
     float xs = X + 0.05 * cam;
     float3 c = float3(0.010, 0.030, 0.095) * (1.0 - smoothstep(0.0, 0.40, Y - 0.12)) * day;
+    bool sky = (P.mask & WADDLE_SKY) != 0;
     float2 dm = float2(xs, Y) - float2(-0.45 * halfW, top - 0.21);
-    float rm = length(dm);
+    float rm = sky ? length(dm) : 1e3;
     if (rm < 0.058) {
         float crescent = length(dm - float2(0.028, 0.014)) > 0.052 ? 1.0 : 0.0;
         o.c = c + float3(0.55, 0.48, 0.28) * crescent * night + float3(0.95, 0.62, 0.16) * 0.75 * day;
@@ -542,11 +548,15 @@ static inline WaddleBack waddle_backdrop(float2 cpx, float2 res, float ts, float
         c += (float3(0.45, 0.28, 0.06) * rays * fall + float3(0.10, 0.06, 0.012) * (1.0 - smoothstep(0.058, 0.10, rm))) * day;
     }
     if (night > 0.01) {
-        // the aurora: curtains hanging from a rippling lower edge, rayed, folds drifting along
-        float ya = top * 0.66 + 0.07 * sin(xs * 1.7 + ts * 0.11) + 0.035 * sin(xs * 4.3 - ts * 0.17);
+        // the aurora: curtains hanging from a rippling lower edge, rayed, folds drifting along;
+        // each ray reaches its own height and fades softly into the dark above
+        float s1 = sin(xs * 1.7 + ts * 0.11);
+        float ya = top * 0.66 + 0.07 * s1 + 0.035 * sin(xs * 4.3 - ts * 0.17);
         float dy = Y - ya;
-        if (dy > -0.02 && dy < 0.24) {
-            float a = smoothstep(-0.02, 0.012, dy) * (1.0 - smoothstep(0.0, 0.24, dy));
+        if ((P.mask & WADDLE_AURORA) != 0 && dy > -0.02 && dy < 0.30) {
+            float reach = 0.12 + 0.16 * (0.5 + 0.5 * sin(xs * 9.0 + 2.0 * s1 + ts * 0.21));
+            float up = saturate(dy / reach);
+            float a = smoothstep(-0.02, 0.012, dy) * (1.0 - up) * (1.0 - up);
             a *= 0.55 + 0.45 * sin(xs * 38.0 + 3.0 * sin(xs * 5.0 + ts * 0.3) + ts * 0.6);
             a *= 0.55 + 0.45 * sin(xs * 2.3 - ts * 0.25);
             float3 ac = mix(float3(0.10, 1.0, 0.42), float3(0.05, 0.75, 0.85), saturate(dy / 0.08));
@@ -555,14 +565,14 @@ static inline WaddleBack waddle_backdrop(float2 cpx, float2 res, float ts, float
         }
         if (rm < 0.11) c += float3(0.05, 0.05, 0.04) * (1.0 - smoothstep(0.058, 0.11, rm)) * night;
         float h = hash21(cell * 0.71 + 3.1);
-        if (h < 0.011 && Y > 0.30) {
+        if (sky && h < 0.011 && Y > 0.30) {
             float tw = 0.5 + 0.5 * sin(ts * (1.3 + 180.0 * h) + h * 900.0);
             c += float3(0.85, 0.90, 1.0) * (0.04 + 0.22 * tw) * night;
         }
         // a shooting star, every so often: a bright head and a fading tail, gone in under a second
         float k = floor(ts / 17.0);
         float hk = hash21(float2(k, 7.7));
-        if (hk < 0.6) {
+        if (sky && hk < 0.6) {
             float u = (ts - (k * 17.0 + 2.0 + 12.0 * hk)) / 0.8;
             if (u >= 0.0 && u <= 1.0) {
                 float2 st = float2((hash21(float2(k, 2.1)) * 1.4 - 0.7) * halfW, top * (0.80 + 0.12 * hash21(float2(k, 3.4))));
@@ -674,7 +684,7 @@ static inline float3 waddle_scene(float2 px, float2 res, float t, constant FXUni
     bool inDot = render == 2 || length(lp) < 0.42;
     if (backdrop > 0 && inDot) B = waddle_backdrop(cpx, res, ts, cell, P);
     float3 back = B.c;
-    float igloo = B.igloo, ground = B.ground;
+    float ground = B.ground;
     float3 snowC = float3(0.72, 0.82, 1.0);
     float bgLvl = 0.0;
     if (inDot && ground < 0.5 && P.snow > 0.01) {
@@ -706,13 +716,12 @@ static inline float3 waddle_scene(float2 px, float2 res, float t, constant FXUni
     }
 
     float3 sc = cellkit_color(sharp);
-    float hide = max(P.behind ? igloo : 0.0, B.fore);               // the igloo, a mound in front of it
-    float fig = smoothstep(0.0, 0.6, sharp.a) * (1.0 - hide);
+    float fig = smoothstep(0.0, 0.6, sharp.a);                      // (always in front of the backdrop)
     float3 E = mix(max(back, snowC * bgLvl), sc, fig) * P.bright;   // what this cell's LED emits
-    float3 spill = soft.c * P.bright * (1.0 - 0.8 * hide);          // the figure, blurred
+    float3 spill = soft.c * P.bright;                               // the figure, blurred
     float depth = max(B.depth, fig);                                // (nearer: fatter, crisper dots)
     float3 bc;
-    if (waddle_burst(cell, anchor, P, ts, bc)) { E = bc; fig = 1.0; depth = 1.0; }
+    if ((P.mask & WADDLE_BURSTS) != 0 && waddle_burst(cell, anchor, P, ts, bc)) { E = bc; fig = 1.0; depth = 1.0; }
     float3 col = bg;
     if (render < 2) {
         // LED DOTS — a tight grid of round dots — or PIXELS — rounded cells: each lit one with a
