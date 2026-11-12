@@ -1,0 +1,23 @@
+{
+  "format": 1,
+  "id": "paper-moon-5b2e9d47",
+  "name": "Paper Moon",
+  "author": "DotStudio",
+  "licence": "MIT",
+  "engine": { "id": "metal", "version": ">=1" },
+  "entry": "scene.metal",
+  "fps": 30,
+  "stepped": false,
+  "params": [
+    { "key": "drift", "label": "Drift", "kind": "slider", "min": 0, "max": 1, "default": 0.35 },
+    { "key": "layers", "label": "Layers", "kind": "slider", "min": 3, "max": 6, "step": 1, "default": 5 },
+    { "key": "grain", "label": "Grain", "kind": "slider", "min": 0, "max": 1, "default": 0.6 }
+  ],
+  "colors": {
+    "a": { "label": "Sky", "default": [0.55, 0.72, 0.86, 1] },
+    "b": { "label": "Hills", "default": [0.32, 0.48, 0.52, 1] }
+  },
+  "uses": ["sun"],
+  "description": "Paper-cut hills drifting in layers under the real sun — a pale moon once it sets.",
+  "guides": ["style/dotstudio"]
+}

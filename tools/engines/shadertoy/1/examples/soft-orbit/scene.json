@@ -1,0 +1,20 @@
+{
+  "format": 1,
+  "id": "soft-orbit-a3f6c218",
+  "name": "Soft Orbit",
+  "author": "DotStudio",
+  "licence": "MIT",
+  "engine": { "id": "shadertoy", "version": ">=1" },
+  "entry": "scene.glsl",
+  "fps": 30,
+  "stepped": false,
+  "params": [
+    { "key": "speed", "label": "Speed", "kind": "slider", "min": 0, "max": 1, "default": 0.4 }
+  ],
+  "colors": {
+    "a": { "label": "Room", "default": [0.86, 0.80, 0.74, 1] },
+    "b": { "label": "Spheres", "default": [0.86, 0.46, 0.36, 1] }
+  },
+  "description": "Three matte spheres circling over a pale floor, lit by a low sun, with soft shadows. A Shadertoy-style example for the shadertoy engine (analytic intersections, so it stays cheap at 5K).",
+  "guides": ["style/dotstudio"]
+}

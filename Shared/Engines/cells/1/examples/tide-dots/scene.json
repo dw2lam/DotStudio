@@ -1,0 +1,22 @@
+{
+  "format": 1,
+  "id": "tide-dots-49b0e2c6",
+  "name": "Tide Dots",
+  "author": "DotStudio",
+  "licence": "MIT",
+  "engine": { "id": "cells", "version": ">=1" },
+  "entry": "scene.metal",
+  "fps": 24,
+  "stepped": true,
+  "params": [
+    { "key": "swell", "label": "Swell", "kind": "slider", "min": 0, "max": 1, "default": 0.5 },
+    { "key": "speed", "label": "Speed", "kind": "slider", "min": 0, "max": 1, "default": 0.4 },
+    { "key": "tide", "label": "Tide", "kind": "toggle", "default": 1 }
+  ],
+  "colors": {
+    "a": { "label": "Night", "default": [0.03, 0.04, 0.09, 1] },
+    "b": { "label": "Foam", "default": [0.78, 0.92, 1.0, 1] }
+  },
+  "description": "Rows of swells rolling in under a low moon, in LED dots, rising and falling with a slow tide.",
+  "guides": ["style/dotstudio"]
+}

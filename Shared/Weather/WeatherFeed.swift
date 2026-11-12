@@ -80,6 +80,7 @@ final class WeatherLink {
     /// Whether this style follows the live weather (the app fetches only while one does).
     static func followsLive(_ preset: Preset) -> Bool {
         preset.effects.contains { $0.enabled && usesWeather($0.kind) && fixedCondition($0) == nil }
+            || preset.customUses("weather")        // a Custom Scene whose manifest "uses" the weather
     }
 
     /// The live weather right now (eased), polling the feed when due.

@@ -147,6 +147,18 @@ func musicSpec(full: MusicSpec.Backdrop?) -> MusicSpec {
     m.setDisplay(full != nil ? .fullScreen : .corner)
     return m
 }
+let store = SharedStore(role: .app)
+
+/// A Custom Scene (CustomScenes.swift): the metal engine's first example package, installed into
+/// the temp store — the saver compiles it at runtime (its first frame waits for the pipeline).
+func customScenePreset() -> Preset? {
+    guard let ex = CustomScenes.engines(store: store.baseDir).first(where: { $0.id == "metal" })?.exampleURLs.first,
+          let id = try? CustomScenes.install(packageAt: ex, into: store.baseDir),
+          let m = CustomScenes.manifest(id: id, store: store.baseDir) else { return nil }
+    return .customScene(m)
+}
+let customPreset = customScenePreset()
+
 var scenarios: [Scenario] = [
     Scenario(name: "Liquid Chrome", preset: preset("Liquid Chrome")),
     Scenario(name: "Tidewater (live wx)", preset: preset("Tidewater"), weather: true),
@@ -162,10 +174,9 @@ var scenarios: [Scenario] = [
     Scenario(name: "Music corner", preset: preset("Liquid Chrome"), music: musicSpec(full: nil)),
     Scenario(name: "Music full (veil)", preset: preset("Liquid Chrome"), music: musicSpec(full: .screensaver)),
     Scenario(name: "Music full (art)", preset: preset("Liquid Chrome"), music: musicSpec(full: .albumArt)),
-]
+] + (customPreset.map { [Scenario(name: "Custom Scene (\($0.name))", preset: $0)] } ?? [])
 if !only.isEmpty { scenarios = scenarios.filter { s in only.contains { s.name.lowercased().contains($0) } } }
-
-let store = SharedStore(role: .app)
+if customPreset == nil { print("warning: no Custom Scene example to install (Engines/ next to the binary?)") }
 
 /// Live weather (rain, fetched now) for Tidewater, written where every WeatherFeed reads it.
 func writeWeather() {
@@ -403,6 +414,13 @@ case "renderer":
 case "saver":
     print("saver: DotSaverView.animateOneFrame at \(W)x\(H) px  [call = the whole tick on the main thread]")
     for s in scenarios { for fps in fpsList { report(runSaver(s, fps: fps)) } }
+    // The saver drew the Custom Scene with its own runtime-compiled pipeline, not the stand-in.
+    if let c = customPreset, scenarios.contains(where: { $0.preset.id == c.id }), let id = c.effects.first?.custom?.id {
+        let st = CustomSceneLink.shared(store: store.baseDir).status(id)
+        print(st == .ready ? "saver: Custom Scene \(c.name): PASS — compiled at runtime and drawn by the saver"
+                           : "saver: Custom Scene \(c.name): FAIL — \(st)")
+        if st != .ready { exit(1) }
+    }
 case "wallpaper" where power != nil:
     // The controller's policy (WallpaperBudget) with default settings, on a --size native screen.
     var settings = WallpaperSettings()

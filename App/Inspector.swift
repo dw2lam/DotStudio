@@ -486,7 +486,11 @@ struct EffectRow: View {
             header
             if isExpanded {
                 VStack(alignment: .leading, spacing: layout.inspectorRowGap) {
-                    ForEach(effect.kind.params) { spec in
+                    if effect.kind == .custom {
+                        CustomSceneStatusRow(effect: effect)
+                    }
+                    // (a Custom Scene's params and colours are its package manifest's)
+                    ForEach(effect.paramSpecs) { spec in
                         ParamRow(spec: spec, value: paramBinding(spec))
                     }
                     if effect.kind.usesColors {
@@ -511,7 +515,7 @@ struct EffectRow: View {
     }
 
     private var header: some View {
-        let name = effect.kind.displayName
+        let name = effect.displayNameText
         return HStack(spacing: layout.iconGap) {
             Button { effect.enabled.toggle() } label: {
                 Image(systemName: effect.enabled ? "eye" : "eye.slash")
@@ -529,9 +533,9 @@ struct EffectRow: View {
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                     .foregroundStyle(effect.enabled ? .primary : .secondary)
-                    .help("\(name) — \(effect.kind.blurb)")
+                    .help("\(name) — \(effect.blurbText)")
                 if effect.kind.isScene {
-                    Text("Scene")
+                    Text(effect.kind == .custom ? "Custom" : "Scene")
                         .textRole(.inspectorTag)
                         .foregroundStyle(.secondary)
                         .fixedSize()
@@ -585,22 +589,22 @@ struct EffectRow: View {
 
     private var wells: [ColorWellsRow<EmptyView>.Well] {
         var out: [ColorWellsRow<EmptyView>.Well] = []
-        if effect.kind.defaultColorA != nil { out.append(.init(title: effect.kind.colorALabel, color: colorBinding(isA: true))) }
-        if effect.kind.defaultColorB != nil { out.append(.init(title: effect.kind.colorBLabel, color: colorBinding(isA: false))) }
+        if effect.defaultColorAValue != nil { out.append(.init(title: effect.colorALabelText, color: colorBinding(isA: true))) }
+        if effect.defaultColorBValue != nil { out.append(.init(title: effect.colorBLabelText, color: colorBinding(isA: false))) }
         return out
     }
 
     private var isDefault: Bool {
-        effect.params == effect.kind.defaultParams
-            && effect.colorA == effect.kind.defaultColorA
-            && effect.colorB == effect.kind.defaultColorB
+        effect.params == effect.defaultParamValues
+            && effect.colorA == effect.defaultColorAValue
+            && effect.colorB == effect.defaultColorBValue
             && effect.logoKind == nil && effect.logoText == nil && effect.logoFile == nil
     }
 
     private func reset() {
-        effect.params = effect.kind.defaultParams
-        effect.colorA = effect.kind.defaultColorA
-        effect.colorB = effect.kind.defaultColorB
+        effect.params = effect.defaultParamValues
+        effect.colorA = effect.defaultColorAValue
+        effect.colorB = effect.defaultColorBValue
         effect.logoKind = nil; effect.logoText = nil; effect.logoFile = nil
     }
 
@@ -612,10 +616,53 @@ struct EffectRow: View {
     private func colorBinding(isA: Bool) -> Binding<Color> {
         Binding(
             get: {
-                let c = isA ? (effect.colorA ?? effect.kind.defaultColorA) : (effect.colorB ?? effect.kind.defaultColorB)
+                let c = isA ? (effect.colorA ?? effect.defaultColorAValue) : (effect.colorB ?? effect.defaultColorBValue)
                 return Color(c ?? .black)
             },
             set: { if isA { effect.colorA = RGBA($0) } else { effect.colorB = RGBA($0) } })
+    }
+}
+
+/// A Custom Scene's package: what it is, and — when it can't draw — why (its compile errors, a
+/// GPU fault, a missing package or engine). Re-checked every second, so an edit made through the
+/// MCP server shows here without touching the style.
+struct CustomSceneStatusRow: View {
+    let effect: EffectInstance
+    @Environment(\.layout) private var layout
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            let status = effect.custom.map { CustomSceneLink.shared(store: CustomScenes.defaultStore).status($0.id) } ?? .missing
+            VStack(alignment: .leading, spacing: layout.labelGap) {
+                if let m = effect.customManifest {
+                    Text([m.author.map { "by \($0)" }, "\(m.engine.id) engine"].compactMap { $0 }.joined(separator: " · "))
+                        .textRole(.caption).foregroundStyle(.secondary)
+                }
+                switch status {
+                case .ready:
+                    EmptyView()
+                case .compiling:
+                    Label("Compiling…", systemImage: "hourglass").textRole(.caption).foregroundStyle(.secondary)
+                case .missing:
+                    Label("This scene's package isn't installed — showing a plain gradient.", systemImage: "exclamationmark.triangle")
+                        .textRole(.caption).foregroundStyle(.orange)
+                case .disabled(let reason):
+                    Label("Turned off after a GPU error (\(reason)) — edit the scene to try again.", systemImage: "exclamationmark.triangle")
+                        .textRole(.caption).foregroundStyle(.orange)
+                case .failed(let d):
+                    let errors = d.filter { $0.severity == .error }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label("Doesn't compile — showing a plain gradient.", systemImage: "exclamationmark.triangle")
+                            .textRole(.caption).foregroundStyle(.orange)
+                        ForEach(Array(errors.prefix(3).enumerated()), id: \.offset) { _, e in
+                            Text(e.formatted).textRole(.caption2).foregroundStyle(.secondary).lineLimit(3)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
