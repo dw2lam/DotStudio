@@ -1,0 +1,21 @@
+{
+  "format": 1,
+  "id": "ink-drift-0c4e9b72",
+  "name": "Ink Drift",
+  "author": "DotStudio",
+  "licence": "MIT",
+  "engine": { "id": "shadertoy", "version": ">=1" },
+  "entry": "scene.glsl",
+  "fps": 30,
+  "stepped": false,
+  "params": [
+    { "key": "flow", "label": "Flow", "kind": "slider", "min": 0, "max": 1, "default": 0.4 },
+    { "key": "scale", "label": "Scale", "kind": "slider", "min": 0, "max": 1, "default": 0.3 }
+  ],
+  "colors": {
+    "a": { "label": "Ink", "default": [0.10, 0.20, 0.38, 1] },
+    "b": { "label": "Accent", "default": [0.80, 0.36, 0.26, 1] }
+  },
+  "description": "Two inks marbling slowly on warm paper. A Shadertoy-style example for the shadertoy engine.",
+  "guides": ["style/dotstudio"]
+}
