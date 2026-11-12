@@ -18,6 +18,10 @@ fi
 for fw in "$APP"/Contents/Frameworks/*.framework(N); do [[ "$fw" == "$SP" ]] || sign "$fw"; done
 SAVER="$APP/Contents/Resources/DotStudio.saver"
 [[ -d "$SAVER" ]] && sign --preserve-metadata=entitlements,flags "$SAVER"
+# The MCP server AI clients launch (Contents/MacOS/dotstudio-mcp): signed before the app seals it,
+# under its own stable identifier, so it keeps one identity across updates.
+MCP="$APP/Contents/MacOS/dotstudio-mcp"
+[[ -f "$MCP" ]] && sign --identifier com.davidlam.DotStudio.mcp --preserve-metadata=entitlements,flags "$MCP"
 sign --preserve-metadata=entitlements,flags "$APP"
 
 codesign --verify --deep --strict "$APP"

@@ -32,7 +32,8 @@ targets:
     sources:
       - Saver
       - path: Shared
-        excludes: ["Photos/**", "Engines/**"]
+        # Shared/AI: the AI bridge and edits — app and dotstudio-mcp only.
+        excludes: ["Photos/**", "Engines/**", "AI/**"]
       # Built-in slideshow photos ship ONCE, inside the saver (Resources/Photos). The app
       # reads them from its embedded DotStudio.saver (CollectionSource.builtInPhotoURLs).
       - path: Shared/Photos
@@ -64,12 +65,24 @@ targets:
       - path: Shared/Engines
         type: folder
         buildPhase: resources
+      # The AI guides (style, power, burn-in, settings) → Contents/Resources/Guides, read by
+      # dotstudio-mcp (read_guide / MCP resources); engines/<id> is served from Resources/Engines.
+      - path: Guides
+        type: folder
+        buildPhase: resources
     dependencies:
       - target: DotStudioSaver
         embed: true
         codeSign: true
         copy:
           destination: resources
+      # The MCP server, next to the app's executable (Contents/MacOS): there Bundle.main is
+      # the app, so it renders with the app's metallib and resources (MCP/main.swift).
+      - target: dotstudio-mcp
+        embed: true
+        codeSign: true
+        copy:
+          destination: executables
       - package: Sparkle
     info:
       path: App/Info.plist
@@ -116,3 +129,22 @@ targets:
         ENABLE_APP_SANDBOX: "NO"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         MARKETING_VERSION: "1.4.6"
+
+  # The MCP server AI clients launch (Claude Desktop, Claude Code, Cursor…): stdio JSON-RPC,
+  # embedded at DotStudio.app/Contents/MacOS/dotstudio-mcp. Compiles Shared (renderer, model,
+  # Shared/AI) — not the shaders: it uses the app's own default.metallib at run time.
+  dotstudio-mcp:
+    type: tool
+    platform: macOS
+    sources:
+      - MCP
+      - path: Shared
+        excludes: ["Photos/**", "PlanetTextures/**", "**/*.metal", "**/*.jpg", "**/*.png"]
+    settings:
+      base:
+        PRODUCT_NAME: dotstudio-mcp
+        PRODUCT_BUNDLE_IDENTIFIER: com.davidlam.DotStudio.mcp
+        SWIFT_OBJC_BRIDGING_HEADER: Shared/Bridging.h
+        ENABLE_APP_SANDBOX: "NO"
+        SKIP_INSTALL: "YES"
+        GENERATE_INFOPLIST_FILE: "NO"

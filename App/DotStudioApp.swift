@@ -54,6 +54,10 @@ struct DotStudioApp: App {
             // the way a launch does, saves it, prints a summary, exits.
             AppModel.migrateOnly()
         }
+        // dotstudio-mcp writes library.json itself only while the app isn't running, under this
+        // lock; the app holds it from loading the library until its AI bridge is open, so the
+        // two never interleave (Shared/AI/AIBridge.swift). Never blocks a launch for long.
+        let storeLock = StoreLock.acquire(store: SharedStore.appBaseDir, timeout: 5)
         let model = AppModel()
         _model = StateObject(wrappedValue: model)
         WallpaperController.shared.attach(model: model)   // restored in applicationDidFinishLaunching
@@ -62,6 +66,8 @@ struct DotStudioApp: App {
         AppPresence.shared.attach(model: model)
         SetupGuidePanel.shared.attach(model: model)        // Help ▸ Set Up Screensaver… (SetupGuide.swift)
         LoginNudge.shared.attach(model: model)             // started in applicationDidFinishLaunching
+        AIBridgeHost.shared.start(model: model)            // AI assistants' changes (AIBridgeHost.swift)
+        storeLock?.release()
         // After an app update, silently refresh the installed .saver so the
         // screensaver actually gets the new code (takes effect next start).
         Installer.reinstallIfOutdated()
@@ -203,6 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         Breadcrumbs.note("quit")
+        AIBridgeHost.shared.stop()     // dotstudio-mcp edits the files from now on
         MusicLifecycle.shared.stop()   // clears music.json: the saver shows no stale track
         WallpaperController.shared.shutdown()
     }
