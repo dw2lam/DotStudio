@@ -45,3 +45,15 @@ frame (its poster).
 
 `validate` checks the variants, that every clip is a playable video at least 0.4 s long, and warns
 about low resolution or a codec without hardware decode.
+
+## Grain and halation (applied live)
+
+Don't bake grain into the clips: the engine adds it at playback, so it stays sharp at every
+screen size and never smears in the video codec.
+- **Grain** (0…1, default 0.35): fine, animated, luminance-weighted — strongest in the mids, gentle
+  in shadows and highlights; a new pattern on every frame of the clip (stepped at its frame rate);
+  about 1.4 pt per grain at any resolution.
+- **Halation** (0…1, default 0): a subtle warm bleed around highlights, for clips that weren't
+  graded with it (the Blender toolkit's clips bake their own — leave it at 0 for those).
+Both are engine params: they appear in the Inspector under every film style, and a style stores
+them as `ds.grain` / `ds.halation` in its params. One fragment pass, ≤ 0.3 ms at 5120×2880.

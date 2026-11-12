@@ -459,6 +459,8 @@ final class CustomSceneBench {
     private let queue: MTLCommandQueue?
     private(set) var lastError: String?
     var params: [String: Double] = [:]
+    /// Textures for slots 9…12 in place of the package's assets (tools: a film's clip frames).
+    var textures: [MTLTexture]?
 
     init(device: MTLDevice, pso: MTLRenderPipelineState, prepared: PreparedScene) {
         self.device = device; self.pso = pso; self.prepared = prepared
@@ -483,7 +485,8 @@ final class CustomSceneBench {
         CustomSceneLink.fillStatic(&u, inst: instP, prepared: prepared, wall: Date(), location: nil,
                                    weather: .clear, musicPlaying: false, musicLevel: 0)
         u.resolution = simd_float2(Float(width), Float(height))
-        let assets = CustomSceneAssets.textures(for: prepared, device: device)
+        let assets = textures.map { $0 + CustomSceneAssets.textures(for: prepared, device: device) }
+            ?? CustomSceneAssets.textures(for: prepared, device: device)
         for f in 0..<frames {
             u.time = time + Float(f) * 0.37
             let rpd = MTLRenderPassDescriptor()
