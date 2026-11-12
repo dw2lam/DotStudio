@@ -84,19 +84,102 @@ Stack effects on top of a scene, or start from nothing with **Create Your Own**.
 ## Install
 
 1. Download **[DotStudio.dmg](https://github.com/dw2lam/DotStudio/releases/latest/download/DotStudio.dmg)**
-   from the [latest release](https://github.com/dw2lam/DotStudio/releases/latest) and drag
-   **DotStudio** into Applications.
-2. Open it once. DotStudio isn't notarized yet, so macOS stops the first launch: go to
-   **System Settings → Privacy & Security** and click **Open Anyway**.
-3. Follow the welcome guide. It installs the screensaver, then shows you where to choose it in
-   **Wallpaper → Screen Saver**. After that, you switch styles inside the app.
+   from the [latest release](https://github.com/dw2lam/DotStudio/releases/latest), open it and
+   drag **DotStudio** into **Applications**.
+2. Open DotStudio from Applications. It isn't notarized yet, so macOS stops the first launch
+   with "Apple could not verify…". Click **Done** (not Move to Trash).
+3. Open **System Settings › Privacy & Security** and scroll down to **Security**. Next to
+   "DotStudio was blocked to protect your Mac", click **Open Anyway**, confirm with your password
+   or Touch ID, then click **Open Anyway** once more. The button shows for about an hour after
+   the blocked launch; if it's gone, open DotStudio again and come back.
+   (On macOS 15 and later, right-click › Open no longer skips this step.)
+4. Follow the welcome guide. It installs the screensaver, walks you through choosing it, and
+   explains music and the menu bar. It's always under **Help › Welcome to DotStudio…**.
 
-Updates are automatic: DotStudio checks GitHub Releases, downloads new versions in the background
-and installs them when you quit (or **Settings → Updates → Restart to Update**). The screensaver
-updates along with the app. Releases are signed with a stable identity, so privacy permissions
-(like Automation for Spotify and Music) survive updates.
+You only do this once. Updates are automatic: DotStudio checks GitHub Releases, downloads new
+versions in the background and installs them when you quit (or **Settings › Updates › Restart
+to Update**). The screensaver updates along with the app. Releases are signed with a stable
+identity, so privacy permissions (like Automation for Spotify and Music) survive updates.
 
 Requires macOS 14 or later. Made and tested on Apple Silicon.
+
+## Using DotStudio
+
+### The screensaver
+
+DotStudio installs one screensaver; which style it plays is chosen in the app. To turn it on,
+open **System Settings › Wallpaper**, click **Screen Saver…**, and pick **DotStudio** under
+**Other**. The guided setup (**Help › Set Up Screensaver…**, or **Settings › General › Run Setup
+Again…**) shows each click beside a live checklist.
+
+From then on, pick styles in the gallery: one style, a playlist that rotates, and another style
+for the night.
+
+### Live wallpaper
+
+Any style can play behind your windows from the **Wallpaper** card, or press **SYNC** and the
+desktop plays the screensaver's scene in step. It plays while DotStudio is running (closing the
+window keeps it in the menu bar) and costs nothing while it can't be seen: it pauses when
+windows cover the desktop, the screen locks or sleeps, or the screensaver starts.
+
+- **On battery** (**Settings › Live Wallpaper › On Battery**): **Efficient**, the default, plays
+  at 20 fps and a lower resolution; **Full** plays as when plugged in (up to 30 fps); **Still**
+  holds a frame.
+- **Low Power Mode**, or a Mac running hot, holds a still frame and the Wallpaper card says so
+  ("Still — Low Power Mode"). It moves again when Low Power Mode is off. Clocks still turn over
+  every minute.
+
+### Music (Spotify & Apple Music)
+
+While a song plays in Spotify or Apple Music, the screensaver shows it over whatever style is
+playing, and optionally on the live wallpaper too. When the music stops, it goes away; a paused
+song stays for 5 minutes (or 1, or 15).
+
+- **Show music**: **Off**, **Corner** (the default; pick the corner and size), or **Full
+  Screen** in an **Album**, **Stage** or **Cover** layout, over the album's living art or over
+  your screensaver, softly blurred.
+- **Where to change it**: the **Music** key on the Screensaver card, or **Settings › Music**,
+  which also has **Also on the live wallpaper**, how long a paused song stays, and the
+  **Source**: **Automatic**, **Spotify** or **Apple Music**.
+- **Controls**: Play/Pause, Previous and Next in the DotStudio menu-bar menu and Settings ›
+  Music; Play/Pause and Next on the song line of the Screensaver card.
+
+**How it connects.** No Spotify login, no API keys. DotStudio listens for the now-playing
+notifications the Spotify and Music apps on your Mac already send, and talks to them with Apple
+Events (macOS Automation), only while they're open; it never launches them. The first time a
+song plays, macOS asks once whether DotStudio may control Spotify (or Music). Allow it for exact
+progress, the player's own artwork and the controls.
+
+If you don't, the song still shows, but the controls are off and Settings › Music shows **Needs
+permission** with an **Allow…** button. To change your answer, open **System Settings › Privacy &
+Security › Automation**, expand **DotStudio**, and turn on **Spotify** or **Music**. To be asked
+again from scratch, run `tccutil reset AppleEvents com.davidlam.DotStudio` in Terminal (it
+resets DotStudio's Automation answers for every app).
+
+**What leaves your Mac.** Song details come from the players on this Mac and stay there. When a
+player doesn't hand over the cover, DotStudio looks it up in Spotify's or Apple's public catalog;
+only the song's ID, or its artist and album, is sent.
+
+**Keep it running.** The screensaver only knows what's playing while DotStudio runs. With **Keep
+running in the menu bar** (on by default), closing the window leaves it in the menu bar; turn on
+**Open DotStudio at login** in **Settings › General** so it's back after a restart.
+
+## Troubleshooting
+
+- **"Apple could not verify DotStudio…"**: expected on first launch. Use **Open Anyway** in
+  System Settings › Privacy & Security ([Install](#install), step 3).
+- **DotStudio isn't in the screensaver list**: open DotStudio, choose **Help › Set Up
+  Screensaver…** and click **Install** (it goes into `~/Library/Screen Savers`). Then quit and
+  reopen System Settings and look under **Other**.
+- **The live wallpaper is still or paused**: the Wallpaper card says why. *Still — Low Power
+  Mode*, *Still — Mac is running hot* and *Still — on battery* (On Battery set to Still) hold a
+  frame on purpose; it also pauses while windows cover the desktop, and plays only while
+  DotStudio is running.
+- **Music doesn't show**: check that **Show music** isn't Off, DotStudio is running, and the song
+  is playing in the Spotify or Music app on this Mac (not on another device). If the controls are
+  greyed out, allow DotStudio in **System Settings › Privacy & Security › Automation**.
+- **Something else**: **Help › Report a Problem…** shows a report you can read first; **Send Report…**
+  copies it and opens a new GitHub issue to paste it into.
 
 ### Build from source
 
