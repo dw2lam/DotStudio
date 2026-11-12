@@ -81,9 +81,9 @@ enum BounceLogo {
         m.rx = max(W - lw, 1); m.ry = max(H - lh, 1)
         let ty1 = m.ry / (speedScale * H)               // a crossing at speed 1
         let r = m.rx / m.ry
-        func qFor(_ p: Int) -> Int { max(Int((Double(p) / r).rounded()), 1) }
+        func qFor(_ p: Int) -> Int { max(Int(saturating: Double(p) / r, .toNearestOrAwayFromZero), 1) }
         func gcd(_ a: Int, _ b: Int) -> Int { var a = a, b = b; while b != 0 { (a, b) = (b, a % b) }; return a }
-        let target = max(Int((cornerSeconds / ty1).rounded()), 2)
+        let target = min(max(Int(saturating: cornerSeconds / ty1, .toNearestOrAwayFromZero), 2), 1 << 40)
         var p = target
         for d in 0..<64 {                                // the nearest count with gcd(p, q) = 1
             if gcd(target + d, qFor(target + d)) == 1 { p = target + d; break }
@@ -110,18 +110,18 @@ enum BounceLogo {
         let nx = fx.rounded(.down), ny = fy.rounded(.down)
         func tri(_ f: Double, _ n: Double) -> Double {
             let fr = f - n
-            return Int(n).isMultiple(of: 2) ? fr : 1 - fr
+            return Int(saturating: n).isMultiple(of: 2) ? fr : 1 - fr
         }
         return Pose(center: SIMD2(m.lw / 2 + m.rx * tri(fx, nx), m.lh / 2 + m.ry * tri(fy, ny)),
-                    bounces: Int(nx) + Int(ny))
+                    bounces: Int(saturating: nx) &+ Int(saturating: ny))
     }
 
     /// The latest corner hit at or before t: its time and screen corner (px).
     static func lastCorner(_ m: Timing, at t: Double, width W: Double, height H: Double) -> (time: Double, corner: SIMD2<Double>) {
         // (t is a Float on its way here: a frame a hair before the hit still counts as it)
         let k = ((t - m.tc + 0.002) / m.period).rounded(.down)
-        let ki = Int(k)
-        let right = !(ki * m.q).isMultiple(of: 2), bottom = !(ki * m.p).isMultiple(of: 2)
+        let ki = Int(saturating: k)
+        let right = !(ki &* m.q).isMultiple(of: 2), bottom = !(ki &* m.p).isMultiple(of: 2)
         return (m.tc + k * m.period, SIMD2(right ? W : 0, bottom ? H : 0))
     }
 
@@ -136,7 +136,7 @@ enum BounceLogo {
         guard let e = entry(for: inst, mediaDir: mediaDir, device: device) else { return nil }
         let W = Double(u.resolution.x), H = Double(u.resolution.y)
         guard W > 0, H > 0 else { return nil }
-        let speed = Double(u.p0.x), mode = Int((u.p0.z + 0.5).rounded(.down))
+        let speed = Double(u.p0.x), mode = Int(saturating: u.p0.z + 0.5, .down)
         let flourishOn = u.p0.w > 0.5, trail = Double(min(max(u.p1.x, 0), 1))
         let m = timing(width: W, height: H, aspect: e.aspect, size: Double(u.p0.y), speed: speed)
         let t = Double(u.time)

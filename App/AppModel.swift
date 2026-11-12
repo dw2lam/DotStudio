@@ -627,7 +627,13 @@ final class AppModel: ObservableObject {
             throw CocoaError(.fileReadCorruptFile, userInfo: [NSLocalizedDescriptionKey:
                 "“\(doc.preset.name)” was made with a newer version of DotStudio: none of its effects are available in this version."])
         }
-        return (doc.preset, doc.preset.unknownEffects.count, doc.source)
+        // A shared file can say anything: every param clamped to its range (SafeNumbers).
+        var preset = doc.preset
+        preset.sanitize()
+        var source = doc.source
+        if let s = source?.slideSeconds, !s.isFinite { source?.slideSeconds = nil }
+        if let m = source?.motion, !m.isFinite { source?.motion = nil }
+        return (preset, preset.unknownEffects.count, source)
     }
 
     // MARK: Still-image export / wallpaper

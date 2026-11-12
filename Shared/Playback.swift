@@ -45,7 +45,7 @@ enum Playback {
         let fallback = lib.presets.first { $0.id == lib.activeID } ?? lib.presets.first ?? Preset(name: "Empty")
         guard pool.count > 1, let rot = lib.rotation else { return pool.first ?? fallback }
         let interval = max(rot.intervalMinutes, 0.25) * 60
-        let slot = Int(now.timeIntervalSince1970 / interval)
+        let slot = Int(saturating: now.timeIntervalSince1970 / interval)
         let idx = rot.shuffle ? shuffledIndex(slot: slot, count: pool.count) : slot % pool.count
         return pool[idx]
     }

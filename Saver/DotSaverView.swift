@@ -31,6 +31,7 @@ final class DotSaverView: ScreenSaverView {
     private var lastReload: CFTimeInterval = 0
     private var renderScale: CGFloat = 1   // Library.renderScale (1 = full Retina)
     private var presetFPS = 30             // active preset's fps, before power clamps
+    private var stepFPS: Double?           // the rate it steps its own time at (FramePacing.steppedFPS)
     private var lastFrameAt = CACurrentMediaTime()
     private var idleWatchdog: Timer?
 
@@ -315,6 +316,7 @@ final class DotSaverView: ScreenSaverView {
                 renderer?.apply(target, source: lib.source)
             }
             presetFPS = target.fps
+            stepFPS = FramePacing.steppedFPS(target)
             updateInterval()
             shownPreset = target
             // A new style or a library edit (Show music, corner, backdrop, linger): re-present.
@@ -363,7 +365,8 @@ final class DotSaverView: ScreenSaverView {
         /// On battery: 24 fps (an exact 5 refreshes on 120 Hz ProMotion; 20 on a 60 Hz panel —
         /// see divisorFPS) at 0.6× native.
         static let battery = PowerBudget(maxFPS: 24, maxScale: 0.6)
-        /// Low Power Mode: 15 fps at half resolution (a crisp 2× nearest-neighbour upscale).
+        /// Low Power Mode: 15 fps at half resolution (a crisp 2× nearest-neighbour upscale); a
+        /// style stepped at 24 fps (Bloom) draws 12, every other step (effectiveInterval).
         static let lowPower = PowerBudget(maxFPS: 15, maxScale: 0.5)
         /// The System Settings thumbnail: 10 fps, small fixed scale — it's a few hundred points.
         static let preview = PowerBudget(maxFPS: 10, maxScale: 0.35)
@@ -392,10 +395,17 @@ final class DotSaverView: ScreenSaverView {
         if iv != animationTimeInterval { animationTimeInterval = iv }
     }
 
-    /// The preset's fps, clamped for the Settings thumbnail and for battery power.
+    /// The preset's fps, clamped for the Settings thumbnail and for battery power. A style that
+    /// steps its own time (Bloom's 24 fps) follows the live wallpaper's rule (FramePacing.rate):
+    /// 24 on 120 Hz, 30 on 60 Hz — a flat 24 on 60 Hz holds steps for 2 and 3 refreshes in turn,
+    /// a visible judder — and under a budget below its step rate (Low Power's 15, the Settings
+    /// thumbnail's 10) a whole fraction of it that divides the refresh: 12 on 60/120/144 Hz, every
+    /// other step evenly, where 15 would drop steps irregularly.
     private func effectiveInterval() -> TimeInterval {
         var fps = Double(max(presetFPS, 1))
-        if budget.maxFPS < fps {
+        if let step = stepFPS {
+            fps = FramePacing.rate(target: min(fps, budget.maxFPS), step: step, refresh: refreshRate)
+        } else if budget.maxFPS < fps {
             fps = DotSaverView.divisorFPS(target: budget.maxFPS, refresh: refreshRate)
         }
         return 1.0 / fps
@@ -537,8 +547,18 @@ final class DotSaverView: ScreenSaverView {
     private func syncDrawableSize() {
         guard let mv = metalView, bounds.width > 0, bounds.height > 0 else { return }
         let backing = window?.backingScaleFactor ?? 2
-        let capped = budget.maxScale < renderScale
-        let scale = capped ? budget.maxScale : renderScale
+        var capped = budget.maxScale < renderScale
+        var scale = capped ? budget.maxScale : renderScale
+        // A heavy scene on a big screen (Meadow's weather: ~13 ms a 5K frame on an M5 Pro) draws
+        // fewer pixels so its GPU time stays near costBudgetMs: the renderer reports the last
+        // frame's estimated cost (WeatherLink.costNsPerPixel), which only changes when its
+        // pipeline does (a landscape, the weather coming or going), so this settles at once.
+        if let ns = renderer?.lastFrameCostNsPerPixel, ns > 0, !isPreview {
+            let px = Double(bounds.width * backing * scale) * Double(bounds.height * backing * scale)
+            let k = MetalRenderer.costCapScale(nsPerPixel: ns * gpuCostFactor, pixels: px,
+                                               budgetMs: DotSaverView.costBudgetMs)
+            if k < 1 { scale *= CGFloat(k); capped = true }
+        }
         let target = CGSize(width: max((bounds.width * backing * scale).rounded(), 1),
                             height: max((bounds.height * backing * scale).rounded(), 1))
         // MTKView applies its drawableSize to the layer only when it hands out a drawable
@@ -556,6 +576,17 @@ final class DotSaverView: ScreenSaverView {
             }
         }
     }
+
+    /// GPU time a frame of a heavy scene may take (costCapScale): well inside a 120 Hz frame's
+    /// 8.3 ms with the compositor's share, and half a 60 Hz one.
+    static let costBudgetMs = 6.0
+
+    /// The cost table is an Apple GPU's (measured on an M5 Pro); an Intel or AMD GPU is assumed
+    /// 2.5× slower per pixel, so it caps harder.
+    private lazy var gpuCostFactor: Double = {
+        guard let d = metalLayer?.device ?? MTLCreateSystemDefaultDevice() else { return 1 }
+        return d.supportsFamily(.apple7) ? 1 : 2.5
+    }()
 
     override var hasConfigureSheet: Bool { false }
     override var configureSheet: NSWindow? { nil }

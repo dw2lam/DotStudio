@@ -457,12 +457,12 @@ final class WallpaperRenderLoop {
         s.pacing.reset()
     }
 
-    /// One display-link frame.
-    fileprivate func linkFired(_ id: CGDirectDisplayID) {
+    /// One display-link frame; `presentAt` = the link's targetTimestamp (when it will be shown).
+    fileprivate func linkFired(_ id: CGDirectDisplayID, presentAt: CFTimeInterval) {
         guard let s = surfaces[id] else { return }
         guard state.canDraw, state.visible.contains(id) else { pauseLink(s); return }
         if debug { s.pacing.tick() }
-        draw(s, fromLink: true)
+        draw(s, fromLink: true, presentAt: presentAt)
         noteStats()
         // A clock only animates around a change; hand back to the 1 Hz timer after.
         if case .clock = state.pacing(id).profile, plan(for: s) != s.plan { setPlans() }
@@ -470,11 +470,13 @@ final class WallpaperRenderLoop {
 
     /// - settled: the frame will be held (no display link runs after it), so it must show
     ///   the end state of any crossfade rather than its first frame.
-    private func draw(_ s: Surface, fromLink: Bool, settled: Bool = false) {
+    /// - presentAt: the display link's targetTimestamp: a stepped style (Bloom) times its steps
+    ///   by when the frame is shown rather than when it is encoded (MetalRenderer's StepClock).
+    private func draw(_ s: Surface, fromLink: Bool, settled: Bool = false, presentAt: CFTimeInterval? = nil) {
         let pacing = s.pacing
         s.renderer.onPresented = (debug && fromLink) ? { pacing.presented($0) } : nil
-        let drawn = s.warming ? boosted { s.renderer.draw(to: s.layer, settled: settled) }
-                              : s.renderer.draw(to: s.layer, settled: settled)
+        let drawn = s.warming ? boosted { s.renderer.draw(to: s.layer, settled: settled, presentAt: presentAt) }
+                              : s.renderer.draw(to: s.layer, settled: settled, presentAt: presentAt)
         guard drawn else { return }
         s.warming = false
         framesDrawn += 1
@@ -588,7 +590,7 @@ final class WallpaperRenderLoop {
         let id: CGDirectDisplayID
         init(_ loop: WallpaperRenderLoop, _ id: CGDirectDisplayID) { self.loop = loop; self.id = id }
         @objc func fire(_ link: CADisplayLink) {
-            autoreleasepool { loop?.linkFired(id) }
+            autoreleasepool { loop?.linkFired(id, presentAt: link.targetTimestamp) }
         }
     }
 }
