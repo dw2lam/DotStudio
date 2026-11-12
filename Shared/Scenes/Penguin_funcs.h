@@ -34,6 +34,8 @@ struct WaddlePose {
     float iglooX, iglooR;        // px (x from the centre)
     bool behind;                 // passing behind the igloo
     float night;                 // the backdrop: 0 day … 1 night
+    float cam;                   // px the camera has followed it by (the layers' parallax)
+    float burst, burstSeed;      // seconds into a burst of hearts and stars (< 0 none), its seed
     bool custom;
     float2 spr;                  // the custom character: (half width, height), heights
     float lod;
@@ -69,6 +71,8 @@ static inline WaddlePose waddle_pose(constant FXUniforms& u, float2 res) {
     P.iglooX = u.scene[8].x; P.iglooR = u.scene[8].y;
     P.behind = u.scene[8].z > 0.5;
     P.night = saturate(u.scene[8].w);
+    P.cam = u.scene[9].x;
+    P.burst = u.scene[9].y; P.burstSeed = u.scene[9].z;
     return P;
 }
 
@@ -165,12 +169,13 @@ static inline CellLayer waddle_penguin(float2 q, WaddlePose P, float3 body, floa
     for (int i = 0; i < 2; ++i) {
         float s = i == 0 ? -1.0 : 1.0;
         fd[i] = waddle_flipper(p, P, s, ff[i]);
-        ld[i] = waddle_foot(p, P, s, lf[i]);
+        lf[i] = -1.0; ld[i] = 1e3;
+        if (!lod) ld[i] = waddle_foot(p, P, s, lf[i]);      // (the glow pass skips the feet)
     }
     // ---- behind the body
     for (int i = 0; i < 2; ++i) {
         if (ff[i] < -0.2) cellkit_over(o, dark * 0.75, cellkit_cov(fd[i], aa));
-        if (lf[i] < -0.25) cellkit_over(o, WADDLE_FEET * 0.75, cellkit_cov(ld[i], aa));
+        if (!lod && lf[i] < -0.25) cellkit_over(o, WADDLE_FEET * 0.75, cellkit_cov(ld[i], aa));
     }
     // ---- the body
     float dB = waddle_body(p);
@@ -179,15 +184,19 @@ static inline CellLayer waddle_penguin(float2 q, WaddlePose P, float3 body, floa
         float pr = waddle_prof(p.y);
         float sphi = clamp(p.x / pr, -1.0, 1.0);
         float phi = asin(sphi), cphi = sqrt(max(1.0 - sphi * sphi, 0.0));
-        // soft light from the upper left; the far rim and the underside a little darker
-        float ny = clamp((p.y - 0.55) * 1.8, -1.0, 1.0);
-        float lit = 0.80 + 0.13 * (-0.6 * sphi + 0.5 * ny) + 0.10 * cphi;
-        float3 c = body * lit;
+        // form shading, so it reads as a round body: a key light from the upper left front, the
+        // far side and the underside falling off, a soft highlight on the shoulder
+        float ny = clamp((p.y - 0.50) * 2.0, -1.0, 1.0);
+        float3 nrm = normalize(float3(sphi, 0.75 * ny, cphi + 0.25));
+        float dif = saturate(dot(nrm, float3(-0.50, 0.55, 0.67)));
+        float lit = 0.42 + 0.78 * dif;
+        float spec = pow(saturate(dot(nrm, normalize(float3(-0.50, 0.55, 1.67)))), 24.0);
+        float3 c = body * lit + spec * 0.35 * (body + 0.25);
         // the bib: an oval round the front, from the chin to the feet
         float th = phi - P.psi;
         float dBib = waddle_ell(float2(th * 0.36, p.y - 0.305), float2(0.255, 0.318));
         dBib *= mix(1.0, max(cphi, 0.25), 0.6);
-        c = mix(c, WADDLE_WHITE * (0.86 + 0.14 * lit), cellkit_cov(dBib, aa));
+        c = mix(c, WADDLE_WHITE * (0.58 + 0.46 * dif) + spec * 0.15, cellkit_cov(dBib, aa));
         cellkit_over(o, c, aB);
     }
     // ---- in front of the body
@@ -196,7 +205,7 @@ static inline CellLayer waddle_penguin(float2 q, WaddlePose P, float3 body, floa
             float a = cellkit_cov(fd[i], aa);
             cellkit_over(o, mix(mix(body, WADDLE_WHITE, 0.12), dark, aB), a);
         }
-        if (lf[i] >= -0.25) cellkit_over(o, WADDLE_FEET, cellkit_cov(ld[i], aa));
+        if (!lod && lf[i] >= -0.25) cellkit_over(o, WADDLE_FEET, cellkit_cov(ld[i], aa));
     }
     // the bill: small, pointing down at the viewer, forward in profile
     if (lod) {
@@ -407,83 +416,204 @@ static inline int waddle_pick(float3 s, float2 cell, bool figure) {
 }
 
 // ============================================================ the backdrop
-/// The backdrop at a cell (centre cpx): its emission (linear, dim: the penguin stays the hero),
-/// `igloo` 1 where the igloo covers it, `ground` 1 in the drifts along the bottom (falling snow
-/// lands there). `night` 0 day … 1 night. Positions in units of U (the penguin's scale), x from
-/// the centre, y up from the bottom edge.
-static inline float3 waddle_backdrop(float2 cpx, float2 res, float ts, float2 cell, float night,
-                                     float igX, float igR, thread float& igloo, thread float& ground) {
-    igloo = 0.0; ground = 0.0;
+/// The distant peaks: (x, height) in units of U.
+constant float2 WADDLE_PEAKS[6] = { float2(-1.50000, 0.20000), float2(-0.78306, 0.30139), float2(-0.38918, 0.20629), float2(0.43520, 0.26140), float2(1.00898, 0.24111), float2(1.48619, 0.24988) };
+
+/// What the backdrop puts in a cell: its emission (linear; the penguin stays the hero), how near
+/// the layer is (0 the sky … 1 the foreground: nearer layers get fatter, crisper dots), and
+/// whether the igloo, the drifts the penguin stands in, or a foreground mound covers it.
+struct WaddleBack { float3 c; float depth, igloo, ground, fore; };
+
+/// The backdrop at a cell (centre cpx). Layers in parallax: the camera (P.cam px) follows the
+/// penguin a little, and each layer moves by its own share of it — the sky hardly, the peaks a
+/// quarter, the pines two thirds, the drifts most of it, the igloo with the penguin, the
+/// foreground mounds more than it. Units of U (the penguin's scale), x from the centre, y up
+/// from the bottom edge. Unlit cells stay dark: only shapes light up, the sky barely.
+static inline WaddleBack waddle_backdrop(float2 cpx, float2 res, float ts, float2 cell, WaddlePose P) {
+    WaddleBack o; o.c = 0.0; o.depth = 0.0; o.igloo = 0.0; o.ground = 0.0; o.fore = 0.0;
     float U = min(res.y, 1.3 * res.x);
     float X = (cpx.x - 0.5 * res.x) / U, Y = (res.y - cpx.y) / U;
     float halfW = 0.5 * res.x / U, top = res.y / U;
-    float day = 1.0 - night;
-    // (linear emission: the brightest of it ≈ a tenth of the penguin's white, so on the LEDs it
-    // reads at about a third of its brightness)
-    float3 snowLo = mix(float3(0.050, 0.065, 0.110), float3(0.110, 0.130, 0.180), day);
-    float3 snowHi = mix(float3(0.080, 0.095, 0.150), float3(0.160, 0.180, 0.240), day);
+    float cam = P.cam / U;
+    float night = P.night, day = 1.0 - night;
+    float3 snowLo = mix(float3(0.040, 0.052, 0.095), float3(0.085, 0.100, 0.150), day);
+    float3 snowHi = mix(float3(0.070, 0.085, 0.140), float3(0.140, 0.160, 0.215), day);
+    // snow glints: now and then a cell flashes (more by day, under the sun)
+    float gh = hash21(cell * 0.913 + floor(ts * 4.0) * 0.37);
+    float glint = gh < mix(0.004, 0.014, day) ? sin(3.14159 * fract(ts * 4.0)) * 0.45 : 0.0;
 
-    // drifts: low rolling snow along the bottom
-    float drift = 0.050 + 0.020 * sin(X * 4.3 + 1.0) + 0.011 * sin(X * 10.1 + 0.4);
-    if (Y < drift) {
-        ground = 1.0;
-        return mix(snowLo, snowHi, smoothstep(drift - 0.025, drift, Y));
-    }
-    // the igloo: a dome of snow blocks (dark joints), its doorway toward the middle
-    float R = igR / U;
-    float2 d = float2(X - igX / U, Y - 0.02);
-    if (length(d / float2(R, 0.88 * R)) < 1.0) {
-        igloo = 1.0;
-        if (length(float2(d.x - 0.62 * R, d.y) / float2(0.24 * R, 0.46 * R)) < 1.0) return float3(0.0);
-        int ry = int(-cell.y);
-        int bx = int(cell.x) + ((ry / 4) % 2) * 3;
-        bool joint = (ry % 4) == 0 || ((bx % 6) + 6) % 6 == 0;
-        float3 ice = mix(float3(0.075, 0.095, 0.150), float3(0.160, 0.190, 0.260), day);
-        return ice * (joint ? 0.30 : 1.0) * (0.9 - 0.15 * d.x / R);
-    }
-    // two pines on the far side from the igloo, a dusting of snow on each tier
-    for (int i = 0; i < 2; ++i) {
-        float xt = (i == 0 ? 0.34 : 0.66) * halfW, h = i == 0 ? 0.30 : 0.22;
-        float b = 0.045;
-        if (abs(X - xt) > 0.2 * h + 0.01 || Y > b + h) continue;
-        float3 green = mix(float3(0.006, 0.040, 0.018), float3(0.015, 0.085, 0.030), day);
-        if (abs(X - xt) < 0.035 * h + 0.004 && Y < b + 0.18 * h)
-            return mix(float3(0.020, 0.010, 0.005), float3(0.045, 0.022, 0.010), day);
-        for (int k = 2; k >= 0; --k) {
-            float y0 = b + 0.15 * h + float(k) * 0.26 * h, y1 = y0 + 0.42 * h;
-            float w = 0.30 * h * (1.0 - 0.2 * float(k));
-            if (Y >= y0 && Y < y1 && abs(X - xt) < w * (y1 - Y) / (y1 - y0))
-                return Y > y1 - 0.07 * h ? snowHi : green;
+    // ---- foreground mounds at the corners, nearer than the penguin (it passes behind them)
+    {
+        float xf = X + 1.35 * cam;
+        float f1 = (xf + halfW + 0.02) / 0.20, f2 = (xf - halfW - 0.05) / 0.17;
+        float hf = 0.085 * exp(-f1 * f1) + 0.075 * exp(-f2 * f2);
+        if (Y < hf) {
+            o.fore = 1.0; o.depth = 1.0;
+            o.c = mix(snowLo, snowHi, smoothstep(hf - 0.03, hf, Y)) * 1.35 + glint;
+            return o;
         }
     }
-    // distant peaks, snow along their ridges
-    float m = 0.0;
-    for (int i = 0; i < 6; ++i) {
-        float xp = -1.5 + 0.62 * float(i) + 0.13 * sin(float(i) * 2.3);
-        float hp = 0.20 + 0.11 * fract(sin(float(i) * 12.9898) * 43758.5453);
-        m = max(m, hp - abs(X - xp) * 0.62);
+    // ---- drifts the penguin stands in, with its soft shadow (and a hint of its colour) under it
+    {
+        float xd = X + 0.8 * cam;
+        float drift = 0.050 + 0.020 * sin(xd * 4.3 + 1.0) + 0.011 * sin(xd * 10.1 + 0.4);
+        if (Y < drift) {
+            o.ground = 1.0; o.depth = 0.75;
+            o.c = mix(snowLo, snowHi, smoothstep(drift - 0.025, drift, Y)) + glint;
+            float dx = (cpx.x - P.feet.x) / P.hp, w = 0.46 * (1.0 - min(P.hop * 2.5, 0.5));
+            if (P.hp > 1.0 && abs(dx) < w) {
+                float sh = 1.0 - smoothstep(0.55, 1.0, abs(dx) / w);
+                o.c = mix(o.c, o.c * 0.25 + float3(0.0, 0.010, 0.035), sh);
+            }
+            return o;
+        }
     }
-    m += 0.06;
-    if (Y < m) {
-        float3 rock = mix(float3(0.010, 0.015, 0.034), float3(0.018, 0.028, 0.055), day);
-        float3 ridge = mix(float3(0.034, 0.042, 0.070), float3(0.070, 0.085, 0.120), day);
-        return Y > m - 0.035 ? ridge : rock;
+    // ---- the igloo (moving with the penguin): blocks with dark joints, the doorway toward the middle
+    {
+        float R = P.iglooR / U;
+        float2 d = float2(X + cam - P.iglooX / U, Y - 0.02);
+        if (R > 0.0 && length(d / float2(R, 0.88 * R)) < 1.0) {
+            o.igloo = 1.0; o.depth = 0.85;
+            if (length(float2(d.x - 0.62 * R, d.y) / float2(0.24 * R, 0.46 * R)) < 1.0) return o;
+            int ry = int(-cell.y);
+            int bx = int(cell.x) + ((ry / 4) % 2) * 3;
+            bool joint = (ry % 4) == 0 || ((bx % 6) + 6) % 6 == 0;
+            float3 ice = mix(float3(0.075, 0.095, 0.150), float3(0.150, 0.180, 0.250), day);
+            // lit from the upper left: rounder
+            float sh = 0.55 + 0.6 * saturate(0.5 - 0.5 * d.x / R + 0.35 * d.y / R);
+            o.c = ice * (joint ? 0.30 : 1.0) * sh;
+            return o;
+        }
     }
-    // the sky: a dim gradient by day with the sun; by night the dark, a crescent moon and
-    // twinkling stars (high on the left, over the igloo)
-    float3 c = mix(float3(0.075, 0.115, 0.190), float3(0.020, 0.052, 0.150), saturate(Y / top)) * day;
-    float2 dm = float2(X, Y) - float2(-0.45 * halfW, top - 0.21);
-    if (length(dm) < 0.058) {
+    // ---- two pines (mid distance)
+    {
+        float xm = X + 0.65 * cam;
+        for (int i = 0; i < 2; ++i) {
+            float xt = (i == 0 ? 0.34 : 0.66) * halfW, h = i == 0 ? 0.30 : 0.22;
+            float b = 0.045;
+            if (abs(xm - xt) > 0.2 * h + 0.01 || Y > b + h) continue;
+            float3 green = mix(float3(0.005, 0.034, 0.016), float3(0.012, 0.072, 0.026), day);
+            o.depth = 0.6;
+            if (abs(xm - xt) < 0.035 * h + 0.004 && Y < b + 0.18 * h) {
+                o.c = mix(float3(0.018, 0.009, 0.004), float3(0.040, 0.020, 0.009), day);
+                return o;
+            }
+            for (int k = 2; k >= 0; --k) {
+                float y0 = b + 0.15 * h + float(k) * 0.26 * h, y1 = y0 + 0.42 * h;
+                float w = 0.30 * h * (1.0 - 0.2 * float(k));
+                if (Y >= y0 && Y < y1 && abs(xm - xt) < w * (y1 - Y) / (y1 - y0)) {
+                    float lit = 0.75 + 0.5 * saturate((xt - xm) / max(w, 1e-3));   // the lit side
+                    o.c = (Y > y1 - 0.07 * h ? snowHi * 0.85 : green * lit);
+                    return o;
+                }
+            }
+        }
+    }
+    // ---- distant peaks (far: dim), snow along their ridges
+    {
+        float xp0 = X + 0.25 * cam;
+        float m = 0.0;
+        for (int i = 0; i < 6; ++i) m = max(m, WADDLE_PEAKS[i].y - abs(xp0 - WADDLE_PEAKS[i].x) * 0.62);
+        m += 0.06;
+        if (Y < m) {
+            o.depth = 0.25;
+            float3 rock = mix(float3(0.008, 0.012, 0.028), float3(0.015, 0.024, 0.050), day);
+            float3 ridge = mix(float3(0.028, 0.034, 0.058), float3(0.055, 0.066, 0.095), day);
+            o.c = Y > m - 0.035 ? ridge : rock;
+            return o;
+        }
+    }
+    // ---- the sky: dark. By day a deep blue band low down, the sun with slow turning rays; by
+    // night an aurora rippling green → teal → violet, a crescent moon, twinkling stars and now and
+    // then a shooting star.
+    float xs = X + 0.05 * cam;
+    float3 c = float3(0.010, 0.030, 0.095) * (1.0 - smoothstep(0.0, 0.40, Y - 0.12)) * day;
+    float2 dm = float2(xs, Y) - float2(-0.45 * halfW, top - 0.21);
+    float rm = length(dm);
+    if (rm < 0.058) {
         float crescent = length(dm - float2(0.028, 0.014)) > 0.052 ? 1.0 : 0.0;
-        return c + float3(0.50, 0.44, 0.26) * crescent * night + float3(0.60, 0.42, 0.14) * day;
+        o.c = c + float3(0.55, 0.48, 0.28) * crescent * night + float3(0.95, 0.62, 0.16) * 0.75 * day;
+        return o;
     }
-    if (length(dm) < 0.085) c += float3(0.10, 0.07, 0.02) * day;                // the sun's halo
-    float h = hash21(cell * 0.71 + 3.1);
-    if (h < 0.011 && Y > 0.30) {
-        float tw = 0.5 + 0.5 * sin(ts * (1.3 + 180.0 * h) + h * 900.0);
-        c += float3(0.85, 0.90, 1.0) * (0.04 + 0.20 * tw) * night;
+    if (day > 0.01 && rm < 0.26) {
+        float ang = atan2(dm.y, dm.x);
+        float rays = pow(0.5 + 0.5 * cos(12.0 * ang + ts * 0.25), 8.0);
+        float fall = 1.0 - smoothstep(0.065, 0.26, rm);
+        c += (float3(0.45, 0.28, 0.06) * rays * fall + float3(0.10, 0.06, 0.012) * (1.0 - smoothstep(0.058, 0.10, rm))) * day;
     }
-    return c;
+    if (night > 0.01) {
+        // the aurora: curtains hanging from a rippling lower edge, rayed, folds drifting along
+        float ya = top * 0.66 + 0.07 * sin(xs * 1.7 + ts * 0.11) + 0.035 * sin(xs * 4.3 - ts * 0.17);
+        float dy = Y - ya;
+        if (dy > -0.02 && dy < 0.24) {
+            float a = smoothstep(-0.02, 0.012, dy) * (1.0 - smoothstep(0.0, 0.24, dy));
+            a *= 0.55 + 0.45 * sin(xs * 38.0 + 3.0 * sin(xs * 5.0 + ts * 0.3) + ts * 0.6);
+            a *= 0.55 + 0.45 * sin(xs * 2.3 - ts * 0.25);
+            float3 ac = mix(float3(0.10, 1.0, 0.42), float3(0.05, 0.75, 0.85), saturate(dy / 0.08));
+            ac = mix(ac, float3(0.55, 0.22, 1.0), saturate((dy - 0.08) / 0.12));
+            c += ac * a * 0.17 * night;
+        }
+        if (rm < 0.11) c += float3(0.05, 0.05, 0.04) * (1.0 - smoothstep(0.058, 0.11, rm)) * night;
+        float h = hash21(cell * 0.71 + 3.1);
+        if (h < 0.011 && Y > 0.30) {
+            float tw = 0.5 + 0.5 * sin(ts * (1.3 + 180.0 * h) + h * 900.0);
+            c += float3(0.85, 0.90, 1.0) * (0.04 + 0.22 * tw) * night;
+        }
+        // a shooting star, every so often: a bright head and a fading tail, gone in under a second
+        float k = floor(ts / 17.0);
+        float hk = hash21(float2(k, 7.7));
+        if (hk < 0.6) {
+            float u = (ts - (k * 17.0 + 2.0 + 12.0 * hk)) / 0.8;
+            if (u >= 0.0 && u <= 1.0) {
+                float2 st = float2((hash21(float2(k, 2.1)) * 1.4 - 0.7) * halfW, top * (0.80 + 0.12 * hash21(float2(k, 3.4))));
+                float2 dir = normalize(float2(hash21(float2(k, 5.2)) < 0.5 ? -1.0 : 1.0, -0.42));
+                float2 head = st + dir * (0.15 + 0.75 * u);
+                float hh;
+                float dd = cellkit_seg(float2(xs, Y), head - dir * 0.20, head, hh);
+                float cu = P.cellPx / U;
+                if (dd < 0.55 * cu) c += float3(1.0, 0.95, 0.80) * 0.7 * hh * hh * (1.0 - u * 0.5) * night;
+            }
+        }
+    }
+    o.c = c;
+    return o;
+}
+
+/// A burst of little bright shapes popping round the penguin when it waves or dances: hearts,
+/// stars and twinkles flung up and out, falling back and fading. In whole cells. This cell's
+/// colour, or false.
+static inline bool waddle_burst(float2 cell, float2 anchor, WaddlePose P, float ts, thread float3& col) {
+    if (P.burst < 0.0 || P.burst > 1.4) return false;
+    float2 o = P.feet + float2(0.0, -0.80 * P.hp);
+    for (int i = 0; i < 7; ++i) {
+        float fi = float(i);
+        float h1 = hash21(float2(P.burstSeed, fi)), h2 = hash21(float2(P.burstSeed, fi + 9.0));
+        float ang = mix(-2.6, -0.55, (fi + h1) / 7.0);                    // fanned up and out
+        float sp = (0.70 + 0.55 * h2) * P.hp;
+        float a = P.burst;
+        float2 pos = o + float2(cos(ang), sin(ang)) * sp * a + float2(0.0, 0.55 * P.hp) * a * a;
+        float fade = 1.0 - smoothstep(0.9, 1.4, a);
+        int2 d = int2(cell) - int2(floor((pos - anchor) / P.cellPx));
+        int kind = int(h1 * 3.0);
+        bool on = false;
+        if (kind == 0) {                                     // a heart, 5 × 4
+            int x = d.x + 2, y = d.y + 1;
+            if (x >= 0 && x < 5 && y >= 0 && y < 4) {
+                int rows[4] = { 10, 31, 14, 4 };
+                on = ((rows[y] >> (4 - x)) & 1) != 0;
+            }
+            if (on) col = float3(1.0, 0.22, 0.52) * fade;
+        } else if (kind == 1) {                              // a star: a plus of five cells
+            on = (abs(d.x) + abs(d.y) <= 1);
+            if (on) col = float3(1.0, 0.82, 0.18) * fade;
+        } else {                                             // a twinkle: + and × by turns
+            bool plus = fract(ts * 6.0 + h2) < 0.5;
+            on = (d.x == 0 && d.y == 0) || (plus ? (abs(d.x) + abs(d.y) == 1) : (abs(d.x) == 1 && abs(d.y) == 1));
+            if (on) col = float3(0.45, 0.92, 1.0) * fade * (d.x == 0 && d.y == 0 ? 1.0 : 0.6);
+        }
+        if (on) return true;
+    }
+    return false;
 }
 
 // ============================================================ 80 PENGUIN
@@ -537,12 +667,17 @@ static inline float3 waddle_scene(float2 px, float2 res, float t, constant FXUni
     // behind it: the backdrop, and falling snow (each flake a dot stepping down its column,
     // drifting a column either way, gone where it lands: the drifts, or the bottom edge)
     int backdrop = clamp(int(u.p1.w + 0.5), 0, 2);
-    float igloo = 0.0, ground = 0.0;
-    float3 back = backdrop > 0 ? waddle_backdrop(cpx, res, ts, cell, P.night, P.iglooX, P.iglooR, igloo, ground)
-                               : float3(0.0);
+    WaddleBack B;
+    B.c = 0.0; B.depth = 0.0; B.igloo = 0.0; B.ground = 0.0; B.fore = 0.0;
+    // (the backdrop and the snow only where a dot and its rim are: their halos are faint, and a
+    // cell's corners skip the work — at 5K a cell is over a thousand pixels)
+    bool inDot = render == 2 || length(lp) < 0.42;
+    if (backdrop > 0 && inDot) B = waddle_backdrop(cpx, res, ts, cell, P);
+    float3 back = B.c;
+    float igloo = B.igloo, ground = B.ground;
     float3 snowC = float3(0.72, 0.82, 1.0);
     float bgLvl = 0.0;
-    if (ground < 0.5 && P.snow > 0.01) {
+    if (inDot && ground < 0.5 && P.snow > 0.01) {
         for (int k = -1; k <= 1; ++k) {
             float c = cell.x + float(k);
             float h1 = hash21(float2(c, 13.7));
@@ -571,21 +706,25 @@ static inline float3 waddle_scene(float2 px, float2 res, float t, constant FXUni
     }
 
     float3 sc = cellkit_color(sharp);
-    float hide = P.behind ? igloo : 0.0;                            // the igloo in front of it
+    float hide = max(P.behind ? igloo : 0.0, B.fore);               // the igloo, a mound in front of it
     float fig = smoothstep(0.0, 0.6, sharp.a) * (1.0 - hide);
     float3 E = mix(max(back, snowC * bgLvl), sc, fig) * P.bright;   // what this cell's LED emits
     float3 spill = soft.c * P.bright * (1.0 - 0.8 * hide);          // the figure, blurred
+    float depth = max(B.depth, fig);                                // (nearer: fatter, crisper dots)
+    float3 bc;
+    if (waddle_burst(cell, anchor, P, ts, bc)) { E = bc; fig = 1.0; depth = 1.0; }
     float3 col = bg;
     if (render < 2) {
         // LED DOTS — a tight grid of round dots — or PIXELS — rounded cells: each lit one with a
         // soft halo of its own, the figure's light spilling round it, the dark ones faintly there
         // (fat dots, ≈ 80 % of the pitch, like a real panel's; the figure in a coloured halo a few
         // cells deep, kept out of the gaps inside it so the dots stay distinct)
-        float dd = cellkit_led(lp, render == 0, 0.40);
-        float m = saturate(0.5 - dd * cp);
+        // (distance: the far layers' dots smaller and softer, their glow fainter)
+        float dd = cellkit_led(lp, render == 0, mix(0.31, 0.40, depth));
+        float m = saturate(0.5 - dd * cp * mix(0.35, 1.0, depth));
         float r = length(lp);
-        col += spill * glow * (0.85 - 0.70 * fig);
-        col += E * glow * 0.55 * (1.0 - smoothstep(0.30, 0.62, r)) * (0.15 + 0.85 * fig);
+        col += spill * glow * (0.95 - 0.78 * fig);
+        col += E * glow * 0.60 * (1.0 - smoothstep(0.30, 0.64, r)) * (0.12 + 0.88 * max(fig, 0.4 * depth));
         float3 led = E * cellkit_dome(lp) * (1.0 + 0.35 * glow);
         led += saturate(luma(E) - 0.25) * 0.25 * glow * (1.0 - smoothstep(0.0, 0.28, r));   // a hot core
         float3 ghost = bg + float3(0.0020, 0.0022, 0.0030);
