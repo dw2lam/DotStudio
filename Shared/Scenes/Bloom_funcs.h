@@ -582,7 +582,7 @@ static inline float bloom_captions(float2 px, float2 res, int flower, int render
     if (px.y < top - 1.6 * cap || px.y > top + (rows - 1.0) * lead + 0.6 * cap) return 0.0;
     int row = clamp(int(floor((px.y - top + 1.3 * cap) / lead)), 0, 2);
     int line = left ? ((row == 0) ? 0 : (row == 1) ? 1 + flower : 4)
-                    : ((row == 0) ? 5 : (row == 1) ? 6 + render : 8);
+                    : ((row == 0) ? 5 : (row == 1) ? 6 + min(render, 1) : 8);
     float x0;
     if (left) {
         x0 = mx;
@@ -597,13 +597,13 @@ static inline float bloom_captions(float2 px, float2 res, int flower, int render
 }
 
 // ============================================================ 79 BLOOM
-/// p0 = (flower 0 poppy / 1 baby's breath / 2 anemone, render 0 glyphs / 1 pixels, cell size per
+/// p0 = (flower 0 poppy / 1 baby's breath / 2 anemone, render 0 glyphs / 1 pixels / 2 dots, cell size per
 /// 1000 px of height, breeze), p1 = (sky gradient, glow, captions, size); colorA the sky (top),
 /// colorB the petals. Display sRGB out.
 static inline float3 bloom_scene(float2 px, float2 res, float t, constant FXUniforms& u,
                                  texture2d<float> A, sampler s) {
     int flower = clamp(int(u.p0.x + 0.5), 0, 2);
-    int render = clamp(int(u.p0.y + 0.5), 0, 1);
+    int render = clamp(int(u.p0.y + 0.5), 0, 2);
     float cellPx = max(u.p0.z * res.y / 1000.0, 4.0);
     float br = saturate(u.p0.w);
     float grad = saturate(u.p1.x), glow = saturate(u.p1.y);
@@ -667,13 +667,19 @@ static inline float3 bloom_scene(float2 px, float2 res, float t, constant FXUnif
             col = mix(col, gcol, ink);
         }
     } else {
-        // PIXELS — rounded LED cells with a gap, over a soft glow of their own light
+        // PIXELS — rounded LED cells with a gap — or DOTS — a round dot matrix, every dot the
+        // same size (Nothing-style) — over a soft glow of their own light
         float3 gl = (flower == 1) ? petal * gypGlow * 0.17 : hc * soft.a * 0.22;
         col += gl * glow;
         if (sharp.a > 0.01) {
-            float2 q = abs(lp) - 0.5 + 0.09;                  // gap ≈ 18 % of the cell
-            float rr = 0.22;
-            float dd = length(max(q + rr, 0.0)) + min(max(q.x + rr, q.y + rr), 0.0) - rr;
+            float dd;
+            if (render == 2) {
+                dd = length(lp) - 0.37;                       // a round dot, ≈ 74 % of the pitch
+            } else {
+                float2 q = abs(lp) - 0.5 + 0.09;              // gap ≈ 18 % of the cell
+                float rr = 0.22;
+                dd = length(max(q + rr, 0.0)) + min(max(q.x + rr, q.y + rr), 0.0) - rr;
+            }
             float m = saturate(0.5 - dd / cellPxAA);
             float led = 0.88 + 0.16 * (1.0 - dot(lp, lp) * 2.0);  // a faint dome on each cell
             float3 lc = sc * led * (1.0 + 0.25 * glow);
