@@ -42,6 +42,7 @@ struct LibraryView: View {
                 ToolbarItemGroup(placement: .primaryAction) {
                     UpdateReadyButton()
                     newMenu
+                    MCPToolbarButton()      // connect an AI assistant (AIConnect.swift)
                     SettingsLink {
                         Label("Settings", systemImage: "gearshape")
                     }

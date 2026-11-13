@@ -61,6 +61,8 @@ import SwiftUI
 ///   DOTSTUDIO_UI_APPEARANCE=light|dark|both   default: light, plus dark at 1440x900 (or the
 ///                                         natural size) with default text
 ///   DOTSTUDIO_UI_SETTLE=0.6               seconds each render settles before capture
+///   DOTSTUDIO_UI_CHROME=1                 main-window screens in a titled window, captured with
+///                                         its title bar and toolbar (New, MCP, Settings…)
 ///   DOTSTUDIO_UI_LIST=1                   print the screen names and exit
 enum UIShots {
     static let windowSizes: [CGSize] = [CGSize(width: 880, height: 600), CGSize(width: 1100, height: 720),
@@ -152,6 +154,7 @@ enum UIShots {
                             file += ".png"
                             // Build the view after prepare() so it sees this render's state.
                             if shooter.render(screen.view(stage), size: size, typeSize: text.size, dark: dark,
+                                              chrome: screen.frame.isWindow && env["DOTSTUDIO_UI_CHROME"] == "1",
                                               to: out.appendingPathComponent(file)) {
                                 manifest.append(Shot(file: file, screen: screen.name, size: size, text: text.tag,
                                                      stress: stress, dark: dark))
@@ -446,6 +449,8 @@ enum UIShots {
             AnyView(AddEffectPicker(source: st.model.library.source, thumbnailer: st.model.thumbnailer,
                                     include: { $0.isScene }, prompt: "Search scenes") { _ in })
         }))
+        s.append(Screen(name: "mcp-popover", frame: .fit(width: 340), view: { _ in   // (a popover draws its own material)
+            AnyView(MCPPopover().background(Color(nsColor: .windowBackgroundColor))) }))
         s.append(Screen(name: "playlist-editor", frame: .fixed(CGSize(width: 420, height: 460)),
                         prepare: { $0.lineup($0.playlist) }, view: { _ in AnyView(PlaylistEditor()) }))
         for kind in ["slideshow", "photo", "video", "gradient"] {
@@ -885,14 +890,23 @@ enum UIShots {
         /// loop (which is what normally drains autoreleased objects): without this, renders'
         /// windows, hosting views and SwiftUI graphs piled up until AttributeGraph aborted in
         /// grow_region after ~580 renders.
-        func render(_ view: AnyView, size: CGSize, typeSize: DynamicTypeSize, dark: Bool, to url: URL) -> Bool {
+        /// - chrome: a titled window whose toolbar the view fills (its `.toolbar` items, as the
+        ///   main window shows them), captured title bar and all (DOTSTUDIO_UI_CHROME=1).
+        func render(_ view: AnyView, size: CGSize, typeSize: DynamicTypeSize, dark: Bool, chrome: Bool = false,
+                    to url: URL) -> Bool {
             autoreleasepool {
                 let host = NSHostingView(rootView: root(view, width: size.width, height: size.height, typeSize: typeSize))
                 host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                let style: NSWindow.StyleMask = chrome ? [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+                                                       : [.borderless]
                 let win = NSWindow(contentRect: CGRect(origin: CGPoint(x: -30000, y: -30000), size: size),
-                                   styleMask: [.borderless], backing: .buffered, defer: false)
+                                   styleMask: style, backing: .buffered, defer: false)
                 win.isReleasedWhenClosed = false
                 win.appearance = host.appearance
+                if chrome {
+                    host.sceneBridgingOptions = [.toolbars, .title]
+                    win.toolbarStyle = .unified
+                }
                 win.contentView = host
                 host.frame = CGRect(origin: .zero, size: size)
                 defer {
@@ -904,8 +918,11 @@ enum UIShots {
                     host.layoutSubtreeIfNeeded()
                     RunLoop.main.run(until: Date().addingTimeInterval(settle / Double(passes)))
                 }
-                guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return false }
-                host.cacheDisplay(in: host.bounds, to: rep)
+                // (with chrome: the window's frame view — the title bar and toolbar over the content)
+                let target: NSView = chrome ? (host.superview ?? host) : host
+                target.layoutSubtreeIfNeeded()
+                guard let rep = target.bitmapImageRepForCachingDisplay(in: target.bounds) else { return false }
+                target.cacheDisplay(in: target.bounds, to: rep)
                 guard let png = rep.representation(using: .png, properties: [:]) else { return false }
                 return (try? png.write(to: url)) != nil
             }

@@ -21,7 +21,26 @@ struct SettingsView: View {
     /// matrix shows every section; the real window opens at `SettingsMetrics.openHeight`.
     private static let isRenderingShots = ProcessInfo.processInfo.environment["DOTSTUDIO_UI_SHOTS"] != nil
 
+    /// The MCP popover's "More in Settings…" scrolls to the AI section.
+    @ObservedObject private var ai = AIConnect.shared
+    @State private var revealedAI = 0
+
     var body: some View {
+        ScrollViewReader { proxy in
+            form
+                .onAppear { revealAI(proxy) }
+                .onChange(of: ai.revealRequest) { _, _ in revealAI(proxy) }
+        }
+    }
+
+    private func revealAI(_ proxy: ScrollViewProxy) {
+        guard ai.revealRequest != revealedAI else { return }
+        revealedAI = ai.revealRequest
+        // after the window has laid out (it may be opening just now)
+        DispatchQueue.main.async { withAnimation { proxy.scrollTo(AISettingsSection.anchor, anchor: .top) } }
+    }
+
+    private var form: some View {
         Form {
             GeneralSettingsSection()
             MusicSettingsSlot()        // the Music section (MusicSlots.swift)
