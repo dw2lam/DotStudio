@@ -4,6 +4,7 @@
 //  Where the toolkit is:
 //    • DOTSTUDIO_FILM_TOOLKIT=<a tools/film folder>        (development)
 //    • <store>/engines/film/<version>/                       (the pulled pack; the newest wins)
+//    • DotStudio.app/Contents/Resources/film (tools/film), copied to <store>/film/toolkit/<version>/
 //  Everything goes through the toolkit's own driver, job.py (plain python3, never Blender):
 //    templates / validate / env    run synchronously from a tool call (a fraction of a second);
 //    stills / loop                 the commands FilmJobs runs detached and nice'd. job.py runs
@@ -30,7 +31,8 @@ struct DSFilmToolkit: FilmToolkitAPI {
 
     // MARK: Finding things
 
-    /// The toolkit folder: DOTSTUDIO_FILM_TOOLKIT, else the newest pulled pack.
+    /// The toolkit folder: DOTSTUDIO_FILM_TOOLKIT, else the newest pulled pack, else the copy that
+    /// ships inside the app.
     static func locate(store: URL) -> Install? {
         let fm = FileManager.default
         func root(_ u: URL) -> URL? {
@@ -52,8 +54,34 @@ struct DSFilmToolkit: FilmToolkitAPI {
         let found = ((try? fm.contentsOfDirectory(atPath: base.path)) ?? [])
             .filter { !$0.hasPrefix(".") }
             .compactMap { v in root(base.appendingPathComponent(v, isDirectory: true)).map { (v, $0) } }
-        guard let best = found.max(by: { CustomScenes.compareVersions($0.0, $1.0) < 0 }) else { return nil }
-        return Install(root: best.1, version: version(best.1) ?? best.0, source: "pulled")
+        if let best = found.max(by: { CustomScenes.compareVersions($0.0, $1.0) < 0 }) {
+            return Install(root: best.1, version: version(best.1) ?? best.0, source: "pulled")
+        }
+        return bundled(store: store, root: root, version: version)
+    }
+
+    /// The toolkit that ships inside DotStudio.app (Contents/Resources/film, from tools/film). It never
+    /// runs from the signed bundle (Python would write __pycache__ into it and break the seal): it's
+    /// copied once per version into <store>/film/toolkit/<version>/ and runs from there.
+    private static func bundled(store: URL, root: (URL) -> URL?, version: (URL) -> String?) -> Install? {
+        let fm = FileManager.default
+        guard let res = Bundle.main.resourceURL, let src = root(res), let v = version(src),
+              v.range(of: "^[0-9A-Za-z.\\-]{1,32}$", options: .regularExpression) != nil else { return nil }
+        let base = store.appendingPathComponent("film/toolkit", isDirectory: true)
+        let dst = base.appendingPathComponent(v, isDirectory: true)
+        if root(dst) == nil {
+            do {
+                try fm.createDirectory(at: base, withIntermediateDirectories: true)
+                let tmp = base.appendingPathComponent(".copy-\(UUID().uuidString)", isDirectory: true)
+                try fm.copyItem(at: src, to: tmp)
+                if let e = fm.enumerator(at: tmp, includingPropertiesForKeys: nil) {
+                    for case let u as URL in e where u.lastPathComponent == "__pycache__" { try? fm.removeItem(at: u) }
+                }
+                if fm.fileExists(atPath: dst.path) { try? fm.removeItem(at: dst) }
+                try fm.moveItem(at: tmp, to: dst)
+            } catch { return nil }
+        }
+        return root(dst).map { Install(root: $0, version: v, source: "bundled") }
     }
 
     /// python3 for job.py (and, through PATH, for the scenes' own pre-steps — Commute draws its

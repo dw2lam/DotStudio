@@ -1,5 +1,5 @@
 """dotstudio-mcp end-to-end self-test (see run.sh). Exit 0 = PASS."""
-import base64, json, os, shutil, signal, struct, subprocess, sys, tempfile, threading, time, zlib
+import base64, glob, json, os, shutil, signal, struct, subprocess, sys, tempfile, threading, time, zlib
 
 BIN, ROOT, OUT = sys.argv[1], sys.argv[2], sys.argv[3]
 FAILS = []
@@ -381,7 +381,7 @@ ok(c.call("create_style", {"name": "Still Allowed", "effects": [{"kind": "silk"}
 os.remove(os.path.join(S, "ai-settings.json"))
 
 # ---------------------------------------------------------------- custom + film: this build
-print("== custom scenes / film (this build: real engines, no film toolkit installed)")
+print("== custom scenes / film (this build: real engines, the film toolkit that ships in the app)")
 res = c.call("list_engines")
 ok(res, "list_engines")
 eng = {e["id"]: e for e in res["structuredContent"]["installed"]}
@@ -391,11 +391,14 @@ res = c.call("create_custom_scene", {"manifest": {"name": "A", "engine": {"id": 
 err(res, "create_custom_scene: a real compile rejects junk", "doesn't compile")
 check(not os.path.isdir(os.path.join(S, "scenes")) or os.listdir(os.path.join(S, "scenes")) == [], "nothing installed")
 res = c.call("film_status")
-ok(res, "film_status works without the toolkit")
-check(res["structuredContent"]["available"] is True and res["structuredContent"]["toolkitPulled"] is False
-      and "isn't installed" in text(res), "film support is in this build; the toolkit isn't installed in this store")
-err(c.call("create_film_scene", {"template": "commute"}), "create_film_scene needs the toolkit", "list_film_templates")
-err(c.call("create_film_scene", {"spec": {"scene": "commute"}}), "validate needs the toolkit", "isn't installed")
+ok(res, "film_status")
+tk = glob.glob(os.path.join(S, "film", "toolkit", "*", "run.py"))
+check(res["structuredContent"]["available"] is True and len(tk) == 1
+      and not glob.glob(os.path.join(S, "film", "toolkit", "*", "**", "__pycache__"), recursive=True),
+      f"the toolkit inside the app is copied into the store and used from there ({[os.path.relpath(t, S) for t in tk]})")
+res = c.call("create_film_scene", {"template": "commute"})
+ok(res, "create_film_scene from the bundled toolkit's Commute template")
+err(c.call("create_film_scene", {"spec": {"scene": "nope"}}), "the bundled toolkit validates specs", "nope")
 c.close()
 
 # ---------------------------------------------------------------- custom + film: fakes
@@ -785,16 +788,7 @@ dl, nl = (r.get("structuredContent", {}).get("meanLuminance", -1) for r in (day,
 ok(day, "preview_style the rendered film scene")
 pix = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=pix_fmt", "-of", "csv=p=0", os.path.join(pk, "clips", "day.mov")],
                      capture_output=True, text=True).stdout.strip() if shutil.which("ffprobe") else ""
-if dl > nl + 0.15:
-    check(True, f"the rendered clips play: day clip by day, night clip at night ({dl} vs {nl})")
-elif "10" in pix:
-    # KNOWN ENGINE ISSUE (Shared/CustomFilm.swift, not this test's code): CustomFilm.poster hands
-    # AVAssetImageGenerator's 16-bit CGImage of a 10-bit HEVC clip (what dsfilm/encode.py makes) to
-    # MTKTextureLoader, which fails ("Image decoding failed"), so one-off renders show the stand-in.
-    # Becomes a strict check once posters are drawn into an 8-bit context first.
-    print(f"KNOWN no poster frame for a 10-bit HEVC clip ({pix}): previews show the stand-in ({dl} vs {nl}) — CustomFilm.poster", flush=True)
-else:
-    check(False, f"the rendered clips play: day clip by day, night clip at night ({dl} vs {nl}; {text(day)[:200]})")
+check(dl > nl + 0.15, f"the rendered clips play: day clip by day, night clip at night, 10-bit HEVC posters included ({pix}; {dl} vs {nl}; {text(day)[:200]})")
 # one Blender at a time: a second job queues behind the first; cancel stops a job's whole group
 c.close()
 c = Client(R, DOTSTUDIO_FILM_TOOLKIT=TK, DOTSTUDIO_MCP_FAKE_BLENDER=FB, FAKE_BLENDER_FRAME_S=0.5)

@@ -19,3 +19,4 @@ node_modules/
 App/Info.plist
 .dd/
 .claude/worktrees/
+__pycache__/
