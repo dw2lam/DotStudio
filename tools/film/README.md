@@ -76,6 +76,32 @@ RESULT {"ok":false,"error":"..."}          # exit code 1
 
 `stage` is one of `fetch`, `build`, `still`, `sample` or `frame`.
 
+### The job driver (what the MCP server actually runs)
+
+`job.py` is plain python3 (3.9+, no Blender). The MCP server (`DSFilmToolkit`, MCP/FilmToolkit.swift)
+runs it detached and `nice`d, one process per job:
+
+```
+python3 -I job.py env | templates | validate SPEC.json          # JSON on stdout, instant
+python3 -I job.py stills --blender B --spec SPEC --out DIR --work DIR --variants day,night \
+    [--res 1280x720] [--samples 64] [--lock FILE] [--dry-run]   # -> DIR/<variant>.png (Cycles)
+python3 -I job.py loop --blender B --spec SPEC --out DIR --work DIR --variants day \
+    [--seconds 24] [--fps 24] [--res 3840x2160] [--quality draft|standard|final] [--lock FILE] [--keep-frames] [--dry-run]
+    # -> WORK/<variant>/frames (resumable) -> DIR/<variant>.mov (HEVC Main10 hvc1, encode.py); frames deleted once encoded
+```
+
+- It runs `run.py` once per variant and turns its `PROGRESS` lines into `{"fraction", "stage", "eta_s"}`
+  in the file named by `$DSFILM_PROGRESS`; the last line is `RESULT {…}` (exit 1 on failure).
+- One Blender at a time: each Blender process holds an exclusive lock on `--lock`, and it also waits
+  while any other process named `Blender` runs on the Mac.
+- Quality: `draft` = the spec's animation engine (EEVEE), 16 samples, half size (at least 960 px wide);
+  `standard` = the spec's animation engine and samples (EEVEE, 64); `final` = Cycles, 128 samples.
+- The `look` may use DotStudio's 0–1 sliders (`{"bloom": 0.25, "halation": 0.15, "grain": 0.2}`, the
+  defaults equal `post.DEFAULT`) or `post`'s own blocks; the job converts sliders before rendering.
+- A spec with `"scene": "local", "scene_dir": DIR` loads `DIR/scene.py` instead of `scenes/<scene>/`.
+- `--dry-run` prints each Blender command line (`BLENDER …`) without running anything.
+- Templates are `scenes/<id>/template.json` (name, summary, editable params) next to the spec.
+
 ## Packaging (the "film" engine pack)
 
 `tools/film/package.sh [OUT]` zips the following into `film-engine-<version>.zip` and writes its
