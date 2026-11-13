@@ -1,11 +1,13 @@
 //  Guides.swift — the guides the AI reads before it designs, from four places:
 //    • bundled:   DotStudio.app/Contents/Resources/Guides/**.md (repo: Guides/) — style, power,
-//                 burn-in, settings/app, engines/<id> placeholders;
+//                 burn-in, settings/app, film (the Blender toolkit's flow);
 //    • generated: settings/index, settings/looks and settings/<scene kind>, from EffectKind /
 //                 SceneCatalog at run time, so they can never drift from the build (the copies in
 //                 Guides/settings/ are written by `dotstudio-mcp --write-settings-guides`, and the
 //                 self-test fails if they're stale);
-//    • engines:   an installed engine's guide.md (CustomScenesAPI.engines) replaces its placeholder;
+//    • engines:   engines/<id> is each engine's own guide.md (CustomScenesAPI.engines: the built-in
+//                 ones in Resources/Engines/<id>/<version>/, repo Shared/Engines; pulled ones in
+//                 <store>/engines/) — one source of truth, nothing copied into Guides/;
 //    • user:      any .md in <store>/guides/ (brand guides…), as user/<file name>.
 //  Exposed as MCP resources (dotstudio://guides/<id>) AND through list_guides / read_guide,
 //  because many clients ignore resources.
@@ -182,6 +184,11 @@ enum SettingsGuides {
         for k in Catalog.available where !k.isScene {
             s += "| `\(k.rawValue)` | \(k.displayName) | \(k.category.rawValue) |\n"
         }
+        s += "\n## Custom scenes\n\nKind `custom` with `scene`: an installed scene package (`list_custom_scenes`; make one with `create_custom_scene`). Its params and colours are the package's own, plus its engine's (`list_custom_scenes`, `engines/<id>`). An engine compiles a package at run time:\n\n| engine | what you write | guide |\n|---|---|---|\n"
+        for e in CustomScenes.engines(store: CustomScenes.defaultStore) where e.builtIn {
+            s += "| `\(e.id)` v\(e.version) (built in) | \(e.summary) | `engines/\(e.id)` |\n"
+        }
+        s += "| `shadertoy` (pulled: `pull_engine`) | Shadertoy-style GLSL (`mainImage`), translated to Metal. | `engines/shadertoy` once pulled |\n"
         s += "\nSee also `settings/app` (styles, lineup, displays, wallpaper, music) and `style/dotstudio` (taste).\n"
         return s
     }

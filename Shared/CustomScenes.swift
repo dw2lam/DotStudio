@@ -471,8 +471,8 @@ enum CustomScenes {
         }
         if let e = m.entry, !isSafeRelativePath(e) { err("entry \"\(e)\" must be a file inside the package") }
         if m.engine.id != "film", m.entry == nil { err("no entry: the source file to compile (e.g. \"scene.metal\")") }
-        let known = Set(["sun", "weather", "music"])
-        for u in m.uses ?? [] where !known.contains(u.lowercased()) { warn("uses \"\(u)\": known are sun, weather, music") }
+        let known = Set(["sun", "weather", "music", "clock"])
+        for u in m.uses ?? [] where !known.contains(u.lowercased()) { warn("uses \"\(u)\": known are sun, weather, music, clock") }
         return (m, d)
     }
 
@@ -851,6 +851,16 @@ extension EffectInstance {
         for s in m.paramSpecs { e.params[s.key] = s.def }
         e.colorA = m.defaultColorA
         e.colorB = m.defaultColorB
+        // A film package from the Blender toolkit carries its look ("look": {grain, bloom,
+        // halation}): its grain is the style's starting Grain (the engine adds it live); bloom and
+        // halation are baked into its clips, so the engine's Halation starts at 0.
+        if m.engine.id == "film", case .object(let look)? = m.unknownFields["look"] {
+            func num(_ v: JSONValue?) -> Double? {
+                switch v { case .number(let d)?: return d; case .integer(let i)?: return Double(i); default: return nil }
+            }
+            if let g = num(look["grain"]), g.isFinite { e.params["ds.grain"] = Swift.min(Swift.max(g, 0), 1) }
+            if look["halation"] != nil { e.params["ds.halation"] = 0 }
+        }
         return e
     }
 

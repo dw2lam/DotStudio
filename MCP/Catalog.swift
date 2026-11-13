@@ -34,7 +34,7 @@ enum Catalog {
         "Halftone": 1.51, "Riemersma": 4.01, "Blue Noise": 2.68, "Paper Contours": 7.77, "Holographic": 4.98,
         "Quicksilver": 4.63, "Brushed Gold": 4.96, "Midnight Satin": 2.78, "Lagoon": 2.79, "Orchid": 2.64,
         "Polar Night": 7.74, "Glass Tiles": 7.06, "Starfield": 5.03, "VHS": 3.88, "Data Glitch": 1.73, "Game Boy": 2.26,
-        "Super NES": 4.94, "LED Wall": 2.40, "Neon Wire": 1.64, "Kaleidoscope": 1.02, "Thermal Cam": 1.35,
+        "Super NES": 4.94, "LED Wall": 2.40, "Neon Wire": 1.64, "Kaleidoscope": 1.02, "Thermal Cam": 1.35, "Penguin": 2.71,
     ]
 
     private static var builtIns: [Preset] { DefaultPresets.scenes() + DefaultPresets.looks() + DefaultPresets.coolPack() }
@@ -58,7 +58,7 @@ enum Catalog {
         var out: [String] = []
         let clockKinds: Set<EffectKind> = [.typeClock, .flipClock, .wordClock, .windowLight, .dialClock,
                                            .standbyClock, .minimalClock, .watchClock]
-        if clockKinds.contains(kind) || keys.contains("h24") { out.append("clock") }
+        if clockKinds.contains(kind) || keys.contains("h24") || labels.contains("follow the clock") { out.append("clock") }
         if kind == .universe || labels.contains("follow the sun") { out.append("sun") }
         if kind == .universe || kind == .nightSky || labels.contains("follow the sun") { out.append("location") }
         if keys.contains("weather") { out.append("weather") }
@@ -139,14 +139,13 @@ enum StyleBuilder {
     ], required: ["kind"])
 
     struct Context {
-        var customScenes: [JSONObject]        // installed manifests (custom kind)
-        var customAvailable: Bool
+        var scenes: CustomScenesAPI           // installed packages (kind "custom")
     }
 
     static func effect(_ e: JSONObject, index: Int, ctx: Context, existing: EffectInstance? = nil) throws -> JSONObject {
         let where_ = "effects[\(index)]"
         guard let k = e["kind"] as? String else { throw ToolError("\(where_): needs a kind") }
-        if k == "custom" { return try customEffect(e, where_: where_, ctx: ctx) }
+        if k == "custom" { return try customEffect(e, where_: where_, ctx: ctx, existing: existing) }
         guard let kind = Catalog.kind(k) else {
             throw ToolError("\(where_): unknown kind \"\(k)\". Call list_scenes for the kinds (scenes and looks).")
         }
@@ -177,44 +176,29 @@ enum StyleBuilder {
         return JSON.from(inst) as? JSONObject ?? [:]
     }
 
-    private static func customEffect(_ e: JSONObject, where_: String, ctx: Context) throws -> JSONObject {
-        guard ctx.customAvailable else {
-            throw ToolError("\(where_): custom scenes aren't available in this build of DotStudio yet. Use the built-in scenes (list_scenes).")
+    /// A Custom Scene (contract §1): the engine's own starting effect for the package
+    /// (EffectInstance.customScene: its defaults, a film's grain), then the given params (the
+    /// manifest's, or its engine's, like the cells engine's `ds.render`), colours and on/off.
+    private static func customEffect(_ e: JSONObject, where_: String, ctx: Context, existing: EffectInstance?) throws -> JSONObject {
+        guard ctx.scenes.isAvailable else { throw ToolError("\(where_): \(UnavailableCustomScenes.message)") }
+        guard let id = (e["scene"] as? String) ?? existing?.custom?.id else {
+            throw ToolError("\(where_): kind \"custom\" needs `scene` (an id from list_custom_scenes).")
         }
-        guard let id = e["scene"] as? String else { throw ToolError("\(where_): kind \"custom\" needs `scene` (an id from list_custom_scenes).") }
-        guard let m = ctx.customScenes.first(where: { $0["id"] as? String == id }) else {
+        guard let (base, specs) = ctx.scenes.effect(scene: id) else {
             throw ToolError("\(where_): no installed custom scene \"\(id)\". Call list_custom_scenes, or create_custom_scene first.")
         }
-        let specs = m["params"] as? [JSONObject] ?? []
-        var params: [String: Double] = [:]
-        for s in specs { if let k = s["key"] as? String { params[k] = (s["default"] as? NSNumber)?.doubleValue ?? 0 } }
+        var inst = base
+        if let existing, existing.kind == .custom, existing.custom?.id == id { inst = existing }   // a patch keeps the rest
         for (key, v) in e["params"] as? JSONObject ?? [:] {
-            guard let s = specs.first(where: { $0["key"] as? String == key }) else {
-                throw ToolError("\(where_): scene \(id) has no param \"\(key)\". Its params: \(specs.compactMap { $0["key"] as? String }.joined(separator: ", ")).")
+            guard let spec = specs.first(where: { $0.key == key }) else {
+                throw ToolError("\(where_): scene \(id) has no param \"\(key)\". Its params: \(specs.map(\.key).joined(separator: ", ")).")
             }
-            let kindStr = s["kind"] as? String ?? "slider"
-            let spec: ParamSpec
-            if kindStr == "menu", let opts = s["options"] as? [String] {
-                spec = ParamSpec(menu: key, s["label"] as? String ?? key, opts, def: 0)
-            } else {
-                spec = ParamSpec(key, s["label"] as? String ?? key, (s["min"] as? NSNumber)?.doubleValue ?? 0,
-                                 (s["max"] as? NSNumber)?.doubleValue ?? 1, def: 0, toggle: kindStr == "toggle")
-            }
-            params[key] = try value(v, spec, where_ + ".params." + key)
+            inst.params[key] = try value(v, spec, where_ + ".params." + key)
         }
-        var o: JSONObject = ["id": UUID().uuidString, "kind": "custom", "enabled": (e["enabled"] as? Bool) ?? true,
-                             "params": params, "custom": ["id": id]]
-        let colors = m["colors"] as? JSONObject ?? [:]
-        func color(_ slot: String, _ given: Any?) -> Any? {
-            if let g = given as? JSONObject { return JSON.from(rgba(g)) }
-            if let d = (colors[slot] as? JSONObject)?["default"] as? [NSNumber], d.count >= 3 {
-                return JSON.from(RGBA(d[0].doubleValue, d[1].doubleValue, d[2].doubleValue, d.count > 3 ? d[3].doubleValue : 1))
-            }
-            return nil
-        }
-        if let a = color("a", e["colorA"]) { o["colorA"] = a }
-        if let b = color("b", e["colorB"]) { o["colorB"] = b }
-        return o
+        if let c = e["colorA"] as? JSONObject { inst.colorA = rgba(c) }
+        if let c = e["colorB"] as? JSONObject { inst.colorB = rgba(c) }
+        if let en = e["enabled"] as? Bool { inst.enabled = en }
+        return JSON.from(inst) as? JSONObject ?? [:]
     }
 
     static func value(_ v: Any, _ spec: ParamSpec, _ path: String) throws -> Double {
@@ -248,7 +232,7 @@ enum StyleBuilder {
     }
 
     /// The style a create/update call describes, decoded through Preset's own decoder (so a
-    /// kind this build doesn't know — "custom" before the engine lands — is kept verbatim).
+    /// kind this build doesn't know — an effect from a newer DotStudio — is kept verbatim).
     static func preset(id: UUID, name: String, fps: Int, effects: [JSONObject]) throws -> Preset {
         let o: JSONObject = ["id": id.uuidString, "name": name, "fps": fps, "effects": effects]
         do { return try JSON.decode(Preset.self, from: o) } catch {

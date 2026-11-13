@@ -120,6 +120,45 @@ def image(res):
     return base64.b64decode(imgs[0]["data"]) if imgs else None
 
 
+def png_pixels(b):
+    """8-bit RGB(A) PNG → (w, h, rows of [(r, g, b) 0…1]), undoing the scanline filters."""
+    i, idat, w, h, ct = 8, b"", 0, 0, 6
+    while i < len(b):
+        ln, = struct.unpack(">I", b[i:i + 4])
+        typ, data = b[i + 4:i + 8], b[i + 8:i + 8 + ln]
+        if typ == b"IHDR":
+            w, h = struct.unpack(">II", data[:8])
+            ct = data[9]
+        elif typ == b"IDAT":
+            idat += data
+        i += 12 + ln
+    bpp = 4 if ct == 6 else 3
+    raw, stride, rows, prev = zlib.decompress(idat), w * bpp, [], bytearray(w * bpp)
+    for y in range(h):
+        f, line = raw[y * (stride + 1)], bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+        for x in range(stride):
+            a = line[x - bpp] if x >= bpp else 0
+            up, ul = prev[x], (prev[x - bpp] if x >= bpp else 0)
+            if f == 1: line[x] = (line[x] + a) & 255
+            elif f == 2: line[x] = (line[x] + up) & 255
+            elif f == 3: line[x] = (line[x] + (a + up) // 2) & 255
+            elif f == 4:
+                p = a + up - ul
+                pa, pb, pc = abs(p - a), abs(p - up), abs(p - ul)
+                line[x] = (line[x] + (a if pa <= pb and pa <= pc else up if pb <= pc else ul)) & 255
+        rows.append([(line[x] / 255, line[x + 1] / 255, line[x + 2] / 255) for x in range(0, stride, bpp)])
+        prev = line
+    return w, h, rows
+
+
+def region_mean(px, x0, x1, y0, y1):
+    """Mean (r, g, b) of a region given in fractions of the image."""
+    w, h, rows = px
+    cells = [rows[y][x] for y in range(int(y0 * h), max(int(y1 * h), int(y0 * h) + 1))
+             for x in range(int(x0 * w), max(int(x1 * w), int(x0 * w) + 1))]
+    return tuple(sum(c[k] for c in cells) / len(cells) for k in range(3))
+
+
 def library(store):
     with open(os.path.join(store, "library.json")) as f:
         return json.load(f)
@@ -239,7 +278,7 @@ err(c.call("create_style", {"name": "X", "effects": [{"kind": "oceanHorizon", "p
 err(c.call("create_style", {"name": "X", "effects": []}), "empty effects", "at least 1")
 err(c.call("create_style", {"name": "X", "fps": 50, "effects": [{"kind": "silk"}]}), "fps not a choice", "isn't one of")
 err(c.call("create_style", {"name": "X", "effects": [{"kind": "silk", "colorA": {"r": 2, "g": 0, "b": 0}}]}), "colour out of range", "maximum")
-err(c.call("create_style", {"name": "X", "effects": [{"kind": "custom", "scene": "x-12345678"}]}), "custom kind without the engine", "aren't available")
+err(c.call("create_style", {"name": "X", "effects": [{"kind": "custom", "scene": "x-12345678"}]}), "custom kind with a scene that isn't installed", "no installed")
 res = c.call("update_style", {"style": dusk_id, "patch": [{"index": 0, "params": {"waves": 0.6}}], "name": "Harbour Night"})
 ok(res, "update_style patch + rename")
 p = next(p for p in library(S)["presets"] if p["id"] == dusk_id)
@@ -341,14 +380,20 @@ err(c.call("set_wallpaper", {"style": "Golden Hour"}), "wallpaper refused too", 
 ok(c.call("create_style", {"name": "Still Allowed", "effects": [{"kind": "silk"}]}), "styles still creatable with playback off")
 os.remove(os.path.join(S, "ai-settings.json"))
 
-# ---------------------------------------------------------------- custom + film: stub
-print("== custom scenes / film (this build: stubs)")
-err(c.call("list_engines"), "list_engines unavailable", "aren't available")
-err(c.call("create_custom_scene", {"manifest": {"name": "A", "engine": {"id": "metal"}}, "source": "x"}), "create_custom_scene unavailable", "aren't available")
+# ---------------------------------------------------------------- custom + film: this build
+print("== custom scenes / film (this build: real engines, no film toolkit yet)")
+res = c.call("list_engines")
+ok(res, "list_engines")
+eng = {e["id"]: e for e in res["structuredContent"]["installed"]}
+check({"metal", "cells", "film"} <= set(eng) and all(eng[i]["builtIn"] for i in ("metal", "cells", "film")),
+      "metal, cells and film are built in")
+res = c.call("create_custom_scene", {"manifest": {"name": "A", "engine": {"id": "metal"}}, "source": "x"})
+err(res, "create_custom_scene: a real compile rejects junk", "doesn't compile")
+check(not os.path.isdir(os.path.join(S, "scenes")) or os.listdir(os.path.join(S, "scenes")) == [], "nothing installed")
 res = c.call("film_status")
 ok(res, "film_status works without the toolkit")
-check(res["structuredContent"]["available"] is False, "film not available in this build")
-err(c.call("create_film_scene", {"spec": {"scene": {}}}), "create_film_scene unavailable", "aren't available")
+check(res["structuredContent"]["available"] is False, "the film toolkit isn't in this build")
+err(c.call("create_film_scene", {"spec": {"scene": {}}}), "create_film_scene unavailable", "isn't available")
 c.close()
 
 # ---------------------------------------------------------------- custom + film: fakes
@@ -459,9 +504,12 @@ check(res["structuredContent"]["state"] == "done" and res["structuredContent"].g
 fscene = res["structuredContent"].get("scene", "")
 check(os.path.exists(os.path.join(F, "scenes", fscene, "clips", "night.mov")), "film package has its clips")
 man = json.load(open(os.path.join(F, "scenes", fscene, "scene.json")))
-check(man["engine"]["id"] == "film" and man["look"]["grain"] == 0.25 and man["look"]["bloom"] == 0.1
-      and man["params"][0]["key"] == "grain" and man["params"][0]["default"] == 0.25, "film package carries the look and a default grain")
-ok(c.call("create_style", {"name": "Rainy Commute", "effects": [{"kind": "custom", "scene": fscene, "params": {"grain": 0.15}}]}), "create_style with the film scene")
+check(man["engine"]["id"] == "film" and man["look"]["grain"] == 0.25 and man["look"]["bloom"] == 0.1 and "entry" not in man
+      and {c_["variant"] for c_ in man["clips"]} == {"day", "night"}, "film package: the film engine's format, carrying the look")
+res = c.call("create_style", {"name": "Rainy Commute", "effects": [{"kind": "custom", "scene": fscene}]})
+ok(res, "create_style with the film scene")
+check(res["structuredContent"]["style"]["effects"][0]["params"].get("ds.grain") == 0.25, "the package's grain is the style's starting Grain (ds.grain)")
+ok(c.call("create_style", {"name": "Rainy Commute B", "effects": [{"kind": "custom", "scene": fscene, "params": {"ds.grain": 0.15}}]}), "the film engine's Grain is a style param")
 check(job in [j["id"] for j in c.call("film_job_status")["structuredContent"]["jobs"]], "film_job_status lists jobs")
 c.close()
 c = Client(F, DOTSTUDIO_MCP_TEST_FAKES=1, DOTSTUDIO_MCP_FAKE_RENDER_SECONDS=60)
@@ -483,6 +531,166 @@ check(not alive, "cancelled render process is gone")
 check(c.call("film_job_status", {"job": job2})["structuredContent"]["state"] == "cancelled", "job state cancelled")
 err(c.call("film_job_status", {"job": "nope"}), "unknown job", "no film job")
 c.close()
+
+# ---------------------------------------------------------------- custom scenes end to end: the real engines
+print("== custom scenes end to end (the real engines, a local engines index)")
+E = new_store()
+idx = tempfile.mkdtemp(prefix="dsidx-")
+subprocess.run([os.path.join(ROOT, "tools", "engines", "build-index.sh"), idx], check=True, capture_output=True)
+c = Client(E, DOTSTUDIO_MCP_TEST_FAKES="film", DOTSTUDIO_ENGINES_INDEX=os.path.join(idx, "engines-index.json"),
+           DOTSTUDIO_MCP_FAKE_RENDER_SECONDS=1)
+c.init()
+res = c.call("list_engines", {"include_available": True})
+ok(res, "list_engines with a local index")
+check("shadertoy" in [e["id"] for e in res["structuredContent"]["available"]], "the index offers shadertoy")
+err(c.call("pull_engine", {"id": "metal"}), "a built-in engine isn't pulled", "built in")
+err(c.call("pull_engine", {"id": "nope"}), "an engine the index lacks", "no engine")
+ok(c.call("pull_engine", {"id": "shadertoy"}), "pull_engine shadertoy (index, size + sha256, install)")
+check(os.path.exists(os.path.join(E, "engines", "shadertoy", "1", "engine.json")), "pulled into <store>/engines/shadertoy/1")
+
+
+def same_guide(gid, path):
+    return text(c.call("read_guide", {"id": gid})).strip() == open(path).read().strip()
+
+
+for eid in ("metal", "cells", "film"):
+    check(same_guide(f"engines/{eid}", os.path.join(ROOT, "Shared", "Engines", eid, "1", "guide.md")),
+          f"read_guide engines/{eid} is the engine's own guide.md (one source)")
+check(same_guide("engines/shadertoy", os.path.join(ROOT, "tools", "engines", "shadertoy", "1", "guide.md")),
+      "read_guide engines/shadertoy is the pulled engine's guide")
+check(same_guide("film", os.path.join(ROOT, "Guides", "film.md")), "read_guide film: the toolkit's flow")
+
+# a metal scene: colour A on the left half, colour B on the right, a slow band (lines numbered for the errors below)
+panes_src = ("#include <DotStudio.h>\n"
+             "// Two panes and a band.\n"
+             "float4 dsScene(float2 uv, DSContext ctx) {\n"
+             "    float band = 0.5 + 0.5 * sin(uv.y * 12.0 + ctx.t * ctx.p[0]);\n"
+             "    float3 c = uv.x < 0.5 ? ctx.colorA : ctx.colorB;\n"
+             "    return float4(c * (0.75 + 0.25 * band), 1.0);\n"
+             "}\n")
+panes = {"name": "Test Panes", "engine": {"id": "metal", "version": ">=1"}, "fps": 30,
+         "params": [{"key": "speed", "label": "Speed", "kind": "slider", "min": 0, "max": 2, "default": 0.5}],
+         "colors": {"a": {"label": "Left", "default": [0.8, 0.2, 0.1, 1]}, "b": {"label": "Right", "default": [0.1, 0.25, 0.8, 1]}}}
+# compile errors come back with the entry's own line numbers and an excerpt
+bad = panes_src.replace("ctx.colorB;", "ctx.colourB;")
+res = c.call("create_custom_scene", {"manifest": panes, "source": bad})
+err(res, "a compile error installs nothing", "doesn't compile")
+d0 = (res["structuredContent"]["diagnostics"] or [{}])[0]
+check(d0.get("line") == 5 and d0.get("severity") == "error" and "file" not in d0 and ">   5 |" in text(res) and "colourB" in text(res),
+      f"the error is on line 5 of the entry, with the source line (got {d0})")
+check(not os.path.isdir(os.path.join(E, "scenes")) or os.listdir(os.path.join(E, "scenes")) == [], "nothing installed after the error")
+res = c.call("validate_custom_scene", {"manifest": panes, "source": bad.replace("float band", "float bnad", 1)})
+lines_ = sorted(d["line"] for d in res["structuredContent"]["diagnostics"] if d["severity"] == "error")
+check(res.get("isError") and 5 in lines_ and 6 in lines_, f"two errors, lines 5 and 6 ({lines_})")
+res = c.call("create_custom_scene", {"manifest": panes, "source": panes_src})
+ok(res, "create_custom_scene (metal): compiled and installed")
+panes_id = res["structuredContent"].get("id", "")
+check(res["structuredContent"].get("gpuMsAt5K", 0) > 0, "with its GPU cost at 5K")
+ok(c.call("validate_custom_scene", {"id": panes_id}), "validate the installed metal scene")
+# a cells scene: a disc of colour B, coverage in alpha
+dot_src = ("#include <DotStudio.h>\n"
+           "float4 dsScene(float2 uv, DSContext ctx) {\n"
+           "    float d = dsSdCircle(dsCentered(uv, ctx), 0.32);\n"
+           "    return float4(ctx.colorB, dsFill(d, 0.02));\n"
+           "}\n")
+res = c.call("create_custom_scene", {"manifest": {"name": "Test Dot", "engine": {"id": "cells"}, "fps": 24,
+                                                  "colors": {"a": {"label": "Sky", "default": [0.02, 0.02, 0.04, 1]},
+                                                             "b": {"label": "Dot", "default": [1.0, 0.55, 0.2, 1]}}},
+                                     "source": dot_src})
+ok(res, "create_custom_scene (cells)")
+dot_id = res["structuredContent"].get("id", "")
+# a Shadertoy port through the pulled engine
+st_src = ("void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n"
+          "    vec2 uv = fragCoord / iResolution.xy;\n"
+          "    fragColor = vec4(uv.x, 0.15, 1.0 - uv.x, 1.0);\n"
+          "}\n")
+res = c.call("create_custom_scene", {"manifest": {"name": "Test Port", "engine": {"id": "shadertoy"}}, "source": st_src})
+ok(res, "create_custom_scene (shadertoy GLSL)")
+port_id = res["structuredContent"].get("id", "")
+check(os.path.exists(os.path.join(E, "scenes", port_id, "scene.glsl")), "the GLSL entry is scene.glsl")
+check(sorted(s["id"] for s in c.call("list_custom_scenes")["structuredContent"]["scenes"]) == sorted([panes_id, dot_id, port_id]),
+      "list_custom_scenes lists all three")
+
+# styles, through the engine's own helpers (EffectInstance.customScene)
+res = c.call("create_style", {"name": "Panes", "effects": [{"kind": "custom", "scene": panes_id, "params": {"speed": 1.5}}], "fps": 30})
+ok(res, "create_style with the metal scene")
+panes_style = res["structuredContent"]["id"]
+raw = next(p for p in library(E)["presets"] if p["id"] == panes_style)["effects"][0]
+check(raw["kind"] == "custom" and raw["custom"]["id"] == panes_id and raw["params"] == {"speed": 1.5}
+      and abs(raw["colorA"]["r"] - 0.8) < 1e-6 and abs(raw["colorB"]["b"] - 0.8) < 1e-6, "stored per contract §1 (params by key, colours colorA/B)")
+res = c.call("create_style", {"name": "Dot", "effects": [{"kind": "custom", "scene": dot_id, "params": {"ds.render": "Pixels", "ds.cell": 20}}], "fps": 24})
+ok(res, "create_style with the cells scene and its engine's params")
+dot_style = res["structuredContent"]["id"]
+raw = next(p for p in library(E)["presets"] if p["id"] == dot_style)["effects"][0]
+check(raw["params"].get("ds.render") == 1 and raw["params"].get("ds.cell") == 20 and raw["params"].get("ds.glow", 0.5) == 0.5,
+      "engine params stored by key (menu by name); the rest render at their defaults")
+err(c.call("create_style", {"name": "X", "effects": [{"kind": "custom", "scene": dot_id, "params": {"ds.cell": 99}}]}), "engine param range", "outside")
+res = c.call("create_style", {"name": "Port", "effects": [{"kind": "custom", "scene": port_id}]})
+ok(res, "create_style with the shadertoy scene")
+port_style = res["structuredContent"]["id"]
+
+# previews render the scenes' own pipelines (not the calm stand-in): look at the pixels
+res = c.call("preview_style", {"style": panes_style, "width": 320, "height": 200, "save_path": os.path.join(OUT, "e2e-panes.png")})
+ok(res, "preview_style the metal scene")
+px = png_pixels(image(res))
+L, R = region_mean(px, 0.05, 0.4, 0.1, 0.9), region_mean(px, 0.6, 0.95, 0.1, 0.9)
+check(px[0] == 320 and L[0] > L[2] + 0.3 and R[2] > R[0] + 0.3, f"its PNG is the scene: red left {L}, blue right {R}")
+ok(c.call("update_style", {"style": panes_style, "patch": [{"index": 0, "colorA": {"r": 0.1, "g": 0.75, "b": 0.2}}]}), "update_style a custom effect's colour")
+raw = next(p for p in library(E)["presets"] if p["id"] == panes_style)["effects"][0]
+check(raw["custom"]["id"] == panes_id and raw["params"] == {"speed": 1.5}, "the patch keeps the package and params")
+L2 = region_mean(png_pixels(image(c.call("preview_style", {"style": panes_style, "width": 320, "height": 200}))), 0.05, 0.4, 0.1, 0.9)
+check(L2[1] > L2[0] + 0.3, f"…and the preview follows it (green left {L2})")
+res = c.call("preview_style", {"style": dot_style, "width": 320, "height": 200, "save_path": os.path.join(OUT, "e2e-dot.png")})
+ok(res, "preview_style the cells scene")
+px = png_pixels(image(res))
+mid, corner = region_mean(px, 0.45, 0.55, 0.4, 0.6), region_mean(px, 0.0, 0.1, 0.0, 0.15)
+check(mid[0] > 0.35 and mid[0] > mid[2] + 0.2 and corner[0] < 0.15, f"an orange disc of cells on a dark sky (centre {mid}, corner {corner})")
+dots = image(c.call("preview_style", {"draft": {"effects": [{"kind": "custom", "scene": dot_id, "params": {"ds.render": "Dots", "ds.cell": 20}}]},
+                                       "width": 320, "height": 200}))
+check(dots != image(res), "Render = Dots draws differently from Pixels")
+px = png_pixels(image(c.call("preview_style", {"style": port_style, "width": 320, "height": 200, "save_path": os.path.join(OUT, "e2e-port.png")})))
+L, R = region_mean(px, 0.0, 0.15, 0.2, 0.8), region_mean(px, 0.85, 1.0, 0.2, 0.8)
+check(L[2] > L[0] + 0.5 and R[0] > R[2] + 0.5, f"the GLSL port renders (blue left {L}, red right {R})")
+for sid_, name_ in ((panes_style, "metal"), (dot_style, "cells")):
+    res = c.call("benchmark_style", {"style": sid_})
+    ok(res, f"benchmark_style the {name_} scene")
+    check(0 < res["structuredContent"].get("minMs", 0) < 100, f"…{res['structuredContent'].get('minMs', 0):.2f} ms at 5K")
+ok(c.call("set_screensaver", {"style": panes_style}), "set_screensaver to the custom style (temp store)")
+check(library(E)["activeID"] == panes_style, "the screensaver plays it")
+
+# film: the toolkit's stand-in renders real H.264 loops; they install and play through the real film engine
+res = c.call("film_status")
+check(res["structuredContent"]["available"] is True and res["structuredContent"]["toolkitPulled"] is True, "film_status: the stand-in toolkit, installed")
+res = c.call("create_film_scene", {"template": "commute", "name": "Test Commute", "variants": ["day", "night"], "look": {"grain": 0.3}})
+ok(res, "create_film_scene")
+fdraft = res["structuredContent"]["draft"]
+fjob = c.call("render_film_loop", {"draft": fdraft, "seconds": 8})["structuredContent"]["job"]
+deadline = time.time() + 90
+st = {}
+while time.time() < deadline:
+    st = c.call("film_job_status", {"job": fjob})["structuredContent"]
+    if st["state"] != "running" and ("scene" in st or "packageError" in st or st["state"] != "done"):
+        break
+    time.sleep(1)
+check(st.get("state") == "done" and "scene" in st, f"the loop finished, packaged and installed ({st.get('state')}, {st.get('packageError', '')})")
+fscene = st.get("scene", "")
+res = c.call("validate_custom_scene", {"id": fscene})
+ok(res, "the film package validates in the real engine (playable clips)")
+res = c.call("create_style", {"name": "Commute", "effects": [{"kind": "custom", "scene": fscene}], "fps": 24})
+ok(res, "create_style with the film scene")
+film_style = res["structuredContent"]["id"]
+fp = res["structuredContent"]["style"]["effects"][0]["params"]
+check(fp.get("ds.grain") == 0.3 and fp.get("ds.halation") == 0, f"its look: grain → ds.grain, halation baked → 0 ({fp})")
+day = c.call("preview_style", {"style": film_style, "clock": "13:00", "date": "2026-06-21", "width": 320, "height": 200,
+                               "save_path": os.path.join(OUT, "e2e-film-day.png")})
+night = c.call("preview_style", {"style": film_style, "clock": "01:00", "date": "2026-06-21", "width": 320, "height": 200})
+ok(day, "preview_style the film scene")
+check(day["structuredContent"]["meanLuminance"] > night["structuredContent"]["meanLuminance"] + 0.15,
+      f"day plays the day clip, night the night clip ({day['structuredContent']['meanLuminance']} vs {night['structuredContent']['meanLuminance']})")
+res = c.call("benchmark_style", {"style": film_style})
+ok(res, "benchmark_style the film scene")
+c.close()
+shutil.rmtree(idx, ignore_errors=True)
 
 # ---------------------------------------------------------------- the running app
 print("== routing through a running app (stand-in that clobbers direct writes)")
@@ -588,7 +796,7 @@ check(not stale and not extra, "Guides/settings matches this build" + ("" if not
       f" — regenerate with tools/guides/generate.sh (stale {stale[:5]}, extra {extra[:5]})"))
 shutil.rmtree(tmp)
 
-for d in (S, F, A, P):
+for d in (S, F, E, A, P):
     shutil.rmtree(d, ignore_errors=True)
 print()
 print(f"{CHECKS - len(FAILS)}/{CHECKS} checks passed")

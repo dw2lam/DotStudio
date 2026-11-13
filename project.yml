@@ -139,7 +139,7 @@ targets:
     sources:
       - MCP
       - path: Shared
-        excludes: ["Photos/**", "PlanetTextures/**", "**/*.metal", "**/*.jpg", "**/*.png"]
+        excludes: ["Photos/**", "PlanetTextures/**", "Engines/**", "**/*.metal", "**/*.jpg", "**/*.png"]
     settings:
       base:
         PRODUCT_NAME: dotstudio-mcp

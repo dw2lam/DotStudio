@@ -4,7 +4,11 @@
 # `xcodebuild -configuration Release -derivedDataPath build` leaves it) against throwaway stores
 # (DOTSTUDIO_STORE_DIR=$(mktemp -d) per scenario) and exercises: initialize/ping/errors, every
 # tool's happy and error paths, PNG previews, resources, prompts, the custom-scene and film
-# flows (stub and test fakes), detached film jobs (survive the server, cancel), routing through a
+# flows (this build, the structural fakes, and END TO END on the real engines: a pulled engine from
+# a local index, metal / cells / shadertoy scenes compiled, installed, previewed (pixels checked),
+# benchmarked and played, compile errors with their line numbers, film loops from the toolkit's
+# stand-in installed and played by the real film engine), detached film jobs (survive the server,
+# cancel), routing through a
 # stand-in running app that would clobber direct writes, lock contention, parallel servers, the
 # Claude Desktop config merge (temp file only), and settings-guide drift.
 # Silent: no windows, no sounds; never touches the real library or Claude's config.
