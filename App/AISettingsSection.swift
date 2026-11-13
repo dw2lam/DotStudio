@@ -26,7 +26,7 @@ struct AISettingsSection: View {
 
     var body: some View {
         Section {
-            Text("Assistants like Claude, Cursor or VS Code can design screensavers with you through DotStudio's MCP server: they read DotStudio's style guide, build styles from the scenes and looks, preview them as images and check their GPU cost.")
+            Text("Assistants like Claude, Cursor or VS Code can design screensavers with you through DotStudio's MCP server: they read DotStudio's style guide, build styles from the scenes and looks or write new scenes of their own, preview them as images and check their GPU cost.")
                 .textRole(.body).wrapping()
             Toggle("Let AI change what plays", isOn: Binding(get: { settings.allowPlaybackChanges }, set: { on in
                 settings.allowPlaybackChanges = on
