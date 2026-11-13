@@ -234,6 +234,11 @@ enum UIShots {
         // thumbnails' glow (DestinationGlow): paused = the wallpaper's dim glow beside the
         // screensaver's full one; off = no glow on the wallpaper. (dest-notchosen: none on the
         // screensaver either; dest-sync-on: both lit.)
+        // The README's gallery: a screensaver playlist, and Golden Hour as the live wallpaper.
+        s.append(Screen(name: "dest-hero", frame: .window, prepare: { st in
+            st.lineup(st.playlist)
+            WallpaperSlot.shared.set(st.model.library.presets.first { $0.name == "Golden Hour" }?.id ?? st.wallpaper)
+        }, view: main))
         s.append(Screen(name: "dest-wallpaper-paused", frame: .window, prepare: { st in
             WallpaperSlot.shared.set(st.wallpaper)
             WallpaperController.shared.togglePause()

@@ -152,10 +152,20 @@ struct MCPPopover: View {
             if let s = ai.desktopStatus {
                 Text(s).textRole(.caption).foregroundStyle(ai.desktopFailed ? .orange : .secondary).wrapping()
             }
-            Toggle("Let AI change what plays", isOn: ai.allowPlaybackBinding(store: store))
-                .toggleStyle(.switch)
-                .formSwitchSize()
-                .help("Off: assistants can still create and edit styles, but never change your screensaver or live wallpaper.")
+            // The standard macOS switch, small and accent-tinted (as in the setup guide), its
+            // label on the left and the switch at the trailing edge, like a Settings row.
+            HStack(alignment: .center, spacing: layout.controlGap) {
+                Text("Let AI change what plays").textRole(.body).wrapping()
+                    .accessibilityHidden(true)          // (the switch carries the label)
+                Spacer(minLength: 0)
+                Toggle("Let AI change what plays", isOn: ai.allowPlaybackBinding(store: store))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .tint(.accentColor)
+                    .adaptiveControlSize(.small)
+                    .accessibilityLabel("Let AI change what plays")
+            }
+            .help("Off: assistants can still create and edit styles, but never change your screensaver or live wallpaper.")
             Divider()
             Button(scaled: "More in Settings…") {
                 close()
