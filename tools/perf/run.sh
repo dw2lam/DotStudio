@@ -19,6 +19,7 @@ if [[ -z "$PERF_SKIP_BUILD" ]]; then
   cp "$ROOT"/Shared/PlanetTextures/*.jpg "$BIN/" 2>/dev/null || true
 # Custom Scene engines (CustomScenes.builtInEnginesDir: Resources/Engines next to the binary).
 rm -rf "$BIN/Engines" && cp -R "$ROOT/Shared/Engines" "$BIN/Engines"
+ln -sfn "$ROOT/Shared/Films" "$BIN/Films"   # built-in film scenes (CustomScenes.builtInPackagesDirs)
   rm -rf "$BIN/Photos" && mkdir -p "$BIN/Photos"
   cp "$ROOT"/Shared/Photos/*.jpg "$BIN/Photos/" 2>/dev/null || true
   xcrun -sdk macosx clang -O2 -dynamiclib -install_name @rpath/libperfhooks.dylib \

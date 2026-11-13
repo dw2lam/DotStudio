@@ -247,6 +247,8 @@ func customSceneChecks() -> Bool {
         let ex = engines.first { $0.id == "metal" }?.exampleURLs.first
         let m = ex.flatMap { try? CustomScenes.install(packageAt: $0, into: storeURL) }.flatMap { CustomScenes.manifest(id: $0, store: storeURL) }
         var lib = DefaultPresets.makeLibrary()
+        // built-in film scenes (Commute) are Custom Scenes in the default library already
+        let builtInRefs = lib.presets.flatMap(\.effects).filter { $0.custom != nil }.count
         if let m { var p = Preset.customScene(m); p.effects[0].params["speed"] = 0.9; lib.presets.append(p) }
         let enc = JSONEncoder(); enc.outputFormatting = [.sortedKeys]
         let data = (try? enc.encode(lib)) ?? Data()
@@ -254,8 +256,8 @@ func customSceneChecks() -> Bool {
         _ = back?.sanitize()
         let json = String(decoding: data, as: UTF8.self)
         let refs = json.components(separatedBy: "\"custom\":{").count - 1
-        check(m != nil && back == lib && refs == 1 && back?.presets.last?.effects.first?.custom?.id == m?.id,
-              "custom: a library with a Custom Scene round-trips (reference + params kept; no other effect writes \"custom\")")
+        check(m != nil && back == lib && refs == 1 + builtInRefs && back?.presets.last?.effects.first?.custom?.id == m?.id,
+              "custom: a library with a Custom Scene round-trips (reference + params kept; only Custom Scenes write \"custom\": 1 + \(builtInRefs) built-in)")
         var hostile = Preset.customScene(m ?? CustomSceneManifest(id: "x-00000000", name: "x", engine: .init(id: "metal", version: nil), entry: "s.metal"))
         hostile.effects[0].custom = CustomSceneRef(id: "../../Library/Keychains")
         hostile.effects[0].params["speed"] = .nan

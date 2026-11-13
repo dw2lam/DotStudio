@@ -33,7 +33,12 @@ targets:
       - Saver
       - path: Shared
         # Shared/AI: the AI bridge and edits — app and dotstudio-mcp only.
-        excludes: ["Photos/**", "Engines/**", "AI/**"]
+        excludes: ["Photos/**", "Engines/**", "AI/**", "Films/**"]
+      # Built-in film scenes (packages of looping clips rendered in Blender, CustomScenes
+      # builtInPackagesDirs) ship ONCE too, inside the saver (Resources/Films).
+      - path: Shared/Films
+        type: folder
+        buildPhase: resources
       # Built-in slideshow photos ship ONCE, inside the saver (Resources/Photos). The app
       # reads them from its embedded DotStudio.saver (CollectionSource.builtInPhotoURLs).
       - path: Shared/Photos
@@ -61,7 +66,7 @@ targets:
     sources:
       - App
       - path: Shared
-        excludes: ["Photos/**", "Engines/**"]
+        excludes: ["Photos/**", "Engines/**", "Films/**"]
       - path: Shared/Engines
         type: folder
         buildPhase: resources
@@ -139,7 +144,7 @@ targets:
     sources:
       - MCP
       - path: Shared
-        excludes: ["Photos/**", "PlanetTextures/**", "Engines/**", "**/*.metal", "**/*.jpg", "**/*.png"]
+        excludes: ["Photos/**", "PlanetTextures/**", "Engines/**", "Films/**", "**/*.metal", "**/*.jpg", "**/*.png"]
     settings:
       base:
         PRODUCT_NAME: dotstudio-mcp

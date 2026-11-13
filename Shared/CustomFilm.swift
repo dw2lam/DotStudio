@@ -131,7 +131,8 @@ final class CustomFilm {
         gen.appliesPreferredTrackTransform = true
         gen.requestedTimeToleranceBefore = .zero
         gen.requestedTimeToleranceAfter = CMTime(value: 1, timescale: 10)
-        guard let cg = try? gen.copyCGImage(at: .zero, actualTime: nil),
+        guard let frame = try? gen.copyCGImage(at: .zero, actualTime: nil),
+              let cg = eightBit(frame),
               let t = try? MTKTextureLoader(device: device).newTexture(cgImage: cg, options: [
                   .SRGB: false, .origin: MTKTextureLoader.Origin.topLeft.rawValue,
                   .textureUsage: NSNumber(value: MTLTextureUsage.shaderRead.rawValue)]) else { return nil }
@@ -140,6 +141,18 @@ final class CustomFilm {
         posters[key] = t
         posterLock.unlock()
         return t
+    }
+
+    /// The frame as 8-bit sRGB RGBA: a 10-bit HEVC clip (the Blender toolkit's Main10) decodes to a
+    /// 16-bit CGImage, which MTKTextureLoader refuses ("Image decoding failed").
+    static func eightBit(_ cg: CGImage) -> CGImage? {
+        if cg.bitsPerComponent == 8 && cg.bitsPerPixel == 32 { return cg }
+        guard let cs = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: nil, width: cg.width, height: cg.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .none
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+        return ctx.makeImage()
     }
 
     /// The film-specific checks of validate: known variants, playable clips, a day or "any" clip.

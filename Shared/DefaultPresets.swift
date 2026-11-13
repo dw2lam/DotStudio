@@ -58,7 +58,13 @@ enum DefaultPresets {
             Preset(name: "Hyperspace",
                    effects: [fx(.starfield, ["speed": 1.5, "density": 12, "warp": 0.9, "size": 0.8],
                                 a: RGBA(0.01, 0.015, 0.04), b: RGBA(0.75, 0.88, 1.0))]),
-        ] + SceneCatalog.presets
+        ] + SceneCatalog.presets + builtInFilms()
+    }
+
+    /// Photoreal film scenes rendered offline in Blender (tools/film) that ship with the app as
+    /// built-in scene packages (Shared/Films → the saver's Resources/Films; CustomScenes).
+    static func builtInFilms() -> [Preset] {
+        CustomScenes.builtInManifests().map { Preset.customScene($0) }
     }
 
     /// Looks that restyle the shared source. Tuned on the built-in photo slideshow
@@ -125,7 +131,7 @@ enum DefaultPresets {
         "Lava Lamp", "Currents",
         "Golden Hour", "Shallows", "Meadow", "Tall Grass", "Night Sky", "First Snow",
         "Blue Bloom", "Baby's Breath",
-        "Neon Horizon", "Light Ribbons", "Bounce", "Penguin",
+        "Neon Horizon", "Light Ribbons", "Bounce", "Penguin", "Commute",
         // Looks
         "Film", "Riso Duotone", "Cyanotype", "Floyd–Steinberg", "Atkinson", "ASCII", "Amber CRT", "Soft Focus",
     ]
