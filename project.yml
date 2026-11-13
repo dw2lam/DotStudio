@@ -75,6 +75,11 @@ targets:
       - path: Guides
         type: folder
         buildPhase: resources
+      # The Blender film toolkit (tools/film → Contents/Resources/film), for dotstudio-mcp's film
+      # tools; it runs from a copy in the store, never from the bundle (FilmToolkit.bundled).
+      - path: tools/film
+        type: folder
+        buildPhase: resources
     dependencies:
       - target: DotStudioSaver
         embed: true

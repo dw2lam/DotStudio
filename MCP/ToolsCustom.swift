@@ -327,7 +327,7 @@ extension Toolbox {
                  description: "Ray-traced (Cycles) stills of a film draft, one per variant, so the user can approve the base scene BEFORE the long loop render. Runs as a background job; waits up to `wait_seconds` (default 60) and returns the images if done, else the job id for film_job_status.",
                  input: S.obj(["draft": S.str("Draft id from create_film_scene.", pattern: "^film-[0-9a-f]{8}$"), "variants": variants,
                                "width": S.num("Default 1280.", min: 320, max: 3840, integer: true),
-                               "height": S.num("Default 720.", min: 180, max: 2160, integer: true),
+                               "height": S.num("Default 800 (16:10, like Mac displays).", min: 180, max: 2160, integer: true),
                                "samples": S.num("Cycles samples (default 64).", min: 1, max: 4096, integer: true),
                                "wait_seconds": S.num("How long to wait for the result (0–120, default 60).", min: 0, max: 120)],
                               required: ["draft"]), openWorld: false) { [unowned self] a in
@@ -337,7 +337,7 @@ extension Toolbox {
                 let vs = a["variants"] as? [String] ?? self.draftVariants(spec)
                 let job = try FilmJobs.start(store: self.store, kind: "stills", draft: draft, variants: vs) { out in
                     try self.film.stillsCommand(spec: spec, outDir: out, variants: vs,
-                                                width: a["width"] as? Int ?? 1280, height: a["height"] as? Int ?? 720,
+                                                width: a["width"] as? Int ?? 1280, height: a["height"] as? Int ?? 800,
                                                 samples: a["samples"] as? Int ?? 64)
                 }
                 let wait = (a["wait_seconds"] as? NSNumber)?.doubleValue ?? 60
@@ -350,8 +350,8 @@ extension Toolbox {
                  input: S.obj(["draft": S.str("Draft id.", pattern: "^film-[0-9a-f]{8}$"), "variants": variants,
                                "seconds": S.num("Loop length (default: the draft's loop.seconds).", min: 4, max: 120),
                                "fps": ["type": "integer", "enum": [24, 30], "description": "Default 24."],
-                               "width": S.num("Default 3840.", min: 640, max: 7680, integer: true),
-                               "height": S.num("Default 2160.", min: 360, max: 4320, integer: true),
+                               "width": S.num("Default 1920 (16:10; DotStudio scales it to the display).", min: 640, max: 7680, integer: true),
+                               "height": S.num("Default 1200.", min: 360, max: 4320, integer: true),
                                "quality": S.str("draft, standard (default) or final", enum: ["draft", "standard", "final"])],
                               required: ["draft"])) { [unowned self] a in
                 guard self.film.isAvailable else { throw ToolError(UnavailableFilmToolkit.message) }
@@ -361,7 +361,7 @@ extension Toolbox {
                 let job = try FilmJobs.start(store: self.store, kind: "loop", draft: draft, variants: vs) { out in
                     try self.film.loopCommand(spec: spec, outDir: out, variants: vs,
                                               seconds: (a["seconds"] as? NSNumber)?.doubleValue ?? self.draftLoopSeconds(spec), fps: a["fps"] as? Int ?? 24,
-                                              width: a["width"] as? Int ?? 3840, height: a["height"] as? Int ?? 2160,
+                                              width: a["width"] as? Int ?? 1920, height: a["height"] as? Int ?? 1200,
                                               quality: a["quality"] as? String ?? "standard")
                 }
                 return .ok("Started \(job.id) (\(vs.joined(separator: ", "))). It runs in the background; check film_job_status(job: \"\(job.id)\").",
