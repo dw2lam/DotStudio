@@ -1,9 +1,23 @@
 //  Film.swift — photoreal, ray-traced "film" scenes: the Blender toolkit seam and the job runner.
 //
-//  The toolkit (Python package `dsfilm`, branch commute-film, shipped as the pullable `film`
-//  engine) turns a scene spec into a .blend and renders Cycles stills and seamless video loops.
-//  dotstudio-mcp drives it through `FilmToolkitAPI` (contract §6); `UnavailableFilmToolkit`
-//  stands in until the toolkit and the custom-scene engine are merged into this build.
+//  The toolkit (Python package `dsfilm`, branch commute-film, tools/film/) turns a scene spec into
+//  a .blend and renders Cycles stills and seamless video loops. dotstudio-mcp drives it through
+//  `FilmToolkitAPI` (contract §6). What it makes plays through DotStudio's built-in `film` engine
+//  (Shared/CustomFilm.swift, Engines/film/1/guide.md): a scene package of clips, one per variant,
+//  which `FilmPackage.make` builds from a loop's output and CustomScenesAPI installs.
+//
+//  TODO(commute-film): the toolkit isn't in this build yet (it's mid-iteration on its own branch),
+//  so `makeFilmToolkit` returns `UnavailableFilmToolkit` (the self-test: `FakeFilmToolkit`). When
+//  tools/film merges, add `DSFilmToolkit: FilmToolkitAPI` beside them and return it from
+//  makeFilmToolkit when the toolkit is installed:
+//    • status()       Blender via FilmPaths.blender() (never launched to check), the toolkit's
+//                     install and version, the GPU;
+//    • templates()    the toolkit's scene templates (Commute first) with their params and spec;
+//    • validate(spec) the toolkit's own spec check, without rendering;
+//    • stillsCommand / loopCommand  Blender headless + dsfilm argv and env — FilmJobs runs them
+//                     detached and nice'd; progress JSON to $DSFILM_PROGRESS; stills to
+//                     <out>/<variant>.png, loops to <out>/<variant>.mov (HEVC);
+//    • package(...)   FilmPackage.make (or the toolkit's own packager writing the same format).
 //
 //  Renders run as JOBS, never inside a tool call: each is a detached process group (its own
 //  session, `nice`d, stdin from /dev/null, reparented to launchd), so it outlives the MCP process
@@ -17,6 +31,7 @@
 //  A finished loop job is packaged (scene package, engine "film", `clips` per variant) and
 //  installed through CustomScenesAPI the first time film_job_status sees it done.
 
+import AVFoundation
 import CoreGraphics
 import Foundation
 
@@ -36,7 +51,7 @@ struct FilmCommand {
 }
 
 protocol FilmToolkitAPI {
-    /// The toolkit (film engine) is in this build and pulled.
+    /// The toolkit is in this build (status() says whether this Mac has it installed).
     var isAvailable: Bool { get }
     func status() -> FilmStatus
     /// Scenes to start from (Commute first): id, name, summary, variants, cameras, loop, the
@@ -114,9 +129,42 @@ enum FilmLook {
     }
 }
 
+/// A finished loop's clips as a scene package for the built-in `film` engine (contract §6 / §8):
+/// scene.json with `"engine": {"id": "film"}`, a `clips` entry per `<variant>.mov` in the loop's
+/// output (day / golden / night / rain; anything else plays as `any`), the spec's look (its grain
+/// becomes the style's starting Grain: EffectInstance.customScene), and the clips themselves.
+enum FilmPackage {
+    static let variants: Set<String> = ["day", "golden", "night", "rain", "any"]
+
+    static func make(loopOutput: URL, spec: JSONObject, sceneID: String, into package: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: package.appendingPathComponent("clips"), withIntermediateDirectories: true)
+        var clips: [JSONObject] = []
+        let files = try fm.contentsOfDirectory(at: loopOutput, includingPropertiesForKeys: nil)
+            .filter { ["mov", "mp4"].contains($0.pathExtension.lowercased()) }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        for f in files {
+            let name = f.deletingPathExtension().lastPathComponent.lowercased()
+            let variant = variants.contains(name) ? name : "any"
+            let dst = "clips/\(variant).\(f.pathExtension.lowercased())"
+            guard !clips.contains(where: { $0["file"] as? String == dst }) else { continue }
+            try fm.copyItem(at: f, to: package.appendingPathComponent(dst))
+            clips.append(["variant": variant, "file": dst, "loop": true])
+        }
+        guard !clips.isEmpty else { throw ToolError("The loop render left no clips (.mov) to package.") }
+        let fps = ((spec["loop"] as? JSONObject)?["fps"] as? NSNumber)?.intValue ?? 24
+        var m: JSONObject = ["format": 1, "id": sceneID, "name": spec["name"] as? String ?? "Film",
+                             "engine": ["id": "film", "version": ">=1"], "fps": fps, "clips": clips,
+                             "uses": ["sun", "weather"], "look": FilmLook.merged(spec["look"], nil),
+                             "description": spec["description"] as? String ?? "A film scene rendered in Blender by DotStudio's film toolkit."]
+        if let a = spec["author"] as? String { m["author"] = a }
+        try JSON.data(m, pretty: true).write(to: package.appendingPathComponent("scene.json"))
+    }
+}
+
 /// No toolkit in this build: status still reports Blender and the GPU; everything else says why.
 struct UnavailableFilmToolkit: FilmToolkitAPI {
-    static let message = "Film scenes (photoreal, ray-traced Blender renders) aren't available in this build of DotStudio yet: they arrive with the film engine. Use the built-in scenes for now (list_scenes)."
+    static let message = "Making film scenes (photoreal, ray-traced Blender renders) isn't available in this build of DotStudio yet: it arrives with the film toolkit. Film scene packages made elsewhere still play (the film engine is built in); for new scenes, use the built-in scenes and custom shader scenes (list_scenes, list_engines)."
     var isAvailable: Bool { false }
     func status() -> FilmStatus {
         let b = FilmPaths.blender()
@@ -130,13 +178,17 @@ struct UnavailableFilmToolkit: FilmToolkitAPI {
     func package(loopOutput: URL, spec: JSONObject, sceneID: String, into package: URL) throws { throw ToolError(Self.message) }
 }
 
-/// Self-test stand-in (DOTSTUDIO_MCP_TEST_FAKES=1): the "render" is this executable's
-/// `--test-film-worker`, which reports progress, sleeps and writes small PNGs / clip files —
-/// enough to exercise detaching, progress, cancel, packaging and install for real.
+/// Self-test stand-in for the toolkit: the "render" is this executable's `--test-film-worker`,
+/// which reports progress, sleeps and writes small PNG stills / real H.264 loops (so a packaged
+/// scene installs, validates and plays through the real film engine) — enough to exercise
+/// detaching, progress, cancel, packaging and install for real.
+///   DOTSTUDIO_MCP_TEST_FAKES=1     with FakeCustomScenes: "installed" once pull_engine("film") ran;
+///   DOTSTUDIO_MCP_TEST_FAKES=film  with the real engines (CustomScenesBridge): installed.
 struct FakeFilmToolkit: FilmToolkitAPI {
     let store: URL
+    var alwaysInstalled = false
     var isAvailable: Bool { true }
-    var pulled: Bool { FileManager.default.fileExists(atPath: AIStore.enginesDir(store).appendingPathComponent("film").path) }
+    var pulled: Bool { alwaysInstalled || FileManager.default.fileExists(atPath: AIStore.enginesDir(store).appendingPathComponent("film").path) }
     func status() -> FilmStatus {
         let b = FilmPaths.blender()
         return FilmStatus(blenderPath: b?.path, blenderVersion: b?.version, toolkitPulled: pulled,
@@ -180,30 +232,74 @@ struct FakeFilmToolkit: FilmToolkitAPI {
         let dur = ProcessInfo.processInfo.environment["DOTSTUDIO_MCP_FAKE_RENDER_SECONDS"] ?? "2"
         return FilmCommand(executable: me, arguments: ["--test-film-worker", mode, outDir.path, variants.joined(separator: ","), dur])
     }
+    static let notInstalled = "The film toolkit isn't installed on this Mac (the self-test's stand-in installs with pull_engine(\"film\"))."
     func stillsCommand(spec: URL, outDir: URL, variants: [String], width: Int, height: Int, samples: Int) throws -> FilmCommand {
-        guard pulled else { throw ToolError("Pull the film engine first: pull_engine(\"film\").") }
+        guard pulled else { throw ToolError(Self.notInstalled) }
         return worker("stills", outDir, variants, seconds: 0)
     }
     func loopCommand(spec: URL, outDir: URL, variants: [String], seconds: Double, fps: Int, width: Int, height: Int, quality: String) throws -> FilmCommand {
-        guard pulled else { throw ToolError("Pull the film engine first: pull_engine(\"film\").") }
+        guard pulled else { throw ToolError(Self.notInstalled) }
         return worker("loop", outDir, variants, seconds: seconds)
     }
     func package(loopOutput: URL, spec: JSONObject, sceneID: String, into package: URL) throws {
-        let fm = FileManager.default
-        try fm.createDirectory(at: package.appendingPathComponent("clips"), withIntermediateDirectories: true)
-        var clips: [JSONObject] = []
-        for f in (try fm.contentsOfDirectory(at: loopOutput, includingPropertiesForKeys: nil)) where f.pathExtension == "mov" {
-            try fm.copyItem(at: f, to: package.appendingPathComponent("clips").appendingPathComponent(f.lastPathComponent))
-            clips.append(["variant": f.deletingPathExtension().lastPathComponent, "file": "clips/" + f.lastPathComponent, "codec": "hevc"])
+        try FilmPackage.make(loopOutput: loopOutput, spec: spec, sceneID: sceneID, into: package)
+    }
+
+    /// Each variant's light, for the stand-in's stills and clips.
+    static func tint(_ v: String) -> (top: (Double, Double, Double), bottom: (Double, Double, Double)) {
+        switch v {
+        case "golden": return ((0.95, 0.62, 0.32), (0.30, 0.16, 0.10))
+        case "night": return ((0.06, 0.08, 0.18), (0.02, 0.02, 0.05))
+        case "rain": return ((0.42, 0.47, 0.52), (0.12, 0.14, 0.17))
+        default: return ((0.55, 0.72, 0.90), (0.18, 0.24, 0.20))
         }
-        let look = FilmLook.merged(spec["look"], nil)
-        let grain = (look["grain"] as? NSNumber)?.doubleValue ?? 0.2
-        let m: JSONObject = ["format": 1, "id": sceneID, "name": spec["name"] as? String ?? "Film", "engine": ["id": "film", "version": ">=1"],
-                             "entry": "clips", "fps": 24, "clips": clips, "uses": ["sun", "weather"], "look": look,
-                             "params": [["key": "grain", "label": "Film Grain", "kind": "slider", "min": 0, "max": 1, "default": grain]]]
-        try JSON.data(m, pretty: true).write(to: package.appendingPathComponent("scene.json"))
-        try Data("// film package: clips only\nfloat4 dsScene(float2 uv, DSContext ctx) { return 0; }\n".utf8)
-            .write(to: package.appendingPathComponent("clips.txt"))
+    }
+
+    /// A short seamless H.264 loop: the variant's sky gradient with a soft band of light drifting
+    /// across it once per loop (the film engine plays it like a rendered clip).
+    static func writeClip(_ url: URL, variant: String, seconds: Double = 1.5, fps: Int32 = 24, w: Int = 640, h: Int = 360) -> Bool {
+        try? FileManager.default.removeItem(at: url)
+        guard let writer = try? AVAssetWriter(outputURL: url, fileType: .mov) else { return false }
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: w, AVVideoHeightKey: h])
+        input.expectsMediaDataInRealTime = false
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: w, kCVPixelBufferHeightKey as String: h])
+        writer.add(input)
+        guard writer.startWriting() else { return false }
+        writer.startSession(atSourceTime: .zero)
+        let n = Int(Double(fps) * seconds)
+        let (top, bottom) = tint(variant)
+        for i in 0..<n {
+            while !input.isReadyForMoreMediaData { Thread.sleep(forTimeInterval: 0.002) }
+            guard let pool = adaptor.pixelBufferPool else { return false }
+            var pbOut: CVPixelBuffer?
+            CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pbOut)
+            guard let pb = pbOut else { return false }
+            CVPixelBufferLockBaseAddress(pb, [])
+            let base = CVPixelBufferGetBaseAddress(pb)!.assumingMemoryBound(to: UInt8.self)
+            let bpr = CVPixelBufferGetBytesPerRow(pb)
+            let phase = Double(i) / Double(n)                              // once across per loop
+            for y in 0..<h {
+                let fy = Double(y) / Double(h - 1)
+                for x in 0..<w {
+                    let fx = Double(x) / Double(w - 1)
+                    var d = fx - phase; d -= d.rounded()                   // wraps: seamless
+                    let band = 0.18 * exp(-d * d / 0.01) * (1 - fy)
+                    func c(_ a: Double, _ b: Double) -> UInt8 { UInt8(max(0, min(1, a + (b - a) * fy + band)) * 255) }
+                    let o = y * bpr + x * 4
+                    base[o] = c(top.2, bottom.2); base[o + 1] = c(top.1, bottom.1); base[o + 2] = c(top.0, bottom.0); base[o + 3] = 255
+                }
+            }
+            CVPixelBufferUnlockBaseAddress(pb, [])
+            adaptor.append(pb, withPresentationTime: CMTime(value: CMTimeValue(i), timescale: fps))
+        }
+        input.markAsFinished()
+        let done = DispatchSemaphore(value: 0)
+        writer.finishWriting { done.signal() }
+        done.wait()
+        return writer.status == .completed
     }
 
     /// The fake render: progress over `dur` seconds, then outputs.
@@ -224,21 +320,28 @@ struct FakeFilmToolkit: FilmToolkitAPI {
         }
         for v in variants {
             if mode == "stills" {
+                let (top, bottom) = tint(v)
                 let c = CGContext(data: nil, width: 64, height: 40, bitsPerComponent: 8, bytesPerRow: 0,
                                   space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-                c.setFillColor(CGColor(srgbRed: 0.2, green: 0.3, blue: 0.4, alpha: 1)); c.fill(CGRect(x: 0, y: 0, width: 64, height: 40))
+                c.setFillColor(CGColor(srgbRed: bottom.0, green: bottom.1, blue: bottom.2, alpha: 1)); c.fill(CGRect(x: 0, y: 0, width: 64, height: 20))
+                c.setFillColor(CGColor(srgbRed: top.0, green: top.1, blue: top.2, alpha: 1)); c.fill(CGRect(x: 0, y: 20, width: 64, height: 20))
                 try? PreviewRenderer.png(c.makeImage()!).write(to: out.appendingPathComponent("\(v).png"))
-            } else {
-                try? Data("fake hevc \(v)".utf8).write(to: out.appendingPathComponent("\(v).mov"))
+            } else if !writeClip(out.appendingPathComponent("\(v).mov"), variant: v) {
+                print("[fake dsfilm] couldn't write \(v).mov")
+                exit(1)
             }
         }
         exit(0)
     }
 }
 
+/// The toolkit for this build (see the TODO at the top: none until tools/film merges).
 func makeFilmToolkit(store: URL) -> FilmToolkitAPI {
-    if ProcessInfo.processInfo.environment["DOTSTUDIO_MCP_TEST_FAKES"] == "1" { return FakeFilmToolkit(store: store) }
-    return UnavailableFilmToolkit()
+    switch ProcessInfo.processInfo.environment["DOTSTUDIO_MCP_TEST_FAKES"] {
+    case "1": return FakeFilmToolkit(store: store)
+    case "film": return FakeFilmToolkit(store: store, alwaysInstalled: true)
+    default: return UnavailableFilmToolkit()
+    }
 }
 
 // MARK: - Jobs

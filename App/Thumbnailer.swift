@@ -315,6 +315,10 @@ final class Thumbnailer {
             if e.kind == .waddle, (e.params["night"] ?? 1) > 0.5 { take(600) }   // dozes and dims at night
             if WeatherLink.usesWeather(e.kind), WeatherLink.fixedCondition(e) == nil { take(300) }
         }
+        // A Custom Scene: what its manifest says it reads ("uses").
+        if preset.customUses("clock") { take(60) }
+        if preset.customUses("sun") { take(600) }
+        if preset.customUses("weather") { take(300) }
         return best
     }
 

@@ -21,8 +21,8 @@ enum AIStore {
     static func settingsURL(_ store: URL) -> URL { store.appendingPathComponent("ai-settings.json") }
     static func createdURL(_ store: URL) -> URL { store.appendingPathComponent("ai-created.json") }
     static func guidesDir(_ store: URL) -> URL { store.appendingPathComponent("guides", isDirectory: true) }
-    static func scenesDir(_ store: URL) -> URL { store.appendingPathComponent("scenes", isDirectory: true) }
-    static func enginesDir(_ store: URL) -> URL { store.appendingPathComponent("engines", isDirectory: true) }
+    static func scenesDir(_ store: URL) -> URL { CustomScenes.scenesDir(store) }
+    static func enginesDir(_ store: URL) -> URL { CustomScenes.enginesDir(store) }
     static func wallpaperURL(_ store: URL) -> URL { store.appendingPathComponent("wallpaper.json") }
 }
 

@@ -37,7 +37,7 @@ extension Toolbox {
     var custom: [Tool] {
         [
             Tool(name: "list_engines", title: "List engines",
-                 description: "Rendering engines for custom scenes: built-in (metal: write `float4 dsScene(float2 uv, DSContext ctx)` in Metal; cells: LED/pixel-panel scenes) and pullable ones (shadertoy: GLSL mainImage compatibility; film: photoreal Blender renders). Read an engine's guide (read_guide engines/<id>) before writing a scene for it.",
+                 description: "Rendering engines for custom scenes: built-in (metal: write `float4 dsScene(float2 uv, DSContext ctx)` in Metal; cells: LED/pixel-panel scenes; film: looping video clips that follow the sun and weather, made with the Blender toolkit — film_status) and pullable ones (shadertoy: GLSL mainImage compatibility). Read an engine's guide (read_guide engines/<id>) before writing a scene for it.",
                  input: S.obj(["include_available": S.bool("Also list engines that can be pulled (needs the network).")]),
                  readOnly: true, idempotent: true, openWorld: true) { [unowned self] a in
                 guard self.scenes.isAvailable else { throw ToolError(UnavailableCustomScenes.message) }
@@ -53,7 +53,7 @@ extension Toolbox {
                 return .ok(installed.map { "- \($0["id"]!) v\($0["version"]!) (\($0["kind"]!))\(($0["builtIn"] as? Bool) == true ? ", built in" : "")" }.joined(separator: "\n"), o)
             },
             Tool(name: "pull_engine", title: "Pull an engine",
-                 description: "Download and install an optional engine (e.g. \"shadertoy\", \"film\") from DotStudio's engine index. Verified by sha256; engines are shader headers, translators and docs, never native code. Tell the user before pulling a large one (film).",
+                 description: "Download and install an optional engine (e.g. \"shadertoy\") from DotStudio's engine index. Verified by sha256; engines are shader headers, translators and docs, never native code. Built-in engines (metal, cells, film) need no pull.",
                  input: S.obj(["id": S.str("Engine id from list_engines(include_available: true).", pattern: "^[a-z0-9-]{1,32}$")], required: ["id"]),
                  idempotent: true, openWorld: true) { [unowned self] a in
                 let e = try self.scenes.pullEngine(id: a["id"] as! String)
@@ -158,7 +158,7 @@ extension Toolbox {
         }
         let keys = (m["params"] as? [JSONObject] ?? []).compactMap { $0["key"] as? String }
         if Set(keys).count != keys.count { problems.append("param keys must be unique") }
-        if source.utf8.count > 512 * 1024 { problems.append("source is over 512 KB") }
+        if source.utf8.count > CustomScenes.maxSourceBytes { problems.append("source is over \(CustomScenes.maxSourceBytes / 1024) KB") }
         var extra: [(String, String)] = []
         for (name, v) in files ?? [:] {
             guard let text = v as? String else { problems.append("files.\(name) must be a string"); continue }
@@ -199,8 +199,8 @@ extension Toolbox {
         let lines = source.components(separatedBy: "\n")
         var text = r.ok ? "Compiles." : "Doesn't compile yet: \(r.diagnostics.filter { $0.severity == "error" }.count) error(s)."
         for d in r.diagnostics {
-            text += "\n\(d.severity) \(d.line.map { "line \($0)\(d.column.map { ":\($0)" } ?? "")" } ?? ""): \(d.message)"
-            if let l = d.line, l >= 1, l <= lines.count {
+            text += "\n\(d.severity) \(d.file.map { "in \($0) " } ?? "")\(d.line.map { "line \($0)\(d.column.map { ":\($0)" } ?? "")" } ?? ""): \(d.message)"
+            if d.file == nil, let l = d.line, l >= 1, l <= lines.count {          // (the entry's own lines)
                 for n in max(1, l - 2)...min(lines.count, l + 2) { text += "\n  \(n == l ? ">" : " ")\(String(format: "%4d", n)) | \(lines[n - 1])" }
             }
         }
@@ -221,7 +221,7 @@ extension Toolbox {
         let variants = S.arr(S.str("variant", enum: ["day", "golden", "night", "rain"]), "Lighting/weather variants (default all four).", min: 1, max: 4)
         return [
             Tool(name: "film_status", title: "Film status",
-                 description: "START HERE for film scenes (photoreal, ray-traced Blender renders played as seamless video loops). Reports Blender (installed? version — with install steps for the user if it's missing or too old; DotStudio never installs it), whether the film engine/toolkit is pulled, the GPU, recent film jobs, and the steps. Film scenes are big: stills take about a minute each, a loop hours, and clips are 150–250 MB per variant — tell the user before starting.",
+                 description: "START HERE for film scenes (photoreal, ray-traced Blender renders played as seamless video loops). Reports Blender (installed? version — with install steps for the user if it's missing or too old; DotStudio never installs it), whether the film toolkit is installed (the film engine that plays the clips is built in), the GPU, recent film jobs, and the steps. Film scenes are big: stills take about a minute each, a loop hours, and clips are 150–250 MB per variant — tell the user before starting.",
                  input: S.obj([:]), readOnly: true, idempotent: true) { [unowned self] _ in
                 let s = self.film.status()
                 let jobs = FilmJobs.all(self.store).prefix(10).map { j -> JSONObject in
@@ -230,7 +230,7 @@ extension Toolbox {
                 let found = s.blenderPath.map { ($0, s.blenderVersion) }
                 let advice = FilmPaths.installAdvice(found: found)
                 var text = "Blender: \(s.blenderPath.map { "\($0) (\(s.blenderVersion ?? "version unknown"))" } ?? "not installed"). "
-                text += "Film engine: \(s.toolkitPulled ? "pulled v\(s.toolkitVersion ?? "?")" : "not pulled (pull_engine \"film\")"). GPU: \(s.gpu)."
+                text += "Film toolkit: \(s.toolkitPulled ? "installed v\(s.toolkitVersion ?? "?")" : "not installed"). GPU: \(s.gpu)."
                 if let advice { text += "\n" + advice }
                 if !s.notes.isEmpty { text += "\n" + s.notes.joined(separator: "\n") }
                 text += "\nSteps: list_film_templates → create_film_scene → render_film_stills (approve) → render_film_loop → film_job_status → create_style."
@@ -243,11 +243,11 @@ extension Toolbox {
                  input: S.obj([:]), readOnly: true, idempotent: true) { [unowned self] _ in
                 guard self.film.isAvailable else { throw ToolError(UnavailableFilmToolkit.message) }
                 let t = self.film.templates()
-                return .ok(t.isEmpty ? "No templates (pull_engine \"film\" first)." : t.map { "- \($0["id"] ?? "?"): \($0["summary"] ?? "")" }.joined(separator: "\n"),
+                return .ok(t.isEmpty ? "No templates (the film toolkit isn't installed: film_status)." : t.map { "- \($0["id"] ?? "?"): \($0["summary"] ?? "")" }.joined(separator: "\n"),
                            ["templates": t])
             },
             Tool(name: "create_film_scene", title: "Create a film scene",
-                 description: "Start a film scene draft from a template (list_film_templates), with your edits: params (the template's own, e.g. colours), variants, loop length, and the LOOK — bloom, halation (warm red-orange edge glow, like film stock) and live film grain (added by DotStudio at playback, never baked, so it doesn't loop; the scene package carries it as the default). Or pass a full `spec` in the toolkit's format. Validates; returns the draft id and its spec. Nothing renders yet. Read read_guide(\"engines/film\") first (budgets, CC0-only assets, loop rules, original characters only).",
+                 description: "Start a film scene draft from a template (list_film_templates), with your edits: params (the template's own, e.g. colours), variants, loop length, and the LOOK — bloom, halation (warm red-orange edge glow, like film stock) and live film grain (added by DotStudio at playback, never baked, so it doesn't loop; the scene package carries it as the default). Or pass a full `spec` in the toolkit's format. Validates; returns the draft id and its spec. Nothing renders yet. Read read_guide(\"film\") first (budgets, CC0-only assets, loop rules, original characters only).",
                  input: S.obj(["template": S.str("Template id (list_film_templates), e.g. \"commute\"."),
                                "spec": ["type": "object", "description": "A full spec instead of a template (toolkit format)."],
                                "name": S.str("Name for the scene.", max: 60),
@@ -256,7 +256,7 @@ extension Toolbox {
                                "loop_seconds": S.num("Loop length; whole-number periods of every motion must fit it (default: the template's).", min: 8, max: 120),
                                "look": FilmLook.schema,
                                "scene_files": ["type": "object", "maxProperties": 12,
-                                               "description": "A NEW set instead of a template: the toolkit scene module's files by name — scene.py (ASSETS, VARIANTS, CAMERAS, build(ctx); see engines/film and the toolkit guide), assets.json (CC0 refs only), optional helper .py modules. Use with `spec` whose `scene` is \"local\".",
+                                               "description": "A NEW set instead of a template: the toolkit scene module's files by name — scene.py (ASSETS, VARIANTS, CAMERAS, build(ctx); see read_guide film and the toolkit's own docs), assets.json (CC0 refs only), optional helper .py modules. Use with `spec` whose `scene` is \"local\".",
                                                "additionalProperties": ["type": "string", "maxLength": 400_000]]])) { [unowned self] a in
                 guard self.film.isAvailable else { throw ToolError(UnavailableFilmToolkit.message) }
                 var spec: JSONObject

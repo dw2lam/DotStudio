@@ -38,8 +38,8 @@ final class Toolbox {
             }
         }
         var o: JSONObject = ["id": p.id.uuidString, "name": p.name, "type": p.isScene ? "scene" : "look",
-                             "lead": p.leadKindAI?.rawValue ?? (p.unknownEffects.isEmpty ? "none" : "custom"),
-                             "effects": p.effects.map(\.kind.rawValue) + p.unknownEffects.map { _ in "custom" },
+                             "lead": p.leadKindAI?.rawValue ?? (p.unknownEffects.isEmpty ? "none" : "unknown"),
+                             "effects": p.effects.map(\.kind.rawValue) + p.unknownEffects.map { _ in "unknown" },
                              "fps": p.fps, "createdByAI": created.contains(p.id), "playing": roles]
         if full {
             o["style"] = JSON.from(p)
@@ -54,7 +54,7 @@ final class Toolbox {
     }
 
     var builderContext: StyleBuilder.Context {
-        StyleBuilder.Context(customScenes: scenes.installed(), customAvailable: scenes.isAvailable)
+        StyleBuilder.Context(scenes: scenes)
     }
 
     func buildEffects(_ items: [Any], existing: [EffectInstance] = []) throws -> [JSONObject] {
@@ -216,7 +216,7 @@ final class Toolbox {
                         effectsJSON[i] = try StyleBuilder.effect(e, index: i, ctx: self.builderContext, existing: p.effects[i])
                     }
                 }
-                // Effects this build can't decode (custom, before the engine lands) keep their places.
+                // Effects this build can't decode (from a newer DotStudio) keep their places.
                 for u in p.unknownEffects where a["effects"] == nil {
                     if case .object(let o) = u.json { effectsJSON.insert(JSON.from(JSONValue.object(o)) as? JSONObject ?? [:], at: min(u.index, effectsJSON.count)) }
                 }
@@ -371,9 +371,8 @@ final class Toolbox {
             f.dateFormat = "yyyy-MM-dd HH:mm"
             f.locale = Locale(identifier: "en_US_POSIX")
             guard let d = f.date(from: "\(day) \(c)") else { throw ToolError("clock/date don't make a valid local time") }
-            // Half a second into the minute: exactly on it, the clock shaders' fast-math minute
-            // (seconds / 60) can land a hair below and show the minute before.
-            o.clock = d.addingTimeInterval(0.5)
+            // On the minute: a still shows a clock's minute settled (MetalRenderer.stillClocksSettle).
+            o.clock = d
         } else if a["date"] != nil { throw ToolError("`date` needs `clock` too.") }
         let n = a["frames"] as? Int ?? 1
         let cg: CGImage
@@ -402,7 +401,7 @@ final class Toolbox {
             do { try png.write(to: URL(fileURLWithPath: path), options: .atomic); meta["savedTo"] = path; note += ". Saved to \(path)" }
             catch { throw ToolError("Rendered, but couldn't write \(path): \(error.localizedDescription)") }
         }
-        if !p.unknownEffects.isEmpty, p.effects.isEmpty { note += ". This build can't draw custom scenes yet, so the preview is empty." }
+        if !p.unknownEffects.isEmpty { note += ". \(p.unknownEffects.count) effect(s) from a newer DotStudio aren't drawn." }
         return .ok(note + ".", meta, images: [png])
     }
 
