@@ -49,7 +49,7 @@ def main():
     t_start = time.time()
     outputs, timings = [], {}
     sp = spec.load(argv[0])
-    mod = spec.scene_module(sp["scene"])
+    mod = spec.scene_module(sp["scene"], sp.get("scene_dir"))
     miss = assets.missing(getattr(mod, "ASSETS", []))
     if miss:
         emit("PROGRESS", {"stage": "fetch", "assets": miss})

@@ -1,0 +1,15 @@
+{
+  "id": "commute",
+  "name": "Commute",
+  "order": 0,
+  "spec": "commute.json",
+  "summary": "A Japanese commuter-train interior at real scale, the city scrolling past on a viaduct; an original penguin in a suit dozes on the end seat.",
+  "params": [
+    {"key": "penguin_color", "kind": "rgb", "label": "Passenger feathers (linear RGB)"},
+    {"key": "penguin", "kind": "toggle", "default": true, "label": "Passenger on the end seat"},
+    {"key": "sway", "kind": "number", "min": 0, "max": 2, "label": "Carriage sway and roll"},
+    {"key": "cabin", "kind": "number", "min": 0, "max": 2, "label": "Cabin lamp brightness"},
+    {"key": "sun_side_height", "kind": "number", "min": 0.2, "max": 1, "label": "Scenery height on the sun side (lower lets more low sun in)"},
+    {"key": "seed", "kind": "integer", "default": 7, "label": "City layout seed"}
+  ]
+}

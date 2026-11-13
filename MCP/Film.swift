@@ -6,18 +6,18 @@
 //  (Shared/CustomFilm.swift, Engines/film/1/guide.md): a scene package of clips, one per variant,
 //  which `FilmPackage.make` builds from a loop's output and CustomScenesAPI installs.
 //
-//  TODO(commute-film): the toolkit isn't in this build yet (it's mid-iteration on its own branch),
-//  so `makeFilmToolkit` returns `UnavailableFilmToolkit` (the self-test: `FakeFilmToolkit`). When
-//  tools/film merges, add `DSFilmToolkit: FilmToolkitAPI` beside them and return it from
-//  makeFilmToolkit when the toolkit is installed:
+//  `makeFilmToolkit` returns `DSFilmToolkit` (FilmToolkit.swift: the real toolkit, found through
+//  DOTSTUDIO_FILM_TOOLKIT or the pulled `film` pack in <store>/engines/film/<version>/), or in the
+//  self-test `FakeFilmToolkit`:
 //    • status()       Blender via FilmPaths.blender() (never launched to check), the toolkit's
-//                     install and version, the GPU;
+//                     install and version, python3 / Pillow / ffmpeg, the GPU;
 //    • templates()    the toolkit's scene templates (Commute first) with their params and spec;
-//    • validate(spec) the toolkit's own spec check, without rendering;
-//    • stillsCommand / loopCommand  Blender headless + dsfilm argv and env — FilmJobs runs them
-//                     detached and nice'd; progress JSON to $DSFILM_PROGRESS; stills to
-//                     <out>/<variant>.png, loops to <out>/<variant>.mov (HEVC);
-//    • package(...)   FilmPackage.make (or the toolkit's own packager writing the same format).
+//    • validate(spec) the toolkit's own spec check (tools/film/job.py validate), without rendering;
+//    • stillsCommand / loopCommand  tools/film/job.py, which runs Blender headless + run.py per
+//                     variant (and encodes a loop) — FilmJobs runs it detached and nice'd;
+//                     progress JSON to $DSFILM_PROGRESS; stills to <out>/<variant>.png, loops to
+//                     <out>/<variant>.mov (HEVC);
+//    • package(...)   FilmPackage.make.
 //
 //  Renders run as JOBS, never inside a tool call: each is a detached process group (its own
 //  session, `nice`d, stdin from /dev/null, reparented to launchd), so it outlives the MCP process
@@ -127,12 +127,36 @@ enum FilmLook {
         for (k, v) in patch as? JSONObject ?? [:] { out[k] = v }
         return out
     }
+
+    /// The toolkit's own look blocks (dsfilm.post: {"bloom": {"strength": …}, "grain": {"amount": …}})
+    /// at the strength the slider defaults stand for (tools/film/job.py toolkit_look — keep in step).
+    static let toolkitReference: [String: (key: String, value: Double)] = [
+        "bloom": ("strength", 0.08), "halation": ("strength", 0.35), "grain": ("amount", 0.018)]
+
+    /// bloom / halation / grain as 0…1 numbers (a spec may carry the toolkit's blocks instead).
+    static func scalars(_ look: Any?) -> JSONObject {
+        let l = merged(look, nil)
+        var out: JSONObject = [:]
+        for k in ["bloom", "halation", "grain"] {
+            if let n = l[k] as? NSNumber {
+                out[k] = min(max(n.doubleValue, 0), 1)
+            } else if let ref = toolkitReference[k], let block = l[k] as? JSONObject, let v = (block[ref.key] as? NSNumber)?.doubleValue {
+                let def = (defaults[k] as? Double) ?? 0
+                out[k] = (min(max(v / ref.value * def, 0), 1) * 1000).rounded() / 1000
+            } else {
+                out[k] = defaults[k]
+            }
+        }
+        return out
+    }
 }
 
 /// A finished loop's clips as a scene package for the built-in `film` engine (contract §6 / §8):
 /// scene.json with `"engine": {"id": "film"}`, a `clips` entry per `<variant>.mov` in the loop's
-/// output (day / golden / night / rain; anything else plays as `any`), the spec's look (its grain
-/// becomes the style's starting Grain: EffectInstance.customScene), and the clips themselves.
+/// output (day / golden / night / rain; anything else plays as `any`) with its codec, the spec's
+/// look as 0…1 numbers (its grain becomes the style's starting Grain — the film engine's own
+/// `ds.grain` param, EffectInstance.customScene — so the package adds no grain param of its own),
+/// and the clips themselves.
 enum FilmPackage {
     static let variants: Set<String> = ["day", "golden", "night", "rain", "any"]
 
@@ -149,20 +173,37 @@ enum FilmPackage {
             let dst = "clips/\(variant).\(f.pathExtension.lowercased())"
             guard !clips.contains(where: { $0["file"] as? String == dst }) else { continue }
             try fm.copyItem(at: f, to: package.appendingPathComponent(dst))
-            clips.append(["variant": variant, "file": dst, "loop": true])
+            var clip: JSONObject = ["variant": variant, "file": dst, "loop": true]
+            if let c = codec(f) { clip["codec"] = c }
+            clips.append(clip)
         }
         guard !clips.isEmpty else { throw ToolError("The loop render left no clips (.mov) to package.") }
         let fps = ((spec["loop"] as? JSONObject)?["fps"] as? NSNumber)?.intValue ?? 24
         var m: JSONObject = ["format": 1, "id": sceneID, "name": spec["name"] as? String ?? "Film",
                              "engine": ["id": "film", "version": ">=1"], "fps": fps, "clips": clips,
-                             "uses": ["sun", "weather"], "look": FilmLook.merged(spec["look"], nil),
+                             "uses": ["sun", "weather"], "look": FilmLook.scalars(spec["look"]),
                              "description": spec["description"] as? String ?? "A film scene rendered in Blender by DotStudio's film toolkit."]
         if let a = spec["author"] as? String { m["author"] = a }
         try JSON.data(m, pretty: true).write(to: package.appendingPathComponent("scene.json"))
     }
+
+    /// "hevc" / "h264" (or the FourCC) of a clip's video track.
+    static func codec(_ url: URL) -> String? {
+        guard let t = AVURLAsset(url: url).tracks(withMediaType: .video).first,
+              let fd = t.formatDescriptions.first else { return nil }
+        let c = CMFormatDescriptionGetMediaSubType(fd as! CMFormatDescription)
+        switch c {
+        case kCMVideoCodecType_HEVC: return "hevc"
+        case kCMVideoCodecType_H264: return "h264"
+        default:
+            let s = String(bytes: [24, 16, 8, 0].map { UInt8((c >> $0) & 0xff) }, encoding: .ascii) ?? "?"
+            return s.trimmingCharacters(in: .whitespaces)
+        }
+    }
 }
 
-/// No toolkit in this build: status still reports Blender and the GPU; everything else says why.
+/// No toolkit support at all (not used by this build, which has DSFilmToolkit; its message is
+/// what the film tools say when `isAvailable` is false).
 struct UnavailableFilmToolkit: FilmToolkitAPI {
     static let message = "Making film scenes (photoreal, ray-traced Blender renders) isn't available in this build of DotStudio yet: it arrives with the film toolkit. Film scene packages made elsewhere still play (the film engine is built in); for new scenes, use the built-in scenes and custom shader scenes (list_scenes, list_engines)."
     var isAvailable: Bool { false }
@@ -335,12 +376,13 @@ struct FakeFilmToolkit: FilmToolkitAPI {
     }
 }
 
-/// The toolkit for this build (see the TODO at the top: none until tools/film merges).
+/// The real toolkit (whether this Mac has it installed is status()'s business); the self-test's
+/// stand-in under DOTSTUDIO_MCP_TEST_FAKES.
 func makeFilmToolkit(store: URL) -> FilmToolkitAPI {
     switch ProcessInfo.processInfo.environment["DOTSTUDIO_MCP_TEST_FAKES"] {
     case "1": return FakeFilmToolkit(store: store)
     case "film": return FakeFilmToolkit(store: store, alwaysInstalled: true)
-    default: return UnavailableFilmToolkit()
+    default: return DSFilmToolkit(store: store)
     }
 }
 
