@@ -59,6 +59,7 @@ enum CustomSceneCompiler {
         float4 musicPal0; float4 musicPal1; float4 musicPal2; float4 music; float4 musicRect;
         float4 weather; float4 weather2; float4 weather3;
         float4 scene[16];
+        float4 still;
     };
     struct DSVOut { float4 pos [[position]]; float2 uv; };
     vertex DSVOut ds_vertex(uint vid [[vertex_id]]) {

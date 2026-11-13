@@ -16,7 +16,12 @@ static inline DSContext ds_context(constant FXUniforms& u, texture2d<float> a0, 
     c.aspect = c.res.x / c.res.y;
     float fps = u.scene[6].z;
     c.t = fps > 0.5 ? floor(u.time * fps) / fps : u.time;
-    c.clock = clamp(u.clock.x * 3600.0, 0.0, 86400.0);
+    // Whole hours and minutes are exact (MetalRenderer.wallClock keeps their floor() exact); the
+    // seconds stop 50 ms short of the next minute, so floor(clock / 60) and floor(clock / 3600)
+    // are the minute and hour on screen at every instant, fast math and all (not clock.x · 3600,
+    // which read hh:mm:00 as the minute before).
+    c.clock = clamp(floor(u.clock.x), 0.0, 23.0) * 3600.0 + clamp(floor(u.clock.y), 0.0, 59.0) * 60.0
+            + clamp(u.clock.z, 0.0, 59.95);
     c.date.year = int(u.date.x); c.date.month = int(u.date.y); c.date.day = int(u.date.z);
     c.date.weekday = int(u.clock.w);
     c.sun.elevation = u.scene[4].x; c.sun.azimuth = u.scene[4].y; c.sun.isDay = u.scene[4].z > 0.5;

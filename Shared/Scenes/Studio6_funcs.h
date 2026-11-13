@@ -181,7 +181,7 @@ static inline float3 studio6_dialClock(float2 px, float2 res, float t, constant 
             float sh = smoothstep(-0.008 * R, 0.001 * R, dIn);
             // the day number; at midnight the wheel rolls the next one up into the window
             int yy = int(u.date.x), mo = clamp(int(u.date.y), 1, 12), dd = clamp(int(u.date.z), 1, 31);
-            float e = clocks_ease(u.clock.x * 3600.0 / 1.4);
+            float e = u.still.x > 0.5 ? 1.0 : clocks_ease(clocks_secOfDay(u.clock) / 1.4);   // settled in a still
             float capD = 0.054 * R, pitch = 2.3 * hx.y / capD;
             float db; float4 dfw = clocks_face(0, 0.36, db);
             float2 dq = q / capD;

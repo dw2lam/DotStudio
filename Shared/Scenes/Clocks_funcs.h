@@ -173,13 +173,28 @@ static inline float clocks_runDist(texture2d<float> A, sampler s, thread const C
 }
 
 // ============================================================ time
-struct ClkTime { float h, m, s; };
-static inline ClkTime clocks_time(float4 c) {
+/// The time to show. h, m: whole (FXUniforms.clock keeps floor() exact: MetalRenderer.wallClock);
+/// s: seconds with their fraction. a: seconds into the minute's changeover, af: into the
+/// second's — what the figures animate by. They equal s and fract(s) live, so a change starts on
+/// the minute (at hh:mm:00.0 its first frame still shows the minute before); in a still
+/// (FXUniforms.still.x = 1: a thumbnail, a preview) they're long past, so the figures show the
+/// minute asked for, settled. Animate by a / af, show s.
+struct ClkTime { float h, m, s, a, af; };
+static inline ClkTime clocks_time(float4 c, float still) {
     ClkTime t;
     t.h = clamp(floor(c.x), 0.0, 23.0);
     t.m = clamp(floor(c.y), 0.0, 59.0);
     t.s = clamp(c.z, 0.0, 59.999);
+    bool settled = still > 0.5;
+    t.a = settled ? 1000.0 : t.s;
+    t.af = settled ? 1000.0 : fract(t.s);
     return t;
+}
+static inline ClkTime clocks_time(float4 c) { return clocks_time(c, 0.0); }
+/// Seconds since local midnight, exact on every whole second (floor(clock.x) · 3600 + …: not
+/// clock.x · 3600, whose float error reads hh:mm:00 as the minute before, ~4 % of the minutes).
+static inline float clocks_secOfDay(float4 c) {
+    return clamp(floor(c.x), 0.0, 23.0) * 3600.0 + clamp(floor(c.y), 0.0, 59.0) * 60.0 + clamp(c.z, 0.0, 59.999);
 }
 static inline float clocks_hour12(float h) { float x = fmod(h, 12.0); return x < 0.5 ? 12.0 : x; }
 static inline float clocks_ease(float x) { x = clamp(x, 0.0, 1.0); return x * x * (3.0 - 2.0 * x); }
@@ -245,15 +260,15 @@ struct ClkTypeLayout {
 
 static inline float clocks_typeSlotsWidth(float w[7], int n) { float s = 0; for (int i = 0; i < n; ++i) s += w[i]; return s; }
 
-static inline ClkTypeLayout clocks_typeLayout(texture2d<float> A, float4 clock, float4 fw, bool h24, bool secs) {
-    ClkTime T = clocks_time(clock);
+static inline ClkTypeLayout clocks_typeLayout(texture2d<float> A, float4 clock, float still, float4 fw, bool h24, bool secs) {
+    ClkTime T = clocks_time(clock, still);
     const float DUR = 1.1, SDUR = 0.55;
     // previous minute / second (what was showing before the last change)
     float pm = T.m - 1.0, ph = T.h;
     if (pm < 0.0) { pm = 59.0; ph = fmod(T.h + 23.0, 24.0); }
     float sNow = floor(T.s), sPrev = fmod(sNow + 59.0, 60.0);
-    float eMin = clamp(T.s / DUR, 0.0, 1.0);
-    float eSec = clamp(fract(T.s) / SDUR, 0.0, 1.0);
+    float eMin = clamp(T.a / DUR, 0.0, 1.0);
+    float eSec = clamp(T.af / SDUR, 0.0, 1.0);
 
     float hN = h24 ? T.h : clocks_hour12(T.h), hP = h24 ? ph : clocks_hour12(ph);
     float tabW = dot(clocks_adv(A, 0), fw);

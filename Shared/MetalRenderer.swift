@@ -375,6 +375,14 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     /// Tools (gallery renders, parity checks): every pass draws with its own pipeline when it has
     /// one, built on the spot if need be — never the über-shader's stand-in.
     var waitsForScenePipelines = false
+    /// A still (renderThumbnail) shows a clock's minute settled (FXUniforms.still): a card made on
+    /// the minute, or a preview of 12:34, reads 12:34 — not the first frame of the changeover that
+    /// starts at 12:34:00, which still shows 12:33. Tools turn it off to look at the changeover itself.
+    var stillClocksSettle = true
+    /// Live frames show a clock's minute settled too: the wallpaper sets it while it holds a still
+    /// (battery Still, Low Power, a hot Mac: one frame a minute, drawn just after the minute), or
+    /// the held frame would be the changeover's first — the minute before — for a whole minute.
+    var settlesClocks = false
 
     /// The music veil's passes and the error-diffusion kernels: built on first use (a fastStart
     /// renderer has them before it draws a frame that uses them: framePipelinesReady).
@@ -1332,6 +1340,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             u.time = time
             u.glyphCount = Int32(GlyphAtlas.count)
             u.clock = clock; u.date = date
+            u.still = simd_float4((thumbnailing ? stillClocksSettle : settlesClocks) ? 1 : 0, 0, 0, 0)
             u.srcSize = simd_float2(Float(fragInput.width), Float(fragInput.height))
             u.fillMode = Int32(source.fillMode)
             var sceneData: MTLTexture?           // a scene's own data in slot 6 (Zen Garden's track and stones, Bounce's logo)
@@ -1431,12 +1440,23 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private static let wallComponents: Set<Calendar.Component> = [.year, .month, .day, .hour, .minute, .second, .nanosecond, .weekday]
 
     /// wallClock, reusing `day`'s day of the year while `now` falls on that calendar day.
+    ///
+    /// Each field keeps its whole part exact: floor(hour) is the hour, floor(minute) the minute,
+    /// floor(second) the second, at every instant. Worked out in Double and rounded once — but a
+    /// Float of h + 59.99999/60 rounds UP to h + 1 (the last few ms of every hour read as the next
+    /// hour: "1:59" at 12:59:59.999), so each is held below its next whole number.
     static func wallClock(_ now: Date, day: inout DayOfYear?) -> (simd_float4, simd_float4) {
         let cal = Calendar.current
         let c = cal.dateComponents(wallComponents, from: now)
-        let sec = Float(c.second ?? 0) + Float(c.nanosecond ?? 0) / 1e9
-        let min = Float(c.minute ?? 0) + sec / 60
-        let hour = Float(c.hour ?? 0) + min / 60
+        let s = c.second ?? 0, m = c.minute ?? 0, h = c.hour ?? 0
+        let secD = Double(s) + Double(c.nanosecond ?? 0) / 1e9
+        let minD = Double(m) + secD / 60
+        func below(_ v: Double, _ whole: Int) -> Float {
+            Swift.min(Swift.max(Float(v), Float(whole)), Float(whole + 1).nextDown)
+        }
+        let sec = below(secD, s)
+        let min = below(minD, m)
+        let hour = below(Double(h) + minD / 60, h)
         let y = c.year ?? 2026, mo = c.month ?? 1, d = c.day ?? 1
         let doy: Float
         if let k = day, k.year == y, k.month == mo, k.day == d { doy = k.doy } else {

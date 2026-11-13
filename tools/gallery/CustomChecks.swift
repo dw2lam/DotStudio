@@ -134,7 +134,8 @@ func customSceneChecks() -> Bool {
                                    "clock": MemoryLayout<FXUniforms>.offset(of: \FXUniforms.clock)!,
                                    "musicPal0": MemoryLayout<FXUniforms>.offset(of: \FXUniforms.musicPal0)!,
                                    "weather3": MemoryLayout<FXUniforms>.offset(of: \FXUniforms.weather3)!,
-                                   "scene": MemoryLayout<FXUniforms>.offset(of: \FXUniforms.scene)!]
+                                   "scene": MemoryLayout<FXUniforms>.offset(of: \FXUniforms.scene)!,
+                                   "still": MemoryLayout<FXUniforms>.offset(of: \FXUniforms.still)!]
         let same = want.allSatisfy { offsets[$0.key] == $0.value }
         check(size == MemoryLayout<FXUniforms>.stride && same,
               "custom: the runtime prelude's FXUniforms matches EffectUniforms.h (\(size) / \(MemoryLayout<FXUniforms>.stride) bytes; offsets \(same ? "match" : "\(offsets) ≠ \(want)"))")

@@ -986,7 +986,8 @@ if runChecks {
     let retirement = retirementChecks()
     let hardening = hardeningChecks(), lapse = lapseChecks(), landscape = meadowLandscapeChecks()
     let custom = customSceneChecks()                           // tools/gallery/CustomChecks.swift
-    exit(live && format && bounce && retirement && hardening && lapse && landscape && custom ? 0 : 1)
+    let clock = clockBoundaryChecks()                          // tools/gallery/ClockChecks.swift
+    exit(live && format && bounce && retirement && hardening && lapse && landscape && custom && clock ? 0 : 1)
 }
 
 if let tzArg, let tz = TimeZone(identifier: tzArg) { NSTimeZone.default = tz }
@@ -1121,6 +1122,7 @@ func waddlePeaks() {
     }
 }
 if CommandLine.arguments.contains("--waddlepeaks") { waddlePeaks(); exit(0) }
+if CommandLine.arguments.contains("--clockchecks") { exit(clockBoundaryChecks() ? 0 : 1) }   // just ClockChecks.swift
 for p in presets { bounceInfo(p); waddleInfo(p) }
 
 var source = lib.source
@@ -1455,6 +1457,9 @@ for p in presets {
     if let wname { WeatherLink.forced = weatherMix(wname) }
     for clk in clockList {
     renderer.clockOverride = clk.flatMap(wallDate)
+    // --clock HH:MM shows that minute settled, as a card or a preview does; HH:MM:SS(.fff) is the
+    // exact moment, a minute's changeover included (e.g. 12:34:00.3, mid-flip).
+    renderer.stillClocksSettle = (clk?.split(separator: ":").count ?? 2) < 3
     let now = renderer.clockOverride ?? Date()
     for t in times {
         // One render per music variant: each corner, or Full Screen, or none; for Full Screen
