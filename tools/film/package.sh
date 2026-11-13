@@ -1,6 +1,6 @@
 #!/bin/zsh
 # Builds the "film" engine pack for the DotStudio engines index:
-#   dsfilm/ + run.py + fetch.py + templates (scenes/*) + guide.md (this folder's README) + engine.json
+#   dsfilm/ + run.py + job.py + fetch.py + templates (scenes/*) + guide.md (this folder's README) + engine.json
 # as film-engine-<version>.zip plus its sha256. Caches, renders, .blend files and __pycache__ are
 # never included (assets are fetched on the user's machine from CC0 sources).
 #
@@ -14,7 +14,7 @@ trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/film" "$OUT"
 rsync -a --exclude '__pycache__' --exclude '*.pyc' --exclude '*.blend' --exclude '*.blend1' --exclude 'dist' \
   --exclude '*.png' --exclude '*.mov' --exclude '*.mp4' --exclude 'package.sh' --exclude '.gitignore' \
-  "$HERE/dsfilm" "$HERE/scenes" "$HERE/run.py" "$HERE/fetch.py" "$HERE/engine.json" "$STAGE/film/"
+  "$HERE/dsfilm" "$HERE/scenes" "$HERE/run.py" "$HERE/job.py" "$HERE/fetch.py" "$HERE/engine.json" "$STAGE/film/"
 cp "$HERE/README.md" "$STAGE/film/guide.md"
 ZIP="$OUT/film-engine-$VER.zip"
 rm -f "$ZIP"
