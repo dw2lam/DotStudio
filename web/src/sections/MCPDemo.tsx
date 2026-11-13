@@ -112,18 +112,18 @@ function useTabVisible() {
   return visible;
 }
 
-/** True while the element is narrower than `px`. */
-function useNarrow<T extends Element>(px: number) {
+/** The element's width in px (0 until measured). */
+function useWidth<T extends Element>() {
   const ref = useRef<T>(null);
-  const [narrow, setNarrow] = useState(false);
+  const [width, setWidth] = useState(0);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const ro = new ResizeObserver(([e]) => setNarrow(e.contentRect.width < px));
+    const ro = new ResizeObserver(([e]) => setWidth(e.contentRect.width));
     ro.observe(el);
     return () => ro.disconnect();
-  }, [px]);
-  return [ref, narrow] as const;
+  }, []);
+  return [ref, width] as const;
 }
 
 /**
@@ -388,7 +388,8 @@ function StudioDisplay({ children, crop = 1 }: { children: ReactNode; crop?: num
 type ScreenProps = { t: number; armed: number; running: boolean; still?: boolean };
 
 function Screen({ t, armed, running, still = false }: ScreenProps) {
-  const [ref, narrow] = useNarrow<HTMLDivElement>(720);
+  const [ref, width] = useWidth<HTMLDivElement>();
+  const narrow = width > 0 && width < 720;
   const beat = beatAt(t);
   const enjoy = beat === "enjoy";
   let step: (typeof BUILD_STEPS)[number] | null = null;
@@ -409,7 +410,8 @@ function Screen({ t, armed, running, still = false }: ScreenProps) {
     still ? { opacity: on ? 1 : 0 } : { opacity: on ? 1 : 0, transition: `opacity ${ms}ms ease` };
 
   // macOS UI scale: true proportions on a wide screen, enlarged on a narrow one.
-  const k = narrow ? 2.2 : 1;
+  // (13 pt type never drops under 10 px on a narrow screen.)
+  const k = narrow ? Math.max(1, (10 * 1440) / (13 * width)) : 1;
   // Window rects, in % of the screen (narrow screens: one window, larger).
   const appRect = narrow ? { left: 7, top: 9, width: 86 } : { left: 30, top: 9, width: 64 };
   const previewRect = narrow ? { left: 12, top: 11, width: 76 } : { left: 37, top: 15, width: 54 };
@@ -435,8 +437,8 @@ function Screen({ t, armed, running, still = false }: ScreenProps) {
       {/* Everything on the desktop fades away when the screensaver starts. */}
       <div className="absolute inset-0" style={fade(!enjoy)}>
         <MenuBar k={k} narrow={narrow} />
-        {/* DotStudio: hidden title bar, its content runs to the top under the lights. */}
-        <Win rect={appRect} k={k} z={1} toolbar={38} bg="#0c0f17" style={fade(!(narrow && preview), 500)}>
+        {/* DotStudio: the app's own capture, title bar and (inactive) lights included. */}
+        <Win rect={appRect} k={k} z={1} lights={false} style={fade(!(narrow && preview), 500)}>
           <img
             src={MCP_MEDIA.app}
             alt=""
@@ -451,6 +453,8 @@ function Screen({ t, armed, running, still = false }: ScreenProps) {
           rect={previewRect}
           k={k}
           z={2}
+          toolbar={44}
+          title="Preview"
           style={{
             ...fade(preview, 500),
             transform: preview ? "scale(1)" : "scale(0.96)",
@@ -461,21 +465,27 @@ function Screen({ t, armed, running, still = false }: ScreenProps) {
             {armed >= 1 &&
               BUILD_STEPS.map((s) => <Still key={s.id} src={MCP_MEDIA.build[s.id]} on={step?.id === s.id} still={still} />)}
             {/* Rendering: only for a prerendered scene like this one. */}
-            <div className="absolute inset-0 z-[3] flex items-end justify-center pb-[6%]" style={fade(rendering, 400)}>
+            <div
+              className={`absolute inset-0 z-[3] flex justify-center ${narrow ? "items-start pt-[5%]" : "items-end pb-[6%]"}`}
+              style={fade(rendering, 400)}
+            >
               <div
-                className="rounded-full bg-black/65 text-white/90 backdrop-blur-md"
                 style={{
-                  padding: narrow ? "6px 12px" : "0.55cqw 1.1cqw",
-                  fontSize: narrow ? "clamp(9px, 2.3cqw, 12px)" : "1.05cqw",
-                  width: narrow ? "56%" : "34%",
+                  ...glass(k),
+                  borderRadius: pt(14, k),
+                  padding: `${pt(10, k)} ${pt(14, k)}`,
+                  fontSize: narrow ? "clamp(9px, 2.3cqw, 12px)" : pt(13, k),
+                  width: narrow ? "56%" : "36%",
                 }}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span>{progress >= 1 ? "Rendered" : "Rendering…"}</span>
-                  <span className="tabular-nums text-white/60">{Math.round(progress * 100)}%</span>
+                <div className="flex items-center justify-between" style={{ gap: pt(8, k) }}>
+                  <span className="font-semibold">{progress >= 1 ? "Rendered" : "Rendering…"}</span>
+                  <span className="tabular-nums" style={{ color: "rgba(236,236,238,0.6)" }}>
+                    {Math.round(progress * 100)}%
+                  </span>
                 </div>
-                <div className="mt-[0.4em] h-[2px] overflow-hidden rounded-full bg-white/20">
-                  <div className="h-full rounded-full bg-primary" style={{ width: `${progress * 100}%` }} />
+                <div className="overflow-hidden rounded-full" style={{ marginTop: pt(8, k), height: pt(4, k), background: "rgba(255,255,255,0.14)" }}>
+                  <div className="h-full rounded-full bg-[#0a84ff]" style={{ width: `${progress * 100}%` }} />
                 </div>
               </div>
             </div>
@@ -527,73 +537,109 @@ const MAC_FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", "H
 /** macOS points on a 1440-pt-wide screen, as container units, times the UI scale k. */
 const pt = (n: number, k = 1) => `${(((n * 100) / 1440) * k).toFixed(4)}cqw`;
 
-/** The menu bar as macOS 26 draws it: no bar, just type over the wallpaper. No Apple logo. */
+/*
+ * The look follows DavidOS (davidlam.online/about), the owner's macOS 26 desktop: a 30 pt
+ * menu bar of plain white type on the wallpaper, and glass windows (a dark tint + 135° sheen,
+ * 40 pt backdrop blur, 1 px light border, a soft drop shadow and a faint inner rim) with
+ * 20 pt corners and 12 pt traffic lights 7 pt apart, 16 pt in. Re-implemented here at screen
+ * scale; nothing of that site's content is used.
+ */
+const glass = (k: number): CSSProperties => ({
+  background:
+    "linear-gradient(135deg, rgba(64,63,65,0.6) 0%, rgba(28,28,30,0.4) 100%), rgba(43,42,42,0.72)",
+  backdropFilter: `blur(${pt(40, k)})`,
+  WebkitBackdropFilter: `blur(${pt(40, k)})`,
+  border: "1px solid rgba(255,255,255,0.16)",
+  boxShadow: `0 ${pt(8, k)} ${pt(32, k)} rgba(0,0,0,0.5), inset 0 0 0 1px rgba(255,255,255,0.08)`,
+  color: "#ececee",
+});
+
+/** The menu bar as macOS 26 draws it: no bar at all, white type on the wallpaper. No Apple logo. */
 function MenuBar({ k, narrow }: { k: number; narrow: boolean }) {
-  const icon = { height: pt(13, k), width: "auto" } as const;
+  const item: CSSProperties = { padding: `${pt(4, k)} ${pt(10, k)}` };
   return (
     <div
-      className="absolute inset-x-0 top-0 z-[5] flex items-center text-white"
-      style={{
-        height: pt(24, k),
-        fontSize: pt(13, k),
-        gap: pt(20, k),
-        padding: `0 ${pt(14, k)}`,
-        background: "linear-gradient(to bottom, rgba(0,0,0,0.22), rgba(0,0,0,0))",
-        textShadow: "0 0 3px rgba(0,0,0,0.35)",
-      }}
+      className="absolute inset-x-0 top-0 z-[5] flex items-center justify-between text-white"
+      style={{ height: pt(30, k), fontSize: pt(13, k), padding: `0 ${pt(12, k)} 0 ${pt(8, k)}`, lineHeight: 1 }}
     >
-      {/* Where the Apple menu would be. */}
-      <span style={{ width: pt(14, k) }} />
-      <span className="font-bold">DotStudio</span>
-      {!narrow && ["File", "Edit", "View", "Window", "Help"].map((m) => <span key={m}>{m}</span>)}
-      <span className="ml-auto flex items-center" style={{ gap: pt(16, k) }}>
+      <div className="flex items-center" style={{ gap: pt(1, k) }}>
+        {/* Where the Apple menu would be. */}
+        <span style={{ ...item, width: pt(33, k) }} />
+        <span className="font-bold" style={item}>
+          DotStudio
+        </span>
+        {!narrow &&
+          ["File", "Edit", "View", "Window", "Help"].map((m) => (
+            <span key={m} style={item}>
+              {m}
+            </span>
+          ))}
+      </div>
+      <div className="flex items-center" style={{ gap: pt(4, k) }}>
         {!narrow && (
           <>
-            <svg viewBox="0 0 26 13" style={icon} aria-hidden="true">
-              <rect x="0.5" y="0.5" width="22" height="12" rx="3.5" fill="none" stroke="currentColor" strokeOpacity="0.55" />
-              <rect x="2.5" y="2.5" width="15" height="8" rx="2" fill="currentColor" />
-              <path d="M24 4.5v4a2 2 0 0 0 0-4Z" fill="currentColor" fillOpacity="0.55" />
-            </svg>
-            <svg viewBox="0 0 18 13" style={icon} aria-hidden="true">
-              <path
-                d="M9 12.2 6.4 9.6a3.7 3.7 0 0 1 5.2 0L9 12.2Zm-4.3-4.3L3 6.2a8.5 8.5 0 0 1 12 0l-1.7 1.7a6.1 6.1 0 0 0-8.6 0ZM1.3 4.5 0 3.2a12.8 12.8 0 0 1 18 0l-1.3 1.3a11 11 0 0 0-15.4 0Z"
-                fill="currentColor"
-              />
-            </svg>
-            <svg viewBox="0 0 16 13" style={icon} aria-hidden="true">
-              <rect x="0.6" y="0.6" width="14.8" height="5" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.2" />
-              <circle cx="3.6" cy="3.1" r="1.5" fill="currentColor" />
-              <rect x="0.6" y="7.4" width="14.8" height="5" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.2" />
-              <circle cx="12.4" cy="9.9" r="1.5" fill="currentColor" />
-            </svg>
+            <span style={{ padding: `${pt(4, k)} ${pt(5, k)}` }}>
+              <svg viewBox="0 0 28 13" style={{ width: pt(24, k), height: pt(12, k), display: "block" }} aria-hidden="true">
+                <rect x="0.9" y="0.9" width="22.7" height="11.2" rx="3.2" fill="none" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1.8" />
+                <rect x="2.4" y="2.4" width="15.5" height="8.2" rx="1.8" fill="currentColor" />
+                <path d="M25.6 4.3v4.4c1.3-.3 2.1-1.2 2.1-2.2s-.8-1.9-2.1-2.2z" fill="currentColor" fillOpacity="0.5" />
+              </svg>
+            </span>
+            <span style={{ padding: `${pt(4, k)} ${pt(5, k)}` }}>
+              <svg
+                viewBox="0 0 24 18"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.47"
+                strokeLinecap="round"
+                style={{ width: pt(18, k), height: pt(13.5, k), display: "block" }}
+                aria-hidden="true"
+              >
+                <path d="M1.28 7A14 14 0 0 1 22.72 7" />
+                <path d="M5.03 10.15A9.1 9.1 0 0 1 18.97 10.15" />
+                <path d="M8.78 13.3A4.2 4.2 0 0 1 15.22 13.3" />
+                <circle cx="12" cy="16" r="1.3" fill="currentColor" stroke="none" />
+              </svg>
+            </span>
+            <span style={{ padding: `${pt(4, k)} ${pt(6, k)}` }}>
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.96"
+                strokeLinecap="round"
+                style={{ width: pt(15, k), height: pt(15, k), display: "block" }}
+                aria-hidden="true"
+              >
+                <circle cx="10.5" cy="10.5" r="7" />
+                <path d="M15.6 15.6 19.6 19.6" />
+              </svg>
+            </span>
           </>
         )}
-        <span className="tabular-nums">{narrow ? "7:41 PM" : "Thu Nov 12\u20027:41 PM"}</span>
-      </span>
+        <span className="whitespace-nowrap tabular-nums" style={{ padding: `${pt(4, k)} ${pt(2, k)} ${pt(4, k)} ${pt(6, k)}` }}>
+          {narrow ? "7:41 PM" : "Thu Nov 12\u20027:41 PM"}
+        </span>
+      </div>
     </div>
   );
 }
 
-/** Traffic lights: 12 pt, 8 pt apart; grey when the window isn't the active one. */
+/** Traffic lights: 12 pt, 7 pt apart; grey when the window isn't the active one. */
 function Lights({ k, active }: { k: number; active: boolean }) {
-  const colours: [string, string][] = active
-    ? [
-        ["#ff5f57", "#e0443e"],
-        ["#febc2e", "#dea123"],
-        ["#28c840", "#1aab29"],
-      ]
-    : [
-        ["#4d4d4f", "#3e3e40"],
-        ["#4d4d4f", "#3e3e40"],
-        ["#4d4d4f", "#3e3e40"],
-      ];
+  const fills = active ? ["#FF5F57", "#FEBC2E", "#28C840"] : ["#58585c", "#58585c", "#58585c"];
   return (
-    <span className="flex" style={{ gap: pt(8, k) }}>
-      {colours.map(([fill, rim], i) => (
+    <span className="flex" style={{ gap: pt(7, k) }}>
+      {fills.map((fill, i) => (
         <span
           key={i}
           className="rounded-full"
-          style={{ width: pt(12, k), height: pt(12, k), background: fill, boxShadow: `inset 0 0 0 0.5px ${rim}` }}
+          style={{
+            width: pt(12, k),
+            height: pt(12, k),
+            background: fill,
+            boxShadow: "inset 0 0 0 0.5px rgba(0,0,0,0.18), 0 1px 2px rgba(0,0,0,0.12)",
+          }}
         />
       ))}
     </span>
@@ -601,9 +647,9 @@ function Lights({ k, active }: { k: number; active: boolean }) {
 }
 
 /**
- * A macOS 26 window: big continuous corners, a hairline light inner border, a soft wide
- * shadow, and the traffic lights inset at the top left, centred in the toolbar band (or
- * floating over full-height content when there's no band). Height follows the content.
+ * A DavidOS window: glass, 20 pt corners, a 44 pt toolbar with the lights centred in it and a
+ * hairline under it (or, with no toolbar, the lights 16 pt in over the content; or no lights
+ * when the content is a capture that carries its own). Height follows the content.
  */
 function Win({
   rect,
@@ -611,7 +657,8 @@ function Win({
   z,
   active = false,
   toolbar = 0,
-  bg = "#1d1d1f",
+  lights = true,
+  title,
   style,
   children,
 }: {
@@ -620,7 +667,8 @@ function Win({
   z: number;
   active?: boolean;
   toolbar?: number;
-  bg?: string;
+  lights?: boolean;
+  title?: string;
   style?: CSSProperties;
   children: ReactNode;
 }) {
@@ -632,24 +680,33 @@ function Win({
         top: `${rect.top}%`,
         width: `${rect.width}%`,
         zIndex: z,
-        borderRadius: pt(24, k),
-        background: bg,
-        boxShadow: `0 ${pt(3, k)} ${pt(10, k)} rgba(0,0,0,0.3), 0 ${pt(18, k)} ${pt(60, k)} rgba(0,0,0,0.5)`,
+        borderRadius: pt(20, k),
+        ...glass(k),
         ...style,
       }}
     >
-      {toolbar > 0 && <div style={{ height: pt(toolbar, k) }} />}
+      {toolbar > 0 && (
+        <div
+          className="flex items-center font-semibold"
+          style={{
+            height: pt(toolbar, k),
+            paddingLeft: pt(72, k),
+            fontSize: pt(13, k),
+            borderBottom: "1px solid rgba(255,255,255,0.1)",
+          }}
+        >
+          {title}
+        </div>
+      )}
       {children}
-      <span
-        className="pointer-events-none absolute"
-        style={{ left: pt(18, k), top: toolbar > 0 ? pt((toolbar - 12) / 2, k) : pt(16, k) }}
-      >
-        <Lights k={k} active={active} />
-      </span>
-      <span
-        className="pointer-events-none absolute inset-0"
-        style={{ borderRadius: "inherit", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.13)" }}
-      />
+      {lights && (
+        <span
+          className="pointer-events-none absolute"
+          style={{ left: pt(16, k), top: toolbar > 0 ? pt((toolbar - 12) / 2, k) : pt(16, k) }}
+        >
+          <Lights k={k} active={active} />
+        </span>
+      )}
     </div>
   );
 }
@@ -712,14 +769,14 @@ function Bubble({ m }: { m: Message }) {
   if (m.from === "you") {
     return (
       <div className="flex justify-end">
-        <p className="max-w-[88%] rounded-[1em] rounded-br-[0.35em] bg-white/[0.1] px-[0.85em] py-[0.5em] leading-snug text-white/95">
+        <p className="max-w-[88%] rounded-[1.1em] bg-white/[0.12] px-[0.85em] py-[0.5em] leading-snug text-white">
           <WithCommand text={m.text} />
         </p>
       </div>
     );
   }
   return (
-    <div className="max-w-[94%] leading-snug text-white/85">
+    <div className="max-w-[94%] leading-snug text-[#ececee]">
       <p>{m.text}</p>
       {m.tools && <p className="mt-[0.3em] truncate font-mono text-[0.78em] text-white/40">{TOOLS.join("  ·  ")}</p>}
     </div>
@@ -731,24 +788,23 @@ function ChatWindow({ t, still, k }: { t: number; still: boolean; k: number }) {
   const shown = CHAT.filter((m) => m.at <= t);
   return (
     <div
-      className="absolute z-[3] flex flex-col overflow-hidden bg-[#1e1e20]/95 backdrop-blur-xl"
+      className="absolute z-[3] flex flex-col overflow-hidden"
       style={{
         left: "4%",
         top: "14%",
         width: "30%",
         height: "71%",
-        borderRadius: pt(24, k),
-        fontSize: pt(17, k),
-        boxShadow: `0 ${pt(3, k)} ${pt(10, k)} rgba(0,0,0,0.3), 0 ${pt(18, k)} ${pt(60, k)} rgba(0,0,0,0.55)`,
+        borderRadius: pt(20, k),
+        fontSize: pt(16, k),
+        ...glass(k),
       }}
     >
-      <div className="flex shrink-0 items-center" style={{ height: pt(38, k), paddingLeft: pt(18, k) }}>
+      <div
+        className="flex shrink-0 items-center"
+        style={{ height: pt(44, k), paddingLeft: pt(16, k), borderBottom: "1px solid rgba(255,255,255,0.1)" }}
+      >
         <Lights k={k} active />
       </div>
-      <span
-        className="pointer-events-none absolute inset-0 z-10"
-        style={{ borderRadius: "inherit", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.13)" }}
-      />
       <div
         className="relative min-h-0 flex-1"
         style={{
@@ -773,7 +829,10 @@ function ChatWindow({ t, still, k }: { t: number; still: boolean; k: number }) {
           </AnimatePresence>
         </div>
       </div>
-      <div className="mx-[0.8em] mb-[0.8em] flex shrink-0 items-end gap-[0.6em] border-t border-white/10 pt-[0.7em] text-white/90">
+      <div
+        className="mx-[0.75em] mb-[0.75em] flex shrink-0 items-end gap-[0.6em] rounded-[1.1em] px-[0.85em] py-[0.55em] text-white"
+        style={{ background: "rgba(255,255,255,0.08)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.1)" }}
+      >
         <p className="min-w-0 flex-1 leading-snug">
           <Typed t={t} />
         </p>
@@ -792,7 +851,7 @@ function ChatBubbles({ t, still }: { t: number; still: boolean }) {
       style={{ fontSize: "clamp(10px, 2.6cqw, 13px)" }}
     >
       {t < SENT ? (
-        <div className="flex items-end gap-[0.6em] rounded-[1em] bg-[#1c1c1c]/95 px-[0.9em] py-[0.65em] text-white/90 shadow-[0_8px_24px_rgba(0,0,0,0.5)] ring-1 ring-white/10 backdrop-blur-xl">
+        <div className="flex items-end gap-[0.6em] rounded-[1.1em] px-[0.9em] py-[0.65em]" style={glass(2.2)}>
           <p className="min-w-0 flex-1 leading-snug">
             <Typed t={t} />
           </p>
@@ -810,11 +869,7 @@ function ChatBubbles({ t, still }: { t: number; still: boolean }) {
               transition={SPRING}
               className={m.from === "you" ? "flex justify-end" : "flex justify-start"}
             >
-              <div
-                className={`max-w-[92%] rounded-[1em] px-[0.9em] py-[0.55em] leading-snug shadow-[0_8px_24px_rgba(0,0,0,0.45)] ring-1 ring-white/10 backdrop-blur-xl ${
-                  m.from === "you" ? "rounded-br-[0.35em] bg-[#2a2a2a]/95 text-white/95" : "rounded-bl-[0.35em] bg-[#161616]/95 text-white/85"
-                }`}
-              >
+              <div className="max-w-[92%] rounded-[1.1em] px-[0.9em] py-[0.55em] leading-snug" style={glass(2.2)}>
                 {m.from === "you" ? <WithCommand text={m.text} /> : m.text}
                 {m.tools && (
                   <span className="mt-[0.3em] block truncate font-mono text-[0.78em] text-white/40">{TOOLS.join("  ·  ")}</span>
