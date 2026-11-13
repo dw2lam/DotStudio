@@ -4,12 +4,32 @@
   "name": "Commute",
   "author": "DotStudio",
   "licence": "DotStudio built-in. Rendered with Blender from CC0 assets (tools/film/scenes/commute).",
-  "engine": { "id": "film", "version": ">=1" },
+  "engine": {
+    "id": "film",
+    "version": ">=1"
+  },
   "fps": 24,
   "description": "A penguin dozes on the train home. Photoreal, ray traced in Blender; the light follows the real sun.",
-  "uses": ["sun"],
-  "clips": [
-    { "variant": "golden", "file": "clips/golden.mov", "loop": true, "codec": "hevc" }
+  "uses": [
+    "sun"
   ],
-  "look": { "bloom": 0.25, "halation": 0.15, "grain": 0.25 }
+  "clips": [
+    {
+      "variant": "golden",
+      "file": "clips/golden.mov",
+      "loop": true,
+      "codec": "hevc"
+    },
+    {
+      "variant": "night",
+      "file": "clips/night.mov",
+      "loop": true,
+      "codec": "hevc"
+    }
+  ],
+  "look": {
+    "bloom": 0.25,
+    "halation": 0.15,
+    "grain": 0.25
+  }
 }
