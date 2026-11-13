@@ -32,8 +32,8 @@ with open(os.path.join(os.path.dirname(__file__), "assets.json")) as _f:
 VARIANTS = ["day", "golden", "night", "rain"]
 CAMERAS = ["wide", "close", "aisle"]
 
-PERIOD = 650.0
-JOINT = 25.0
+JOINT = 25.0                # rail length (m); the scenery strip is a whole number of rails
+SPEED = 13.54               # m/s (~49 km/h); the strip is SPEED x loop length, rounded to whole rails
 PENGUIN_SEAT = 0          # the end seat of the far bench, by the partition (screen right)
 
 
@@ -49,8 +49,11 @@ def build(ctx):
     # physical units: the diffusers glow at ~1.5 (sky ~0.3-3) and light the cabin to a few hundred lux,
     # which the sun swamps by day; the variant exposure (lighting presets) brings the interior up.
     P["cabin_lamp"] = 0.9 * P.get("cabin", 1.0) * ctx.params.get("cabin", 1.0)
+    P["eevee"] = (ctx.engine or ctx.spec_engine) == "eevee"
     lp = ctx.loop
-    speed = PERIOD / lp.seconds
+    period = max(1, round(ctx.params.get("speed_ms", SPEED) * lp.seconds / JOINT)) * JOINT
+    speed = period / lp.seconds
+    K = lambda k: max(1, round(k * lp.seconds / 48.0))     # harmonics tuned on a 48 s loop, kept ~same Hz
 
     C_CAR = ctx.coll("Carriage")
     C_PEN = ctx.coll("Penguin")
@@ -77,11 +80,12 @@ def build(ctx):
             except Exception:
                 pass
 
-    city.build_tile(tile, lib, P, PERIOD)
+    city.build_tile(tile, lib, P, period)
     root = geo.empty("SceneryRoot", C_OUT)
-    Loop.strip(tile, C_OUT, PERIOD, root, copies=(-1, 0, 1, 2), mirror_y=True, x_offset=PERIOD * 0.37,
+    n = math.ceil(650.0 / period) + 1                      # enough copies to cover the skyline's view
+    Loop.strip(tile, C_OUT, period, root, copies=range(-n, n + 1), mirror_y=True, x_offset=period * 0.37,
                mirror_scale_z=ctx.params.get("sun_side_height", 0.55))
-    lp.scroll(root, -PERIOD)
+    lp.scroll(root, -period)
 
     pen = None
     if ctx.params.get("penguin", True):
@@ -102,8 +106,8 @@ def build(ctx):
         return lp.pulse_train(t, jt, hit, offs)
 
     def sway(t):
-        lat = 0.6 * lp.wave(t, 5, 0.3) + 0.35 * lp.wave(t, 9, 1.7) + 0.2 * lp.wave(t, 23, 0.2)
-        roll = 0.5 * lp.wave(t, 5, 0.8) + 0.3 * lp.wave(t, 13, 2.2) + 0.15 * lp.wave(t, 31, 1.0)
+        lat = 0.6 * lp.wave(t, K(5), 0.3) + 0.35 * lp.wave(t, K(9), 1.7) + 0.2 * lp.wave(t, K(23), 0.2)
+        roll = 0.5 * lp.wave(t, K(5), 0.8) + 0.3 * lp.wave(t, K(13), 2.2) + 0.15 * lp.wave(t, K(31), 1.0)
         return lat * sway_amp, roll * sway_amp
 
     rigs = {name: (c.parent, c.parent.location.copy(), c.parent.rotation_euler.copy()) for name, c in cams.items()}
@@ -113,15 +117,15 @@ def build(ctx):
         lat, roll = sway(t)
         b = bumps(t)
         for r, loc, rot in rigs.values():
-            r.location = loc + Vector((0, lat * 0.006, b * 0.0015 + 0.002 * lp.wave(t, 17)))
+            r.location = loc + Vector((0, lat * 0.006, b * 0.0015 + 0.002 * lp.wave(t, K(17))))
             r.rotation_euler = (rot[0] + math.radians(b * 0.05), rot[1] + math.radians(roll * 0.22), rot[2] + math.radians(lat * 0.07))
         rig.sun.rotation_euler = lighting.sun_euler(base_el + 0.6 * lp.wave(t, 2, 0.4),
                                                     base_az + 4.0 * lp.wave(t, 1) + 1.5 * lp.wave(t, 3, 1.0))
         for i, p in enumerate(pivots):
             ph = i * 0.37
             lat2, _ = sway(t - 0.35 - 0.02 * (i % 5))
-            p.rotation_euler = (math.radians(lat2 * 3.0 + b * 0.5 + 0.5 * lp.wave(t, 29, ph)),
-                                math.radians(0.8 * lp.wave(t, 7, ph * 1.3)), 0)
+            p.rotation_euler = (math.radians(lat2 * 3.0 + b * 0.5 + 0.5 * lp.wave(t, K(29), ph)),
+                                math.radians(0.8 * lp.wave(t, K(7), ph * 1.3)), 0)
         if pen:
             br = breathing(lp, t)
             pen["torso"].scale = (1 + 0.010 * br, 1 + 0.018 * br, 1 + 0.006 * br)
@@ -142,7 +146,10 @@ def build(ctx):
         lp.bake(ids, frame, props=("location", "rotation_euler", "scale"))
     else:
         frame(0.0)
-    return {"cameras": cams, "penguin": pen, "rig": rig}
+    # EEVEE: a baked volume probe over the cabin, so sky light doesn't leak through walls and ceiling
+    probes = {"volumes": [((0.0, 0.0, car.CEIL / 2), ((car.CAR_X[1] - car.CAR_X[0]) / 2, car.HALF_W, car.CEIL / 2), (48, 8, 8))],
+              "spheres": [((-1.0, 0.0, 1.3), 3.5)]}
+    return {"cameras": cams, "penguin": pen, "rig": rig, "probes": probes}
 
 
 def breathing(lp, t):
@@ -155,7 +162,7 @@ def dozing(lp, t):
     """Head pitch in degrees (+ = chin down) and lid closure (1 = shut) — one dozing cycle per loop:
     drift off, stir awake at 17 s (sleepy half-lids, a slow blink), drift again, a heavy nod at 33 s,
     settle."""
-    t = lp.wrap(t)
+    t = lp.wrap(t) * 48.0 / lp.seconds          # the timeline below is written for a 48 s loop
     p = 14.0 + 14.0 * smoothstep(0.0, 17.0, t) * (1 - smoothstep(17.15, 17.55, t))
     p -= 9.0 * smoothstep(17.15, 17.55, t) * (1 - smoothstep(17.55, 20.5, t))     # a gentle start, not a jolt
     p += 16.0 * smoothstep(21.0, 32.5, t) * (1 - smoothstep(33.6, 35.0, t))

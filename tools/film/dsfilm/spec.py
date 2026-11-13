@@ -70,13 +70,17 @@ def build(spec, variant=None, engine=None, res=None, samples=None):
     lp.apply_scene(scene)
     params = dict(spec.get("params", {}))
     light = lighting.preset(variant, **params.get("lighting", {}).get(variant, {}))
-    ctx = Ctx(scene=scene, loop=lp, variant=variant, light=light, params=params,
-              rng=random.Random(params.get("seed", 7)), engine=engine)
-    out = mod.build(ctx) or {}
     rs = dict(spec.get("render", {}))
-    render.setup(scene, engine=engine or rs.get("engine", "cycles"), res=tuple(res or rs.get("res", (1600, 1000))),
-                 samples=samples or rs.get("samples"), exposure=rs.get("exposure", 0.0) + light.get("exposure", 0.0),
-                 motion_blur=rs.get("motion_blur", True))
+    eng = engine or rs.get("engine", "cycles")
+    ctx = Ctx(scene=scene, loop=lp, variant=variant, light=light, params=params,
+              rng=random.Random(params.get("seed", 7)), engine=eng, spec_engine=rs.get("engine", "cycles"))
+    out = mod.build(ctx) or {}
+    # "eevee_exposure": an EV offset applied only under EEVEE, to match it to the Cycles reference
+    ev = rs.get("exposure", 0.0) + light.get("exposure", 0.0) + (rs.get("eevee_exposure", 0.0) if eng == "eevee" else 0.0)
+    render.setup(scene, engine=eng, res=tuple(res or rs.get("res", (1600, 1000))),
+                 samples=samples or rs.get("samples"), exposure=ev, motion_blur=rs.get("motion_blur", True))
+    if scene.render.engine == "BLENDER_EEVEE" and out.get("probes"):
+        render.eevee_probes(scene, **out["probes"])
     ctx.look = spec.get("look")
     post.setup(scene, ctx.look)
     return ctx, out

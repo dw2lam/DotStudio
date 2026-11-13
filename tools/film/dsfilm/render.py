@@ -99,6 +99,30 @@ def setup(scene, engine="cycles", res=(1600, 1000), samples=None, exposure=0.0, 
         e.clamp_surface_indirect = 10.0
 
 
+def eevee_probes(scene, volumes=(), spheres=()):
+    """Adds and bakes EEVEE light probes. Interiors need a volume probe: without one EEVEE lights
+    them with the unoccluded sky (flat, far too bright, no window light). volumes: [(centre,
+    half_size, (rx, ry, rz))], spheres: [(centre, radius)]. The bake is static (taken at the current
+    frame); moving sunlight still comes from the lamp's ray-traced shadows."""
+    coll = scene.collection
+    for i, (c, hs, res) in enumerate(volumes):
+        d = bpy.data.lightprobes.new(f"Volume{i}", "VOLUME")
+        d.resolution_x, d.resolution_y, d.resolution_z = res
+        ob = bpy.data.objects.new(f"Volume{i}", d)
+        ob.location, ob.scale = c, hs
+        coll.objects.link(ob)
+    for i, (c, r) in enumerate(spheres):
+        d = bpy.data.lightprobes.new(f"Sphere{i}", "SPHERE")
+        d.influence_distance = r
+        ob = bpy.data.objects.new(f"Sphere{i}", d)
+        ob.location = c
+        coll.objects.link(ob)
+    t = time.time()
+    with bpy.context.temp_override(scene=scene):
+        bpy.ops.object.lightprobe_cache_bake(subset="ALL")
+    print(f"PROBES baked in {time.time() - t:.1f}s", flush=True)
+
+
 def still(scene, path, frame=1, camera=None):
     if camera is not None:
         scene.camera = camera
