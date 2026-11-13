@@ -41,24 +41,28 @@ def build_tile(tile, lib, P, period, seed=11):
     night = P.get("night", False)
     r = random.Random(seed)
     lit = 0.35 if night else 0.0
+    wet = P.get("rain", False)           # rain: darker, glossier surfaces everywhere (no extra RNG draws)
+    wk = 0.78 if wet else 1.0
 
     # ------------------------------------------------------------------ materials
     def acg(name, size):
         n = NIGHT.get(name, name) if night else name
         return mt.acg_pbr(f"F_{n}_{r.random():.4f}", n, size_m=size * r.uniform(0.9, 1.1), nor_strength=0.4,
                           tint=r.choice([(1, 1, 1), (1.05, 1.0, 0.92), (0.88, 0.92, 0.98), (0.8, 0.8, 0.8)]),
-                          emission_strength=(0.35 if night else 0.0))
+                          emission_strength=(0.35 if night else 0.0), rough_mul=0.5 if wet else 1.0)
     office = [acg(n, s) for n, s in OFFICE]
     towers = [acg(n, s) for n, s in TOWER]
-    houses = [mt.facade_grid(f"HouseWall{i}", wall=c, pitch=r.uniform(2.3, 2.9), floor_h=2.9, win_w=0.42, win_h=0.44,
+    houses = [mt.facade_grid(f"HouseWall{i}", wall=tuple(v * wk for v in c), wall_rough=0.35 if wet else 0.8, pitch=r.uniform(2.3, 2.9), floor_h=2.9, win_w=0.42, win_h=0.44,
                              sill=0.30, lit=lit, lit_prob=0.5, x_offset=r.uniform(0, 3)) for i, c in enumerate(HOUSE_WALLS)]
-    flats = [mt.facade_grid(f"Apartment{i}", wall=c, pitch=r.choice((3.4, 3.8, 4.2)), floor_h=2.95, win_w=0.62,
+    flats = [mt.facade_grid(f"Apartment{i}", wall=tuple(v * wk for v in c), wall_rough=0.35 if wet else 0.8, pitch=r.choice((3.4, 3.8, 4.2)), floor_h=2.95, win_w=0.62,
                             win_h=0.62, sill=0.22, lit=lit, lit_prob=0.55, x_offset=r.uniform(0, 3))
              for i, c in enumerate(APARTMENT_WALLS)]
-    shops = [mt.facade_grid(f"MixedUse{i}", wall=c, pitch=3.0, floor_h=3.2, win_w=0.75, win_h=0.55, sill=0.25,
+    shops = [mt.facade_grid(f"MixedUse{i}", wall=tuple(v * wk for v in c), wall_rough=0.35 if wet else 0.8, pitch=3.0, floor_h=3.2, win_w=0.75, win_h=0.55, sill=0.25,
                             curtain_prob=0.15, lit=lit * 1.3, lit_prob=0.7) for i, c in enumerate(HOUSE_WALLS[:4])]
-    roofs = [mt.acg_pbr(f"RoofTiles{i}", "RoofingTiles006", size_m=3.0, desat=True, tint=t) for i, t in enumerate(ROOF_TINTS)]
-    roof_flat = mt.noise_bump(mt.principled("RoofFlat", (0.42, 0.42, 0.40), 0.85), scale=10, strength=0.1, rough_var=0.1)
+    roofs = [mt.acg_pbr(f"RoofTiles{i}", "RoofingTiles006", size_m=3.0, desat=True, tint=tuple(v * wk for v in t),
+                        rough_mul=0.35 if wet else 1.0) for i, t in enumerate(ROOF_TINTS)]
+    roof_flat = mt.noise_bump(mt.principled("RoofFlat", tuple(v * wk for v in (0.42, 0.42, 0.40)), 0.3 if wet else 0.85),
+                              scale=10, strength=0.1, rough_var=0.1)
     balcony = mt.noise_bump(mt.principled("BalconySlab", (0.62, 0.61, 0.58), 0.7), scale=20, strength=0.05)
     balcony_panel = mt.principled("BalconyPanel", (0.70, 0.72, 0.74), 0.25, **{"Transmission Weight": 0.3})
     steel = mt.principled("Steel", (0.45, 0.46, 0.47), 0.45, 0.8)
@@ -68,8 +72,12 @@ def build_tile(tile, lib, P, period, seed=11):
              for i, c in enumerate(SIGN_COLORS)]
     concrete = mt.ph_pbr("ViaductConcrete", "concrete_wall_008", size_m=3.0, desat=True, tint=(0.62, 0.62, 0.60))
     gravel = mt.acg_pbr("Ballast", "Gravel022", size_m=1.5)
-    road = mt.ph_pbr("Road", "asphalt_02", size_m=5.0)
-    lot = mt.ph_pbr("Lot", "asphalt_02", size_m=7.0, desat=True, tint=(0.50, 0.49, 0.47))
+    if wet:     # wet asphalt: darker and mirror-ish, so lamps and buildings reflect in it
+        road = mt.ph_pbr("Road", "asphalt_02", size_m=5.0, value=0.6, rough_mul=0.15, rough_add=0.02)
+        lot = mt.ph_pbr("Lot", "asphalt_02", size_m=7.0, desat=True, tint=(0.30, 0.30, 0.29), rough_mul=0.18, rough_add=0.03)
+    else:
+        road = mt.ph_pbr("Road", "asphalt_02", size_m=5.0)
+        lot = mt.ph_pbr("Lot", "asphalt_02", size_m=7.0, desat=True, tint=(0.50, 0.49, 0.47))
     grass = mt.acg_pbr("Grass", "Grass004", size_m=3.0)
     pole_mat = mt.noise_bump(mt.principled("PoleConcrete", (0.55, 0.55, 0.52), 0.7), scale=30, strength=0.1)
     lamp = mt.emission("StreetLamp", (1.0, 0.85, 0.6), 4.0 if night else 0.0)

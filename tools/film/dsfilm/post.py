@@ -8,6 +8,8 @@ The spec's "look" block (all keys optional; omit the block for no post):
       "halation": {"strength": 0.35, "threshold": 2.0, "size": 0.22,           # warm red-orange glow
                    "tint": [1.0, 0.32, 0.10]},                                  #   around bright edges
       "vignette": 0.22,                                                         # 0..1 corner darkening
+      "fog":      {"color": [0.16, 0.18, 0.21], "amount": 0.8,                  # depth fog (mist pass);
+                   "start": 12, "depth": 260},                                  #   lighting presets add it
       "grain":    {"amount": 0.018}                                             # PREVIEW ONLY (stills)
     }
 
@@ -54,9 +56,27 @@ def setup(scene, look):
         return None
     ng = bpy.data.node_groups.new("FilmLook", "CompositorNodeTree")
     ng.interface.new_socket("Image", in_out="OUTPUT", socket_type="NodeSocketColor")
+    fog = look.get("fog")
+    if fog:      # depth fog from the mist pass (enable before the Render Layers node exposes "Mist")
+        bpy.context.view_layer.use_pass_mist = True
+        if scene.world:
+            ms = scene.world.mist_settings
+            ms.start, ms.depth, ms.falloff = fog.get("start", 15.0), fog.get("depth", 300.0), "QUADRATIC"
     rl = ng.nodes.new("CompositorNodeRLayers")
     out = ng.nodes.new("NodeGroupOutput")
     img = rl.outputs["Image"]
+    if fog and "Mist" in rl.outputs:
+        f = ng.nodes.new("ShaderNodeMath")
+        f.operation = "MULTIPLY"
+        f.inputs[1].default_value = fog.get("amount", 0.7)
+        ng.links.new(rl.outputs["Mist"], f.inputs[0])
+        mx = ng.nodes.new("ShaderNodeMix")
+        mx.data_type = "RGBA"
+        ng.links.new(f.outputs[0], mx.inputs[0])
+        ng.links.new(img, mx.inputs[6])
+        c = fog.get("color", (0.2, 0.22, 0.25))
+        mx.inputs[7].default_value = (c[0], c[1], c[2], 1.0)
+        img = mx.outputs[2]
     if look.get("halation"):
         img = _glare(ng, img, "halation", look["halation"])
     if look.get("bloom"):

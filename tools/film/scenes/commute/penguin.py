@@ -148,6 +148,14 @@ def _mats(color):
         teal.node_tree.links.remove(l)
     mix.inputs["Fac"].default_value = 0.0
     m["teal"] = teal
+    # eyelids: the same feathers but opaque (no subsurface), so a shut lid never glows with the pupil
+    # and catch-light behind it in strong sun
+    lidm = teal.copy()
+    lidm.name = "PenguinLid"
+    for n in lidm.node_tree.nodes:
+        if n.type == "BSDF_PRINCIPLED":
+            n.inputs["Subsurface Weight"].default_value = 0.0
+    m["lid"] = lidm
     m["bill"] = mt.noise_bump(mt.principled("Bill", (0.98, 0.46, 0.02), 0.25,
                                             **{"Subsurface Weight": 0.3, "Subsurface Radius": (1.0, 0.4, 0.1),
                                                "Subsurface Scale": 0.01, "Coat Weight": 0.6, "Coat Roughness": 0.1}),
@@ -161,9 +169,12 @@ def _mats(color):
     m["glint"] = mt.principled("Glint", (1, 1, 1), 0.3, **{"Emission Color": (1, 1, 1), "Emission Strength": 0.25})
     m["lash"] = mt.principled("Lash", (0.0, 0.16, 0.22), 0.5)
     m["cheek"] = mt.principled("Cheek", (0.85, 0.40, 0.45), 0.6, **{"Sheen Weight": 0.5})
-    m["suit"] = mt.ph_pbr("SuitWool", "poly_wool_herringbone", size_m=0.09, desat=True, tint=(0.030, 0.032, 0.040),
-                          nor_strength=0.9, rough_mul=0.5, rough_add=0.45,
-                          **{"Sheen Weight": 0.06, "Sheen Roughness": 0.6, "Sheen Tint": (0.5, 0.5, 0.55)})
+    # dark wool: very rough, little specular (a dielectric's 4% at full roughness reads as grey haze
+    # under direct sun), a faint sheen tinted near the cloth's own colour
+    m["suit"] = mt.ph_pbr("SuitWool", "poly_wool_herringbone", size_m=0.09, desat=True, tint=(0.020, 0.021, 0.026),
+                          nor_strength=0.9, rough_mul=0.2, rough_add=0.78,
+                          **{"Specular IOR Level": 0.18, "Sheen Weight": 0.12, "Sheen Roughness": 0.5,
+                             "Sheen Tint": (0.16, 0.16, 0.18)})
     m["shirt"] = mt.noise_bump(mt.principled("Shirt", (0.88, 0.89, 0.90), 0.55, **{"Subsurface Weight": 0.1,
                                                                                      "Sheen Weight": 0.3}),
                                scale=700, strength=0.03, distance=0.0005)
@@ -352,15 +363,25 @@ def build(C, loc, yaw_deg=0.0, size=1.0, color=(0.0, 0.42, 0.56)):
         sphere(f"Glint2{sx}", 0.003, (sx * -0.006 + 0.008, er * 0.99, -0.010), pm["glint"], C, scale=(1, 0.4, 1), parent=eye)
         lid = empty(f"Lid{sx}", C, parent=eye)
         lb = bmesh.new()
-        bmesh.ops.create_uvsphere(lb, u_segments=40, v_segments=24, radius=er * 1.06)
+        bmesh.ops.create_uvsphere(lb, u_segments=40, v_segments=24, radius=er * 1.12)   # clears the catch-light, which then hides under a shut lid
         bmesh.ops.delete(lb, geom=[v for v in lb.verts if v.co.z < -0.001], context="VERTS")
-        lo = from_bm(f"UpperLid{sx}", lb, pm["teal"], C, lid)
+        lo = from_bm(f"UpperLid{sx}", lb, pm["lid"], C, lid)
         so = lo.modifiers.new("thick", "SOLIDIFY")
-        so.thickness = 0.003
+        so.thickness = 0.0045
         smooth_by_angle(lo, 80)
         # lash line along the lid's front rim: the closed-eye curve when shut, the lid edge when open
-        rim = [(er * 1.06 * math.cos(a), er * 1.06 * math.sin(a), 0.0) for a in [math.pi * (0.12 + 0.76 * k / 16) for k in range(17)]]
-        smooth_tube(f"Lash{sx}", rim, 0.0022, pm["lash"], C, parent=lid)
+        rim = [(er * 1.12 * math.cos(a), er * 1.12 * math.sin(a), 0.0) for a in [math.pi * (0.12 + 0.76 * k / 16) for k in range(17)]]
+        smooth_tube(f"Lash{sx}", rim, 0.0014, pm["lash"], C, parent=lid)   # a fine line, not a pupil-like crescent
+        # the closed-eye line: a soft ∪ drawn on the lid's surface where it faces forward-down when shut
+        # (lid space = shut space rotated: shut (X, Y, Z) is lid (X, -Z, Y)); open, it folds up as a crease
+        R = er * 1.12
+        arc = []
+        for k in range(15):
+            X = R * 0.72 * (2 * k / 14 - 1)
+            Z = -0.16 * R - 0.20 * R * (1 - (X / (0.72 * R)) ** 2)
+            Y = math.sqrt(max(R * R - X * X - Z * Z, 0.0)) + 0.0006
+            arc.append((X, -Z, Y))
+        smooth_tube(f"ShutLine{sx}", arc, 0.0016, pm["lash"], C, parent=lid)
         _on_bone(eye, arm, "head")
         lids.append(lid)
         ch = sphere(f"Cheek{sx}", 0.045, (sx * 0.16, surface_y(0.16, 0.775) - 0.012, 0.775), pm["cheek"], C,
