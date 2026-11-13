@@ -155,7 +155,7 @@ does).
 | preset | sky (Poly Haven HDRI) | sun | exposure |
 |---|---|---|---|
 | day | kloofendal_48d_partly_cloudy_puresky | 17°, 4.0 | +1.8 |
-| golden | belfast_sunset_puresky | 10°, 3.0, warm | +1.7 |
+| golden | qwantani_sunset_puresky, sky tinted warm (`sky_tint`) | 9°, 3.2, orange | +1.6 |
 | night | kloppenheim_07_puresky ×0.10 | off | +3.5 |
 | rain | kloofendal_overcast_puresky | off | +1.8 |
 
@@ -215,11 +215,12 @@ Our own character, in generic penguin-cartoon vocabulary:
 
 - one continuous chubby egg/pear body, with no separate head and a rounded crown (no pointed peak)
 - teal, with a big white belly that stops at the chest
-- big cartoon eyes set straight into the teal (no white face mask), with lids and lash lines
+- gentle eyes set straight into the teal (no white face mask): small, set deep so the lids close flush,
+  with big dark pupils, a soft catch-light and a thin lash line; sleepy half-lids when he stirs
 - a wide, tapering orange bill with a smile
 - short flipper wings out at the sides
 - chunky flat feet
-- a charcoal suit, collar and red tie
+- a dark charcoal suit with cloth folds, a collar and a red tie
 
 The head nods with a two-bone armature that bends the top of the egg.
 
@@ -230,7 +231,7 @@ What you can change without code (colours, variants, loop, cameras) is listed in
 
 Poly Haven:
 
-- HDRIs: kloofendal_48d_partly_cloudy_puresky, belfast_sunset_puresky, kloppenheim_07_puresky,
+- HDRIs: kloofendal_48d_partly_cloudy_puresky, qwantani_sunset_puresky, kloppenheim_07_puresky,
   kloofendal_overcast_puresky
 - textures: velour_velvet, poly_wool_herringbone, asphalt_02, concrete_wall_008
 - models: jacaranda_tree, shrub_02, shrub_04

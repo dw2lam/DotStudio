@@ -236,32 +236,39 @@ def _ceiling_floor(C, M):
 
 
 def _ads(C, M, posters):
+    """Above-window ads as on many Japanese EMUs: a straight, vertical aluminium-framed ad board
+    standing on the luggage rack's front rail, square to the carriage, three B3-ish sheets per bench.
+    Hanging (nakazuri) posters hang flat from the ceiling on two wires, square to the car's axis."""
     order = ["tea", "school", "travel", "clinic", "manners", "travel", "tea", "school", "clinic"]
-    tilt = math.radians(35)          # the frames lean out from the cove, facing down into the car
+    zr, h_board = 1.815, 0.36                 # the rack's front rail, board height
     k = 0
     for s in (-1, 1):
+        yb = s * (HALF_W - 0.31)              # just behind the rack's front edge
+        rot = (math.radians(90), 0, math.pi) if s < 0 else (math.radians(90), 0, 0)   # face the aisle, unmirrored
         for (x0, x1) in BENCHES:
+            # the board: a thin panel in an aluminium edge frame
+            bw = x1 - x0 - 0.10
+            cx0 = (x0 + x1) / 2
+            box(f"AdBoard{s}_{x0:.1f}", (bw, 0.012, h_board), (cx0, yb + s * 0.010, zr + h_board / 2), M["wall_lower"], C)
+            for zz in (zr + 0.008, zr + h_board - 0.008):
+                box(f"AdRail{s}_{x0:.1f}_{zz:.2f}", (bw + 0.02, 0.03, 0.018), (cx0, yb, zz), M["alu"], C, bevel=0.004)
+            for xx in (cx0 - bw / 2, cx0 + bw / 2):
+                box(f"AdPost{s}_{xx:.2f}", (0.018, 0.03, h_board), (xx, yb, zr + h_board / 2), M["alu"], C, bevel=0.004)
             n = 3
-            pw = (x1 - x0 - 0.1) / n
+            pw = bw / n
             for i in range(n):
-                cx = x0 + 0.05 + pw * (i + 0.5)
+                cx = cx0 - bw / 2 + pw * (i + 0.5)
                 name = order[k % len(order)]
                 k += 1
                 im = bpy.data.images.load(posters[name], check_existing=True)
                 aspect = im.size[0] / im.size[1]
-                h = 0.34 if aspect < 1.2 else 0.30
-                wdt = min(h * aspect, pw - 0.08)
-                if aspect < 1:
-                    h, wdt = 0.36, 0.36 * aspect
-                # face the aisle and a little down; the 180° turn on the far side keeps the print unmirrored
-                rot = (math.radians(90) + tilt, 0, math.pi) if s < 0 else (math.radians(90) + tilt, 0, 0)
-                p = plane_uv(f"Poster{k}", wdt, h, mt.image_mat(f"Poster{k}_{name}", posters[name], rough=0.3, coat=0.5),
-                             C, (cx, s * (HALF_W - 0.10), WALL_TOP + 0.14), rot)
-                fr = slab(f"PosterFrame{k}", [rrect(-wdt / 2 - 0.02, -h / 2 - 0.02, wdt / 2 + 0.02, h / 2 + 0.02, 0.012),
-                                              rrect(-wdt / 2, -h / 2, wdt / 2, h / 2, 0.004)], 0.012, [M["alu"]], C)
-                fr.parent = p
-                fr.rotation_euler = (math.radians(-90), 0, 0)
-                fr.location = (0, 0, 0.003)
+                h = h_board - 0.05
+                wdt = min(h * aspect, pw - 0.06)
+                h = wdt / aspect if wdt < h * aspect else h
+                plane_uv(f"Poster{k}", wdt, h, mt.image_mat(f"Poster{k}_{name}", posters[name], rough=0.3, coat=0.5),
+                         C, (cx, yb - s * 0.002, zr + h_board / 2), rot)
+                # a clear acrylic cover clip at the top of each sheet
+                box(f"PosterClip{k}", (wdt * 0.9, 0.006, 0.012), (cx, yb - s * 0.006, zr + h_board / 2 + h / 2 - 0.004), M["alu"], C)
     for di, (x0, x1) in enumerate(DOORS):
         cx = (x0 + x1) / 2
         plane_uv(f"RouteMap{di}", 0.95, 0.142, mt.image_mat(f"RouteMat{di}", posters["route_map"], rough=0.3, coat=0.5),
@@ -271,11 +278,14 @@ def _ads(C, M, posters):
                  C, (cx + 0.45, -HALF_W + 0.041, 2.05), (math.radians(90), 0, math.pi))
     plane_uv("PrioritySign", 0.26, 0.13, mt.image_mat("PriorityMat", posters["priority"], rough=0.3, coat=0.3), C,
              ((BENCHES[2][0] + BENCHES[2][1]) / 2, -HALF_W + 0.012, 1.935), (math.radians(90), 0, math.pi))
-    for k, x in enumerate((-5.0, -0.4, 4.0)):
-        p = plane_uv(f"Drop{k}", 0.70, 0.25, mt.image_mat(f"DropMat{k}", posters["hanging"], rough=0.35, coat=0.2),
-                     C, (x, 0.0, 2.12), (math.radians(90), 0, math.pi))
-        tube(f"DropClip{k}", [(x - 0.36, 0, 2.252), (x + 0.36, 0, 2.252)], 0.006, M["alu"], C)
-        tube(f"DropWire{k}", [(x, 0, 2.252), (x, 0, CEIL)], 0.002, M["alu"], C)
+    for k, x in enumerate((-4.6, 0.2, 5.0)):
+        w, h, z = 0.80, 0.29, 2.08
+        mat = mt.image_mat(f"DropMat{k}", posters["hanging"], rough=0.35, coat=0.2)
+        plane_uv(f"DropA{k}", w, h, mat, C, (x + 0.001, 0.0, z), (math.radians(90), 0, math.radians(90)))
+        plane_uv(f"DropB{k}", w, h, mat, C, (x - 0.001, 0.0, z), (math.radians(90), 0, math.radians(-90)))
+        box(f"DropBar{k}", (0.012, w + 0.02, 0.016), (x, 0.0, z + h / 2 + 0.006), M["alu"], C, bevel=0.003)
+        for yy in (-w / 2 + 0.03, w / 2 - 0.03):
+            tube(f"DropWire{k}_{yy:.2f}", [(x, yy, z + h / 2 + 0.012), (x, yy, CEIL - 0.01)], 0.0018, M["alu"], C)
 
 
 def _straps(C, M, row_y, n, yellow=()):

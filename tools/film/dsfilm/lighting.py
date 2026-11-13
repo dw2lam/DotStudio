@@ -9,11 +9,11 @@ stuck with the photo's sun. With ``hdri=None`` a Nishita physical sky is used in
 
 Presets (override any key):
     day     clear midday, cumulus      kloofendal_48d_partly_cloudy_puresky
-    golden  low warm sun, sunset sky   belfast_sunset_puresky
+    golden  low warm sun, sunset sky   qwantani_sunset_puresky (its sun just off-frame), sky tinted warm
     night   overcast city-glow night   kloppenheim_07_puresky   (sun off; light from lamps)
     rain    overcast, soft light       kloofendal_overcast_puresky (sun off)
 
-Keys: hdri, hdri_rot (deg), hdri_strength, hdri_clamp (max radiance kept), sun_elev, sun_az (deg),
+Keys: hdri, hdri_rot (deg), hdri_strength, hdri_clamp (max radiance kept), sky_tint (rgb multiplier), sun_elev, sun_az (deg),
 sun_strength (W/m², ~4 for a clear day under AgX at exposure 0), sun_color, sun_angle (deg, disc
 size -> shadow softness), exposure (EV over the scene-referred render; interiors lit through windows need +1.5..2 by day, +3..4 at night; applied by render.setup), cabin (interior lamp scale),
 night (bool for scenes: switch on windows), rain (bool).
@@ -31,9 +31,9 @@ PRESETS = {
     "day": dict(hdri="kloofendal_48d_partly_cloudy_puresky", hdri_rot=200, hdri_strength=1.0, hdri_clamp=40,
                 sun_elev=17, sun_az=62, sun_strength=4.0, sun_color=(1.0, 0.96, 0.90), sun_angle=0.55,
                 exposure=1.8, cabin=1.0, night=False, rain=False),
-    "golden": dict(hdri="belfast_sunset_puresky", hdri_rot=64, hdri_strength=0.55, hdri_clamp=25,
-                   sun_elev=10, sun_az=65, sun_strength=3.0, sun_color=(1.0, 0.60, 0.30), sun_angle=0.6,
-                   exposure=1.7, cabin=1.0, night=False, rain=False),
+    "golden": dict(hdri="qwantani_sunset_puresky", hdri_rot=34, hdri_strength=0.8, hdri_clamp=20,
+                   sky_tint=(1.0, 0.74, 0.50), sun_elev=9, sun_az=65, sun_strength=3.2,
+                   sun_color=(1.0, 0.52, 0.22), sun_angle=0.6, exposure=1.6, cabin=1.0, night=False, rain=False),
     "night": dict(hdri="kloppenheim_07_puresky", hdri_rot=90, hdri_strength=0.10, hdri_clamp=10,
                   sun_elev=-20, sun_az=60, sun_strength=0.0, sun_color=(1, 1, 1), sun_angle=0.5,
                   exposure=3.5, cabin=1.0, night=True, rain=False),
@@ -91,7 +91,14 @@ def setup(scene, coll, name="day", **over):
         vm.operation = "MINIMUM"
         vm.inputs[1].default_value = (p["hdri_clamp"],) * 3
         ln.new(env.outputs["Color"], vm.inputs[0])
-        ln.new(vm.outputs["Vector"], bg.inputs["Color"])
+        col = vm.outputs["Vector"]
+        if p.get("sky_tint"):
+            tm = nt.new("ShaderNodeVectorMath")
+            tm.operation = "MULTIPLY"
+            tm.inputs[1].default_value = tuple(p["sky_tint"])
+            ln.new(col, tm.inputs[0])
+            col = tm.outputs["Vector"]
+        ln.new(col, bg.inputs["Color"])
     else:
         sky = nt.new("ShaderNodeTexSky")
         sky.sky_type = "NISHITA"
