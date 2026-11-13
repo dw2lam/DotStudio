@@ -374,7 +374,58 @@ enum CustomScenes {
 
     static func scenesDir(_ store: URL) -> URL { store.appendingPathComponent("scenes", isDirectory: true) }
     static func enginesDir(_ store: URL) -> URL { store.appendingPathComponent("engines", isDirectory: true) }
-    static func packageDir(id: String, store: URL) -> URL { scenesDir(store).appendingPathComponent(id, isDirectory: true) }
+    /// Where package `id` is read from: the store's copy, else a built-in package with that id
+    /// (Resources/Films), else the store path (missing).
+    static func packageDir(id: String, store: URL) -> URL {
+        let mine = storePackageDir(id: id, store: store)
+        if FileManager.default.fileExists(atPath: mine.path) { return mine }
+        return builtInPackageDir(id: id) ?? mine
+    }
+    /// The store's own copy of package `id` (install and remove write only here, never a bundle).
+    static func storePackageDir(id: String, store: URL) -> URL { scenesDir(store).appendingPathComponent(id, isDirectory: true) }
+
+    // MARK: Built-in packages (film scenes rendered offline that ship with the app)
+
+    /// Built-in scene packages ship ONCE, inside the saver (Resources/Films), like the slideshow
+    /// photos; the app and dotstudio-mcp read them from the embedded DotStudio.saver. The tools put
+    /// a Films folder next to their binary; DOTSTUDIO_FILMS_DIR overrides.
+    static var builtInPackagesDirs: [URL] {
+        var dirs: [URL] = []
+        if let s = ProcessInfo.processInfo.environment["DOTSTUDIO_FILMS_DIR"], !s.isEmpty {
+            dirs.append(URL(fileURLWithPath: s, isDirectory: true))
+        }
+        if let r = Bundle(for: MetalRenderer.self).resourceURL { dirs.append(r.appendingPathComponent("Films", isDirectory: true)) }
+        if let r = Bundle.main.resourceURL {
+            dirs.append(r.appendingPathComponent("DotStudio.saver/Contents/Resources/Films", isDirectory: true))
+            dirs.append(r.appendingPathComponent("Films", isDirectory: true))
+        }
+        return dirs
+    }
+
+    static func builtInPackageDir(id: String) -> URL? {
+        guard isValidID(id) else { return nil }
+        for d in builtInPackagesDirs {
+            let u = d.appendingPathComponent(id, isDirectory: true)
+            if FileManager.default.fileExists(atPath: u.appendingPathComponent("scene.json").path) { return u }
+        }
+        return nil
+    }
+
+    /// The built-in packages' manifests (first folder that has any), by name.
+    static func builtInManifests() -> [CustomSceneManifest] {
+        let fm = FileManager.default
+        for d in builtInPackagesDirs {
+            guard let ids = try? fm.contentsOfDirectory(atPath: d.path) else { continue }
+            let ms = ids.filter(isValidID).sorted().compactMap { id -> CustomSceneManifest? in
+                guard let m = readManifest(packageAt: d.appendingPathComponent(id, isDirectory: true)).0, m.id == id else { return nil }
+                return m
+            }
+            if !ms.isEmpty { return ms }
+        }
+        return []
+    }
+
+    static func isBuiltIn(id: String) -> Bool { builtInPackageDir(id: id) != nil }
 
     /// `[a-z0-9-]{1,48}` + "-" + 8 hex.
     static func isValidID(_ id: String) -> Bool {
@@ -522,7 +573,7 @@ enum CustomScenes {
                 enc.outputFormatting = [.prettyPrinted, .sortedKeys]
                 try enc.encode(m).write(to: tmp.appendingPathComponent("scene.json"), options: .atomic)
             }
-            let dst = packageDir(id: m.id, store: store)
+            let dst = storePackageDir(id: m.id, store: store)
             if fm.fileExists(atPath: dst.path) {
                 _ = try fm.replaceItemAt(dst, withItemAt: tmp)
             } else {
@@ -582,7 +633,7 @@ enum CustomScenes {
 
     static func remove(id: String, store: URL) throws {
         guard isValidID(id) else { throw CustomSceneError.notFound("no scene \"\(id)\"") }
-        let dir = packageDir(id: id, store: store)
+        let dir = storePackageDir(id: id, store: store)
         guard FileManager.default.fileExists(atPath: dir.path) else { throw CustomSceneError.notFound("no scene \"\(id)\"") }
         try FileManager.default.removeItem(at: dir)
         clearCaches(id: id)

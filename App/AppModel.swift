@@ -275,12 +275,12 @@ final class AppModel: ObservableObject {
     /// (Now Playing was one until music became a presentation over any style — it's retired:
     /// never added, and a library that has it keeps it.)
     // The 1.4 highlights 1.3 users get once on upgrade (Zen Garden, Shallows), Bounce
-    // (new after 1.4) and the 1.4.2 clocks (a 1.4 library gets those as new featured built-ins).
+    // (new after 1.4), Commute (1.5: a built-in film scene) and the 1.4.2 clocks (a 1.4 library gets those as new featured built-ins).
     // Sunray was one until 1.4.2 retired it (DefaultPresets.retiredStyles); Tidewater until 1.4.5
     // folded it into Golden Hour (DefaultPresets.foldTidewater).
     static let promotedBuiltIns = ["Zen Garden", "Shallows", "Bounce",
                                    "StandBy", "Minimal", "Chronometer", "Meadow", "Tall Grass",
-                                   "Blue Bloom", "Baby's Breath", "Penguin"]
+                                   "Blue Bloom", "Baby's Breath", "Penguin", "Commute"]
 
     /// New built-in styles reach existing libraries exactly once (runs on every launch):
     ///  • no `seenBuiltIns` (a library from before 1.4): everything shipping now counts as
