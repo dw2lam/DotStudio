@@ -171,10 +171,10 @@ export function MCPDemo() {
     <section
       id="mcp"
       aria-labelledby="mcp-title"
-      className="relative bg-black px-4 py-16 sm:py-20 md:flex md:min-h-[100svh] md:flex-col md:justify-center md:py-[clamp(1.25rem,4.5svh,3.5rem)]"
+      className="section-pad mcp-fit relative bg-black"
     >
       <div className="mx-auto flex w-full max-w-7xl flex-col">
-        <header className="mb-6 flex flex-col gap-3 md:mb-[clamp(0.75rem,3svh,2rem)] md:flex-row md:items-end md:justify-between md:gap-10">
+        <header className="mb-[var(--head-gap)] flex flex-col gap-3 md:mb-[clamp(0.75rem,3svh,2rem)] md:flex-row md:items-end md:justify-between md:gap-10">
           <h2
             id="mcp-title"
             className="text-4xl font-medium leading-[0.95] tracking-[-0.04em] sm:text-5xl md:text-[clamp(2.5rem,7.5svh,4rem)]"

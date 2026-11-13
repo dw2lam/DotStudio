@@ -126,9 +126,9 @@ function Row({ q, a, open, onToggle }: { q: string; a: ReactNode; open: boolean;
 export function Questions() {
   const [open, setOpen] = useState<number | null>(null);
   return (
-    <section id="faq" className="relative bg-black px-4 py-16 sm:py-20">
+    <section id="faq" className="section-pad relative bg-black">
       <div className="mx-auto grid max-w-7xl grid-cols-1 gap-x-12 lg:grid-cols-12">
-        <SectionHeader eyebrow="FAQ" title="Questions." className="mb-8 lg:col-span-4 lg:mb-0" />
+        <SectionHeader eyebrow="FAQ" title="Questions." className="mb-[var(--head-gap)] lg:col-span-4 lg:mb-0" />
         <ul className="lg:col-span-8">
           {QUESTIONS.map((item, i) => (
             <Row key={item.q} q={item.q} a={item.a} open={open === i} onToggle={() => setOpen(open === i ? null : i)} />
