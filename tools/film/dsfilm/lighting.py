@@ -11,12 +11,13 @@ Presets (override any key):
     day     clear midday, cumulus      kloofendal_48d_partly_cloudy_puresky
     golden  low warm sun, sunset sky   qwantani_sunset_puresky (its sun just off-frame), sky tinted warm
     night   overcast city-glow night   kloppenheim_07_puresky   (sun off; light from lamps)
-    rain    overcast, soft light       kloofendal_overcast_puresky (sun off)
+    rain    dark overcast, rain        kloofendal_overcast_puresky dimmed + cooled, depth fog (sun off)
 
 Keys: hdri, hdri_rot (deg), hdri_strength, hdri_clamp (max radiance kept), sky_tint (rgb multiplier), sun_elev, sun_az (deg),
 sun_strength (W/m², ~4 for a clear day under AgX at exposure 0), sun_color, sun_angle (deg, disc
 size -> shadow softness), exposure (EV over the scene-referred render; interiors lit through windows need +1.5..2 by day, +3..4 at night; applied by render.setup), cabin (interior lamp scale),
-night (bool for scenes: switch on windows), rain (bool).
+night (bool for scenes: switch on windows), rain (bool), fog ({color, amount, start, depth}: depth
+fog from the mist pass, merged into the spec's look by dsfilm.spec).
 """
 import math
 from types import SimpleNamespace
@@ -37,9 +38,12 @@ PRESETS = {
     "night": dict(hdri="kloppenheim_07_puresky", hdri_rot=90, hdri_strength=0.10, hdri_clamp=10,
                   sun_elev=-20, sun_az=60, sun_strength=0.0, sun_color=(1, 1, 1), sun_angle=0.5,
                   exposure=3.5, cabin=1.0, night=True, rain=False),
-    "rain": dict(hdri="kloofendal_overcast_puresky", hdri_rot=120, hdri_strength=1.0, hdri_clamp=20,
-                 sun_elev=40, sun_az=60, sun_strength=0.0, sun_color=(1, 1, 1), sun_angle=0.5,
-                 exposure=1.8, cabin=1.0, night=False, rain=True),
+    # rain: a heavy, darker grey sky (dimmed and cooled), cabin lamps up so the car glows against it,
+    # and depth fog (dsfilm.post "fog") so the city fades into the weather
+    "rain": dict(hdri="kloofendal_overcast_puresky", hdri_rot=120, hdri_strength=0.32, hdri_clamp=20,
+                 sky_tint=(0.80, 0.86, 0.94), sun_elev=40, sun_az=60, sun_strength=0.0, sun_color=(1, 1, 1),
+                 sun_angle=0.5, exposure=2.0, cabin=2.2, night=False, rain=True,
+                 fog={"color": [0.16, 0.18, 0.21], "amount": 0.8, "start": 12.0, "depth": 260.0}),
 }
 
 HDRIS = sorted({p["hdri"] for p in PRESETS.values()})

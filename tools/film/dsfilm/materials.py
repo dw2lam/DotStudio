@@ -11,9 +11,10 @@ object scale applied (1,1,1) or the texture scales with the object.
     noise_bump(mat, scale, strength, rough_var)    # micro-surface: bump + roughness wobble
     emission(name, color, strength)
     image_mat(name, path, ...)                     # UV-mapped printed sheet (posters, signs)
-    thin_glass(name, refl=0.08)                    # window pane: see-through + Fresnel reflection
+    thin_glass(name, refl=0.08, rain=, haze=)      # window pane: see-through + Fresnel reflection; rain on it
     facade_grid(name, wall, pitch, floor_h, ...)   # procedural building wall with windows (lit at night)
 """
+import math
 import os
 
 import bpy
@@ -199,11 +200,19 @@ def image_mat(name, path, rough=0.35, coat=0.0, emit=0.0, alpha=False):
     return mat
 
 
-def thin_glass(name, tint=(0.93, 0.97, 0.95), refl=0.08, rough=0.0, rain=False, smudge=0.0):
+def thin_glass(name, tint=(0.93, 0.97, 0.95), refl=0.08, rough=0.0, rain=False, smudge=0.0, up="Y",
+               flow=(-1.0, -0.22), haze=0.0):
     """A thin pane: Transparent (no refraction offset, as a real thin pane) mixed with a Fresnel
     glossy reflection. Objects using it should also get ``visible_shadow = False`` (geometry.no_shadow)
-    so sunlight passes. With rain=True a drop-and-runnel normal is added; returns (mat, mapping) where
-    keyframing the mapping's Location z scrolls the runnels (periodic if it moves whole cells)."""
+    so sunlight passes.
+
+    rain=True adds water on the glass and returns (mat, RainDriver): beads (static) and runnels
+    that slide along `flow` (in the pane's own (along, up) axes — on a moving train the airflow
+    pushes them back and a little down). Water darkens and distorts what's behind it, catches
+    reflections, and clears little windows in the condensation (`haze`, heavier low on the pane).
+    `up` is the pane's object-space up axis ("Y" for geometry.slab panes, "Z" otherwise).
+    Call driver.set(phase) every frame with phase = t / loop (0..1) and keyframe driver.sockets;
+    the runnels use two cross-faded layers so the motion loops seamlessly."""
     mat = bpy.data.materials.new(name)
     nt, ln = _nodes(mat)
     nt.remove(nt.get("Principled BSDF"))
@@ -232,68 +241,142 @@ def thin_glass(name, tint=(0.93, 0.97, 0.95), refl=0.08, rough=0.0, rain=False, 
     mf.inputs[2].default_value = refl
     mf.use_clamp = True
     ln.new(fr.outputs[0], mf.inputs[0])
+    see = tr.outputs[0]
+    driver = None
+    if rain:
+        driver, water, v = _rain(nt, ln, gl, fr, up, flow)
+        # what's behind a drop is refracted: darker, a little cooler
+        dk = nt.new("ShaderNodeMix")
+        dk.data_type = "RGBA"
+        ln.new(water, dk.inputs[0])
+        _set(dk.inputs[6], tint)
+        _set(dk.inputs[7], tuple(c * 0.42 for c in tint))
+        ln.new(dk.outputs[2], tr.inputs["Color"])
+        # water catches much more reflection
+        wr = nt.new("ShaderNodeMath")
+        wr.operation = "MULTIPLY_ADD"
+        wr.inputs[1].default_value = 0.55
+        ln.new(water, wr.inputs[0])
+        ln.new(fr.outputs[0], wr.inputs[2])
+        ln.new(wr.outputs[0], mf.inputs[0])
+        if haze:
+            # condensation: a soft milky film, heavier toward the bottom of the pane, cleared by drops
+            low = nt.new("ShaderNodeMapRange")
+            low.inputs["From Min"].default_value = 1.45
+            low.inputs["From Max"].default_value = 1.0
+            low.inputs["To Min"].default_value = haze * 0.45
+            low.inputs["To Max"].default_value = haze
+            ln.new(v, low.inputs["Value"])
+            clear = nt.new("ShaderNodeMath")
+            clear.operation = "MULTIPLY"
+            inv = nt.new("ShaderNodeMath")
+            inv.operation = "SUBTRACT"
+            inv.inputs[0].default_value = 1.0
+            ln.new(water, inv.inputs[1])
+            ln.new(low.outputs["Result"], clear.inputs[0])
+            ln.new(inv.outputs[0], clear.inputs[1])
+            fog = nt.new("ShaderNodeBsdfDiffuse")
+            _set(fog.inputs["Color"], (0.62, 0.65, 0.66))
+            fm = nt.new("ShaderNodeMixShader")
+            ln.new(clear.outputs[0], fm.inputs["Fac"])
+            ln.new(tr.outputs[0], fm.inputs[1])
+            ln.new(fog.outputs[0], fm.inputs[2])
+            see = fm.outputs[0]
     mx = nt.new("ShaderNodeMixShader")
     ln.new(mf.outputs[0], mx.inputs["Fac"])
-    ln.new(tr.outputs[0], mx.inputs[1])
+    ln.new(see, mx.inputs[1])
     ln.new(gl.outputs[0], mx.inputs[2])
     ln.new(mx.outputs[0], out.inputs["Surface"])
     try:
         mat.surface_render_method = "BLENDED"
     except Exception:
         pass
-    mapping = None
-    if rain:
-        mapping = _rain(nt, ln, gl, fr, mf)
-    return (mat, mapping) if rain else mat
+    return (mat, driver) if rain else mat
 
 
-def _rain(nt, ln, gl, fr, mf):
+class RainDriver:
+    """Animates a rain pane's runnels: two layers slide along the flow and cross-fade, each jumping
+    back while invisible, so phase 0 and phase 1 look identical (a seamless loop)."""
+
+    def __init__(self, off_a, off_b, w_a, cycles=6, travel=2.6):
+        self.off_a, self.off_b, self.w_a = off_a, off_b, w_a
+        self.cycles, self.travel = cycles, travel
+        self.sockets = [(off_a, "default_value"), (off_b, "default_value"), (w_a, "default_value")]
+
+    def set(self, phase):
+        pa = (phase * self.cycles) % 1.0
+        pb = (pa + 0.5) % 1.0
+        self.off_a.default_value = pa * self.travel
+        self.off_b.default_value = pb * self.travel + 17.3        # a different patch of the pattern
+        self.w_a.default_value = 1.0 - abs(2.0 * pa - 1.0)
+
+
+def _rain(nt, ln, gl, fr, up, flow):
+    """Returns (driver, water mask socket, pane-up coordinate socket)."""
+    def m(op, a, b=None, c=None):
+        n = nt.new("ShaderNodeMath")
+        n.operation = op
+        for i, v in enumerate((a, b, c)):
+            if v is None:
+                continue
+            if isinstance(v, (int, float)):
+                n.inputs[i].default_value = v
+            else:
+                ln.new(v, n.inputs[i])
+        return n.outputs[0]
+
+    def value(v=0.0):
+        n = nt.new("ShaderNodeValue")
+        n.outputs[0].default_value = v
+        return n.outputs[0]
+
     tc = nt.new("ShaderNodeTexCoord")
-    mp = nt.new("ShaderNodeMapping")
-    ln.new(tc.outputs["Object"], mp.inputs["Vector"])
-    beads = nt.new("ShaderNodeTexVoronoi")
-    beads.inputs["Scale"].default_value = 45.0
-    ln.new(tc.outputs["Object"], beads.inputs["Vector"])
-    runs = nt.new("ShaderNodeTexVoronoi")
-    runs.inputs["Scale"].default_value = 14.0
-    sc = nt.new("ShaderNodeMapping")
-    sc.inputs["Scale"].default_value = (1.0, 1.0, 0.18)
-    ln.new(mp.outputs["Vector"], sc.inputs["Vector"])
-    ln.new(sc.outputs["Vector"], runs.inputs["Vector"])
-    hs = []
-    for v, gate_at, r in ((beads, 0.55, 0.20), (runs, 0.85, 0.12)):
-        mr = nt.new("ShaderNodeMapRange")
-        mr.inputs["From Max"].default_value = r
-        mr.inputs["To Min"].default_value = 1.0
-        mr.inputs["To Max"].default_value = 0.0
-        ln.new(v.outputs["Distance"], mr.inputs["Value"])
-        gate = nt.new("ShaderNodeMath")
-        gate.operation = "GREATER_THAN"
-        gate.inputs[1].default_value = gate_at
-        ln.new(v.outputs["Color"], gate.inputs[0])
-        m = nt.new("ShaderNodeMath")
-        m.operation = "MULTIPLY"
-        ln.new(mr.outputs["Result"], m.inputs[0])
-        ln.new(gate.outputs[0], m.inputs[1])
-        hs.append(m)
-    add = nt.new("ShaderNodeMath")
-    add.operation = "MAXIMUM"
-    ln.new(hs[0].outputs[0], add.inputs[0])
-    ln.new(hs[1].outputs[0], add.inputs[1])
+    sep = nt.new("ShaderNodeSeparateXYZ")
+    ln.new(tc.outputs["Object"], sep.inputs[0])
+    u, v = sep.outputs["X"], sep.outputs["Y" if up == "Y" else "Z"]
+
+    def vor(x, y, scale):
+        cb = nt.new("ShaderNodeCombineXYZ")
+        ln.new(x, cb.inputs[0])
+        ln.new(y, cb.inputs[1])
+        vo = nt.new("ShaderNodeTexVoronoi")
+        vo.inputs["Scale"].default_value = scale
+        ln.new(cb.outputs[0], vo.inputs["Vector"])
+        return vo
+
+    def drops(vo, radius, keep):
+        """Round water where the cell's random value passes `keep`, sized by that value."""
+        r = m("MULTIPLY", m("MULTIPLY_ADD", vo.outputs["Color"], 0.7, 0.5), radius)    # rgb -> its average-ish
+        prof = m("SUBTRACT", 1.0, m("DIVIDE", vo.outputs["Distance"], r))
+        prof = m("MAXIMUM", prof, 0.0)
+        dome = m("POWER", prof, 0.5)
+        gate = m("GREATER_THAN", vo.outputs["Color"], keep)
+        return m("MULTIPLY", dome, gate)
+
+    # beads: static drops of a few sizes (about 6-14 mm on a 1.4 m pane at scale 34)
+    beads = m("MAXIMUM", drops(vor(u, v, 26.0), 0.34, 0.40), drops(vor(m("ADD", u, 3.1), v, 55.0), 0.30, 0.50))
+    # runnels: drops stretched along the flow, sliding (two layers, cross-faded)
+    fx, fy = flow
+    nrm = math.hypot(fx, fy) or 1.0
+    fx, fy = fx / nrm, fy / nrm
+    along = m("ADD", m("MULTIPLY", u, fx), m("MULTIPLY", v, fy))      # distance along the flow
+    across = m("SUBTRACT", m("MULTIPLY", v, fx), m("MULTIPLY", u, fy))
+    off_a, off_b, w_a = value(0.0), value(17.3), value(0.0)
+    layers = []
+    for off in (off_a, off_b):
+        s = m("SUBTRACT", along, off)
+        vo = vor(m("MULTIPLY", s, 0.10), across, 24.0)               # cells ~42 mm across, ~0.42 m long
+        layers.append(drops(vo, 0.36, 0.60))
+    w_b = m("SUBTRACT", 1.0, w_a)
+    runs = m("ADD", m("MULTIPLY", layers[0], w_a), m("MULTIPLY", layers[1], w_b))
+    water = m("MINIMUM", m("MAXIMUM", beads, runs), 1.0)
     bump = nt.new("ShaderNodeBump")
     bump.inputs["Strength"].default_value = 1.0
-    bump.inputs["Distance"].default_value = 0.003
-    ln.new(add.outputs[0], bump.inputs["Height"])
+    bump.inputs["Distance"].default_value = 0.004
+    ln.new(water, bump.inputs["Height"])
     ln.new(bump.outputs["Normal"], gl.inputs["Normal"])
     ln.new(bump.outputs["Normal"], fr.inputs["Normal"])
-    # water catches more reflection
-    mm = nt.new("ShaderNodeMath")
-    mm.operation = "MULTIPLY_ADD"
-    mm.inputs[1].default_value = 0.25
-    ln.new(add.outputs[0], mm.inputs[0])
-    ln.new(fr.outputs[0], mm.inputs[2])
-    ln.new(mm.outputs[0], mf.inputs[0])
-    return mp
+    return RainDriver(off_a.node.outputs[0], off_b.node.outputs[0], w_a.node.outputs[0]), water, v
 
 
 def facade_grid(name, wall=(0.82, 0.80, 0.76), glass=(0.05, 0.06, 0.07), pitch=3.2, floor_h=3.0, win_w=0.55,
