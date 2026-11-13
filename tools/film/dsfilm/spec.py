@@ -12,7 +12,7 @@ stills and/or a frame sequence. A scene module (tools/film/scenes/<name>/scene.p
 
 Spec keys (all optional except "scene"):
     {
-      "scene": "commute",
+      "scene": "commute",                                # or "local" + "scene_dir": a folder with scene.py
       "variant": "day",
       "loop": {"seconds": 48, "fps": 24},
       "params": {...},                                   # scene-specific knobs
@@ -43,8 +43,9 @@ def load(path):
         return json.load(f)
 
 
-def scene_module(name):
-    path = os.path.join(FILM_ROOT, "scenes", name, "scene.py")
+def scene_module(name, scene_dir=None):
+    """tools/film/scenes/<name>/scene.py, or <scene_dir>/scene.py for a new set ("scene": "local")."""
+    path = os.path.join(scene_dir or os.path.join(FILM_ROOT, "scenes", name), "scene.py")
     d = os.path.dirname(path)
     if d not in sys.path:
         sys.path.insert(0, d)
@@ -63,7 +64,7 @@ class Ctx(SimpleNamespace):
 
 def build(spec, variant=None, engine=None, res=None, samples=None):
     variant = variant or spec.get("variant", "day")
-    mod = scene_module(spec["scene"])
+    mod = scene_module(spec["scene"], spec.get("scene_dir"))
     bpy.ops.wm.read_factory_settings(use_empty=True)
     scene = bpy.context.scene
     lp = Loop(**spec.get("loop", {}))
