@@ -6,7 +6,7 @@ others — can use it to design screensavers with you:
 
 - it reads DotStudio's **guides** first (the house style, every scene's settings, power and burn-in rules, and any guides
   you add, such as a brand guide);
-- builds a **style** from the built-in scenes and looks (or, with the scene-engine update, writes its own shader scene);
+- builds a **style** from the built-in scenes and looks, or writes its own **custom scene** (a shader DotStudio compiles on your Mac);
 - **previews** it as images (any moment, clock time, weather, with the music card) and checks its **GPU cost** at 5K;
 - and, only when you ask, sets it as your **screensaver** or **live wallpaper**. Each change shows a small notice in
   DotStudio with Undo, and Settings ▸ AI has a switch that keeps the AI from changing what plays at all.
@@ -96,7 +96,7 @@ resulting style JSON and its previews.
 | [Calm ocean at dusk, with a big clock](examples/calm-ocean-clock.md) | Reading the guide, a dusk sea + a matching clock in rotation, contact sheet, benchmark, setting the screensaver |
 | [My brand colours, from a guide](examples/brand-guide.md) | A user guide steering the palette, iterating after a preview, exporting a share file |
 | [Match my wallpaper](examples/match-my-wallpaper.md) | A scene + a look, weather and time of day |
-| [A pixel cat on an LED panel](examples/pixel-cat-led.md) | A custom scene on the `cells` engine (scene-engine update) |
+| [A pixel cat on an LED panel](examples/pixel-cat-led.md) | A custom scene on the `cells` engine |
 | [Port a Shadertoy I wrote](examples/port-shadertoy.md) | Pulling the `shadertoy` engine, licence in the manifest |
 | [A photoreal rainy café window](examples/rainy-cafe-film.md) | Film scenes: Blender check, a new set with CC0 assets, the look (bloom, halation, live grain), stills for approval, a background loop render, install |
 
@@ -119,7 +119,7 @@ apply.
 | Custom scenes | `list_engines`, `pull_engine`, `create_custom_scene`, `update_custom_scene`, `validate_custom_scene`, `list_custom_scenes` |
 | Film scenes | `film_status`, `list_film_templates`, `create_film_scene` (template + params + look: bloom, halation, live grain — or a new set), `get_film_scene`, `update_film_scene`, `render_film_stills`, `render_film_loop`, `film_job_status`, `cancel_film_job` |
 
-Custom and film scenes need DotStudio's scene-engine update and the film engine; until then those tools say so.
+Custom scenes are built in: the `metal`, `cells` and `film` engines ship with DotStudio, `shadertoy` is pulled on demand. Making film scenes needs the Blender film toolkit, which isn't in DotStudio yet: until it is, the film tools say so (film packages made elsewhere still play).
 
 ## How it stays out of your way
 
@@ -138,7 +138,7 @@ Custom and film scenes need DotStudio's scene-engine update and the film engine;
 - Protocol: MCP over stdio, newline-delimited JSON-RPC 2.0; versions 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05.
   Tools return text, `structuredContent` and PNG image content; strict JSON Schemas; argument errors come back as tool
   errors the model can fix.
-- Tests: `tools/mcp-selftest/run.sh` (200+ end-to-end checks against throwaway stores, including a stand-in running app
+- Tests: `tools/mcp-selftest/run.sh` (270+ end-to-end checks against throwaway stores, including the real scene engines and a stand-in running app
   that would overwrite direct writes). Examples: `python3 tools/mcp-selftest/examples.py <dotstudio-mcp> . <outDir>`.
 - Settings guides: `tools/guides/generate.sh` regenerates `Guides/settings/*.md` from the scene catalog (the server
   also generates them live, and the self-test fails when the checked-in copies are stale).

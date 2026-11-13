@@ -136,8 +136,8 @@ When you design a style, leave room for the corner card (bottom left by default)
 
 ## Custom and film scenes
 
-- Custom scenes (`create_custom_scene`) are small shader packages in `<store>/scenes/`; styles use them as `{"kind": "custom", "scene": "<id>"}` like any scene. They need DotStudio's scene-engine update.
-- Film scenes are photoreal video loops rendered in Blender (`read_guide engines/film`). They are BIG: Blender itself (about 1 GB, installed by the user), the film engine pack, about a minute per approval still, hours per loop, and 150–250 MB of video per variant (0.6–1 GB for all four). Always tell the user the time and disk cost before rendering, render only the variants they want, and never start a render they haven't agreed to. Playback is cheap (hardware video decode), so a finished film scene suits the live wallpaper well.
+- Custom scenes (`create_custom_scene`) are small shader packages in `<store>/scenes/`; styles use them as `{"kind": "custom", "scene": "<id>"}` like any scene. Engines: `metal` and `cells` (shaders) and `film` (video clips) are built in, `shadertoy` (GLSL) is pulled on demand (`list_engines`, `read_guide engines/<id>`).
+- Film scenes are photoreal video loops rendered in Blender (`read_guide film` for the toolkit, `engines/film` for playback). They are BIG: Blender itself (about 1 GB, installed by the user), the film toolkit, about a minute per approval still, hours per loop, and 150–250 MB of video per variant (0.6–1 GB for all four). Always tell the user the time and disk cost before rendering, render only the variants they want, and never start a render they haven't agreed to. Playback is cheap (hardware video decode), so a finished film scene suits the live wallpaper well.
 
 ## Sharing
 

@@ -57,3 +57,7 @@ screen size and never smears in the video codec.
   graded with it (the Blender toolkit's clips bake their own — leave it at 0 for those).
 Both are engine params: they appear in the Inspector under every film style, and a style stores
 them as `ds.grain` / `ds.halation` in its params. One fragment pass, ≤ 0.3 ms at 5120×2880.
+
+## Making one
+
+DotStudio's film toolkit (Blender, driven by an AI through the MCP server) renders and packages film scenes in this format: `read_guide film` has its flow, budgets and rules.

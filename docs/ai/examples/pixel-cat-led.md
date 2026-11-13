@@ -2,25 +2,30 @@
 
 > **You:** Make a little pixel cat sleeping on an LED panel, like the penguin one.
 
-_Custom scenes arrive with DotStudio's scene-engine update. This session was recorded against the self-test's stand-in engine, so the tool calls and answers are real but no preview image is shown._
-
 ```
 → list_engines({})
 ```
 ```text
-- metal v1 (metal-source), built in
 - cells v1 (cells), built in
+- film v1 (film), built in
+- metal v1 (metal-source), built in
 ```
 
 ```
 → read_guide({"id": "engines/cells"})
 ```
 ```text
-# Engine: cells (LED panels, pixels, glyph cells)
+# The `cells` engine (v1)
 
-Placeholder. The `cells` engine ships with DotStudio once custom scenes arrive; its `guide.md` replaces this page when installed.
+The CellKit look of DotStudio's Bloom scene: your scene, sampled once per cell, drawn as
+**LED dots**, **rounded LED pixels** or **glyphs** (△ ▽ C Z O ☆ · ( )) over a soft glow of its
+own light. Built on the `metal` engine — read its guide first; everything in `DotStudio.h` works.
 
-Same signature as `metal` (`float4 dsScene(float2 uv, DSContext ctx)`), but the result is colour + coverage per cell: the engine draws it as LED dots, square pixels or glyphs (the CellKit look of LED Wall and Penguin), …
+```metal
+#include <DotStudio.h>
+
+float4 dsScene(float2 uv, DSContext ctx) {
+    float2 p = …
 ```
 
 ```
@@ -48,16 +53,32 @@ float4 dsScene(float2 uv, DSContext ctx) {
 ```
 ```text
 Compiles.
-GPU ≈ 2.50 ms per frame at 5K.
-Installed as sleepy-cat-035dd8ec. Use it: create_style(effects: [{"kind": "custom", "scene": "sleepy-cat-035dd8ec"}]).
+GPU ≈ 0.94 ms per frame at 5K.
+Installed as sleepy-cat-a225ed54. Use it: create_style(effects: [{"kind": "custom", "scene": "sleepy-cat-a225ed54"}]).
 ```
 
 ```
-→ create_style({"name": "Sleepy Cat", "fps": 24, "effects": [{"kind": "custom", "scene": "sleepy-cat-035dd8ec", "params": {"zzz": true}}]})
+→ create_style({"name": "Sleepy Cat", "fps": 24, "effects": [{"kind": "custom", "scene": "sleepy-cat-a225ed54", "params": {"zzz": true, "ds.render": "Dots"}}]})
 ```
 ```text
-Created “Sleepy Cat” (8021C859-B0A4-4494-94A8-8F86C1EF2B77). DotStudio isn't running: library.json was updated; the app shows it next time it opens.
-Next: preview_style(style: "8021C859-B0A4-4494-94A8-8F86C1EF2B77") — and a contact sheet over time (frames: 6) to check the motion.
+Created “Sleepy Cat” (3A1BA0F9-D598-4474-971C-48322D42E410). DotStudio isn't running: library.json was updated; the app shows it next time it opens.
+Next: preview_style(style: "3A1BA0F9-D598-4474-971C-48322D42E410") — and a contact sheet over time (frames: 6) to check the motion.
+```
+
+```
+→ preview_style({"style": "3A1BA0F9-D598-4474-971C-48322D42E410", "t": 4, "width": 1280, "height": 800})
+```
+```text
+“Sleepy Cat” at t = 4.0 s.
+```
+
+![pixel-cat-led.jpg](img/pixel-cat-led.jpg)
+
+```
+→ benchmark_style({"style": "3A1BA0F9-D598-4474-971C-48322D42E410"})
+```
+```text
+“Sleepy Cat” at 5120×2880 on Apple M5 Pro: 0.76 ms min, 1.05 ms median GPU per frame (≈956 fps of GPU headroom). Within budget.
 ```
 
 Resulting style (as stored in `library.json`):
@@ -79,18 +100,19 @@ Resulting style (as stored in `library.json`):
         "a": 1
       },
       "custom": {
-        "id": "sleepy-cat-035dd8ec"
+        "id": "sleepy-cat-a225ed54"
       },
       "enabled": true,
-      "id": "AF2FB205-FB8D-4DF9-AF5F-7D4C0A08E966",
+      "id": "AC31C8D6-E48A-4395-ACFE-9248012BB61A",
       "params": {
         "breath": 0.5,
+        "ds.render": 2,
         "zzz": 1
       },
       "kind": "custom"
     }
   ],
-  "id": "8021C859-B0A4-4494-94A8-8F86C1EF2B77",
+  "id": "3A1BA0F9-D598-4474-971C-48322D42E410",
   "fps": 24,
   "name": "Sleepy Cat"
 }

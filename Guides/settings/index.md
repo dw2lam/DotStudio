@@ -40,6 +40,7 @@ One guide per scene (`read_guide settings/<kind>`) and one for all looks (`setti
 | `watchClock` | Chronometer | clock | medium | A fine wristwatch dial: sunburst finish, polished hands, a sweeping seconds hand. |
 | `meadow` | Meadow | sun, location, weather | medium | Rolling summer fields in the wind under a big sky; can follow the real sun, moon and weather. |
 | `flowerBloom` | Bloom |  | light | A single flower swaying in a light breeze, set in tiny glyphs or glowing cells. |
+| `waddle` | Penguin | clock | light | A little penguin on an LED panel: it waddles, waves, belly-slides, dances and dozes. |
 
 ## Looks
 
@@ -77,5 +78,16 @@ One guide per scene (`read_guide settings/<kind>`) and one for all looks (`setti
 | `risograph` | Risograph | Print & Halftone |
 | `grainWash` | Grain Wash | Color & Light |
 | `glass` | Glass | Glass & Distort |
+
+## Custom scenes
+
+Kind `custom` with `scene`: an installed scene package (`list_custom_scenes`; make one with `create_custom_scene`). Its params and colours are the package's own, plus its engine's (`list_custom_scenes`, `engines/<id>`). An engine compiles a package at run time:
+
+| engine | what you write | guide |
+|---|---|---|
+| `cells` v1 (built in) | The same dsScene function, but its alpha is coverage: drawn as glyphs, LED pixels or LED dots over a soft glow (the Bloom look). | `engines/cells` |
+| `film` v1 (built in) | Looping video clips (day, golden hour, night, rain) that follow the real sun and weather, crossfading between them. | `engines/film` |
+| `metal` v1 (built in) | Write a scene as one Metal function, float4 dsScene(float2 uv, DSContext ctx), with DotStudio's clock, sun, weather, music, params and helpers. | `engines/metal` |
+| `shadertoy` (pulled: `pull_engine`) | Shadertoy-style GLSL (`mainImage`), translated to Metal. | `engines/shadertoy` once pulled |
 
 See also `settings/app` (styles, lineup, displays, wallpaper, music) and `style/dotstudio` (taste).

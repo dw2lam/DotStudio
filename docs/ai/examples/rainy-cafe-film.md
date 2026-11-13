@@ -2,35 +2,28 @@
 
 > **You:** Can you make a photoreal one — looking out of a café window at night while it rains?
 
-_Film scenes arrive with the film engine (DotStudio's Blender toolkit). This session was recorded against the self-test's stand-in toolkit: the job flow, progress and install are real; the stills it returned were placeholders, so they aren't shown, and the scene module below is illustrative — it has not been run in Blender._
+_Making film scenes needs DotStudio's film toolkit (Blender), which isn't in DotStudio yet. This session ran against the self-test's stand-in toolkit with DotStudio's real film engine: the job flow, packaging, install and playback are real; its stills and clips are placeholders, so they aren't shown, and the scene module below is illustrative — it has not been run in Blender._
 
 ```
 → film_status({})
 ```
 ```text
-Blender: /Applications/Blender.app/Contents/MacOS/Blender (5.1.0). Film engine: not pulled (pull_engine "film"). GPU: Apple M5 Pro.
+Blender: /Applications/Blender.app/Contents/MacOS/Blender (5.1.0). Film toolkit: installed v1. GPU: Apple M5 Pro.
 test toolkit
 Steps: list_film_templates → create_film_scene → render_film_stills (approve) → render_film_loop → film_job_status → create_style.
 ```
 
-**Assistant:** Blender 5.1 is installed. This needs the film engine (a small download), about a minute per approval still, then a background render of a few hours for a 24-second loop, and roughly 300 MB for the two variants (night, rain). Go ahead?
+**Assistant:** Blender 5.1 is installed. This uses DotStudio's film toolkit: about a minute per approval still, then a background render of a few hours for a 24-second loop, and roughly 300 MB for the two variants (night, rain). Go ahead?
 
 > **You:** Go ahead.
 
 ```
-→ pull_engine({"id": "film"})
+→ read_guide({"id": "film"})
 ```
 ```text
-Installed engine film v1. Read its guide: read_guide("engines/film").
-```
+# Film scenes: the Blender toolkit (photoreal, ray-traced)
 
-```
-→ read_guide({"id": "engines/film"})
-```
-```text
-# Engine: film (photoreal, ray-traced scenes)
-
-A film scene is a real 3D set — CC0 assets, physical materials and light — built in Blender by DotStudio's film toolkit (`dsfilm`), rendered with Cycles/EEVEE into seamless video loops (one per variant: `day`, `golden`, `night`, `rain`), and played by D …
+A film scene is a real 3D set — CC0 assets, physical materials and light — built in Blender by DotStudio's film toolkit (`dsfilm`), rendered with Cycles/EEVEE into seamless video loops (one per variant: `day`, `golden`, `night`, `rain`), an …
 ```
 
 ```
@@ -46,7 +39,7 @@ A film scene is a real 3D set — CC0 assets, physical materials and light — b
 → create_film_scene({"spec": {"scene": "local", "variant": "night", "loop": {"seconds": 24, "fps": 24}, "render": {"engine": "cycles", "res": [1600, 1000], "samples": 384, "motion_blur": true}, "stills": [{"name": "night_wide", "camera": "wide", "frame": 1, "variant": "night"}, {"name": "rain_wide", "camera": "wide", "frame": 1, "variant": "rain"}], "animation": {"camera": "wide", "engine": "eevee", "res": [2560, 1600], "samples": 64}}, "name": "Rainy Café", "variants": ["night", "rain"], "look": {"bloom": 0.3, "halation": 0.35, "grain": 0.25}, "scene_files": {"scene.py": "…below…", "assets.json": "…below…"}})
 ```
 ```text
-Saved film draft film-b8ba7fcd (local, look: bloom 0.3, halation 0.35, grain 0.25). Next: render_film_stills(draft: "film-b8ba7fcd") and show the stills to the user before animating.
+Saved film draft film-8d225f17 (local, look: bloom 0.3, halation 0.35, grain 0.25). Next: render_film_stills(draft: "film-8d225f17") and show the stills to the user before animating.
 ```
 
 `scene_files["scene.py"]`:
@@ -88,10 +81,10 @@ def build(ctx):
 ```
 
 ```
-→ render_film_stills({"draft": "film-b8ba7fcd", "wait_seconds": 30})
+→ render_film_stills({"draft": "film-8d225f17", "wait_seconds": 30})
 ```
 ```text
-stills-4ee20aa7: done, 100% — stills sample 10/10. 2 still(s): night, rain. Show them to the user; when the base scene is approved, render_film_loop.
+stills-e8fc3a66: done, 100% — stills sample 10/10. 2 still(s): night, rain. Show them to the user; when the base scene is approved, render_film_loop.
 ```
 
 **Assistant:** Here are the night and rain stills. Happy with the framing and the light before I animate it? (Halation is up at 0.35 for the tungsten lamp against the dark window; grain is added live, so it won't repeat with the loop.)
@@ -99,39 +92,39 @@ stills-4ee20aa7: done, 100% — stills sample 10/10. 2 still(s): night, rain. Sh
 > **You:** A touch brighter, a little less bloom. Then animate it.
 
 ```
-→ update_film_scene({"draft": "film-b8ba7fcd", "look": {"bloom": 0.2}, "spec_patch": {"render": {"exposure": 0.3}}})
+→ update_film_scene({"draft": "film-8d225f17", "look": {"bloom": 0.2}, "spec_patch": {"render": {"exposure": 0.3}}})
 ```
 ```text
-Updated film draft film-b8ba7fcd (local, look: bloom 0.2, halation 0.35, grain 0.25). Next: render_film_stills(draft: "film-b8ba7fcd") and show the stills to the user before animating.
+Updated film draft film-8d225f17 (local, look: bloom 0.2, halation 0.35, grain 0.25). Next: render_film_stills(draft: "film-8d225f17") and show the stills to the user before animating.
 ```
 
 ```
-→ render_film_loop({"draft": "film-b8ba7fcd"})
+→ render_film_loop({"draft": "film-8d225f17"})
 ```
 ```text
-Started loop-931ee42c (night, rain). It runs in the background; check film_job_status(job: "loop-931ee42c").
+Started loop-bb439d25 (night, rain). It runs in the background; check film_job_status(job: "loop-bb439d25").
 ```
 
 ```
-→ film_job_status({"job": "loop-931ee42c"})
+→ film_job_status({"job": "loop-bb439d25"})
 ```
 ```text
-loop-931ee42c: running, 40% — loop sample 4/10, about 0 min left.
+loop-bb439d25: running, 40% — loop sample 4/10, about 0 min left.
 ```
 
 ```
-→ film_job_status({"job": "loop-931ee42c"})
+→ film_job_status({"job": "loop-bb439d25"})
 ```
 ```text
-loop-931ee42c: done, 100% — loop sample 10/10. Installed film scene film-b8ba7fcd-9605c0dc: create_style(effects: [{"kind": "custom", "scene": "film-b8ba7fcd-9605c0dc"}]).
+loop-bb439d25: done, 100% — loop sample 10/10. Installed film scene film-8d225f17-6e58f0eb: create_style(effects: [{"kind": "custom", "scene": "film-8d225f17-6e58f0eb"}]).
 ```
 
 ```
-→ create_style({"name": "Rainy Café", "fps": 24, "effects": [{"kind": "custom", "scene": "film-b8ba7fcd-9605c0dc", "params": {"grain": 0.25}}]})
+→ create_style({"name": "Rainy Café", "fps": 24, "effects": [{"kind": "custom", "scene": "film-8d225f17-6e58f0eb", "params": {"ds.grain": 0.25}}]})
 ```
 ```text
-Created “Rainy Café” (45E97DF1-A18C-4D38-AE98-D5338352A0A4). DotStudio isn't running: library.json was updated; the app shows it next time it opens.
-Next: preview_style(style: "45E97DF1-A18C-4D38-AE98-D5338352A0A4") — and a contact sheet over time (frames: 6) to check the motion.
+Created “Rainy Café” (3E3598B6-7210-4152-9B2C-F15C5B70FC65). DotStudio isn't running: library.json was updated; the app shows it next time it opens.
+Next: preview_style(style: "3E3598B6-7210-4152-9B2C-F15C5B70FC65") — and a contact sheet over time (frames: 6) to check the motion.
 ```
 
 **Assistant:** “Rainy Café” is in your library. It's video, so it's light on the GPU — a good live wallpaper too.
