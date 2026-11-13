@@ -1,65 +1,48 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion, type Transition } from "framer-motion";
-import { Check, Pause, Play } from "lucide-react";
+import { ArrowUp, Pause, Play } from "lucide-react";
 import { WordsPullUpMultiStyle } from "../components/animations/WordsPullUpMultiStyle";
-import { MCP_MEDIA, VARIANTS } from "./mcpMedia";
+import { MCP_MEDIA } from "./mcpMedia";
 import {
+  BEATS,
   BUILD_STEPS,
-  CHAPTERS,
+  CHAT,
+  COMMAND,
   DURATION,
-  LOG,
   PROMPT,
   RENDER,
   SENT,
-  TYPE_END,
-  TYPE_START,
-  type ChapterId,
-  type Entry,
+  TOOLS,
+  composerAt,
+  type BeatId,
+  type Message,
 } from "./aiSequence";
 
 /*
- * The section after the hero (the hero's NEW pill links here): DotStudio's MCP server, shown working. One ~38 s pass of a real
- * session (aiSequence.ts): the prompt is typed, the AI's tool calls arrive in the log, the
- * stage shows Blender building the scene (layout → clay → materials → light → look), the
- * loop rendering, and the finished loop playing on a Mac display.
+ * "Now with MCP": a short chat with DotStudio connected over MCP, beside the scene it makes,
+ * then three tiny setup steps. The demo (aiSequence.ts) runs ~30 s in four beats: the prompt
+ * (the blank cycles through ideas), building and one tweak, a render (only some scenes need
+ * one), and the result playing on a Mac display.
  *
- * The clock only runs while the sequence is on screen and the tab is visible; it can be paused,
- * and the chapter tabs seek. Media loads a chapter ahead. Under prefers-reduced-motion there
- * is no clock at all: a static storyboard of the four chapters stands in.
- *
- * QA hook: `?ai=<seconds>` opens the sequence paused at that moment.
+ * It only runs while on screen and the tab is visible; it can be paused and the beat dots
+ * seek. Media loads a beat ahead. Under prefers-reduced-motion: four still frames instead.
+ * QA hook: `?ai=<seconds>` opens it paused at that moment.
  */
 
 const CREAM = "#E1E0CC";
-const EASE = [0.16, 1, 0.3, 1] as const;
-/** The soft, critically damped spring the Now Playing demo uses. */
 const SPRING: Transition = { type: "spring", duration: 1.0, bounce: 0 };
+const DOCS = "https://github.com/dw2lam/DotStudio/tree/main/docs/ai";
+const DOWNLOAD = "https://github.com/dw2lam/DotStudio/releases/latest/download/DotStudio.dmg";
 
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
-const num = (n: number) => n.toLocaleString("en-US");
 
-function chapterAt(t: number): ChapterId {
-  let id: ChapterId = "ask";
-  for (const c of CHAPTERS) if (t >= c.start) id = c.id;
+function beatAt(t: number): BeatId {
+  let id: BeatId = "prompt";
+  for (const b of BEATS) if (t >= b.start) id = b.id;
   return id;
 }
 
-/** The loop render's progress at `t`, as film_job_status would report it. */
-function renderAt(t: number) {
-  const p = clamp01((t - RENDER.start) / (RENDER.end - RENDER.start));
-  const total = RENDER.framesPerVariant * RENDER.variants.length;
-  const frame = Math.min(total - 1, Math.floor(p * total));
-  const vi = Math.floor(frame / RENDER.framesPerVariant);
-  return {
-    p,
-    variant: RENDER.variants[vi],
-    vi,
-    frame: Math.max(1, frame - vi * RENDER.framesPerVariant),
-    minutes: Math.round((1 - p) * RENDER.minutes),
-  };
-}
-
-// --- The clock ---------------------------------------------------------------------------
+// --- Clock and visibility -----------------------------------------------------------------
 
 function initialSeek(): number | null {
   if (typeof window === "undefined") return null;
@@ -68,7 +51,7 @@ function initialSeek(): number | null {
   return Number.isFinite(n) ? Math.min(DURATION - 0.01, Math.max(0, n)) : null;
 }
 
-/** Seconds into the sequence; advances (and wraps) only while `running`. ~20 updates a second. */
+/** Seconds into the demo; advances (and wraps) only while `running`. ~20 updates a second. */
 function useClock(running: boolean, start: number) {
   const [t, setT] = useState(start);
   const tRef = useRef(start);
@@ -78,8 +61,7 @@ function useClock(running: boolean, start: number) {
     let last = performance.now();
     let shown = last;
     const tick = (now: number) => {
-      // A long frame (a background tab, a jank) doesn't jump the story ahead.
-      const dt = Math.min(0.1, (now - last) / 1000);
+      const dt = Math.min(0.1, (now - last) / 1000); // a long frame doesn't jump the story
       last = now;
       const next = tRef.current + dt;
       const wrapped = next >= DURATION;
@@ -133,11 +115,11 @@ function useTabVisible() {
 export function MCPDemo() {
   const reduced = useReducedMotion() ?? false;
   return (
-    <section id="ai" aria-labelledby="ai-title" className="relative scroll-mt-4 bg-black px-4 py-20 sm:py-28 md:py-32">
+    <section id="mcp" aria-labelledby="mcp-title" className="relative scroll-mt-4 bg-black px-4 py-20 sm:py-28 md:py-32">
       <div className="mx-auto max-w-7xl">
-        <header className="mb-8 flex flex-col gap-4 sm:mb-12 lg:flex-row lg:items-end lg:justify-between lg:gap-10">
+        <header className="mb-8 sm:mb-12">
           <h2
-            id="ai-title"
+            id="mcp-title"
             className="text-4xl font-medium leading-[0.95] tracking-[-0.04em] sm:text-5xl md:text-6xl"
             style={{ color: CREAM }}
           >
@@ -149,140 +131,276 @@ export function MCPDemo() {
               ]}
             />
           </h2>
-          <p className="max-w-md text-sm leading-relaxed text-gray-400 md:text-base lg:pb-1 lg:text-right">
-            Claude, or any MCP app, can build, render and set screensavers in DotStudio.{" "}
-            <a
-              href="#how-it-works"
-              className="whitespace-nowrap text-primary/85 underline decoration-white/20 underline-offset-4 transition-colors hover:text-primary"
-            >
-              How it works
-            </a>
+          <p className="mt-4 max-w-xl text-sm leading-relaxed text-gray-400 md:text-base">
+            Any MCP app, on any model, can now make screensavers with DotStudio.
           </p>
         </header>
 
-        <div className="grid grid-cols-1 gap-x-10 gap-y-6 lg:grid-cols-12">
-          {reduced ? (
-            <div className="lg:col-span-12">
-              <Storyboard />
-            </div>
-          ) : (
-            <Sequence />
-          )}
-        </div>
+        {reduced ? <Storyboard /> : <Demo />}
+        <Setup />
       </div>
     </section>
   );
 }
 
-// --- The animated sequence -----------------------------------------------------------------
+/** Three tiny steps, inline. */
+function Setup() {
+  const k = "text-gray-300";
+  return (
+    <ol className="mt-10 grid grid-cols-1 gap-x-8 gap-y-4 border-t border-white/10 pt-6 text-xs leading-relaxed text-gray-500 sm:mt-12 sm:text-sm md:grid-cols-3">
+      <li>
+        <span className="mr-2 font-serif italic text-primary/40">01</span>
+        <a href={DOWNLOAD} target="_blank" rel="noopener noreferrer" className={`${k} transition-colors hover:text-primary`}>
+          Get DotStudio
+        </a>
+        , in Applications.
+      </li>
+      <li>
+        <span className="mr-2 font-serif italic text-primary/40">02</span>
+        <span className={k}>Connect your AI app</span> in Settings › AI: one click for Claude Desktop, or copy the
+        command or JSON for any MCP app.
+      </li>
+      <li>
+        <span className="mr-2 font-serif italic text-primary/40">03</span>
+        <span className={k}>Ask.</span> Film scenes need Blender 5.1+.{" "}
+        <a
+          href={DOCS}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="whitespace-nowrap underline decoration-white/20 underline-offset-4 transition-colors hover:text-primary"
+        >
+          Setup guide
+        </a>
+      </li>
+    </ol>
+  );
+}
 
-function Sequence() {
+// --- The demo ------------------------------------------------------------------------------
+
+function Demo() {
   const seekFrom = useRef(initialSeek()).current;
   const [rootRef, onScreen] = useOnScreen<HTMLDivElement>();
   const tabVisible = useTabVisible();
   const [paused, setPaused] = useState(seekFrom !== null);
-  const [t, seek] = useClock(onScreen && tabVisible && !paused, seekFrom ?? 0);
-  const chapter = chapterAt(t);
-  const ci = CHAPTERS.findIndex((c) => c.id === chapter);
+  const running = onScreen && tabVisible && !paused;
+  const [t, seek] = useClock(running, seekFrom ?? 0);
+  const beat = beatAt(t);
+  const bi = BEATS.findIndex((b) => b.id === beat);
 
-  // Load a chapter ahead: the build stills while the prompt types, the loop before Play.
+  // Load a beat ahead: the build stills while the prompt types, the loop while rendering.
   const [armed, setArmed] = useState(0);
-  const want = t >= 17 || ci >= 3 ? 3 : t >= 7 || ci >= 2 ? 2 : t >= 1.2 || ci >= 1 ? 1 : 0;
+  const want = t >= 13 || bi >= 2 ? 2 : t >= 1 || bi >= 1 ? 1 : 0;
   useEffect(() => {
     if (onScreen && want > armed) setArmed(want);
   }, [onScreen, want, armed]);
 
-  const running = onScreen && tabVisible && !paused;
+  return (
+    <div ref={rootRef} className="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:gap-6">
+      <p className="sr-only">
+        A demonstration: in an AI app with DotStudio connected over MCP, someone asks “{PROMPT}”. DotStudio builds
+        the scene, the light is made warmer on request, the scene renders, and it is set as the Mac's screensaver.
+      </p>
+      <Chat t={t} className="lg:col-span-4" />
+      <div className="min-w-0 lg:col-span-8">
+        <Stage t={t} beat={beat} armed={armed} running={running} />
+        <div className="mt-4 flex items-center justify-between">
+          <div role="group" aria-label="Steps" className="flex items-center gap-1">
+            {BEATS.map((b) => {
+              const on = b.id === beat;
+              return (
+                <button
+                  key={b.id}
+                  type="button"
+                  aria-label={b.name}
+                  aria-current={on ? "step" : undefined}
+                  onClick={() => seek(b.start + 0.01)}
+                  className="group flex h-8 items-center px-1"
+                >
+                  <span
+                    className={`block h-1.5 rounded-full transition-all duration-500 ${
+                      on ? "w-6 bg-primary/80" : "w-1.5 bg-white/20 group-hover:bg-white/40"
+                    }`}
+                  />
+                </button>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            onClick={() => setPaused((p) => !p)}
+            aria-label={paused ? "Play the demonstration" : "Pause the demonstration"}
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-white/[0.06] text-gray-400 transition-colors hover:bg-white/[0.1] hover:text-primary"
+          >
+            {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Chat ----------------------------------------------------------------------------------
+
+/** "/mcp DotStudio" set apart from the rest of a message. */
+function WithCommand({ text }: { text: string }) {
+  if (!text.startsWith("/")) return <>{text}</>;
+  const head = text.slice(0, COMMAND.length);
   return (
     <>
-      <div ref={rootRef} className="min-w-0 lg:col-span-8">
-        <p className="sr-only">
-          A demonstration, in four chapters. Ask: “{PROMPT}” The AI calls DotStudio's tools get_started, read_guide,
-          film_status and list_film_templates. Build: create_film_scene starts from the Commute template; Blender
-          builds the set, then clay, materials, ray-traced light and the film look; render_film_stills shows three
-          stills, and the user approves. Render: render_film_loop renders a seamless loop for day, golden hour and
-          night in the background, checked with film_job_status. Play: create_style and set_screensaver, and the
-          loop plays as the Mac's screensaver.
-        </p>
-        <Stage t={t} chapter={chapter} armed={armed} running={running} />
-        <Chapters t={t} chapter={chapter} paused={paused} onSeek={seek} onToggle={() => setPaused((p) => !p)} />
-      </div>
-      <Log t={t} className="lg:col-span-4" />
+      <span className="font-mono text-[0.92em] text-primary">{head}</span>
+      {text.slice(COMMAND.length)}
     </>
+  );
+}
+
+function Chat({ t, className = "" }: { t: number; className?: string }) {
+  const shown = CHAT.filter((m) => m.at <= t);
+  const typed = composerAt(t);
+  const typing = t < SENT;
+  return (
+    <div
+      aria-hidden="true"
+      className={`flex h-[300px] flex-col overflow-hidden rounded-2xl bg-[#141414] ring-1 ring-white/[0.06] sm:h-[320px] lg:h-auto ${className}`}
+    >
+      <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-3 text-xs">
+        <span className="text-gray-400">Your AI app</span>
+        <span className="flex items-center gap-1.5 text-gray-500">
+          <span className="h-1.5 w-1.5 rounded-full bg-[#7fbf8a]" />
+          DotStudio
+        </span>
+      </div>
+
+      <div
+        className="relative min-h-0 flex-1"
+        style={{
+          maskImage: "linear-gradient(to bottom, transparent 0, #000 22%)",
+          WebkitMaskImage: "linear-gradient(to bottom, transparent 0, #000 22%)",
+        }}
+      >
+        <div className="absolute inset-x-0 bottom-0 flex flex-col gap-2.5 px-4 pb-3">
+          <AnimatePresence initial={false}>
+            {shown.map((m) => (
+              <motion.div
+                key={m.at}
+                layout="position"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, transition: { duration: 0.3 } }}
+                transition={SPRING}
+                className={m.from === "you" ? "flex justify-end" : ""}
+              >
+                <Bubble m={m} />
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        </div>
+      </div>
+
+      <div className="px-3 pb-3">
+        <div className="flex min-h-[44px] items-end gap-2 rounded-xl bg-black/40 py-2 pl-3 pr-2 ring-1 ring-white/[0.06]">
+          <p className="min-w-0 flex-1 py-1 text-[13px] leading-snug text-gray-200">
+            {typed ? <WithCommand text={typed} /> : <span className="text-gray-600">Ask anything</span>}
+            {typing && typed && <span className="caret-blink ml-px inline-block h-[1em] w-px translate-y-[0.15em] bg-primary" />}
+          </p>
+          <span
+            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors duration-300 ${
+              typed ? "bg-primary text-black" : "bg-white/[0.06] text-gray-600"
+            }`}
+          >
+            <ArrowUp className="h-3.5 w-3.5" />
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Bubble({ m }: { m: Message }) {
+  if (m.from === "you") {
+    return (
+      <p className="max-w-[88%] rounded-2xl rounded-br-md bg-white/[0.08] px-3.5 py-2 text-[13px] leading-snug text-gray-100">
+        <WithCommand text={m.text} />
+      </p>
+    );
+  }
+  return (
+    <div className="max-w-[92%] text-[13px] leading-snug text-gray-300">
+      <p>{m.text}</p>
+      {m.tools && (
+        <p
+          className="mt-1.5 flex gap-1 overflow-hidden whitespace-nowrap"
+          style={{ maskImage: "linear-gradient(to right, #000 85%, transparent)", WebkitMaskImage: "linear-gradient(to right, #000 85%, transparent)" }}
+        >
+          {TOOLS.map((tool) => (
+            <span key={tool} className="rounded-md bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10px] text-gray-500">
+              {tool}
+            </span>
+          ))}
+        </p>
+      )}
+    </div>
   );
 }
 
 // --- Stage ---------------------------------------------------------------------------------
 
-function Stage({ t, chapter, armed, running }: { t: number; chapter: ChapterId; armed: number; running: boolean }) {
-  const play = chapter === "play";
-  const r = renderAt(t);
-
-  let step = BUILD_STEPS[0];
+function Stage({ t, beat, armed, running }: { t: number; beat: BeatId; armed: number; running: boolean }) {
+  const enjoy = beat === "enjoy";
+  let step: (typeof BUILD_STEPS)[number] | null = null;
   for (const s of BUILD_STEPS) if (t >= s.at) step = s;
-
-  // Which picture is up.
-  const showing =
-    chapter === "build"
-      ? `build:${step.id}`
-      : chapter === "render"
-        ? t < RENDER.start + 0.8
-          ? "noisy"
-          : `frame:${r.variant}`
-        : play
-          ? "final"
-          : "none";
+  const rendering = beat === "render";
+  const progress = clamp01((t - RENDER.start) / (RENDER.end - RENDER.start));
 
   const videoRef = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
-    if (play && running) v.play().catch(() => {});
+    if (enjoy && running) v.play().catch(() => {});
     else v.pause();
-  }, [play, running, armed]);
+  }, [enjoy, running, armed]);
 
   return (
-    <div className="relative aspect-[16/10] w-full" style={{ containerType: "inline-size" }}>
+    <div className="relative aspect-[16/10] w-full">
       {/* The screen: fills the stage while building, then settles into a Mac display. */}
       <motion.div
         className="absolute inset-0 overflow-hidden bg-[#0f0f0e]"
         initial={false}
         animate={
-          play
+          enjoy
             ? {
                 scale: 0.8,
                 y: "-7.5%",
                 borderRadius: 10,
-                boxShadow:
-                  "0 0 0 9px #050505, 0 0 0 10px rgba(255,255,255,0.13), 0 40px 90px -30px rgba(0,0,0,0.95)",
+                boxShadow: "0 0 0 9px #050505, 0 0 0 10px rgba(255,255,255,0.13), 0 40px 90px -30px rgba(0,0,0,0.95)",
               }
             : {
                 scale: 1,
                 y: "0%",
-                borderRadius: 14,
+                borderRadius: 16,
                 boxShadow: "0 0 0 0px #050505, 0 0 0 1px rgba(255,255,255,0.06), 0 30px 80px -30px rgba(0,0,0,0.9)",
               }
         }
         transition={SPRING}
       >
-        <AskLayer t={t} on={chapter === "ask"} />
+        {/* Before anything is built: just the app, waiting. */}
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 z-[3] flex items-center justify-center bg-[radial-gradient(50%_50%_at_50%_50%,rgba(222,219,200,0.06),transparent_70%)] transition-opacity duration-700"
+          style={{ opacity: step ? 0 : 1 }}
+        >
+          <img src="/icon.png" alt="" width={56} height={56} className="h-12 w-12 rounded-xl opacity-60 sm:h-14 sm:w-14" />
+        </div>
 
         {armed >= 1 &&
           BUILD_STEPS.map((s) => (
-            <Still key={s.id} src={MCP_MEDIA.build[s.id]} on={showing === `build:${s.id}`} />
+            <Still key={s.id} src={MCP_MEDIA.build[s.id]} on={!enjoy && step?.id === s.id} />
           ))}
+
         {armed >= 2 && (
-          <>
-            <Still src={MCP_MEDIA.render.noisy} on={showing === "noisy"} still />
-            {VARIANTS.map((v) => (
-              <Still key={v} src={MCP_MEDIA.render.frames[v]} on={showing === `frame:${v}`} still />
-            ))}
-          </>
-        )}
-        {armed >= 3 && (
           <div
             className="absolute inset-0 transition-opacity duration-1000 ease-out"
-            style={{ opacity: play ? 1 : 0, zIndex: play ? 3 : 1 }}
+            style={{ opacity: enjoy ? 1 : 0, zIndex: enjoy ? 3 : 1 }}
           >
             <img
               src={MCP_MEDIA.final.poster}
@@ -310,70 +428,63 @@ function Stage({ t, chapter, armed, running }: { t: number; chapter: ChapterId; 
           </div>
         )}
 
-        {/* Live film grain: DotStudio adds it at playback, so it's live here too. */}
+        {/* Live grain, as DotStudio adds it at playback. */}
         <div
           aria-hidden="true"
           className={`noise-overlay pointer-events-none absolute inset-0 z-[4] mix-blend-overlay transition-opacity duration-700 ${
             running ? "grain-live" : ""
           }`}
-          style={{ opacity: play || (chapter === "build" && step.id === "graded") ? 0.42 : 0 }}
+          style={{ opacity: enjoy ? 0.4 : 0 }}
         />
 
-        {/* Blender's chapters get a quiet scrim and their captions. */}
+        {/* Rendering: the picture dims, one small bar. */}
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 z-[5] bg-gradient-to-t from-black/70 via-black/0 to-black/25 transition-opacity duration-700"
-          style={{ opacity: chapter === "build" || chapter === "render" ? 1 : 0 }}
-        />
-        <Corner on={chapter === "build" || chapter === "render"}>
-          Blender 5.1 · {chapter === "render" ? "EEVEE" : step.id === "lit" || step.id === "graded" ? "Cycles" : "Viewport"}
-        </Corner>
-        <StepCaption chapter={chapter} step={step} />
-        <RenderReadout on={chapter === "render"} r={r} />
+          className="absolute inset-0 z-[5] flex items-center justify-center bg-black/45 transition-opacity duration-500"
+          style={{ opacity: rendering ? 1 : 0 }}
+        >
+          <div className="w-[38%] min-w-[150px] text-center">
+            <p className="text-xs text-white/85 sm:text-sm">{progress >= 1 ? "Rendered" : "Rendering…"}</p>
+            <div className="mt-2.5 h-[3px] overflow-hidden rounded-full bg-white/20">
+              <div className="h-full rounded-full bg-primary" style={{ width: `${progress * 100}%` }} />
+            </div>
+          </div>
+        </div>
       </motion.div>
 
-      {/* The display's stand, rising in under the screen. */}
-      <motion.div
-        aria-hidden="true"
-        className="absolute left-1/2 top-[83%] h-[12.5%] w-[15%] -translate-x-1/2"
-        initial={false}
-        animate={{ opacity: play ? 1 : 0, y: play ? 0 : 12 }}
-        transition={play ? { ...SPRING, delay: 0.25 } : { duration: 0.3 }}
-      >
-        <div className="mx-auto h-[86%] w-full rounded-b-[3px] bg-gradient-to-b from-[#1c1c1c] via-[#2a2a29] to-[#232322]" />
-        <div className="mx-[-55%] h-[14%] rounded-[3px] bg-gradient-to-b from-[#3a3a38] to-[#1d1d1c] shadow-[0_8px_20px_rgba(0,0,0,0.6)]" />
-      </motion.div>
-
-      {/* What's playing, beside the stand. */}
-      <motion.div
-        className="absolute bottom-[1.5%] left-[10%] hidden max-w-[32%] sm:block"
-        initial={false}
-        animate={{ opacity: play && t >= 29.2 ? 1 : 0, y: play && t >= 29.2 ? 0 : 6 }}
-        transition={{ duration: 0.6, ease: EASE }}
-      >
-        <p className="truncate text-[11px] leading-tight sm:text-sm" style={{ color: CREAM }}>
-          Morning Commute
-        </p>
-        <p className="truncate text-[10px] leading-tight text-gray-500 sm:text-xs">Your screensaver now</p>
-      </motion.div>
+      <Stand on={enjoy} />
     </div>
   );
 }
 
+function Stand({ on, still = false }: { on: boolean; still?: boolean }) {
+  return (
+    <motion.div
+      aria-hidden="true"
+      className="absolute left-1/2 top-[83%] h-[12.5%] w-[15%] -translate-x-1/2"
+      initial={false}
+      animate={{ opacity: on ? 1 : 0, y: on ? 0 : 12 }}
+      transition={still ? { duration: 0 } : on ? { ...SPRING, delay: 0.25 } : { duration: 0.3 }}
+    >
+      <div className="mx-auto h-[86%] w-full rounded-b-[3px] bg-gradient-to-b from-[#1c1c1c] via-[#2a2a29] to-[#232322]" />
+      <div className="mx-[-55%] h-[14%] rounded-[3px] bg-gradient-to-b from-[#3a3a38] to-[#1d1d1c] shadow-[0_8px_20px_rgba(0,0,0,0.6)]" />
+    </motion.div>
+  );
+}
+
 /** One full-frame still that fades in over whatever is up, then holds with a slow push-in. */
-function Still({ src, on, still = false }: { src: string; on: boolean; still?: boolean }) {
+function Still({ src, on }: { src: string; on: boolean }) {
   const style: CSSProperties = on
     ? {
         opacity: 1,
         zIndex: 2,
-        transform: still ? "scale(1)" : "scale(1.04)",
+        transform: "scale(1.04)",
         transition: "opacity 900ms cubic-bezier(0.4,0,0.2,1), transform 9s cubic-bezier(0.2,0,0.4,1)",
       }
     : {
         opacity: 0,
         zIndex: 1,
         transform: "scale(1)",
-        // Stay up under the next picture while it fades in, then go.
         transition: "opacity 400ms ease 900ms, transform 0s linear 1300ms",
       };
   return (
@@ -389,377 +500,82 @@ function Still({ src, on, still = false }: { src: string; on: boolean; still?: b
   );
 }
 
-function AskLayer({ t, on }: { t: number; on: boolean }) {
-  const n = Math.round(clamp01((t - TYPE_START) / (TYPE_END - TYPE_START)) * PROMPT.length);
-  const typing = t < SENT;
-  const tool = [...LOG].reverse().find((e): e is Extract<Entry, { kind: "tool" }> => e.kind === "tool" && e.at <= t);
-  return (
-    <div
-      aria-hidden="true"
-      className="absolute inset-0 z-[3] flex flex-col justify-between p-[5.5cqw] transition-opacity duration-700"
-      style={{ opacity: on ? 1 : 0, pointerEvents: on ? "auto" : "none" }}
-    >
-      <div
-        className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(70%_60%_at_30%_35%,rgba(222,219,200,0.06),transparent_70%)]"
-      />
-      <div>
-        <p
-          className="font-serif italic leading-[1.12] text-primary"
-          style={{ fontSize: "max(17px, 4.3cqw)" }}
-        >
-          <span className="font-serif">{PROMPT.slice(0, n)}</span>
-          <span
-            className={`ml-[0.06em] inline-block h-[0.95em] w-[2px] translate-y-[0.14em] bg-primary/80 ${
-              typing ? "caret-blink" : "opacity-0"
-            }`}
-          />
-          {/* Reserve the whole prompt's space, so nothing moves as it types. */}
-          <span className="invisible font-serif">{PROMPT.slice(n)}</span>
-        </p>
-      </div>
-      <div className="h-[max(16px,2.2cqw)] text-[max(10px,1.45cqw)] text-gray-500">
-        <AnimatePresence mode="wait">
-          {tool && (
-            <motion.span
-              key={tool.name}
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.3 }}
-              className="inline-flex items-center gap-2"
-            >
-              <Dot done={t >= tool.done} />
-              <span>
-                DotStudio · <span className="font-mono text-gray-300">{tool.name}</span>
-              </span>
-            </motion.span>
-          )}
-        </AnimatePresence>
-      </div>
-    </div>
-  );
-}
+// --- Reduced motion: four still frames -----------------------------------------------------
 
-function Corner({ on, children }: { on: boolean; children: ReactNode }) {
+function Frame({ children }: { children: ReactNode }) {
   return (
-    <div
-      aria-hidden="true"
-      className="absolute left-[2.4cqw] top-[2.2cqw] z-[6] flex items-center gap-1.5 text-[max(9px,1.2cqw)] tracking-wide text-white/70 transition-opacity duration-500"
-      style={{ opacity: on ? 1 : 0 }}
-    >
-      <span className="h-1.5 w-1.5 rounded-full bg-[#e8a33c] shadow-[0_0_8px_#e8a33c]" />
+    <div className="relative aspect-[16/10] overflow-hidden rounded-xl bg-[#0f0f0e] ring-1 ring-white/[0.06]" aria-hidden="true">
       {children}
     </div>
   );
 }
 
-function StepCaption({ chapter, step }: { chapter: ChapterId; step: (typeof BUILD_STEPS)[number] }) {
-  const on = chapter === "build";
+function Img({ src }: { src: string }) {
   return (
-    <div aria-hidden="true" className="absolute bottom-[2.6cqw] left-[2.6cqw] right-[2.6cqw] z-[6]">
-      <AnimatePresence mode="wait">
-        {on && (
-          <motion.div
-            key={step.id}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.45, ease: EASE }}
-            className="flex items-baseline gap-2 text-[max(11px,1.55cqw)]"
-          >
-            <span className="font-serif italic text-primary/60">
-              {String(BUILD_STEPS.findIndex((s) => s.id === step.id) + 1).padStart(2, "0")}
-            </span>
-            <span style={{ color: CREAM }}>{step.name}</span>
-            <span className="truncate text-white/55">{step.detail}</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+    <img
+      src={src}
+      alt=""
+      width={MCP_MEDIA.width}
+      height={MCP_MEDIA.height}
+      loading="lazy"
+      decoding="async"
+      className="absolute inset-0 h-full w-full object-cover"
+    />
   );
 }
-
-function RenderReadout({ on, r }: { on: boolean; r: ReturnType<typeof renderAt> }) {
-  return (
-    <div
-      aria-hidden="true"
-      className="absolute inset-x-[2.6cqw] bottom-[2.4cqw] z-[6] transition-opacity duration-500"
-      style={{ opacity: on ? 1 : 0 }}
-    >
-      <div className="flex items-end justify-between gap-3 text-[max(10px,1.45cqw)] leading-tight">
-        <div className="min-w-0">
-          <div className="hidden items-center gap-[1.4cqw] text-white/55 sm:flex">
-            {RENDER.variants.map((v, i) => (
-              <span key={v} className={`inline-flex items-center gap-1 ${i === r.vi ? "text-white" : ""}`}>
-                {i < r.vi || r.p >= 1 ? (
-                  <Check className="h-[1.1em] w-[1.1em] text-primary" />
-                ) : (
-                  <span
-                    className={`inline-block h-[0.5em] w-[0.5em] rounded-full ${i === r.vi ? "bg-primary" : "border border-white/40"}`}
-                  />
-                )}
-                {v === "golden" ? "Golden" : v === "day" ? "Day" : "Night"}
-              </span>
-            ))}
-          </div>
-          <div className="mt-[0.6cqw] tabular-nums" style={{ color: CREAM }}>
-            <span className="sm:hidden">{r.variant === "golden" ? "Golden" : r.variant === "day" ? "Day" : "Night"} · </span>
-            Frame {num(r.frame)} <span className="text-white/50">of {num(RENDER.framesPerVariant)}</span>
-          </div>
-        </div>
-        <div className="shrink-0 text-right tabular-nums text-white/60">
-          <div className="hidden sm:block">Sped up</div>
-          <div className="mt-[0.6cqw]">{r.p >= 1 ? "Done" : `about ${r.minutes} min left`}</div>
-        </div>
-      </div>
-      <div className="mt-[1.2cqw] h-[2px] overflow-hidden rounded-full bg-white/15">
-        <div className="h-full rounded-full bg-primary" style={{ width: `${r.p * 100}%` }} />
-      </div>
-    </div>
-  );
-}
-
-// --- Chapters ------------------------------------------------------------------------------
-
-function Chapters({
-  t,
-  chapter,
-  paused,
-  onSeek,
-  onToggle,
-}: {
-  t: number;
-  chapter: ChapterId;
-  paused: boolean;
-  onSeek: (s: number) => void;
-  onToggle: () => void;
-}) {
-  return (
-    <div className="mt-4 flex items-start gap-3 sm:mt-5 sm:gap-4">
-      <div role="group" aria-label="Chapters" className="grid flex-1 grid-cols-4 gap-2 sm:gap-3">
-        {CHAPTERS.map((c, i) => {
-          const end = CHAPTERS[i + 1]?.start ?? DURATION;
-          const fill = clamp01((t - c.start) / (end - c.start));
-          const on = c.id === chapter;
-          return (
-            <button
-              key={c.id}
-              type="button"
-              aria-current={on ? "step" : undefined}
-              onClick={() => onSeek(c.start + 0.01)}
-              className="group text-left"
-            >
-              <span className="block h-[2px] overflow-hidden rounded-full bg-white/10">
-                <span className="block h-full rounded-full bg-primary/80" style={{ width: `${fill * 100}%` }} />
-              </span>
-              <span className="mt-2 flex items-baseline gap-1.5 text-xs sm:text-sm">
-                <span className="hidden font-serif italic text-primary/40 sm:inline">{c.n}</span>
-                <span
-                  className={`transition-colors duration-300 ${on ? "text-primary" : "text-gray-500 group-hover:text-gray-300"}`}
-                >
-                  {c.name}
-                </span>
-              </span>
-            </button>
-          );
-        })}
-      </div>
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-label={paused ? "Play the demonstration" : "Pause the demonstration"}
-        className="-mt-1.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/[0.06] text-gray-300 transition-colors hover:bg-white/[0.1] hover:text-primary"
-      >
-        {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
-      </button>
-    </div>
-  );
-}
-
-// --- Log -----------------------------------------------------------------------------------
-
-function Dot({ done }: { done: boolean }) {
-  return done ? (
-    <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-primary/15">
-      <Check className="h-2.5 w-2.5 text-primary" strokeWidth={3} />
-    </span>
-  ) : (
-    <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-[1.5px] border-white/15 border-t-primary" />
-  );
-}
-
-function Log({ t, className = "" }: { t: number; className?: string }) {
-  const shown = LOG.filter((e) => e.at <= t);
-  return (
-    <div aria-hidden="true" className={className}>
-      <div
-        className="relative h-[176px] overflow-hidden sm:h-[196px] lg:h-full lg:min-h-[300px]"
-        style={{
-          maskImage: "linear-gradient(to bottom, transparent 0, #000 34%)",
-          WebkitMaskImage: "linear-gradient(to bottom, transparent 0, #000 34%)",
-        }}
-      >
-        <div className="absolute inset-x-0 bottom-0 flex flex-col gap-3">
-          <AnimatePresence initial={false}>
-            {shown.map((e) => (
-              <motion.div
-                key={`${e.kind}-${e.at}`}
-                layout="position"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, transition: { duration: 0.4 } }}
-                transition={SPRING}
-              >
-                <LogLine e={e} t={t} />
-              </motion.div>
-            ))}
-          </AnimatePresence>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function LogLine({ e, t }: { e: Entry; t: number }) {
-  if (e.kind === "you") {
-    return (
-      <p className="line-clamp-2 rounded-xl bg-white/[0.05] px-3.5 py-2.5 font-serif text-[15px] italic leading-snug text-primary/90">
-        {e.text}
-      </p>
-    );
-  }
-  if (e.kind === "ai") {
-    return <p className="px-0.5 text-[13px] leading-snug text-gray-300">{e.text}</p>;
-  }
-  const done = t >= e.done;
-  return (
-    <div className="flex items-start gap-2.5 px-0.5">
-      <span className="mt-[2px]">
-        <Dot done={done} />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="truncate font-mono text-[12px] leading-snug text-gray-200">
-          {e.name}
-          {e.args && <span className="text-gray-500">({e.args})</span>}
-        </div>
-        <div className="truncate text-[12px] leading-snug text-gray-500">{done ? e.result : "…"}</div>
-      </div>
-    </div>
-  );
-}
-
-// --- Reduced motion: the same story as four still frames -----------------------------------
-
-const BOARD: { n: string; name: string; body: string; tools: string[] }[] = [
-  {
-    n: "01",
-    name: "Ask",
-    body: "Describe the screensaver you want, in your own words.",
-    tools: ["get_started", "list_film_templates"],
-  },
-  {
-    n: "02",
-    name: "Build",
-    body: "Blender builds the scene: clay, materials, ray-traced light, then the film look. You approve the stills.",
-    tools: ["create_film_scene", "render_film_stills"],
-  },
-  {
-    n: "03",
-    name: "Render",
-    body: "A seamless loop for day, golden hour and night renders in the background.",
-    tools: ["render_film_loop", "film_job_status"],
-  },
-  {
-    n: "04",
-    name: "Play",
-    body: "It's added to your library and, because you asked, set as your screensaver.",
-    tools: ["create_style", "set_screensaver"],
-  },
-];
 
 function Storyboard() {
-  const r = renderAt(23.6);
-  const frames: ReactNode[] = [
-    <div key="ask" className="absolute inset-0 flex flex-col justify-center bg-[#0f0f0e] p-[6cqw]">
-      <p className="font-serif italic leading-[1.15] text-primary" style={{ fontSize: "max(14px, 5.6cqw)" }}>
-        “{PROMPT}”
-      </p>
-    </div>,
-    <div key="build" className="absolute inset-0">
-      {(["clay", "materials", "graded"] as const).map((id, i) => (
-        <img
-          key={id}
-          src={MCP_MEDIA.build[id]}
-          alt=""
-          width={MCP_MEDIA.width}
-          height={MCP_MEDIA.height}
-          loading="lazy"
-          decoding="async"
-          className="absolute inset-0 h-full w-full object-cover"
-          style={{ clipPath: `inset(0 ${(2 - i) * 33.333}% 0 ${i * 33.333}%)` }}
-        />
-      ))}
-      <div className="absolute inset-y-0 left-1/3 w-px bg-black/60" />
-      <div className="absolute inset-y-0 left-2/3 w-px bg-black/60" />
-    </div>,
-    <div key="render" className="absolute inset-0">
-      <img
-        src={MCP_MEDIA.render.frames.golden}
-        alt=""
-        width={MCP_MEDIA.width}
-        height={MCP_MEDIA.height}
-        loading="lazy"
-        decoding="async"
-        className="absolute inset-0 h-full w-full object-cover"
-      />
-      <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/0 to-transparent" />
-      <RenderReadout on r={r} />
-    </div>,
-    <div key="play" className="absolute inset-0 bg-[#0b0b0a]">
-      <div className="absolute left-[10%] top-[3%] h-[80%] w-[80%] overflow-hidden rounded-[8px] shadow-[0_0_0_7px_#050505,0_0_0_8px_rgba(255,255,255,0.13)]">
-        <img
-          src={MCP_MEDIA.final.poster}
-          alt=""
-          width={MCP_MEDIA.width}
-          height={MCP_MEDIA.height}
-          loading="lazy"
-          decoding="async"
-          className="h-full w-full object-cover"
-        />
-      </div>
-      <div className="absolute left-1/2 top-[84%] h-[12.5%] w-[15%] -translate-x-1/2">
-        <div className="h-[86%] w-full rounded-b-[3px] bg-gradient-to-b from-[#1c1c1c] via-[#2a2a29] to-[#232322]" />
-        <div className="mx-[-55%] h-[14%] rounded-[3px] bg-gradient-to-b from-[#3a3a38] to-[#1d1d1c]" />
-      </div>
-    </div>,
+  const frames: { caption: string; frame: ReactNode }[] = [
+    {
+      caption: "Ask in any MCP app.",
+      frame: (
+        <div className="absolute inset-0 flex items-center p-[7%]">
+          <p className="rounded-2xl rounded-br-md bg-white/[0.08] px-3 py-2 text-[11px] leading-snug text-gray-100 sm:text-xs">
+            <WithCommand text={PROMPT} />
+          </p>
+        </div>
+      ),
+    },
+    { caption: "It builds the scene with you.", frame: <Img src={MCP_MEDIA.build.lit} /> },
+    {
+      caption: "It renders, if needed.",
+      frame: (
+        <>
+          <Img src={MCP_MEDIA.build.warm} />
+          <div className="absolute inset-0 flex items-center justify-center bg-black/45">
+            <div className="w-[45%]">
+              <p className="text-center text-[11px] text-white/85">Rendering…</p>
+              <div className="mt-2 h-[3px] overflow-hidden rounded-full bg-white/20">
+                <div className="h-full w-3/5 rounded-full bg-primary" />
+              </div>
+            </div>
+          </div>
+        </>
+      ),
+    },
+    {
+      caption: "Then it's your screensaver.",
+      frame: (
+        <>
+          <div className="absolute left-[10%] top-[3%] h-[80%] w-[80%] overflow-hidden rounded-[6px] shadow-[0_0_0_5px_#050505,0_0_0_6px_rgba(255,255,255,0.13)]">
+            <Img src={MCP_MEDIA.final.poster} />
+          </div>
+          <Stand on still />
+        </>
+      ),
+    },
   ];
   return (
-    <div>
-      <ol className="grid grid-cols-1 gap-x-4 gap-y-7 sm:grid-cols-2">
-        {BOARD.map((b, i) => (
-          <li key={b.n}>
-            <div
-              className="relative aspect-[16/10] overflow-hidden rounded-xl ring-1 ring-white/[0.06]"
-              style={{ containerType: "inline-size" }}
-              aria-hidden="true"
-            >
-              {frames[i]}
-            </div>
-            <h3 className="mt-3 flex items-baseline gap-2 text-sm sm:text-base" style={{ color: CREAM }}>
-              <span className="font-serif italic text-primary/40">{b.n}</span>
-              {b.name}
-            </h3>
-            <p className="mt-1 text-xs leading-relaxed text-gray-400 sm:text-sm">{b.body}</p>
-            <p className="mt-2 flex flex-wrap gap-1.5">
-              {b.tools.map((tool) => (
-                <span key={tool} className="rounded-md bg-white/[0.05] px-2 py-0.5 font-mono text-[11px] text-gray-400">
-                  {tool}
-                </span>
-              ))}
-            </p>
-          </li>
-        ))}
-      </ol>
-    </div>
+    <ol className="grid grid-cols-2 gap-x-3 gap-y-5 sm:gap-x-4 lg:grid-cols-4">
+      {frames.map((f, i) => (
+        <li key={f.caption}>
+          <Frame>{f.frame}</Frame>
+          <p className="mt-2.5 text-xs leading-snug text-gray-400 sm:text-sm">
+            <span className="mr-1.5 font-serif italic text-primary/40">{String(i + 1).padStart(2, "0")}</span>
+            {f.caption}
+          </p>
+        </li>
+      ))}
+    </ol>
   );
 }

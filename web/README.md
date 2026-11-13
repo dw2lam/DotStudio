@@ -19,14 +19,13 @@ scale/fade entrances).
 
 | Section | What it is |
 |---------|-----------|
-| `Hero` | Inset rounded viewport, **live ASCII effect canvas** backdrop (no stock video), hanging black nav pill, giant `DotStudio` wordmark with a small "NEW · Now with MCP" pill above it (links to `#ai`), pitch + "Get DotStudio" CTA |
-| `MCPDemo` | `#ai`, right after the hero: "Now with MCP." + one line, then a ~38 s auto-playing session with the MCP server (prompt → the main tool calls in a log → Blender build stages → loop render readout → the loop on a Mac display). Script in `aiSequence.ts`, media slots in `mcpMedia.ts` + `public/media/mcp/README.md`; paused off screen, pause button, chapter tabs seek, `?ai=<seconds>` opens it paused; reduced motion gets a four-frame storyboard |
+| `Hero` | Inset rounded viewport, **live ASCII effect canvas** backdrop (no stock video), hanging black nav pill, giant `DotStudio` wordmark with a small "NEW · Now with MCP" pill above it (links to `#mcp`), pitch + "Get DotStudio" CTA |
+| `MCPDemo` | `#mcp`, right after the hero (its NEW pill links here): "Now with MCP." + one line; a ~30 s demo of a generic AI-app chat with DotStudio connected (prompt with cycling ideas → build + one tweak → "Rendering…" only for scenes that need it → the scene on a Mac display) beside the stage, minimal beat dots + pause; then three inline setup steps. Script `aiSequence.ts`, media slots `mcpMedia.ts` + `public/media/mcp/README.md`; `?ai=<seconds>` opens it paused; reduced motion gets four still frames |
 | `Showcase` | "The best of the library": the owner's favourites only: Liquid Chrome (silent render loop), Zen Garden, Tidewater (four renders of its live sky cross-fading: dusk, night, morning, snow), Topography, Universe |
 | `NowPlaying` | New in 1.4: what's playing (Spotify / Apple Music) over any screensaver; Album / Stage / Cover / Corner switcher (images load on demand, fictional demo track) |
 | `Studio` | The app itself: the gallery with Screensaver + Wallpaper cards joined by SYNC, Playlist / Night / Wallpaper, a details strip (live weather, 120 fps, menu bar, instant start), and the editor |
 | `Packs` | Clocks (2×2 uncropped 16:10 stills: StandBy, Chronometer, Minimal, Window Light), Flowing (Lava loop), Water & Sky (Shallows), Retro (Neon Horizon loop); scene lists = the default library's styles of each pack; no style repeated from Showcase |
 | `Looks` | One built-in photo, six Looks, switchable in place (images load on demand) |
-| `HowItWorks` | `#how-it-works`: MCP setup in three cards (get DotStudio → connect Claude Desktop / Claude Code / other MCP apps → ask), film-scene costs (Blender 5.1+, installed by the user) and the "you stay in charge" note |
 | `Steps` | Install: DMG → Open Anyway in Privacy & Security → welcome guide; auto-updates + library location |
 | `Download` | Centered `#101010` CTA card: icon, "Get DotStudio", cream pill download button, release meta |
 

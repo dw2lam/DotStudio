@@ -1,37 +1,25 @@
 # MCP section media (`MCPDemo.tsx`)
 
-Every file the MCP section shows, by slot. The slots are listed in `src/sections/mcpMedia.ts`.
-To swap in final renders, overwrite a file with the same name; no code changes.
+Every file the MCP demo shows, by slot (listed in `src/sections/mcpMedia.ts`). To swap in final
+renders, overwrite a file with the same name; no code changes.
 
-The current files are **placeholders** made from the Commute work-in-progress stills (day, golden,
-night wide shots and the layout workbench renders). `clay`, `materials`, `graded`,
-`render-noisy` and the `frame-*` grades were faked from the day/golden/night stills with ffmpeg,
-and `final-loop` is a slow push-in on `graded` with a passing shadow, not a render.
+Stills: **1600 × 1000 (16:10) WebP, quality ~72, ≤ ~150 KB each**, all from Commute's `wide`
+camera except `layout`.
 
-All stills: **1600 × 1000 (16:10) WebP, quality ~72, ≤ ~150 KB each**. Same camera (Commute's
-`wide`) for everything except `layout`, so the build reads as one shot coming together.
-
-| Slot | File | What it should be |
+| When | File | What it should be |
 |---|---|---|
-| Build 01 · Set | `layout.webp` | The Commute set blocked out: workbench / bird's-eye view of carriage, viaduct, street. Untextured is fine. |
-| Build 02 · Clay | `clay.webp` | `wide` camera, every material overridden with plain clay grey, soft light. |
-| Build 03 · Materials | `materials.webp` | `wide`, real materials, flat preview light (no sun shadows yet). |
-| Build 04 · Light | `lit.webp` | `wide`, Cycles approval still: ray-traced sun and shadows, no look yet. |
-| Build 05 · Look | `graded.webp` | `wide`, the final look: bloom, halation, colour. No baked grain (the page adds live grain, as DotStudio does). |
-| Render · first frame | `render-noisy.webp` | A very low-sample frame of the loop (visible noise), shown as the render starts. |
-| Render · day | `frame-day.webp` | A finished loop frame, `day` variant, graded. |
-| Render · golden | `frame-golden.webp` | Same, `golden`. |
-| Render · night | `frame-night.webp` | Same, `night`. |
-| Play · loop | `final-loop.webm` | The finished seamless loop: **1280 × 800, 24 fps, VP9, no audio, ≤ ~4 MB** (8–20 s). |
-| Play · loop | `final-loop.mp4` | The same loop as **H.264** (`-movflags +faststart`, yuv420p), ≤ ~4 MB. Safari falls back to it. |
-| Play · poster | `final-poster.webp` | The loop's first frame, 1600 × 1000 WebP. |
+| Build | `layout.webp` | The set blocked out (bird's-eye / workbench view). Placeholder. |
+| Build | `clay.webp` | `wide`, clay materials. |
+| "Here's a first look." | `lit.webp` | `wide`, the first lit still. |
+| "Make the light warmer." → "Done." | `warm.webp` | `wide`, the same shot in warmer light (the golden variant). Also shown, dimmed, while rendering. |
+| Enjoy | `final-loop.webm` | The finished seamless loop: **1280 × 800, 24 fps, VP9, no audio, ≤ ~4 MB**. It should match `warm` (the warmer light). Currently a placeholder: a slow push-in on `warm`. |
+| Enjoy | `final-loop.mp4` | The same loop as **H.264** (yuv420p, `-movflags +faststart`), ≤ ~4 MB. Safari uses it. |
+| Enjoy | `final-poster.webp` | The loop's first frame, 1600 × 1000 WebP. Currently a copy of `warm`. |
 
-Budget: the site is on Vercel Hobby; keep this folder under ~6 MB in total.
-
-Encoding, for reference:
+Budget: the site is on Vercel Hobby; keep this folder under ~6 MB.
 
 ```sh
-cwebp -q 72 still.png -o graded.webp
+cwebp -q 72 still.png -o warm.webp
 ffmpeg -i loop.mov -vf scale=1280:800 -c:v libx264 -crf 24 -preset slow -pix_fmt yuv420p -movflags +faststart -an final-loop.mp4
 ffmpeg -i final-loop.mp4 -c:v libvpx-vp9 -b:v 0 -crf 38 -row-mt 1 -an final-loop.webm
 ```

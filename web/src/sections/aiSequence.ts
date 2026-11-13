@@ -1,74 +1,80 @@
-import type { BuildStep, Variant } from "./mcpMedia";
+import type { BuildStep } from "./mcpMedia";
 
 /*
- * The MCP section's script: one session with DotStudio's MCP server, condensed to ~38 s.
- * Tool names, arguments and the shape of each answer are the server's own (MCP/Tools.swift,
- * MCP/ToolsCustom.swift, Guides/engines/film.md): film_status → list_film_templates →
- * create_film_scene → render_film_stills (the user approves) → render_film_loop →
- * film_job_status → create_style → set_screensaver (only because the user asked).
- * The log shows the main calls only (a real session also reads guides and checks film_status),
- * with results shortened for the page. Times are seconds from the start of the loop.
+ * The MCP demo's script: a short chat with DotStudio connected over MCP, ~30 s, in four
+ * beats. Times are seconds from the start of the loop.
  */
 
-export const PROMPT =
-  "Make me a screensaver: a sunny commuter train, a penguin in a suit dozing on the end seat. Make it look real.";
+export const COMMAND = "/mcp DotStudio";
+export const LEAD = " — create me a ";
 
-export type ChapterId = "ask" | "build" | "render" | "play";
+/** The blank cycles through a few ideas, then settles on the last one. */
+export const IDEAS = ["calm ocean at dusk", "pixel cat on an LED panel", "sunny train ride with a sleepy penguin"];
 
-export const CHAPTERS: { id: ChapterId; n: string; name: string; start: number }[] = [
-  { id: "ask", n: "01", name: "Ask", start: 0 },
-  { id: "build", n: "02", name: "Build", start: 7.2 },
-  { id: "render", n: "03", name: "Render", start: 18.4 },
-  { id: "play", n: "04", name: "Play", start: 27.6 },
+export const PROMPT = COMMAND + LEAD + IDEAS[IDEAS.length - 1];
+
+export type BeatId = "prompt" | "build" | "render" | "enjoy";
+
+export const BEATS: { id: BeatId; name: string; start: number }[] = [
+  { id: "prompt", name: "Prompt", start: 0 },
+  { id: "build", name: "Build", start: 7.4 },
+  { id: "render", name: "Render", start: 15.0 },
+  { id: "enjoy", name: "Enjoy", start: 20.8 },
 ];
 
-/** Length of one pass; the sequence then starts over. */
-export const DURATION = 38;
+export const DURATION = 30;
 
-/** The prompt types from TYPE_START to TYPE_END, then is "sent" at SENT. */
-export const TYPE_START = 0.5;
-export const TYPE_END = 3.4;
-export const SENT = 3.8;
+/** When the prompt is sent. */
+export const SENT = 7.4;
 
-export type Entry =
-  | { at: number; kind: "you"; text: string }
-  | { at: number; kind: "ai"; text: string }
-  | { at: number; kind: "tool"; name: string; args?: string; result: string; done: number };
+/**
+ * The composer's text at `t`: the lead types out, then each idea types in, holds and (all
+ * but the last) backspaces away.
+ */
+export function composerAt(t: number): string {
+  if (t >= SENT) return "";
+  const head = COMMAND + LEAD;
+  const LEAD_END = 1.6;
+  if (t < 0.4) return "";
+  if (t < LEAD_END) return head.slice(0, Math.round(((t - 0.4) / (LEAD_END - 0.4)) * head.length));
+  // Each idea: type (0.04 s a letter), hold, delete (0.015 s a letter).
+  let at = LEAD_END + 0.1;
+  for (let i = 0; i < IDEAS.length; i++) {
+    const idea = IDEAS[i];
+    const typed = at + idea.length * 0.04;
+    if (t < typed) return head + idea.slice(0, Math.max(0, Math.round((t - at) / 0.04)));
+    const last = i === IDEAS.length - 1;
+    const held = typed + (last ? 99 : 0.5);
+    if (t < held) return head + idea;
+    const gone = held + idea.length * 0.015;
+    if (t < gone) return head + idea.slice(0, idea.length - Math.round((t - held) / 0.015));
+    at = gone + 0.15;
+  }
+  return head;
+}
 
-export const LOG: Entry[] = [
-  { at: SENT, kind: "you", text: PROMPT },
-  { at: 4.3, done: 4.8, kind: "tool", name: "get_started", result: "DotStudio is running" },
-  { at: 5.5, done: 6.1, kind: "tool", name: "list_film_templates", result: "commute: a train, a penguin on the end seat" },
+export type Message = { at: number; from: "you" | "ai"; text: string; tools?: boolean };
 
-  { at: 7.3, done: 8.1, kind: "tool", name: "create_film_scene", args: '"commute"', result: "Draft saved, with bloom, halation and grain" },
-  { at: 12.4, done: 14.6, kind: "tool", name: "render_film_stills", result: "3 ray-traced stills: day, golden, night" },
-  { at: 15.0, kind: "ai", text: "Here are the stills. Happy with the light?" },
-  { at: 16.6, kind: "you", text: "Love it. Animate it, and set it as my screensaver." },
-
-  { at: 18.6, done: 19.1, kind: "tool", name: "render_film_loop", result: "Rendering in the background" },
-  { at: 22.0, done: 22.3, kind: "tool", name: "film_job_status", result: "38% · golden, frame 166 of 1,152" },
-  { at: 26.7, done: 27.0, kind: "tool", name: "film_job_status", result: "Done · installed as a scene" },
-
-  { at: 27.8, done: 28.2, kind: "tool", name: "create_style", args: '"Morning Commute"', result: "Added to your library" },
-  { at: 28.6, done: 29.0, kind: "tool", name: "set_screensaver", result: "Playing now · Undo in DotStudio" },
-  { at: 30.0, kind: "ai", text: "Done. It follows the sun: day, golden hour, then night." },
+export const CHAT: Message[] = [
+  { at: SENT, from: "you", text: PROMPT },
+  { at: 8.0, from: "ai", text: "On it.", tools: true },
+  { at: 10.9, from: "ai", text: "Here's a first look." },
+  { at: 12.1, from: "you", text: "Make the light warmer." },
+  { at: 13.8, from: "ai", text: "Done." },
+  { at: 15.2, from: "ai", text: "This one's prerendered, so it's rendering now. Most scenes play live." },
+  { at: 21.2, from: "ai", text: "Set as your screensaver. Enjoy." },
 ];
+
+/** The tools that do the work, shown once as a single line of chips (the MCP server's real names). */
+export const TOOLS = ["create_film_scene", "render_film_stills", "set_screensaver"];
 
 /** What the stage shows while building, from when. */
-export const BUILD_STEPS: { id: BuildStep; at: number; name: string; detail: string }[] = [
-  { id: "layout", at: 7.2, name: "Set", detail: "The Commute template, blocked out" },
-  { id: "clay", at: 9.2, name: "Clay", detail: "Camera, carriage and passenger" },
-  { id: "materials", at: 10.9, name: "Materials", detail: "CC0 textures" },
-  { id: "lit", at: 12.6, name: "Light", detail: "Ray-traced sun and shadows, in Cycles" },
-  { id: "graded", at: 14.6, name: "Look", detail: "Bloom, halation, live grain" },
+export const BUILD_STEPS: { id: BuildStep; at: number }[] = [
+  { id: "layout", at: 8.0 },
+  { id: "clay", at: 9.3 },
+  { id: "lit", at: 10.6 },
+  { id: "warm", at: 13.5 },
 ];
 
-/** The loop render: frames per variant (48 s × 24 fps) and the job's span on the clock. */
-export const RENDER = {
-  start: 19.1,
-  end: 26.7,
-  framesPerVariant: 1152,
-  variants: ["day", "golden", "night"] as Variant[],
-  /** Real time the job stands for, in minutes (EEVEE, 2560 × 1600, three variants). */
-  minutes: 190,
-};
+/** The render, for scenes that need one. */
+export const RENDER = { start: 15.4, end: 20.4 };

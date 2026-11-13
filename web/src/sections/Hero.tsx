@@ -28,16 +28,17 @@ export function Hero() {
           <div className="grid grid-cols-1 items-end gap-6 md:grid-cols-12 md:gap-8">
             {/* Giant wordmark */}
             <div className="md:col-span-8">
-              {/* What's new: one quiet line that takes you to the AI section. */}
+              {/* What's new: one quiet line that takes you to the MCP section. */}
               <motion.a
-                href="#ai"
+                href="#mcp"
+                aria-label="Update: DotStudio now works with MCP"
                 initial={{ y: 12, opacity: 0 }}
                 animate={{ y: 0, opacity: 1 }}
                 transition={{ duration: 0.8, delay: 0.35, ease: EASE }}
-                className="group mb-4 inline-flex max-w-full items-center gap-2.5 rounded-full bg-black/35 py-1 pl-1 pr-3.5 text-[11px] text-primary/85 ring-1 ring-white/10 backdrop-blur-md transition-colors duration-300 hover:bg-black/50 hover:text-primary sm:mb-6 sm:text-sm"
+                className="group mb-4 inline-flex h-8 max-w-full items-center gap-2.5 rounded-full bg-black/35 pl-[5px] pr-3.5 text-[11px] text-primary/85 ring-1 ring-white/10 backdrop-blur-md transition-colors duration-300 hover:bg-black/50 hover:text-primary sm:mb-6 sm:h-9 sm:pl-1.5 sm:pr-4 sm:text-sm"
               >
-                <span className="rounded-full bg-primary px-2 py-[3px] text-[9px] font-bold leading-none tracking-[0.18em] text-black sm:text-[10px]">
-                  NEW
+                <span className="flex h-[22px] items-center rounded-full bg-primary px-2.5 text-[11px] font-bold leading-none text-black sm:h-6 sm:text-xs">
+                  Update
                 </span>
                 <span className="truncate">Now with MCP</span>
                 <ArrowRight className="h-3.5 w-3.5 shrink-0 transition-transform duration-300 group-hover:translate-x-0.5" />
