@@ -1,12 +1,13 @@
 import type { BuildStep, Variant } from "./mcpMedia";
 
 /*
- * The AI hero's script: one session with DotStudio's MCP server, condensed to ~38 s.
+ * The MCP section's script: one session with DotStudio's MCP server, condensed to ~38 s.
  * Tool names, arguments and the shape of each answer are the server's own (MCP/Tools.swift,
  * MCP/ToolsCustom.swift, Guides/engines/film.md): film_status → list_film_templates →
  * create_film_scene → render_film_stills (the user approves) → render_film_loop →
  * film_job_status → create_style → set_screensaver (only because the user asked).
- * Results are shortened for the page. Times are seconds from the start of the loop.
+ * The log shows the main calls only (a real session also reads guides and checks film_status),
+ * with results shortened for the page. Times are seconds from the start of the loop.
  */
 
 export const PROMPT =
@@ -36,24 +37,21 @@ export type Entry =
 
 export const LOG: Entry[] = [
   { at: SENT, kind: "you", text: PROMPT },
-  { at: 4.2, done: 4.6, kind: "tool", name: "get_started", result: "DotStudio is running; guides to read first" },
-  { at: 4.8, done: 5.2, kind: "tool", name: "read_guide", args: '"engines/film"', result: "The film flow, budgets and loop rules" },
-  { at: 5.4, done: 5.9, kind: "tool", name: "film_status", result: "Blender 5.1 · film engine pulled · Apple GPU" },
-  { at: 6.1, done: 6.6, kind: "tool", name: "list_film_templates", result: "commute: a train interior, a penguin on the end seat" },
+  { at: 4.3, done: 4.8, kind: "tool", name: "get_started", result: "DotStudio is running" },
+  { at: 5.5, done: 6.1, kind: "tool", name: "list_film_templates", result: "commute: a train, a penguin on the end seat" },
 
-  { at: 7.3, done: 8.1, kind: "tool", name: "create_film_scene", args: '"commute"', result: "Saved draft film-4c1e9a07 · bloom 0.25, halation 0.15, grain 0.2" },
-  { at: 12.4, done: 14.6, kind: "tool", name: "render_film_stills", args: "day, golden, night", result: "3 stills, ray-traced in Cycles" },
-  { at: 15.0, kind: "ai", text: "Here are the stills. Happy with the light before I animate it?" },
+  { at: 7.3, done: 8.1, kind: "tool", name: "create_film_scene", args: '"commute"', result: "Draft saved, with bloom, halation and grain" },
+  { at: 12.4, done: 14.6, kind: "tool", name: "render_film_stills", result: "3 ray-traced stills: day, golden, night" },
+  { at: 15.0, kind: "ai", text: "Here are the stills. Happy with the light?" },
   { at: 16.6, kind: "you", text: "Love it. Animate it, and set it as my screensaver." },
 
-  { at: 18.6, done: 19.1, kind: "tool", name: "render_film_loop", args: "day, golden, night", result: "Started loop-8d2f61b3 in the background" },
-  { at: 21.2, done: 21.5, kind: "tool", name: "film_job_status", result: "running, 28% — day, frame 954 of 1,152, about 137 min left" },
-  { at: 23.6, done: 23.9, kind: "tool", name: "film_job_status", result: "running, 59% — golden, frame 894 of 1,152, about 78 min left" },
-  { at: 26.7, done: 27.0, kind: "tool", name: "film_job_status", result: "done · installed film-4c1e9a07-b7d2" },
+  { at: 18.6, done: 19.1, kind: "tool", name: "render_film_loop", result: "Rendering in the background" },
+  { at: 22.0, done: 22.3, kind: "tool", name: "film_job_status", result: "38% · golden, frame 166 of 1,152" },
+  { at: 26.7, done: 27.0, kind: "tool", name: "film_job_status", result: "Done · installed as a scene" },
 
-  { at: 27.8, done: 28.2, kind: "tool", name: "create_style", args: '"Morning Commute"', result: "Created “Morning Commute”" },
-  { at: 28.6, done: 29.0, kind: "tool", name: "set_screensaver", args: '"Morning Commute"', result: "Your screensaver now plays it · Undo in DotStudio" },
-  { at: 30.0, kind: "ai", text: "Done. It follows the sun: the day, golden and night loops play in turn as your day goes." },
+  { at: 27.8, done: 28.2, kind: "tool", name: "create_style", args: '"Morning Commute"', result: "Added to your library" },
+  { at: 28.6, done: 29.0, kind: "tool", name: "set_screensaver", result: "Playing now · Undo in DotStudio" },
+  { at: 30.0, kind: "ai", text: "Done. It follows the sun: day, golden hour, then night." },
 ];
 
 /** What the stage shows while building, from when. */

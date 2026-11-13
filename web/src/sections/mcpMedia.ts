@@ -1,5 +1,5 @@
 /*
- * Every image and clip the AI hero (AIHero.tsx) shows, by slot. The files live in
+ * Every image and clip the MCP section (MCPDemo.tsx) shows, by slot. The files live in
  * public/media/mcp/; public/media/mcp/README.md lists each slot's size and format.
  *
  * To swap in the final renders, overwrite the files with the same names: nothing else

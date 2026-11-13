@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion, type Transition } from "framer-motion";
-import { ArrowDown, ArrowRight, Check, Pause, Play } from "lucide-react";
-import { Navbar } from "../components/Navbar";
+import { Check, Pause, Play } from "lucide-react";
 import { WordsPullUpMultiStyle } from "../components/animations/WordsPullUpMultiStyle";
 import { MCP_MEDIA, VARIANTS } from "./mcpMedia";
 import {
@@ -19,12 +18,12 @@ import {
 } from "./aiSequence";
 
 /*
- * The top of the page: DotStudio's new MCP server, shown working. One ~38 s pass of a real
+ * The section after the hero (the hero's NEW pill links here): DotStudio's MCP server, shown working. One ~38 s pass of a real
  * session (aiSequence.ts): the prompt is typed, the AI's tool calls arrive in the log, the
  * stage shows Blender building the scene (layout → clay → materials → light → look), the
  * loop rendering, and the finished loop playing on a Mac display.
  *
- * The clock only runs while the hero is on screen and the tab is visible; it can be paused,
+ * The clock only runs while the sequence is on screen and the tab is visible; it can be paused,
  * and the chapter tabs seek. Media loads a chapter ahead. Under prefers-reduced-motion there
  * is no clock at all: a static storyboard of the four chapters stands in.
  *
@@ -33,7 +32,6 @@ import {
 
 const CREAM = "#E1E0CC";
 const EASE = [0.16, 1, 0.3, 1] as const;
-const DOWNLOAD = "https://github.com/dw2lam/DotStudio/releases/latest/download/DotStudio.dmg";
 /** The soft, critically damped spring the Now Playing demo uses. */
 const SPRING: Transition = { type: "spring", duration: 1.0, bounce: 0 };
 
@@ -132,26 +130,39 @@ function useTabVisible() {
 
 // --- Section -------------------------------------------------------------------------------
 
-export function AIHero() {
+export function MCPDemo() {
   const reduced = useReducedMotion() ?? false;
   return (
-    <section aria-labelledby="ai-hero-title" className="p-4 md:p-6">
-      <div className="relative min-h-[calc(100svh-2rem)] overflow-hidden rounded-2xl bg-[#0b0b0a] md:min-h-[calc(100svh-3rem)] md:rounded-[2rem]">
-        <div className="bg-noise pointer-events-none absolute inset-0 opacity-[0.08]" aria-hidden="true" />
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 bg-[radial-gradient(55%_50%_at_68%_48%,rgba(222,219,200,0.07),transparent_70%)]"
-        />
-        <Navbar />
+    <section id="ai" aria-labelledby="ai-title" className="relative scroll-mt-4 bg-black px-4 py-20 sm:py-28 md:py-32">
+      <div className="mx-auto max-w-7xl">
+        <header className="mb-8 flex flex-col gap-4 sm:mb-12 lg:flex-row lg:items-end lg:justify-between lg:gap-10">
+          <h2
+            id="ai-title"
+            className="text-4xl font-medium leading-[0.95] tracking-[-0.04em] sm:text-5xl md:text-6xl"
+            style={{ color: CREAM }}
+          >
+            <WordsPullUpMultiStyle
+              className="!justify-start"
+              segments={[
+                { text: "Now with" },
+                { text: "MCP.", className: "font-serif font-normal italic tracking-[-0.02em] text-primary/75" },
+              ]}
+            />
+          </h2>
+          <p className="max-w-md text-sm leading-relaxed text-gray-400 md:text-base lg:pb-1 lg:text-right">
+            Claude, or any MCP app, can build, render and set screensavers in DotStudio.{" "}
+            <a
+              href="#how-it-works"
+              className="whitespace-nowrap text-primary/85 underline decoration-white/20 underline-offset-4 transition-colors hover:text-primary"
+            >
+              How it works
+            </a>
+          </p>
+        </header>
 
-        {/* Phones and tablets: pitch, stage, log in a column. Wide: pitch over log on the
-            left, the stage spanning both rows on the right. */}
-        <div className="relative mx-auto grid min-h-[inherit] max-w-[90rem] grid-cols-1 content-center gap-x-10 gap-y-8 px-5 pb-8 pt-20 sm:px-8 sm:pb-10 sm:pt-24 md:px-10 lg:grid-cols-12 lg:grid-rows-[auto_auto] lg:pb-10 lg:pt-24 xl:gap-x-14">
-          <div className="lg:col-span-5 lg:row-start-1 lg:self-end">
-            <Pitch />
-          </div>
+        <div className="grid grid-cols-1 gap-x-10 gap-y-6 lg:grid-cols-12">
           {reduced ? (
-            <div className="min-w-0 lg:col-span-7 lg:col-start-6 lg:row-span-2 lg:row-start-1 lg:self-center">
+            <div className="lg:col-span-12">
               <Storyboard />
             </div>
           ) : (
@@ -160,75 +171,6 @@ export function AIHero() {
         </div>
       </div>
     </section>
-  );
-}
-
-function Pitch() {
-  return (
-    <div>
-      <motion.div
-        initial={{ y: 12, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ duration: 0.8, delay: 0.1, ease: EASE }}
-        className="flex items-center gap-3"
-      >
-        <span className="rounded-full bg-primary px-2.5 py-1 text-[10px] font-bold leading-none tracking-[0.2em] text-black">
-          NEW
-        </span>
-        <span className="text-[10px] uppercase tracking-[0.25em] text-primary/70 sm:text-xs">AI, via MCP</span>
-      </motion.div>
-
-      <h2
-        id="ai-hero-title"
-        className="mt-5 text-[2.6rem] font-medium leading-[0.98] tracking-[-0.04em] sm:text-6xl lg:text-[3.5rem] xl:text-[4.1rem]"
-        style={{ color: CREAM }}
-      >
-        <WordsPullUpMultiStyle
-          className="!justify-start"
-          delayOffset={0.15}
-          segments={[
-            { text: "Make your own screensaver" },
-            { text: "with\u00A0AI.", className: "font-serif font-normal italic tracking-[-0.02em] text-primary/75" },
-          ]}
-        />
-      </h2>
-
-      <motion.p
-        initial={{ y: 16, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ duration: 0.8, delay: 0.45, ease: EASE }}
-        className="mt-5 max-w-md text-sm leading-relaxed text-primary/70 md:text-base"
-      >
-        Describe it to Claude or any MCP app. DotStudio builds the scene in Blender, renders a
-        seamless loop and <span style={{ color: CREAM }}>sets it as your screensaver</span>.
-      </motion.p>
-
-      <motion.div
-        initial={{ y: 16, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ duration: 0.8, delay: 0.6, ease: EASE }}
-        className="mt-7 flex flex-wrap items-center gap-x-6 gap-y-4"
-      >
-        <a
-          href={DOWNLOAD}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="group inline-flex w-fit items-center gap-2 rounded-full bg-primary py-1.5 pl-5 pr-1.5 text-sm font-medium text-black shadow-lg shadow-black/30 transition-all duration-300 hover:gap-3 sm:text-base"
-        >
-          Get DotStudio
-          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-black transition-transform duration-300 group-hover:scale-110 sm:h-10 sm:w-10">
-            <ArrowRight className="h-4 w-4" style={{ color: CREAM }} />
-          </span>
-        </a>
-        <a
-          href="#how-it-works"
-          className="group inline-flex items-center gap-2 text-sm text-primary/80 transition-colors hover:text-primary sm:text-base"
-        >
-          How it works
-          <ArrowDown className="h-4 w-4 transition-transform duration-300 group-hover:translate-y-0.5" />
-        </a>
-      </motion.div>
-    </div>
   );
 }
 
@@ -253,7 +195,7 @@ function Sequence() {
   const running = onScreen && tabVisible && !paused;
   return (
     <>
-      <div ref={rootRef} className="min-w-0 lg:col-span-7 lg:col-start-6 lg:row-span-2 lg:row-start-1 lg:self-center">
+      <div ref={rootRef} className="min-w-0 lg:col-span-8">
         <p className="sr-only">
           A demonstration, in four chapters. Ask: “{PROMPT}” The AI calls DotStudio's tools get_started, read_guide,
           film_status and list_film_templates. Build: create_film_scene starts from the Commute template; Blender
@@ -265,7 +207,7 @@ function Sequence() {
         <Stage t={t} chapter={chapter} armed={armed} running={running} />
         <Chapters t={t} chapter={chapter} paused={paused} onSeek={seek} onToggle={() => setPaused((p) => !p)} />
       </div>
-      <Log t={t} className="lg:col-span-5 lg:row-start-2 lg:self-start lg:pt-2" />
+      <Log t={t} className="lg:col-span-4" />
     </>
   );
 }
@@ -461,19 +403,18 @@ function AskLayer({ t, on }: { t: number; on: boolean }) {
         className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(70%_60%_at_30%_35%,rgba(222,219,200,0.06),transparent_70%)]"
       />
       <div>
-        <span className="text-[max(9px,1.25cqw)] uppercase tracking-[0.25em] text-primary/55">You ask</span>
         <p
-          className="mt-[2.4cqw] font-serif italic leading-[1.12] text-primary"
+          className="font-serif italic leading-[1.12] text-primary"
           style={{ fontSize: "max(17px, 4.3cqw)" }}
         >
-          <span>{PROMPT.slice(0, n)}</span>
+          <span className="font-serif">{PROMPT.slice(0, n)}</span>
           <span
             className={`ml-[0.06em] inline-block h-[0.95em] w-[2px] translate-y-[0.14em] bg-primary/80 ${
               typing ? "caret-blink" : "opacity-0"
             }`}
           />
           {/* Reserve the whole prompt's space, so nothing moves as it types. */}
-          <span className="invisible">{PROMPT.slice(n)}</span>
+          <span className="invisible font-serif">{PROMPT.slice(n)}</span>
         </p>
       </div>
       <div className="h-[max(16px,2.2cqw)] text-[max(10px,1.45cqw)] text-gray-500">
@@ -567,7 +508,7 @@ function RenderReadout({ on, r }: { on: boolean; r: ReturnType<typeof renderAt> 
           </div>
         </div>
         <div className="shrink-0 text-right tabular-nums text-white/60">
-          <div className="hidden sm:block">2560 × 1600 · 24 fps · sped up</div>
+          <div className="hidden sm:block">Sped up</div>
           <div className="mt-[0.6cqw]">{r.p >= 1 ? "Done" : `about ${r.minutes} min left`}</div>
         </div>
       </div>
@@ -651,14 +592,8 @@ function Log({ t, className = "" }: { t: number; className?: string }) {
   const shown = LOG.filter((e) => e.at <= t);
   return (
     <div aria-hidden="true" className={className}>
-      <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.25em] text-gray-500 sm:text-[11px]">
-        <span>Your AI app</span>
-        <span className="normal-case tracking-normal text-gray-600">
-          via <span className="font-mono">dotstudio-mcp</span>
-        </span>
-      </div>
       <div
-        className="relative mt-3 h-[176px] overflow-hidden sm:h-[196px] lg:h-[212px]"
+        className="relative h-[176px] overflow-hidden sm:h-[196px] lg:h-full lg:min-h-[300px]"
         style={{
           maskImage: "linear-gradient(to bottom, transparent 0, #000 34%)",
           WebkitMaskImage: "linear-gradient(to bottom, transparent 0, #000 34%)",
@@ -688,10 +623,9 @@ function Log({ t, className = "" }: { t: number; className?: string }) {
 function LogLine({ e, t }: { e: Entry; t: number }) {
   if (e.kind === "you") {
     return (
-      <div className="rounded-xl bg-white/[0.05] px-3.5 py-2.5">
-        <span className="block text-[10px] uppercase tracking-[0.2em] text-gray-500">You</span>
-        <span className="mt-1 line-clamp-2 font-serif text-[15px] italic leading-snug text-primary/90">{e.text}</span>
-      </div>
+      <p className="line-clamp-2 rounded-xl bg-white/[0.05] px-3.5 py-2.5 font-serif text-[15px] italic leading-snug text-primary/90">
+        {e.text}
+      </p>
     );
   }
   if (e.kind === "ai") {
@@ -721,7 +655,7 @@ const BOARD: { n: string; name: string; body: string; tools: string[] }[] = [
     n: "01",
     name: "Ask",
     body: "Describe the screensaver you want, in your own words.",
-    tools: ["get_started", "read_guide", "film_status", "list_film_templates"],
+    tools: ["get_started", "list_film_templates"],
   },
   {
     n: "02",
@@ -747,8 +681,7 @@ function Storyboard() {
   const r = renderAt(23.6);
   const frames: ReactNode[] = [
     <div key="ask" className="absolute inset-0 flex flex-col justify-center bg-[#0f0f0e] p-[6cqw]">
-      <span className="text-[max(9px,2.2cqw)] uppercase tracking-[0.25em] text-primary/55">You ask</span>
-      <p className="mt-[3cqw] font-serif italic leading-[1.15] text-primary" style={{ fontSize: "max(14px, 5.6cqw)" }}>
+      <p className="font-serif italic leading-[1.15] text-primary" style={{ fontSize: "max(14px, 5.6cqw)" }}>
         “{PROMPT}”
       </p>
     </div>,

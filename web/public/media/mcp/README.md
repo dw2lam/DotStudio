@@ -1,6 +1,6 @@
-# AI hero media (`AIHero.tsx`)
+# MCP section media (`MCPDemo.tsx`)
 
-Every file the AI hero shows, by slot. The slots are listed in `src/sections/mcpMedia.ts`.
+Every file the MCP section shows, by slot. The slots are listed in `src/sections/mcpMedia.ts`.
 To swap in final renders, overwrite a file with the same name; no code changes.
 
 The current files are **placeholders** made from the Commute work-in-progress stills (day, golden,

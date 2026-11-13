@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
 import { ArrowRight } from "lucide-react";
+import { Navbar } from "../components/Navbar";
 import { HeroReel } from "../components/HeroReel";
 import { WordsPullUp } from "../components/animations/WordsPullUp";
 
@@ -9,7 +10,7 @@ const DOWNLOAD = "https://github.com/dw2lam/DotStudio/releases/latest/download/D
 
 export function Hero() {
   return (
-    <section className="h-screen p-4 pt-0 md:p-6 md:pt-0">
+    <section className="h-screen p-4 md:p-6">
       <div className="relative h-full w-full overflow-hidden rounded-2xl md:rounded-[2rem]">
         {/* Backdrop: the app's own scenes, crossfading, with a "Now showing" caption. */}
         <HeroReel />
@@ -20,11 +21,27 @@ export function Hero() {
         <div className="pointer-events-none absolute inset-0 bg-black/35" />
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/70" />
 
+        <Navbar />
+
         {/* Bottom-aligned content */}
         <div className="absolute bottom-0 left-0 right-0 p-5 sm:p-7 md:p-10">
           <div className="grid grid-cols-1 items-end gap-6 md:grid-cols-12 md:gap-8">
             {/* Giant wordmark */}
             <div className="md:col-span-8">
+              {/* What's new: one quiet line that takes you to the AI section. */}
+              <motion.a
+                href="#ai"
+                initial={{ y: 12, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                transition={{ duration: 0.8, delay: 0.35, ease: EASE }}
+                className="group mb-4 inline-flex max-w-full items-center gap-2.5 rounded-full bg-black/35 py-1 pl-1 pr-3.5 text-[11px] text-primary/85 ring-1 ring-white/10 backdrop-blur-md transition-colors duration-300 hover:bg-black/50 hover:text-primary sm:mb-6 sm:text-sm"
+              >
+                <span className="rounded-full bg-primary px-2 py-[3px] text-[9px] font-bold leading-none tracking-[0.18em] text-black sm:text-[10px]">
+                  NEW
+                </span>
+                <span className="truncate">Now with MCP</span>
+                <ArrowRight className="h-3.5 w-3.5 shrink-0 transition-transform duration-300 group-hover:translate-x-0.5" />
+              </motion.a>
               <h1
                 className="font-medium leading-[0.85] tracking-[-0.07em] text-[16vw] sm:text-[15vw] md:text-[14vw] lg:text-[13vw] xl:text-[12vw]"
                 style={{ color: CREAM, textShadow: "0 2px 32px rgba(0,0,0,0.55), 0 1px 4px rgba(0,0,0,0.45)" }}

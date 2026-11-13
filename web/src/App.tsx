@@ -1,5 +1,5 @@
-import { AIHero } from "./sections/AIHero";
 import { Hero } from "./sections/Hero";
+import { MCPDemo } from "./sections/MCPDemo";
 import { Showcase } from "./sections/Showcase";
 import { LiveSky } from "./sections/LiveSky";
 import { NowPlaying } from "./sections/NowPlaying";
@@ -14,8 +14,8 @@ import { Download } from "./sections/Download";
 export default function App() {
   return (
     <div className="min-h-screen bg-black">
-      <AIHero />
       <Hero />
+      <MCPDemo />
       <Showcase />
       <LiveSky />
       <NowPlaying />

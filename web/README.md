@@ -19,8 +19,8 @@ scale/fade entrances).
 
 | Section | What it is |
 |---------|-----------|
-| `AIHero` | First thing on the page: NEW, "Make your own screensaver with AI", Download + How it works CTAs, and a ~38 s auto-playing session with the MCP server (prompt → real tool calls in a log → Blender build stages → loop render readout → the loop on a Mac display). Script in `aiSequence.ts`, media slots in `mcpMedia.ts` + `public/media/mcp/README.md`; paused off screen, pause button, chapter tabs seek, `?ai=<seconds>` opens it paused; reduced motion gets a four-frame storyboard. Carries the nav pill |
-| `Hero` | Inset rounded viewport, **live ASCII effect canvas** backdrop (no stock video), hanging black nav pill, giant `DotStudio` wordmark, pitch + "Get DotStudio" CTA |
+| `Hero` | Inset rounded viewport, **live ASCII effect canvas** backdrop (no stock video), hanging black nav pill, giant `DotStudio` wordmark with a small "NEW · Now with MCP" pill above it (links to `#ai`), pitch + "Get DotStudio" CTA |
+| `MCPDemo` | `#ai`, right after the hero: "Now with MCP." + one line, then a ~38 s auto-playing session with the MCP server (prompt → the main tool calls in a log → Blender build stages → loop render readout → the loop on a Mac display). Script in `aiSequence.ts`, media slots in `mcpMedia.ts` + `public/media/mcp/README.md`; paused off screen, pause button, chapter tabs seek, `?ai=<seconds>` opens it paused; reduced motion gets a four-frame storyboard |
 | `Showcase` | "The best of the library": the owner's favourites only: Liquid Chrome (silent render loop), Zen Garden, Tidewater (four renders of its live sky cross-fading: dusk, night, morning, snow), Topography, Universe |
 | `NowPlaying` | New in 1.4: what's playing (Spotify / Apple Music) over any screensaver; Album / Stage / Cover / Corner switcher (images load on demand, fictional demo track) |
 | `Studio` | The app itself: the gallery with Screensaver + Wallpaper cards joined by SYNC, Playlist / Night / Wallpaper, a details strip (live weather, 120 fps, menu bar, instant start), and the editor |

@@ -116,7 +116,7 @@ export function HowItWorks() {
   return (
     <section id="how-it-works" className="relative scroll-mt-4 bg-black px-4 py-20 sm:py-28 md:py-32">
       <div className="mx-auto max-w-7xl">
-        <SectionHeader eyebrow="With AI" title="How it works:" aside="three steps, then just ask.">
+        <SectionHeader eyebrow="MCP" title="How it works:" aside="three steps, then just ask.">
           <p className="mt-5 max-w-xl text-xs leading-relaxed text-gray-400 sm:text-sm">
             DotStudio comes with an MCP server, so Claude or any MCP app can design screensavers
             with you. Everything runs on your Mac.

@@ -9,8 +9,7 @@ import { useReducedMotion } from "framer-motion";
  *
  * Phones (portrait screens) get 720×1600 renders of the same scenes instead of a centre crop.
  *
- * Loading: the hero sits under the AI announcement now, so even the first poster waits until
- * it nears the viewport (loading="lazy"). Videos and
+ * Loading: only the first poster is fetched up front (it is the hero's LCP image). Videos and
  * the next poster load while the hero is on screen, one scene ahead (the next one once the
  * current clip is playing, so the two never compete for bandwidth on the first load). Everything pauses when
  * the hero scrolls away or the tab is hidden. Under prefers-reduced-motion no video is loaded:
@@ -169,9 +168,8 @@ export function HeroReel() {
                 alt=""
                 width={tall ? 720 : 1600}
                 height={tall ? 1600 : 1000}
-                decoding="async"
-                loading={i === 0 ? "lazy" : undefined}
-                {...{ fetchpriority: "low" }}
+                decoding={i === 0 ? "sync" : "async"}
+                {...{ fetchpriority: i === 0 ? "high" : "low" }}
                 className="absolute inset-0 h-full w-full object-cover"
               />
               {!reduced && (
