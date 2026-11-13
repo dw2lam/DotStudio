@@ -81,8 +81,9 @@ def make_materials(P, assets_tex):
     # EEVEE has no true reflections of the cabin in thin glass (its probes see the bright windows), so
     # the pane reflects less there and without smudge haze, to match the path-traced look
     g = mt.thin_glass("WindowGlass", tint=(0.70, 0.77, 0.74), refl=0.04 if P.get("eevee") else 0.12,
-                      smudge=0.0 if P.get("eevee") else 0.06, rain=rain)
-    M["glass"], M["rain_map"] = (g if rain else (g, None))
+                      smudge=0.0 if P.get("eevee") else 0.06, rain=rain,
+                      flow=(-1.0, -0.22), haze=0.16 if rain else 0.0)   # airflow drags drops back and down
+    M["glass"], M["rain"] = (g if rain else (g, None))
     return M
 
 

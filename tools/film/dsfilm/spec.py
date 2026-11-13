@@ -81,6 +81,8 @@ def build(spec, variant=None, engine=None, res=None, samples=None):
                  samples=samples or rs.get("samples"), exposure=ev, motion_blur=rs.get("motion_blur", True))
     if scene.render.engine == "BLENDER_EEVEE" and out.get("probes"):
         render.eevee_probes(scene, **out["probes"])
-    ctx.look = spec.get("look")
+    ctx.look = dict(spec.get("look") or {}) or None
+    if light.get("fog"):                 # weather fog travels with the lighting preset
+        ctx.look = dict(ctx.look or {}, fog=light["fog"])
     post.setup(scene, ctx.look)
     return ctx, out
