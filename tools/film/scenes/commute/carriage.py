@@ -78,7 +78,10 @@ def make_materials(P, assets_tex):
     M["exterior"] = mt.principled("CarExterior", (0.70, 0.71, 0.72), 0.3, 0.9)
     rain = P.get("rain", False)
     # UV-cut tinted glass as on Japanese EMUs: less light through, so the cabin shows in it by day too
-    g = mt.thin_glass("WindowGlass", tint=(0.70, 0.77, 0.74), refl=0.12, smudge=0.06, rain=rain)
+    # EEVEE has no true reflections of the cabin in thin glass (its probes see the bright windows), so
+    # the pane reflects less there and without smudge haze, to match the path-traced look
+    g = mt.thin_glass("WindowGlass", tint=(0.70, 0.77, 0.74), refl=0.04 if P.get("eevee") else 0.12,
+                      smudge=0.0 if P.get("eevee") else 0.06, rain=rain)
     M["glass"], M["rain_map"] = (g if rain else (g, None))
     return M
 
