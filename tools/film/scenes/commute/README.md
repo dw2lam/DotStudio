@@ -19,7 +19,7 @@ To make your own version, copy `commute.json`, change the values below, and run 
 | `params.sway` | 1.0 | Carriage sway and roll (0 is perfectly steady; 2 is a rough line) |
 | `params.cabin` | 1.0 | Brightness of the cabin lamps |
 | `params.sun_side_height` | 0.55 | How tall the scenery on the sun side is. It is only ever seen in shadows and reflections. Lower values let more low sun in. |
-| `params.lighting.<variant>` | — | Any lighting-preset key: `sun_elev`, `sun_az`, `sun_strength`, `sun_color`, `hdri`, `hdri_rot`, `hdri_strength`, `exposure`. For example, `{"day": {"sun_elev": 25}}` |
+| `params.lighting.<variant>` | — | Any lighting-preset key: `sun_elev`, `sun_az`, `sun_strength`, `sun_color`, `hdri`, `hdri_rot`, `hdri_strength`, `sky_tint`, `exposure`. For example, `{"day": {"sun_elev": 25}}` |
 | `params.seed` | 7 | Random seed for the city layout |
 | `look` | bloom + halation + vignette + preview grain | The film look (`dsfilm.post`). Omit the block, or pass `--no-post`, for the raw render. |
 | `render` | Cycles, 1600×1000, 384 samples | Engine, resolution and samples |
@@ -39,9 +39,11 @@ There are three cameras:
 | Tie colour | `penguin.py`, the `TieSilk` material |
 | Suit | `penguin.py`, the `SuitWool` tint |
 | Poster artwork and texts | `posters.py` (all fictional brands; regenerate with `python3 -I posters.py`) |
+| Ad board and hanging posters | `carriage.py`, `_ads()` |
+| Parked cars and street trees | `city.py` (`CAR_COLORS`, `car()`, greenery) |
 | Facade colours | `city.py`, `HOUSE_WALLS` / `APARTMENT_WALLS` |
 | Building heights and density | `city.py`, the row tables |
-| The dozing timeline (when he jerks awake, the heavy nod) | `scene.py`, `dozing()` |
+| The dozing timeline (when he stirs, how far his lids open, the heavy nod) | `scene.py`, `dozing()` |
 | Camera positions and lenses | `scene.py`, `_cameras()` |
 
 ## Costs (M5 Pro)

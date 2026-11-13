@@ -30,7 +30,9 @@ NIGHT = {"Facade018A": "Facade018C", "Facade019A": "Facade019C", "Facade020A": "
 HOUSE_WALLS = [(0.66, 0.64, 0.59), (0.60, 0.56, 0.50), (0.68, 0.67, 0.64), (0.52, 0.49, 0.44), (0.50, 0.53, 0.55),
                (0.63, 0.60, 0.52)]
 APARTMENT_WALLS = [(0.68, 0.66, 0.62), (0.62, 0.57, 0.50), (0.55, 0.54, 0.52), (0.64, 0.61, 0.55), (0.47, 0.42, 0.38)]
-ROOF_TINTS = [(0.30, 0.33, 0.38), (0.22, 0.24, 0.28), (0.36, 0.30, 0.26), (0.30, 0.38, 0.46), (0.42, 0.40, 0.38)]
+ROOF_TINTS = [(0.30, 0.33, 0.38), (0.16, 0.17, 0.20), (0.40, 0.26, 0.18), (0.22, 0.32, 0.48), (0.42, 0.40, 0.38),
+              (0.55, 0.30, 0.20), (0.26, 0.22, 0.20)]
+CAR_COLORS = [(0.80, 0.80, 0.78)] * 4 + [(0.55, 0.56, 0.58)] * 3 + [(0.03, 0.03, 0.035)] * 2 + [(0.45, 0.05, 0.05), (0.08, 0.15, 0.35), (0.55, 0.50, 0.40)]
 SIGN_COLORS = [(0.85, 0.12, 0.10), (0.95, 0.75, 0.10), (0.10, 0.35, 0.75), (0.95, 0.95, 0.92), (0.10, 0.55, 0.30),
                (0.90, 0.45, 0.10)]
 
@@ -71,6 +73,10 @@ def build_tile(tile, lib, P, period, seed=11):
     grass = mt.acg_pbr("Grass", "Grass004", size_m=3.0)
     pole_mat = mt.noise_bump(mt.principled("PoleConcrete", (0.55, 0.55, 0.52), 0.7), scale=30, strength=0.1)
     lamp = mt.emission("StreetLamp", (1.0, 0.85, 0.6), 4.0 if night else 0.0)
+    car_paint = [mt.principled(f"CarPaint{i}", c, 0.25, 0.5, **{"Coat Weight": 1.0, "Coat Roughness": 0.05})
+                 for i, c in enumerate(CAR_COLORS)]
+    car_glass = mt.principled("CarGlass", (0.02, 0.025, 0.03), 0.05, **{"Coat Weight": 1.0})
+    tyre = mt.principled("Tyre", (0.02, 0.02, 0.02), 0.8)
     shop_front = mt.principled("ShopFront", (0.05, 0.05, 0.06), 0.15, **{"Specular IOR Level": 0.8,
                                **({"Emission Color": (1.0, 0.85, 0.65), "Emission Strength": 0.25} if night else {})})
 
@@ -136,6 +142,7 @@ def build_tile(tile, lib, P, period, seed=11):
         B.box((0.08, 0.5, 0.08), (x, y_face + 0.2, z + h / 2 - 0.2), steel)
 
     rows = [(-19.0, 9.0), (-31.0, 9.0), (-43.0, 9.0), (-55.0, 9.0), (-67.0, 9.0)]
+    greenery = []
     for ri, (yc, depth) in enumerate(rows):
         x = r.uniform(0, 4)
         next_street = r.uniform(50, 90)
@@ -147,8 +154,8 @@ def build_tile(tile, lib, P, period, seed=11):
             w = r.uniform(6.0, 9.5)
             d = r.uniform(7.0, depth)
             y = yc - r.uniform(0, 1.5)
-            if ri == 0 and r.random() < 0.3 or r.random() < 0.08:   # a small mixed-use building
-                floors = r.randint(3, 6)
+            if ri == 0 and r.random() < 0.45 or r.random() < 0.10:   # a small mixed-use building
+                floors = r.randint(3, 7)
                 h = floors * 3.2
                 B.box((w, d, h), (x + w / 2, y, GROUND + h / 2), r.choice(shops))
                 B.box((w + 0.1, d + 0.1, 0.5), (x + w / 2, y, GROUND + h + 0.25), roof_flat)
@@ -159,7 +166,8 @@ def build_tile(tile, lib, P, period, seed=11):
                 B.box((w - 0.4, 0.1, 2.6), (x + w / 2, y + d / 2 + 0.03, GROUND + 1.4), shop_front)
                 B.box((w - 0.2, 1.0, 0.12), (x + w / 2, y + d / 2 + 0.5, GROUND + 3.0), r.choice(signs))
             else:
-                h = r.choice((5.8, 6.1, 6.4)) if r.random() < 0.78 else r.choice((8.8, 9.3))
+                q = r.random()
+                h = r.choice((5.8, 6.1, 6.4)) if q < 0.58 else r.choice((8.8, 9.3)) if q < 0.9 else 3.3
                 B.box((w, d, h), (x + w / 2, y, GROUND + h / 2), r.choice(houses))
                 if r.random() < 0.82:
                     v, f = gable(w, d, r.uniform(1.6, 2.4))
@@ -169,7 +177,29 @@ def build_tile(tile, lib, P, period, seed=11):
                     rooftop(x + w / 2, y, w, d, GROUND + h + 0.4)
                 if r.random() < 0.4:                # a little balcony or carport roof
                     B.box((w * 0.6, 0.9, 0.12), (x + w / 2, y + d / 2 + 0.45, GROUND + 2.9), balcony)
-            x += w + r.uniform(0.8, 2.2)
+            gap = r.uniform(0.8, 2.6)
+            if gap > 1.6 and r.random() < 0.45:      # a garden tree or hedge in the gap
+                greenery.append((x + w + gap / 2, y + r.uniform(-d / 3, d / 3)))
+            x += w + gap
+
+    # parked cars: along both kerbs of the viaduct street and in small lots between the rows
+    def car(x, y, rot_z=0.0):
+        paint = r.choice(car_paint)
+        L, W = r.uniform(3.6, 4.7), r.uniform(1.55, 1.8)
+        B.box((L, W, 0.62), (x, y, GROUND + 0.52), paint, rot_z)
+        B.box((L * r.uniform(0.5, 0.6), W * 0.9, 0.5), (x - L * 0.05, y, GROUND + 1.07), car_glass, rot_z)
+        B.box((L * r.uniform(0.42, 0.52), W * 0.92, 0.06), (x - L * 0.05, y, GROUND + 1.34), paint, rot_z)
+        for dxw in (-L * 0.32, L * 0.32):
+            B.box((0.62, W + 0.02, 0.62), (x + dxw * math.cos(rot_z), y + dxw * math.sin(rot_z), GROUND + 0.31), tyre, rot_z)
+    x = r.uniform(2, 10)
+    while x < period - 6:
+        if r.random() < 0.55:
+            car(x, r.choice((-8.3, -12.7)))
+        x += r.uniform(5.0, 14.0)
+    for k in range(int(period / 60)):
+        lx, ly = r.uniform(10, period - 20), r.choice((-25.0, -37.0, -49.0))
+        for j in range(r.randint(2, 5)):
+            car(lx + j * 2.6, ly, math.pi / 2)
 
     # ------------------------------------------------------------------ mid-rise blocks
     for ri, (yc, hmin, hmax) in enumerate(((-84, 12, 26), (-108, 14, 34), (-134, 16, 42), (-162, 18, 48), (-195, 20, 55))):
@@ -226,6 +256,9 @@ def build_tile(tile, lib, P, period, seed=11):
         geo.instance(f"Tree{x:.0f}", tree, tile, (x, r.choice((-25.5, -37.5, -49.5, -61.5)), GROUND), (0, 0, r.uniform(0, math.tau)),
                      (s, s, s))
         x += r.uniform(30, 70)
+    for gx, gy in greenery:     # garden trees between houses
+        s_ = r.uniform(1.6, 2.8)
+        geo.instance(f"Garden{gx:.0f}{gy:.0f}", r.choice(shrubs), tile, (gx, gy, GROUND), (0, 0, r.uniform(0, math.tau)), (s_, s_, s_))
     # a pocket park now and then
     for k in range(3):
         px = r.uniform(40, period - 60)

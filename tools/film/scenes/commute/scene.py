@@ -153,16 +153,17 @@ def breathing(lp, t):
 
 def dozing(lp, t):
     """Head pitch in degrees (+ = chin down) and lid closure (1 = shut) — one dozing cycle per loop:
-    drift off, jerk awake at 17 s (eyes open, a blink), drift again, a heavy nod at 33 s, settle."""
+    drift off, stir awake at 17 s (sleepy half-lids, a slow blink), drift again, a heavy nod at 33 s,
+    settle."""
     t = lp.wrap(t)
-    p = 14.0 + 14.0 * smoothstep(0.0, 17.0, t) * (1 - smoothstep(17.15, 17.45, t))
-    p -= 16.0 * smoothstep(17.15, 17.35, t) * (1 - smoothstep(17.35, 20.5, t))
+    p = 14.0 + 14.0 * smoothstep(0.0, 17.0, t) * (1 - smoothstep(17.15, 17.55, t))
+    p -= 9.0 * smoothstep(17.15, 17.55, t) * (1 - smoothstep(17.55, 20.5, t))     # a gentle start, not a jolt
     p += 16.0 * smoothstep(21.0, 32.5, t) * (1 - smoothstep(33.6, 35.0, t))
-    p += 7.0 * bump(t, 33.6, 0.40)
-    p -= 14.0 * smoothstep(35.0, 47.5, t) * 0.0
-    lid = 1.0 - smoothstep(17.2, 17.35, t) * (1 - smoothstep(20.2, 21.6, t))
-    lid += bump(t, 19.4, 0.08) * (1 - lid)
-    lid -= 0.45 * bump(t, 34.2, 0.5)
+    p += 6.0 * bump(t, 33.6, 0.45)
+    # lids: 1 = shut; awake he only gets as far as sleepy half-lids (0.45), with a slow blink
+    lid = 1.0 - 0.55 * smoothstep(17.2, 17.6, t) * (1 - smoothstep(20.2, 21.8, t))
+    lid += bump(t, 19.3, 0.12) * (1 - lid)
+    lid -= 0.25 * bump(t, 34.2, 0.5)
     return p, min(max(lid, 0.0), 1.0)
 
 
@@ -170,7 +171,8 @@ def _cameras(C):
     out = {}
     specs = {
         # seated opposite, a little toward the car centre, looking across at the bench and windows
-        "wide": dict(frm=(0.0, 1.06, 1.17), to=(-1.15, -1.45, 1.08), lens=26, fstop=5.6, focus=(car.seat_x(0), -1.0, 0.95)),
+        "wide": dict(frm=(0.0, 1.06, 1.17), to=(-1.15, -1.45, 1.17), lens=26, fstop=5.6, focus=(car.seat_x(0), -1.0, 0.95),
+                     shift_y=0.055),   # level camera, lens shift up: verticals stay straight, ad boards in frame
         # closer on the penguin, longer lens, shallow focus
         "close": dict(frm=(-1.05, 0.55, 1.16), to=(car.seat_x(0) - 0.05, -1.10, 1.10), lens=50, fstop=2.2,
                       focus=(car.seat_x(0) + 0.04, -0.75, 1.22)),
@@ -184,6 +186,7 @@ def _cameras(C):
         cd.sensor_fit = "HORIZONTAL"
         cd.dof.use_dof = True
         cd.dof.aperture_fstop = s["fstop"]
+        cd.shift_y = s.get("shift_y", 0.0)
         cd.dof.focus_distance = (Vector(s["focus"]) - Vector(s["frm"])).length
         rig = geo.empty(f"CamRig_{name}", C, s["frm"])
         geo.look_at(rig, s["frm"], s["to"])

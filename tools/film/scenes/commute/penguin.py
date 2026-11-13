@@ -140,8 +140,14 @@ def _feather_mat(color):
 
 def _mats(color):
     m = {"body": _feather_mat(color)}
-    m["teal"] = mt.principled("Teal", color, 0.5, **{"Sheen Weight": 0.5, "Sheen Roughness": 0.4,
-                                                     "Subsurface Weight": 0.1, "Subsurface Scale": 0.02})
+    # the same feathers without the belly patch (flippers, eyelids), so they match the body exactly
+    teal = m["body"].copy()
+    teal.name = "PenguinTeal"
+    mix = next(n for n in teal.node_tree.nodes if n.type == "MIX_SHADER")
+    for l in list(mix.inputs["Fac"].links):
+        teal.node_tree.links.remove(l)
+    mix.inputs["Fac"].default_value = 0.0
+    m["teal"] = teal
     m["bill"] = mt.noise_bump(mt.principled("Bill", (0.98, 0.46, 0.02), 0.25,
                                             **{"Subsurface Weight": 0.3, "Subsurface Radius": (1.0, 0.4, 0.1),
                                                "Subsurface Scale": 0.01, "Coat Weight": 0.6, "Coat Roughness": 0.1}),
@@ -151,12 +157,13 @@ def _mats(color):
                                                "Subsurface Scale": 0.01}), scale=140, strength=0.08, distance=0.001)
     m["eye"] = mt.principled("EyeWhite", (0.92, 0.92, 0.90), 0.1, **{"Coat Weight": 1.0, "Coat Roughness": 0.02,
                                                                       "Subsurface Weight": 0.25})
-    m["pupil"] = mt.principled("Pupil", (0.008, 0.01, 0.014), 0.06, **{"Coat Weight": 1.0, "Coat Roughness": 0.02})
-    m["glint"] = mt.principled("Glint", (1, 1, 1), 0.05, **{"Emission Color": (1, 1, 1), "Emission Strength": 0.5})
-    m["lash"] = mt.principled("Lash", (0.01, 0.06, 0.08), 0.4)
+    m["pupil"] = mt.principled("Pupil", (0.012, 0.016, 0.024), 0.3, **{"Coat Weight": 0.5, "Coat Roughness": 0.15})
+    m["glint"] = mt.principled("Glint", (1, 1, 1), 0.3, **{"Emission Color": (1, 1, 1), "Emission Strength": 0.25})
+    m["lash"] = mt.principled("Lash", (0.0, 0.16, 0.22), 0.5)
     m["cheek"] = mt.principled("Cheek", (0.85, 0.40, 0.45), 0.6, **{"Sheen Weight": 0.5})
-    m["suit"] = mt.ph_pbr("SuitWool", "poly_wool_herringbone", size_m=0.09, desat=True, tint=(0.07, 0.075, 0.09),
-                          nor_strength=0.9, **{"Sheen Weight": 0.1, "Sheen Roughness": 0.6, "Sheen Tint": (0.5, 0.5, 0.55)})
+    m["suit"] = mt.ph_pbr("SuitWool", "poly_wool_herringbone", size_m=0.09, desat=True, tint=(0.030, 0.032, 0.040),
+                          nor_strength=0.9, rough_mul=0.5, rough_add=0.45,
+                          **{"Sheen Weight": 0.06, "Sheen Roughness": 0.6, "Sheen Tint": (0.5, 0.5, 0.55)})
     m["shirt"] = mt.noise_bump(mt.principled("Shirt", (0.88, 0.89, 0.90), 0.55, **{"Subsurface Weight": 0.1,
                                                                                      "Sheen Weight": 0.3}),
                                scale=700, strength=0.03, distance=0.0005)
@@ -210,6 +217,22 @@ def _on_bone(ob, arm, bone):
     return ob
 
 
+def _folds(ob, scale=0.07, strength=0.007):
+    """Cloth folds: a soft marble displacement after subdivision (wrinkles and drape, cheaply)."""
+    tex = bpy.data.textures.new(f"Folds_{ob.name}", "MARBLE")
+    tex.marble_type = "SOFT"
+    tex.noise_basis_2 = "SIN"
+    tex.noise_scale = scale
+    tex.turbulence = 4.0
+    tex.noise_depth = 2
+    md = ob.modifiers.new("folds", "DISPLACE")
+    md.texture = tex
+    md.texture_coords = "LOCAL"
+    md.strength = strength
+    md.mid_level = 0.5
+    return ob
+
+
 def build(C, loc, yaw_deg=0.0, size=1.0, color=(0.0, 0.42, 0.56)):
     pm = _mats(color)
     root = empty("PenguinRoot", C, loc)
@@ -259,6 +282,7 @@ def build(C, loc, yaw_deg=0.0, size=1.0, color=(0.0, 0.42, 0.56)):
     so.thickness, so.offset = 0.02, 1.0
     sub = jacket.modifiers.new("sub", "SUBSURF")
     sub.levels = sub.render_levels = 2
+    _folds(jacket, 0.08, 0.014)
     smooth_by_angle(jacket, 80)
     # lapels along the V
     for sx in (-1, 1):
@@ -294,6 +318,7 @@ def build(C, loc, yaw_deg=0.0, size=1.0, color=(0.0, 0.42, 0.56)):
         sl = smooth_tube(f"Sleeve{sx}", [sh, (sx * 0.33, 0.01, 0.51), el], 0.068, pm["suit"], C, parent=arm,
                          taper=[1.15, 1.05, 0.95])
         _skin(sl, arm)
+        _folds(sl, 0.03, 0.005)
         sphere(f"Cuff{sx}", 0.06, el, pm["shirt"], C, scale=(1.0, 1.0, 0.32), parent=arm,
                rot=(0, sx * math.radians(-32), 0))
         sphere(f"Flipper{sx}", 0.075, (sx * 0.425, 0.04, 0.30), pm["teal"], C, scale=(0.55, 1.0, 1.7), parent=arm,
@@ -312,27 +337,30 @@ def build(C, loc, yaw_deg=0.0, size=1.0, color=(0.0, 0.42, 0.56)):
     # face: eyes, lids, bill, cheeks — rigid on the head bone
     bpy.context.view_layer.update()
     lids = []
-    ez, ex, er = 0.888, 0.086, 0.064
+    # gentle eyes: small, set deep so only a shallow cap shows (lids stay flush when shut), big dark
+    # pupils filling most of the cap, a soft catch-light, a thin dark-teal lash line, no brows
+    ez, ex, er = 0.885, 0.084, 0.050
     for sx in (-1, 1):
         sy = surface_y(ex, ez)
         yaw = math.atan2(ex, sy) * 0.8
-        eye = empty(f"Eye{sx}", C, (sx * ex, sy - er * 0.48, ez), parent=arm)
-        eye.rotation_euler = (math.radians(-6), 0, sx * -yaw)
+        eye = empty(f"Eye{sx}", C, (sx * ex, sy - er * 0.72, ez), parent=arm)
+        # lid edges tilt with the inner corners up: a soft, sleepy face rather than a frown
+        eye.rotation_euler = (math.radians(-6), sx * math.radians(14), sx * -yaw)
         sphere(f"EyeWhite{sx}", er, (0, 0, 0), pm["eye"], C, parent=eye)
-        # pupil and glint sit just proud of the white (the pupil's front at 1.01 er) and stay under the shut lid
-        sphere(f"Pupil{sx}", er * 0.50, (sx * -0.005, er * 0.86, 0.0), pm["pupil"], C, scale=(1.0, 0.3, 1.15), parent=eye)
-        sphere(f"Glint{sx}", 0.006, (sx * -0.012 + 0.008, er * 0.97, 0.017), pm["glint"], C, scale=(1, 0.5, 1), parent=eye)
+        sphere(f"Pupil{sx}", er * 0.60, (0.0, er * 0.80, -0.003), pm["pupil"], C, scale=(1.0, 0.36, 1.08), parent=eye)
+        sphere(f"Glint{sx}", 0.0065, (sx * -0.006 - 0.007, er * 0.995, 0.012), pm["glint"], C, scale=(1, 0.4, 1), parent=eye)
+        sphere(f"Glint2{sx}", 0.003, (sx * -0.006 + 0.008, er * 0.99, -0.010), pm["glint"], C, scale=(1, 0.4, 1), parent=eye)
         lid = empty(f"Lid{sx}", C, parent=eye)
         lb = bmesh.new()
-        bmesh.ops.create_uvsphere(lb, u_segments=40, v_segments=24, radius=er * 1.12)
+        bmesh.ops.create_uvsphere(lb, u_segments=40, v_segments=24, radius=er * 1.06)
         bmesh.ops.delete(lb, geom=[v for v in lb.verts if v.co.z < -0.001], context="VERTS")
         lo = from_bm(f"UpperLid{sx}", lb, pm["teal"], C, lid)
         so = lo.modifiers.new("thick", "SOLIDIFY")
-        so.thickness = 0.004
+        so.thickness = 0.003
         smooth_by_angle(lo, 80)
-        # lash line along the lid's front rim: the closed-eye curve when shut, the upper lid line when open
-        rim = [(er * 1.12 * math.cos(a), er * 1.12 * math.sin(a), 0.0) for a in [math.pi * k / 16 for k in range(17)]]
-        smooth_tube(f"Lash{sx}", rim, 0.0042, pm["lash"], C, parent=lid)
+        # lash line along the lid's front rim: the closed-eye curve when shut, the lid edge when open
+        rim = [(er * 1.06 * math.cos(a), er * 1.06 * math.sin(a), 0.0) for a in [math.pi * (0.12 + 0.76 * k / 16) for k in range(17)]]
+        smooth_tube(f"Lash{sx}", rim, 0.0022, pm["lash"], C, parent=lid)
         _on_bone(eye, arm, "head")
         lids.append(lid)
         ch = sphere(f"Cheek{sx}", 0.045, (sx * 0.16, surface_y(0.16, 0.775) - 0.012, 0.775), pm["cheek"], C,
@@ -347,7 +375,7 @@ def build(C, loc, yaw_deg=0.0, size=1.0, color=(0.0, 0.42, 0.56)):
             x, y, zz = v.co
             x *= 1.0 - 0.66 * max(y, 0.0)               # taper toward a rounded tip
             v.co = Vector((x * w, y * l, zz * hgt))
-            v.co.z += 2.2 * hgt * (v.co.x / w) ** 2 * max(-y, 0.0) * 0.5   # smile at the corners
+            v.co.z += 1.1 * hgt * (v.co.x / w) ** 2 * max(-y, 0.0) * 0.5   # a slight smile at the corners
             v.co.y -= 0.03 * (v.co.x / w) ** 2                               # corners follow the face
         ob = from_bm(name, bm, pm["bill"], C, arm)
         ob.location = (0, by + yo, z)
