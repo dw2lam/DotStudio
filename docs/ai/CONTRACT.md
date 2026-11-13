@@ -144,3 +144,19 @@ CustomSceneLink.swift, GLSLTranslator.swift, CustomFilm.swift). Additions, none 
   app's Thumbnailer); live renderers never wait (they draw the calm stand-in, shader 90, until it's built) except
   the screensaver's first frame. tools/gallery: `--scene <packageDir>` (validate + install into the temp store +
   render / `--gpubench`), and `--checks` runs the Custom Scene checks.
+
+## 9. As merged (branch ai-integrate — additive)
+- `makeCustomScenesAPI` returns `CustomScenesBridge` (MCP/CustomScenesAPI.swift): §4 on `MTLCreateSystemDefaultDevice()`
+  and the MCP's store, diagnostics carry `file` (nil = the entry; the tools show source lines only for the entry),
+  the async engine calls are waited on from the tool call. `CustomScenesAPI.effect(scene:)` hands the tools the
+  engine's own starting effect (`EffectInstance.customScene`) and every param it takes (manifest + engine), so
+  custom styles are built exactly as the app builds them. `DOTSTUDIO_MCP_TEST_FAKES=1` keeps the structural stand-in.
+- Guides: `engines/<id>` is served from each engine's own `guide.md` (built-in: Resources/Engines; pulled: the store).
+  The bundled `Guides/engines/*` placeholders are gone; the Blender toolkit's flow (§6) is the bundled guide `film`.
+- Film (§6 vs §8): the `film` *engine* is built in (it plays clips); the Blender *toolkit* is separate and not merged
+  yet, so `makeFilmToolkit` returns `UnavailableFilmToolkit` (TODO + seam in MCP/Film.swift). `FilmPackage.make`
+  writes a loop's output in the engine's format (no `entry`; `clips` by variant; the spec's `look`). A package's
+  `look.grain` is its styles' starting `ds.grain`; `ds.halation` starts at 0 (the toolkit bakes halation).
+  `DOTSTUDIO_MCP_TEST_FAKES=film` = the real engines with the stand-in toolkit (real H.264 loops).
+- Clocks: `FXUniforms.still` (x = 1 in a still) settles a clock's minute changeover; `ctx.clock` is exact on every
+  minute (`floor(clock / 60)` is the minute on screen). Manifests may list `"clock"` in `uses`.

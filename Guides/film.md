@@ -1,17 +1,17 @@
-# Engine: film (photoreal, ray-traced scenes)
+# Film scenes: the Blender toolkit (photoreal, ray-traced)
 
-A film scene is a real 3D set — CC0 assets, physical materials and light — built in Blender by DotStudio's film toolkit (`dsfilm`), rendered with Cycles/EEVEE into seamless video loops (one per variant: `day`, `golden`, `night`, `rain`), and played by DotStudio as a scene that follows the sun and the weather. This page is the contract for an AI driving it through the MCP tools. When the film engine is pulled, its own `guide.md` (the full spec schema and each template's params) is listed as well; read both.
+A film scene is a real 3D set — CC0 assets, physical materials and light — built in Blender by DotStudio's film toolkit (`dsfilm`), rendered with Cycles/EEVEE into seamless video loops (one per variant: `day`, `golden`, `night`, `rain`), and played by DotStudio as a scene that follows the sun and the weather. This page is the contract for an AI driving the toolkit through the MCP tools. DotStudio's `film` engine — the part that plays the finished clips, built into the app — has its own guide, `engines/film` (variants, clip rules, live grain); read both.
 
 ## The flow (every step is a tool)
 
-1. `film_status` — Blender installed and new enough? Film engine pulled? Which GPU? If Blender is missing or too old, pass its install steps to the user **word for word and stop**: DotStudio never installs Blender, and you must not either (no scripts, no Homebrew, no downloads on the user's behalf). The user downloads Blender 5.1+ for Apple Silicon from blender.org, drags it to Applications, opens it once and quits.
-2. `pull_engine("film")` — the toolkit pack (Python + scene templates + this guide; no native code). Tell the user first.
+1. `film_status` — Blender installed and new enough? Film toolkit installed? Which GPU? If Blender is missing or too old, pass its install steps to the user **word for word and stop**: DotStudio never installs Blender, and you must not either (no scripts, no Homebrew, no downloads on the user's behalf). The user downloads Blender 5.1+ for Apple Silicon from blender.org, drags it to Applications, opens it once and quits.
+2. The film toolkit (Python + scene templates; no native code) ships separately from the app; `film_status` says whether this Mac has it. The `film` engine that plays the clips is built into DotStudio — nothing to pull for that.
 3. `list_film_templates` — start from a template. **Commute** is the first: a Japanese commuter-train interior at real scale, the city scrolling past on a viaduct, an original penguin in a suit dozing on the end seat. Templates list their params, cameras, variants and loop length.
 4. `create_film_scene(template, params, variants, loop_seconds, look)` — a draft. Edit later with `update_film_scene` (`spec_patch` deep-merges into the spec) and read it back with `get_film_scene`.
 5. `render_film_stills(draft)` — ray-traced stills per variant, returned as images. **Show them to the user and get an explicit yes on the base scene before animating.** Iterate on stills (cheap) — never on loops (expensive).
 6. `render_film_loop(draft)` — a background job: Blender headless at low priority, one at a time, survives the chat ending. Returns a job id at once. Confirm the cost with the user first.
 7. `film_job_status(job)` — progress, ETA and the log's tail; poll every few minutes, not in a tight loop. `cancel_film_job` stops it. When it finishes, the clips are packaged and installed as a scene and the status returns its id.
-8. `create_style(effects: [{"kind": "custom", "scene": "<id>", "params": {"grain": 0.2}}])`, `preview_style`, and only if the user asks, `set_screensaver` / `set_wallpaper`.
+8. `create_style(effects: [{"kind": "custom", "scene": "<id>", "params": {"ds.grain": 0.2}}])`, `preview_style`, and only if the user asks, `set_screensaver` / `set_wallpaper`.
 
 ## The look
 
@@ -21,7 +21,7 @@ A film scene is a real 3D set — CC0 assets, physical materials and light — b
 |---|---|---|---|---|
 | `bloom` | 0–1 | 0.25 | Soft glow around bright lights (lamps, sun on glass). Above 0.5 reads as cheap "dreamy". | at render |
 | `halation` | 0–1 | 0.15 | The warm red-orange glow film stock gives bright edges against dark. Lovely at night and golden; keep ≤ 0.2 by day. | at render |
-| `grain` | 0–1 | 0.2 | Live film grain added by DotStudio while it plays — never baked into the clips, so it never repeats with the loop. The package carries it as the default; the style's `grain` param overrides it. 0.1–0.3 is natural; 0 looks like CG. | at playback |
+| `grain` | 0–1 | 0.2 | Live film grain added by DotStudio while it plays — never baked into the clips, so it never repeats with the loop. The package carries it as the default; the style's `ds.grain` param (the film engine's Grain) overrides it. 0.1–0.3 is natural; 0 looks like CG. | at playback |
 
 ## Budgets (Apple Silicon, M5 Pro 16-core GPU, 24 GB — scale up for smaller GPUs)
 
