@@ -2,7 +2,7 @@
   "id": "film",
   "kind": "film",
   "name": "Film — prerendered photoreal loops",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "requires": {"blender": ">=5.1", "python3": ">=3.10", "ffmpeg": ">=6", "pillow": "for template textures"},
   "entry": "run.py",
   "cli": "Blender -b --factory-startup --python run.py -- SPEC.json (--stills DIR | --still FILE | --anim DIR [--frames A-B] | --build-sequence DIR) [--variant V] [--camera C] [--engine cycles|eevee] [--res WxH] [--samples N] [--no-post]",

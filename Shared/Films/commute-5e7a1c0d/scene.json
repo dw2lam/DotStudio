@@ -9,11 +9,18 @@
     "version": ">=1"
   },
   "fps": 24,
-  "description": "A penguin dozes on the train home. Photoreal, ray traced in Blender; the light follows the real sun.",
+  "description": "A penguin dozes on the train home. Photoreal, ray traced in Blender; the light follows the real sun and the weather.",
   "uses": [
-    "sun"
+    "sun",
+    "weather"
   ],
   "clips": [
+    {
+      "variant": "day",
+      "file": "clips/day.mov",
+      "loop": true,
+      "codec": "hevc"
+    },
     {
       "variant": "golden",
       "file": "clips/golden.mov",
@@ -23,6 +30,12 @@
     {
       "variant": "night",
       "file": "clips/night.mov",
+      "loop": true,
+      "codec": "hevc"
+    },
+    {
+      "variant": "rain",
+      "file": "clips/rain.mov",
       "loop": true,
       "codec": "hevc"
     }
