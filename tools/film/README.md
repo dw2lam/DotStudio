@@ -36,6 +36,7 @@ nice -n 10 $B -b --factory-startup --python tools/film/run.py -- tools/film/scen
 nice -n 10 $B -b --factory-startup --python tools/film/run.py -- tools/film/scenes/commute/commute.json \
     --anim OUT/frames --engine eevee                       # the loop as PNG frames (resumable)
 python3 -I tools/film/dsfilm/encode.py OUT/frames OUT/commute-day   # -> .mov (HEVC 10-bit) + -preview.mp4
+python3 -I tools/film/dsfilm/encode.py --web OUT/frames OUT/commute-day --max-mb 4   # -> -web.webm (VP9) + -web.mp4
 python3 -I tools/film/dsfilm/encode.py --seam OUT/frames            # loop-seam check (want ratio ~1)
 ```
 
@@ -147,7 +148,7 @@ does).
 | `post` | `setup(scene, look)`, `enable(scene, on)`, `grain_preview(src_png, dst_png, amount)` | The spec's `look` block, baked in Blender 5's compositor: halation (warm glow around highlights), bloom, vignette. Thresholds are in scene-linear units before exposure (2–3 catches only real highlights). Grain is never baked into video; the app adds it at playback. |
 | `geometry.Batch` | `Batch(name, coll)`: `.box(size, loc, mat, rot_z)`, `.cylinder(r, h, loc, mat)`, `.poly(verts, faces, mat, loc)`, `.finish()` | Thousands of parts merged into one mesh per material (a city is a few dozen objects) |
 | `materials.facade_grid` | `facade_grid(name, wall, glass, pitch, floor_h, win_w, win_h, sill, curtain_prob, lit, lit_prob)` | A procedural building wall with recessed windows, curtains and, at night, lit rooms; no textures needed |
-| `encode` | `encode(frames_dir, out_base, vignette=0.35, grain=0)`, `seam(frames_dir)` | HEVC main10 `hvc1` via VideoToolbox, plus an H.264 preview |
+| `encode` | `encode(frames_dir, out_base)`, `web(frames_dir, out_base, size, max_mb)`, `seam(frames_dir)` | HEVC main10 `hvc1` via VideoToolbox + an H.264 preview; two-pass VP9 webm + H.264 mp4 sized for the web; no grain (the app adds it live) |
 | `spec` | `load(path)`, `scene_module(name)`, `build(spec, variant, engine, res, samples)` | what run.py uses |
 
 ### Lighting presets
@@ -169,16 +170,19 @@ light the interior: that flattens the sun patches.
 
 | What | Cost |
 |---|---|
-| Building Commute | ~12 s; about 2,000 objects |
+| Building Commute | ~15–30 s (a few hundred objects; the city is merged per material) |
 | First Cycles render after a fresh start | +~60–90 s of Metal kernel compile (cached afterwards) |
-| Cycles still, 1600×1000, 384 samples (adaptive + OIDN) | 52–68 s per frame (day_wide 52 s, day_close 68 s, golden_wide 57 s, night_wide 67 s), plus ~25 s of build/sync per process |
-| Cycles still, 800×500, 128 samples (iteration) | ~8 s |
-| EEVEE (ray traced), 800×500, 16 samples | ~30–40 s for the first frame, including shader compile |
-| Commute loop | 48 s × 24 fps = 1152 frames |
+| Cycles still, 1600×1000, 384 samples (adaptive + OIDN, 1024-px tiles) | 75–105 s per frame |
+| Cycles still, 800×500, 64–128 samples (iteration) | ~7–10 s |
+| Cycles animation frame, 2560×1600, 128 samples | ~76 s per frame (measured over 10 frames) |
+| EEVEE animation frame (ray traced, probes baked), 2560×1600, 64 samples | ~20–30 s per frame (measured over 24 frames) |
+| EEVEE animation frame, 1920×1200, 64 samples | ~26 s per frame: the cost is in the samples, not the resolution |
+| EEVEE probe bake (volume + sphere) | ~8 s per process |
+| Commute loop | 24 s × 24 fps = 576 frames: ~4 h with EEVEE at 64 samples, ~12 h with Cycles at 128 |
+| Web encode (1280×800, two-pass VP9 + H.264) | about a minute for 24 s |
 
-The EEVEE animation and Cycles animation per-frame costs have not been measured yet. Measure them
-on 24 frames before committing to a full render: at 2560×1600, 1152 Cycles frames would take
-roughly 1–2 minutes each, i.e. a day or more.
+Always time 24 frames before a full loop. EEVEE needs the scene's baked volume probe to match
+Cycles; without it an interior is lit by the whole sky and looks flat and washed out.
 
 ## Commute scene
 
