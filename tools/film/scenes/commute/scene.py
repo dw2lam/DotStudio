@@ -136,12 +136,14 @@ def build(ctx):
             pen["head"].rotation_euler = (math.radians(-0.65 * pitch), math.radians(roll * 1.5), math.radians(-lat * 2.0))
             for l in pen["lids"]:
                 l.rotation_euler = (math.radians(80 - 170 * lid), 0, 0)  # dome back = open, forward = shut
-        if M.get("rain_map") is not None:
-            M["rain_map"].inputs["Location"].default_value = (0.0, 0.0, 6.0 * t / lp.seconds)
+        if M.get("rain") is not None:
+            M["rain"].set(lp.wrap(t) / lp.seconds)
 
     ids = [r for r, _, _ in rigs.values()] + [rig.sun] + pivots
     if pen:
         ids += [pen["torso"], (pen["head"], "rotation_euler")] + pen["lids"]
+    if M.get("rain") is not None:
+        ids += M["rain"].sockets
     if not ctx.params.get("static", False):
         lp.bake(ids, frame, props=("location", "rotation_euler", "scale"))
     else:
