@@ -104,3 +104,19 @@ body {
     animation: none;
   }
 }
+
+/* MCP demo: from tablets up the stage is given the height left in the window (MCPDemo.tsx,
+   useFitStage) and the display is as large as fits in it, centred. Its frame is 1000 wide by
+   632 tall (CROP 0.8 of 790). */
+.fit-display {
+  width: 100%;
+  margin-inline: auto;
+}
+@media (min-width: 768px) {
+  .fit-stage {
+    container-type: size;
+  }
+  .fit-display {
+    width: min(100cqw, calc(100cqh * 1000 / 632));
+  }
+}

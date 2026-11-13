@@ -16,8 +16,7 @@ type Tile = {
   aspect: string;
 };
 
-// The owner's favourites, one appearance each across the page. Clocks, the other
-// water scenes and the classic genres live in Packs.
+// The owner's favourites, one appearance each across the page.
 const TILES: Tile[] = [
   {
     name: "Liquid Chrome",

@@ -1,7 +1,7 @@
 import type { BuildStep } from "./mcpMedia";
 
 /*
- * The MCP demo's script: a short chat with DotStudio connected over MCP, ~30 s, in four
+ * The MCP demo.s script: a short chat with DotStudio connected over MCP, ~31 s, in four
  * beats. Times are seconds from the start of the loop.
  */
 
@@ -19,10 +19,10 @@ export const BEATS: { id: BeatId; name: string; start: number }[] = [
   { id: "prompt", name: "Prompt", start: 0 },
   { id: "build", name: "Build", start: 7.4 },
   { id: "render", name: "Render", start: 15.0 },
-  { id: "enjoy", name: "Enjoy", start: 20.8 },
+  { id: "enjoy", name: "Enjoy", start: 21.0 },
 ];
 
-export const DURATION = 30;
+export const DURATION = 31;
 
 /** When the prompt is sent. */
 export const SENT = 7.4;
@@ -62,7 +62,7 @@ export const CHAT: Message[] = [
   { at: 12.1, from: "you", text: "Make the light warmer." },
   { at: 13.8, from: "ai", text: "Done." },
   { at: 15.2, from: "ai", text: "This one's prerendered, so it's rendering now. Most scenes play live." },
-  { at: 21.2, from: "ai", text: "Set as your screensaver. Enjoy." },
+  { at: 20.0, from: "ai", text: "Set as your screensaver. Enjoy." },
 ];
 
 /** The tools that do the work, shown once as a single line of chips (the MCP server's real names). */
@@ -77,4 +77,4 @@ export const BUILD_STEPS: { id: BuildStep; at: number }[] = [
 ];
 
 /** The render, for scenes that need one. */
-export const RENDER = { start: 15.4, end: 20.4 };
+export const RENDER = { start: 15.4, end: 19.6 };

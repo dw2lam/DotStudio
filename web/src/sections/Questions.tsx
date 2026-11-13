@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
-import { Reveal } from "../components/Reveal";
+import { useId, useState, type ReactNode } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { Plus } from "lucide-react";
 import { SectionHeader } from "../components/SectionHeader";
 
 const CREAM = "#E1E0CC";
@@ -14,50 +15,26 @@ const QUESTIONS: { q: string; a: ReactNode }[] = [
     q: "macOS says it can't verify the developer.",
     a: (
       <>
-        DotStudio isn't notarized yet. Click <K>Done</K>, then in{" "}
-        <K>System Settings → Privacy &amp; Security</K> click <K>Open Anyway</K>, then confirm with{" "}
-        <K>Open</K>. You do this once;
-        on macOS 15 and later, right-click → Open no longer skips it.
+        DotStudio isn't notarized yet. Click <K>Done</K>, then <K>Open Anyway</K> in{" "}
+        <K>System Settings › Privacy &amp; Security</K>. You only do this once.
       </>
     ),
   },
   {
-    q: "How do I choose the screensaver?",
+    q: "How do I set the screensaver?",
     a: (
       <>
-        <K>System Settings → Wallpaper → Screen Saver…</K>, then <K>DotStudio</K> under Other. The
-        welcome guide shows each click. After that, you pick styles in the app.
+        In <K>System Settings › Wallpaper › Screen Saver</K>, choose <K>DotStudio</K> under Other. The
+        welcome guide walks you through it.
       </>
     ),
   },
   {
-    q: "Why does Guide Me ask for Accessibility?",
+    q: "How does the music work?",
     a: (
       <>
-        So it can see where the buttons are in System Settings and point at the next one as you
-        click. It only reads System Settings, and only while the guide is open. Say no and the guide
-        shows the same steps as pictures; change it any time in{" "}
-        <K>Privacy &amp; Security → Accessibility</K>.
-      </>
-    ),
-  },
-  {
-    q: "How does Spotify connect?",
-    a: (
-      <>
-        Through the Spotify and Music apps on your Mac: no account, no sign-in. The first time a song
-        plays, macOS asks to let DotStudio control the app, which turns on play, pause and skip.
-        Change it in <K>Privacy &amp; Security → Automation</K>.
-      </>
-    ),
-  },
-  {
-    q: "What does DotStudio send anywhere?",
-    a: (
-      <>
-        Your styles and what you play stay on your Mac. A missing album cover is looked up in
-        Spotify's or Apple's public catalog by the song's ID, or its artist and album. Weather uses
-        your location rounded to about 10 km.
+        It follows Spotify or Apple Music on your Mac, with no account or sign-in. macOS asks once to
+        let DotStudio control them.
       </>
     ),
   },
@@ -65,40 +42,98 @@ const QUESTIONS: { q: string; a: ReactNode }[] = [
     q: "Why is my wallpaper still?",
     a: (
       <>
-        Low Power Mode and a hot Mac hold a still frame, and it pauses while windows cover the
-        desktop. On battery it plays at 20 fps; pick Full or Still in <K>Settings → Live Wallpaper</K>.
+        Low Power Mode and a hot Mac hold a still frame, and it pauses behind windows. On battery it
+        plays at 20 fps; change it in <K>Settings › Live Wallpaper</K>.
       </>
     ),
   },
   {
-    q: "Does it need to stay open?",
+    q: "How does the MCP server work?",
     a: (
       <>
-        In the menu bar, yes: the wallpaper and the music on your screensaver need DotStudio running.
-        Closing its window keeps it there; <K>Open DotStudio at login</K> brings it back after a restart.
+        DotStudio includes an MCP server, so any MCP app can design and set screensavers with you.
+        Connect it in <K>Settings › AI</K>. Rendered film scenes need Blender 5.1 or later, which you
+        install yourself.
+      </>
+    ),
+  },
+  {
+    q: "How does it update?",
+    a: <>New versions come from GitHub Releases, and the app checks for and installs them itself.</>,
+  },
+  {
+    q: "What does DotStudio send anywhere?",
+    a: (
+      <>
+        Your styles and what you play stay on your Mac. Missing album art is looked up in Spotify's or
+        Apple's public catalog, and weather uses your location rounded to about 10 km.
       </>
     ),
   },
 ];
 
-export function Questions() {
+/** One question: a button that opens its answer with a soft height animation. */
+function Row({ q, a, open, onToggle }: { q: string; a: ReactNode; open: boolean; onToggle: () => void }) {
+  const id = useId();
+  const reduce = useReducedMotion();
   return (
-    <section id="faq" className="relative bg-black px-4 pb-4 pt-4 sm:pb-8 sm:pt-8">
-      <div className="mx-auto max-w-7xl">
-        <SectionHeader eyebrow="FAQ" title="Questions." />
+    <li className="border-t border-white/10 last:border-b">
+      <h3>
+        <button
+          type="button"
+          id={`${id}-q`}
+          aria-expanded={open}
+          aria-controls={`${id}-a`}
+          onClick={onToggle}
+          className="group flex w-full items-center justify-between gap-6 rounded-sm py-5 text-left outline-none focus-visible:ring-1 focus-visible:ring-primary/40 sm:py-6"
+        >
+          <span
+            className={`text-[15px] transition-colors duration-200 sm:text-lg ${
+              open ? "" : "text-gray-300 group-hover:text-primary"
+            }`}
+            style={open ? { color: CREAM } : undefined}
+          >
+            {q}
+          </span>
+          <Plus
+            aria-hidden="true"
+            className={`h-4 w-4 shrink-0 text-gray-500 transition-transform duration-300 group-hover:text-primary ${
+              open ? "rotate-45 text-primary" : ""
+            }`}
+          />
+        </button>
+      </h3>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            id={`${id}-a`}
+            role="region"
+            aria-labelledby={`${id}-q`}
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={reduce ? { duration: 0 } : { type: "spring", duration: 0.5, bounce: 0 }}
+            className="overflow-hidden"
+          >
+            <p className="max-w-2xl pb-6 pr-10 text-sm leading-relaxed text-gray-400">{a}</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </li>
+  );
+}
 
-        <div className="grid grid-cols-1 gap-x-12 md:grid-cols-2">
+export function Questions() {
+  const [open, setOpen] = useState<number | null>(null);
+  return (
+    <section id="faq" className="relative bg-black px-4 py-16 sm:py-20">
+      <div className="mx-auto grid max-w-7xl grid-cols-1 gap-x-12 lg:grid-cols-12">
+        <SectionHeader eyebrow="FAQ" title="Questions." className="mb-8 lg:col-span-4 lg:mb-0" />
+        <ul className="lg:col-span-8">
           {QUESTIONS.map((item, i) => (
-            <Reveal key={item.q} index={i % 2} y={10} scaleFrom={1}>
-              <div className="border-t border-white/10 py-6 sm:py-7">
-                <h3 className="text-base font-bold sm:text-lg" style={{ color: CREAM }}>
-                  {item.q}
-                </h3>
-                <p className="mt-2 text-xs leading-relaxed text-gray-400 sm:text-sm">{item.a}</p>
-              </div>
-            </Reveal>
+            <Row key={item.q} q={item.q} a={item.a} open={open === i} onToggle={() => setOpen(open === i ? null : i)} />
           ))}
-        </div>
+        </ul>
       </div>
     </section>
   );

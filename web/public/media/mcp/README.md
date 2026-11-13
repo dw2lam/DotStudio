@@ -8,6 +8,7 @@ camera except `layout`.
 
 | When | File | What it should be |
 |---|---|---|
+| Desktop | `app.webp` | DotStudio's library window on the simulated desktop: the real capture `docs/app.png` (1600 × 1000) at 1280 × 800, WebP q86 (~80 KB). Replace this one file when the app's UI changes (e.g. the MCP button in its top bar). The desktop picture is the hero's `/media/loops/hero-tidewater.webp`. |
 | Build | `layout.webp` | The set blocked out (bird's-eye / workbench view). Placeholder. |
 | Build | `clay.webp` | `wide`, clay materials. |
 | "Here's a first look." | `lit.webp` | `wide`, the first lit still. |

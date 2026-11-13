@@ -1,15 +1,21 @@
 /*
  * Every image and clip the MCP section (MCPDemo.tsx) shows, by slot. The files live in
- * public/media/mcp/; public/media/mcp/README.md lists each slot's size and format.
- * To swap in final renders, overwrite the files with the same names: nothing else changes.
+ * public/media/mcp/ (README.md there lists sizes and formats); the desktop wallpaper is the
+ * hero's own Golden Hour still. To swap in final renders, overwrite the files with the same
+ * names: nothing else changes.
  */
 
 const DIR = "/media/mcp/";
 
-/** What the stage shows while the scene comes together, in order. */
+/** What DotStudio's preview shows while the scene comes together, in order. */
 export type BuildStep = "layout" | "clay" | "lit" | "warm";
 
 export const MCP_MEDIA = {
+  /** The simulated Mac's desktop picture (already on the page: the hero's first scene). */
+  wallpaper: "/media/loops/hero-tidewater.webp",
+  /** DotStudio's library window, the real capture docs/app.png (16:10). */
+  app: DIR + "app.webp",
+
   /** 1600 × 1000 stills, all from the same camera except `layout`. */
   build: {
     layout: DIR + "layout.webp",
@@ -19,7 +25,7 @@ export const MCP_MEDIA = {
     warm: DIR + "warm.webp",
   } satisfies Record<BuildStep, string>,
 
-  /** The finished scene, playing on the Mac. Seamless loop; poster = its first frame. */
+  /** The finished scene as the screensaver: seamless loop; poster = its first frame. */
   final: {
     webm: DIR + "final-loop.webm",
     mp4: DIR + "final-loop.mp4",
