@@ -475,6 +475,8 @@ final class WallpaperRenderLoop {
     private func draw(_ s: Surface, fromLink: Bool, settled: Bool = false, presentAt: CFTimeInterval? = nil) {
         let pacing = s.pacing
         s.renderer.onPresented = (debug && fromLink) ? { pacing.presented($0) } : nil
+        // Held once a minute (Still / Low Power / hot): a clock shows the new minute settled.
+        s.renderer.settlesClocks = state.still
         let drawn = s.warming ? boosted { s.renderer.draw(to: s.layer, settled: settled, presentAt: presentAt) }
                               : s.renderer.draw(to: s.layer, settled: settled, presentAt: presentAt)
         guard drawn else { return }

@@ -19,7 +19,7 @@
         bool glassS = style == 1, inkS = style == 2;
 
         float bias; float4 fw = clocks_face(faceSel, wgt, bias);
-        ClkTypeLayout TL = clocks_typeLayout(textAtlas, u.clock, fw, h24, secs);
+        ClkTypeLayout TL = clocks_typeLayout(textAtlas, u.clock, u.still.x, fw, h24, secs);
         float cap = min(0.30 * size, 0.84 * aspect / max(TL.width, 1.0));
         float capPx = cap * res.y;
         float fp = 1.0 / capPx;                                    // one pixel, in caps
@@ -160,7 +160,7 @@
         float db; float4 dfw = clocks_face(faceSel == 1 ? 2 : (faceSel == 2 ? 1 : 0), 0.55, db);
 
         // ---- the figures, before and after their last change
-        ClkTime T = clocks_time(u.clock);
+        ClkTime T = clocks_time(u.clock, u.still.x);
         float pm = T.m - 1.0, ph = T.h;
         if (pm < 0.0) { pm = 59.0; ph = fmod(T.h + 23.0, 24.0); }
         float sN = floor(T.s), sP = fmod(sN + 59.0, 60.0);
@@ -207,7 +207,7 @@
 
         int aN = (ci == 0) ? apN : 0, aO = (ci == 0) ? apO : 0;     // AM / PM rides the hour card
         bool changed = gN[ci] != gO[ci] || aN != aO;
-        float e = changed ? ((ci >= 4) ? fract(T.s) : T.s) : 9.0;
+        float e = changed ? ((ci >= 4) ? T.af : T.a) : 9.0;
         float th = clocks_flapAngle(e);
         bool flipping = e < 0.75;
 
@@ -347,7 +347,7 @@
         float capS = 0.40 * pitch, capPx = capS * res.y;
         float bias; float4 fw = clocks_face(faceSel, wgt, bias);
 
-        ClkTime T = clocks_time(u.clock);
+        ClkTime T = clocks_time(u.clock, u.still.x);
         float pmn = T.m - 1.0, phr = T.h;
         if (pmn < 0.0) { pmn = 59.0; phr = fmod(T.h + 23.0, 24.0); }
         uint mN = clocks_wordMask(T.h, T.m, period), mO = clocks_wordMask(phr, pmn, period);
@@ -360,8 +360,8 @@
             bool on = (mN >> uint(i)) & 1u, was = (mO >> uint(i)) & 1u;
             if (!on && !was) continue;
             float a = 1.0;
-            if (on && !was) a = smoothstep(0.15 + 0.07 * float(i), 1.55 + 0.07 * float(i), T.s);
-            else if (!on && was) a = 1.0 - smoothstep(0.0, 1.1, T.s);
+            if (on && !was) a = smoothstep(0.15 + 0.07 * float(i), 1.55 + 0.07 * float(i), T.a);
+            else if (!on && was) a = 1.0 - smoothstep(0.0, 1.1, T.a);
             uchar3 w = CLK_WORDS[i];
             // light spilling round the word: a tight and a wide falloff along its centre line
             // (no plateau, no visible edge)
@@ -402,7 +402,7 @@
         }
         if (apos > 0.5) {
             bool on = (mN >> 24u) & 1u, was = (mO >> 24u) & 1u;
-            litHere = on ? (was ? 1.0 : smoothstep(1.83, 3.23, T.s)) : (was ? 1.0 - smoothstep(0.0, 1.1, T.s) : 0.0);
+            litHere = on ? (was ? 1.0 : smoothstep(1.83, 3.23, T.a)) : (was ? 1.0 - smoothstep(0.0, 1.1, T.a) : 0.0);
         }
         float cov = clocks_cov(d, capPx);
 
@@ -501,14 +501,14 @@
             bool centered = layout == 1;
             float bias; float4 fw = clocks_face(faceSel == 0 ? 1 : (faceSel == 1 ? 0 : 2), faceSel == 1 ? 0.15 : 0.35, bias);
             float dbias; float4 dfw = clocks_face(faceSel == 0 ? 1 : (faceSel == 1 ? 0 : 2), 0.45, dbias);
-            ClkTime T = clocks_time(u.clock);
+            ClkTime T = clocks_time(u.clock, u.still.x);
             float pmn = T.m - 1.0, phr = T.h;
             if (pmn < 0.0) { pmn = 59.0; phr = fmod(T.h + 23.0, 24.0); }
             // a new minute never cuts in: the run slides into its new layout, figures that change
             // fade away and the new ones fade up (~1.1 s), figures that stay put stay solid
-            bool changing = T.s < 1.1;
-            float slide = clocks_ease(T.s / 1.1);
-            float wN = clocks_ease((T.s - 0.40) / 0.70), wO = 1.0 - clocks_ease(T.s / 0.50);
+            bool changing = T.a < 1.1;
+            float slide = clocks_ease(T.a / 1.1);
+            float wN = clocks_ease((T.a - 0.40) / 0.70), wO = 1.0 - clocks_ease(T.a / 0.50);
             float xL = -0.5 * aspect + 0.085 * aspect;
             float x0 = xL;
             ClkRun rNew = clocks_timeRun(T.h, T.m, h24);

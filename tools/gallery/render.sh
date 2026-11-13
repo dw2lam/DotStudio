@@ -17,7 +17,7 @@ rm -rf "$BIN/Photos" && mkdir -p "$BIN/Photos"
 cp "$ROOT"/Shared/Photos/*.jpg "$BIN/Photos/" 2>/dev/null || true
 xcrun -sdk macosx swiftc -O -import-objc-header "$ROOT/Shared/Bridging.h" -I "$ROOT/Shared" \
   "$ROOT"/Shared/*.swift "$ROOT"/Shared/Scenes/*.swift "$ROOT"/Shared/Music/*.swift "$ROOT"/Shared/Weather/*.swift \
-  "$ROOT/tools/gallery/CustomChecks.swift" "$ROOT/tools/gallery/main.swift" -o "$BIN/gallery"
+  "$ROOT/tools/gallery/CustomChecks.swift" "$ROOT/tools/gallery/ClockChecks.swift" "$ROOT/tools/gallery/main.swift" -o "$BIN/gallery"
 # Custom Scene checks: the repo (CellKit.h drift) and an offline engines index (pullEngine).
 export DOTSTUDIO_REPO_ROOT="$ROOT"
 if [[ -x "$ROOT/tools/engines/build-index.sh" ]]; then

@@ -64,6 +64,10 @@ typedef struct {
     // .prepare in Studio2.swift, called from MetalRenderer.encodePasses). Zero for scenes that
     // don't use it.
     FX_FLOAT4 scene[16];
+    // (x: 1 = a still — a one-off frame: a thumbnail, a preview, the gallery — whose clock
+    //  shows the minute it was asked for, settled, not the first frame of the changeover
+    //  that starts on the minute (Clocks_funcs.h clocks_time); 0 for live frames. y, z, w: 0.)
+    FX_FLOAT4 still;
 } FXUniforms;
 
 #endif /* EffectUniforms_h */

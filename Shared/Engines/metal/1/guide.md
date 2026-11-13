@@ -64,7 +64,7 @@ my-scene/
 | `float2 res` | output size in pixels (up to 5120×2880, also portrait displays) |
 | `float aspect` | `res.x / res.y` |
 | `float t` | seconds since the scene started. Wraps every hour behind a crossfade: use it for periodic motion (`sin(t*…)`, `fract`, noise offsets), never as an ever-growing coordinate. |
-| `float clock` | local wall-clock seconds since midnight (0…86400) |
+| `float clock` | local wall-clock seconds since midnight (0…86400). `floor(clock / 3600)` and `floor(clock / 60)` are exactly the hour and minute on screen at every instant (draw digits from them); the seconds stop 50 ms short of each minute |
 | `DSDate date` | `year`, `month` 1–12, `day` 1–31, `weekday` 1 = Sunday … 7 |
 | `DSSun sun` | `elevation` (° above horizon, −90…90), `azimuth` (° from north, clockwise), `isDay` |
 | `DSWeather weather` | `cloud`, `rain`, `snow`, `fog`, `wind`, all 0…1 (eased; clear sky when unknown) |

@@ -40,19 +40,19 @@ static inline float3 standby_standby(float2 px, float2 res, constant FXUniforms&
     float lift = secs ? 0.10 : 0.0;                                   // room for the seconds line
     float2 q = p / cap + float2(0.0, -0.5 + lift);                    // caps; baseline y = 0, cap top −1
 
-    ClkTime T = clocks_time(u.clock);
+    ClkTime T = clocks_time(u.clock, u.still.x);
     float3 C = saturate(u.colorA.rgb), C2 = saturate(u.colorB.rgb);
     float night = (nightSel == 1) ? 1.0 : (nightSel == 2) ? 0.0 : clockkit_night(u);
 
     float ink = 0.0;
-    bool changing = T.s < STANDBY_ROLL;
+    bool changing = T.a < STANDBY_ROLL;
     const float D = 0.26;                                             // roll distance, caps
     if (q.y > (changing ? -1.15 - D : -1.15) && q.y < (changing ? 0.12 + D : 0.12)) {   // the figures' band only
         // a changing figure rolls up out of view as the next one rises into place (both fading),
         // while the run slides into its new spacing; figures that stay put stay solid
         float pm = T.m - 1.0, ph = T.h;
         if (pm < 0.0) { pm = 59.0; ph = fmod(T.h + 23.0, 24.0); }
-        float x = saturate(T.s / STANDBY_ROLL);                       // time through the roll
+        float x = saturate(T.a / STANDBY_ROLL);                       // time through the roll
         float e = clocks_easeOut(x);                                  // its travel: quick, then settling
         ClkRun rN = clocks_timeRun(T.h, T.m, h24);
         ClkRun rO = changing ? clocks_timeRun(ph, pm, h24) : rN;
@@ -116,10 +116,10 @@ static inline float3 standby_standby(float2 px, float2 res, constant FXUniforms&
 // ============================================================ 76 MINIMAL
 /// Coverage of the two small seconds figures (tabular, pen at q = 0 on the baseline), each one
 /// cross-fading into the next as it changes.
-static inline float standby_secondsInk(texture2d<float> A, sampler s, float sec, float4 fw, float bias,
+static inline float standby_secondsInk(texture2d<float> A, sampler s, float sec, float af, float4 fw, float bias,
                                        float2 q, float capPx, float cell) {
     float sN = floor(sec), sP = fmod(sN + 59.0, 60.0);
-    float w = clocks_ease(fract(sec) / 0.35);
+    float w = clocks_ease(af / 0.35);                    // af: ClkTime.af (settled in a still)
     float ink = 0.0;
     for (int i = 0; i < 2; ++i) {
         float2 lq = q - float2(float(i) * cell, 0.0);
@@ -198,12 +198,12 @@ static inline float3 standby_minimal(float2 px, float2 res, constant FXUniforms&
     float cov = 0.0;
     // the time
     if (p.y > baseT - 1.3 * capT && p.y < baseT + 0.3 * capT) {
-        ClkTime T = clocks_time(u.clock);
+        ClkTime T = clocks_time(u.clock, u.still.x);
         float pmn = T.m - 1.0, phr = T.h;
         if (pmn < 0.0) { pmn = 59.0; phr = fmod(T.h + 23.0, 24.0); }
-        bool changing = T.s < 1.1;
-        float slide = clocks_ease(T.s / 1.1);
-        float wN = clocks_ease((T.s - 0.40) / 0.70), wO = 1.0 - clocks_ease(T.s / 0.50);
+        bool changing = T.a < 1.1;
+        float slide = clocks_ease(T.a / 1.1);
+        float wN = clocks_ease((T.a - 0.40) / 0.70), wO = 1.0 - clocks_ease(T.a / 0.50);
         ClkRun rNew = clocks_timeRun(T.h, T.m, h24);
         ClkRun rOld = changing ? clocks_timeRun(phr, pmn, h24) : rNew;
         float2 tq = (p - float2(centered ? 0.0 : xL, baseT)) / capT;
@@ -214,7 +214,7 @@ static inline float3 standby_minimal(float2 px, float2 res, constant FXUniforms&
         if (secs) {
             float2 sq = (tq - float2(endX + 0.16, 0.0)) / ks;
             float sb; float4 sfw = clocks_face(0, 0.22, sb);
-            cov = max(cov, 0.55 * standby_secondsInk(A, s, T.s, sfw, sb, sq, ks * capT * res.y, tabW));
+            cov = max(cov, 0.55 * standby_secondsInk(A, s, T.s, T.af, sfw, sb, sq, ks * capT * res.y, tabW));
         }
     }
     // the date: "TUESDAY · NOVEMBER 10" in small tracked capitals
@@ -225,7 +225,7 @@ static inline float3 standby_minimal(float2 px, float2 res, constant FXUniforms&
         ClkRun dr = clocks_dateRun(u.date, u.clock, true, false);
         float w = clocks_runWidth(A, dr, dfw, dtrack);
         float2 dq = dq0 + float2(centered ? 0.5 * w : 0.0, 0.0);
-        float secOfDay = u.clock.x * 3600.0;
+        float secOfDay = u.still.x > 0.5 ? 1000.0 : clocks_secOfDay(u.clock);   // (the date settled in a still)
         float wN = clocks_ease((secOfDay - 0.40) / 0.70);             // at midnight: yesterday fades out,
         float dc = wN * clocks_cov(clocks_runDist(A, s, dr, dfw, dtrack, dq) - db, capD * res.y);
         if (secOfDay < 1.1) {                                         // today fades in (as the time does)
@@ -424,7 +424,7 @@ static inline float3 standby_watch(float2 px, float2 res, float t, constant FXUn
                 float dIn = clockkit_box(q + sOff * (0.014 * R), hx - cr) - cr;
                 float sh = smoothstep(-0.009 * R, 0.001 * R, dIn);
                 int yy = int(u.date.x), mo = clamp(int(u.date.y), 1, 12), dd = clamp(int(u.date.z), 1, 31);
-                float e = clocks_ease(u.clock.x * 3600.0 / 1.4);
+                float e = u.still.x > 0.5 ? 1.0 : clocks_ease(clocks_secOfDay(u.clock) / 1.4);   // settled in a still
                 float capD = 0.058 * R, pitch = 2.3 * hx.y / capD;
                 float db; float4 dfw = clocks_face(0, 0.45, db);
                 float2 dq = q / capD;
