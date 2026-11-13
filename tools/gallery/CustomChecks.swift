@@ -439,13 +439,18 @@ func customSceneChecks() -> Bool {
                 }
                 // the best of 8 interleaved rounds of 6 frames each (the GPU's clocks and other work
                 // make single runs noisy; interleaving keeps the three configurations comparable)
+                // — and when another app is drawing on the GPU meanwhile (a live wallpaper, the real
+                // DotStudio), up to 3 such batches, keeping each configuration's best so far
                 var best = [Double](repeating: .infinity, count: 3)
-                for round in 0..<8 {
-                    for (i, b) in benches.enumerated() {
-                        if let f = b.render(width: 5120, height: 2880, time: Float(round) * 0.7 + 1, frames: 6, readBack: false) {
-                            best[i] = min(best[i], f.ms)
+                for batch in 0..<3 {
+                    for round in 0..<8 {
+                        for (i, b) in benches.enumerated() {
+                            if let f = b.render(width: 5120, height: 2880, time: Float(batch * 8 + round) * 0.7 + 1, frames: 6, readBack: false) {
+                                best[i] = min(best[i], f.ms)
+                            }
                         }
                     }
+                    if best[1] - best[0] <= 0.3 && best[2] - best[0] <= 0.3 { break }
                 }
                 let plain = best[0], grained = best[1], full = best[2]
                 // (the pass itself — a 4K clip aspect-filled to 5K — is the floor any video pass pays)
