@@ -10,5 +10,5 @@
   "entryExtensions": ["glsl", "frag"],
   "guide": "guide.md",
   "examples": ["examples/dune-light", "examples/ink-drift", "examples/soft-orbit"],
-  "minApp": "1.4.6"
+  "minApp": "1.5.0"
 }

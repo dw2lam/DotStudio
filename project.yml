@@ -18,7 +18,7 @@ settings:
     CODE_SIGNING_REQUIRED: "YES"
     CODE_SIGNING_ALLOWED: "YES"
     ENABLE_HARDENED_RUNTIME: "NO"
-    MARKETING_VERSION: "1.4.6"
+    MARKETING_VERSION: "1.5.0"
     # Local/dev builds are build 1 so any published release counts as newer.
     # CI stamps the real build number (git commit count) — see release.yml.
     CURRENT_PROJECT_VERSION: "1"
@@ -128,7 +128,7 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: Shared/Bridging.h
         ENABLE_APP_SANDBOX: "NO"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        MARKETING_VERSION: "1.4.6"
+        MARKETING_VERSION: "1.5.0"
 
   # The MCP server AI clients launch (Claude Desktop, Claude Code, Cursor…): stdio JSON-RPC,
   # embedded at DotStudio.app/Contents/MacOS/dotstudio-mcp. Compiles Shared (renderer, model,

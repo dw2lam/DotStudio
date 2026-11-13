@@ -9,5 +9,5 @@
   "entryExtensions": ["metal"],
   "guide": "guide.md",
   "examples": ["examples/aurora-lake", "examples/paper-moon", "examples/tide-pool", "examples/rain-window", "examples/solar-dial", "examples/music-bloom"],
-  "minApp": "1.4.6"
+  "minApp": "1.5.0"
 }
