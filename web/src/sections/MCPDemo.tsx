@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion, type Transition } from "framer-motion";
 import { ArrowUp, Pause, Play } from "lucide-react";
 import { WordsPullUpMultiStyle } from "../components/animations/WordsPullUpMultiStyle";
@@ -554,6 +554,32 @@ const glass = (k: number): CSSProperties => ({
   color: "#ececee",
 });
 
+/**
+ * DotStudio's mark as a one-colour menu-bar glyph: the app icon's chrome drop drawn as a
+ * solid sphere with its swirl and highlight cut out (from App/Assets.xcassets/AppIcon).
+ */
+function DotMark({ size }: { size: string }) {
+  const id = useId().replace(/:/g, "");
+  return (
+    <svg viewBox="0 0 16 16" style={{ width: size, height: size, display: "block" }} aria-hidden="true">
+      <defs>
+        <mask id={`dsm${id}`}>
+          <rect width="16" height="16" fill="#fff" />
+          <path
+            d="M1.6 10.6C4.1 10.2 5.1 6.9 8.2 6.6c2.3-.2 3.1 1.7 5.9 1.1"
+            fill="none"
+            stroke="#000"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          />
+          <circle cx="5.6" cy="4.6" r="1.35" fill="#000" />
+        </mask>
+      </defs>
+      <circle cx="8" cy="8" r="7.25" fill="currentColor" mask={`url(#dsm${id})`} />
+    </svg>
+  );
+}
+
 /** The menu bar as macOS 26 draws it: no bar at all, white type on the wallpaper. No Apple logo. */
 function MenuBar({ k, narrow }: { k: number; narrow: boolean }) {
   const item: CSSProperties = { padding: `${pt(4, k)} ${pt(10, k)}` };
@@ -563,8 +589,10 @@ function MenuBar({ k, narrow }: { k: number; narrow: boolean }) {
       style={{ height: pt(30, k), fontSize: pt(13, k), padding: `0 ${pt(12, k)} 0 ${pt(8, k)}`, lineHeight: 1 }}
     >
       <div className="flex items-center" style={{ gap: pt(1, k) }}>
-        {/* Where the Apple menu would be. */}
-        <span style={{ ...item, width: pt(33, k) }} />
+        {/* The app's mark where the Apple menu would be (DavidOS's 13 × 15 pt slot). */}
+        <span className="flex items-center" style={item}>
+          <DotMark size={pt(14, k)} />
+        </span>
         <span className="font-bold" style={item}>
           DotStudio
         </span>
