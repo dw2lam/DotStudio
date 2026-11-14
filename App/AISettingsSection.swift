@@ -18,6 +18,12 @@ struct AISettingsSection: View {
         Section {
             Text("Assistants like Claude, Cursor or VS Code can design screensavers with you through DotStudio's MCP server: they read DotStudio's style guide, build styles from the scenes and looks or write new scenes of their own, preview them as images and check their GPU cost.")
                 .textRole(.body).wrapping()
+            LabeledContent("How to use it") {
+                Text("1. Connect your assistant below.\n2. \(AIConnect.restartHint)\n3. Ask it for a screensaver — “\(AIConnect.examplePrompt)”\n4. \(AIConnect.libraryHint)")
+                    .textRole(.caption).foregroundStyle(.secondary).wrapping()
+                    .multilineTextAlignment(.leading)
+                    .textSelection(.enabled)
+            }
             Toggle("Let AI change what plays", isOn: ai.allowPlaybackBinding(store: store))
                 .formSwitchSize()
                 .help("Off: assistants can still create and edit styles, but never change your screensaver or live wallpaper.")

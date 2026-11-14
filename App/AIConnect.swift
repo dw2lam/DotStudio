@@ -34,6 +34,11 @@ final class AIConnect: ObservableObject {
     }
 
     static var claudeCodeCommand: String { ClaudeDesktopConfig.claudeCodeCommand(command: helperPath) }
+
+    // The how-to, shared by the MCP popover and Settings ▸ AI.
+    static let restartHint = "Quit and reopen Claude Desktop. Claude Code picks DotStudio up in a new session. In Cursor, VS Code and other apps, paste the JSON into their MCP settings."
+    static let examplePrompt = "Make me a calm ocean screensaver with a clock, and show me a preview."
+    static let libraryHint = "New styles appear in your Library, ready to play. Whenever the AI changes something, a small notice shows what it did, with Undo."
     static var configJSON: String { ClaudeDesktopConfig.snippet(command: helperPath) }
 
     /// Re-read the settings and whether Claude Desktop lists this helper (on appear).
@@ -142,19 +147,31 @@ struct MCPPopover: View {
                         .textRole(.caption).foregroundStyle(.orange).wrapping()
                 }
             }
-            VStack(alignment: .leading, spacing: layout.controlGap) {
-                Button(scaled: ai.installedInDesktop ? "Added to Claude Desktop" : "Add to Claude Desktop") { ai.addToDesktop() }
-                    .disabled(ai.installedInDesktop || !ai.helperFound)
-                Button(scaled: ai.copied == "code" ? "Copied" : "Copy Claude Code command") {
-                    ai.copy(AIConnect.claudeCodeCommand, "code")
+            step(1, "Connect your assistant") {
+                VStack(alignment: .leading, spacing: layout.controlGap) {
+                    Button(scaled: ai.installedInDesktop ? "Added to Claude Desktop" : "Add to Claude Desktop") { ai.addToDesktop() }
+                        .disabled(ai.installedInDesktop || !ai.helperFound)
+                    Button(scaled: ai.copied == "code" ? "Copied" : "Copy Claude Code command") {
+                        ai.copy(AIConnect.claudeCodeCommand, "code")
+                    }
+                    .help(AIConnect.claudeCodeCommand)
+                    Button(scaled: ai.copied == "json" ? "Copied" : "Copy JSON for other apps") { ai.copy(AIConnect.configJSON, "json") }
+                        .help("The mcpServers entry for Cursor, VS Code, Codex and other MCP clients")
                 }
-                .help(AIConnect.claudeCodeCommand)
-                Button(scaled: ai.copied == "json" ? "Copied" : "Copy JSON") { ai.copy(AIConnect.configJSON, "json") }
-                    .help("The mcpServers entry for Cursor, VS Code, Codex and other MCP clients")
+                .disabled(!ai.helperFound)
+                if let s = ai.desktopStatus {
+                    Text(s).textRole(.caption).foregroundStyle(ai.desktopFailed ? .orange : .secondary).wrapping()
+                }
             }
-            .disabled(!ai.helperFound)
-            if let s = ai.desktopStatus {
-                Text(s).textRole(.caption).foregroundStyle(ai.desktopFailed ? .orange : .secondary).wrapping()
+            step(2, "Restart it") {
+                Text(AIConnect.restartHint).textRole(.caption).foregroundStyle(.secondary).wrapping()
+            }
+            step(3, "Ask for a screensaver") {
+                Text("“\(AIConnect.examplePrompt)”").textRole(.caption).foregroundStyle(.secondary).wrapping()
+                Button(scaled: ai.copied == "prompt" ? "Copied" : "Copy example") { ai.copy(AIConnect.examplePrompt, "prompt") }
+            }
+            step(4, "Find it in your Library") {
+                Text(AIConnect.libraryHint).textRole(.caption).foregroundStyle(.secondary).wrapping()
             }
             // The standard macOS switch, small and accent-tinted (as in the setup guide), its
             // label on the left and the switch at the trailing edge, like a Settings row.
@@ -178,8 +195,26 @@ struct MCPPopover: View {
             }
         }
         .padding(layout.cardPadding)
-        .frame(width: min(max(layout.scaled(300), range.lowerBound), range.upperBound), alignment: .leading)
+        .frame(width: min(max(layout.scaled(320), range.lowerBound), range.upperBound), alignment: .leading)
         .onAppear { ai.refresh(store: store) }
+    }
+
+    /// One numbered how-to step: an accent number, the title, then its controls or note.
+    private func step<Content: View>(_ n: Int, _ title: String, @ViewBuilder _ content: () -> Content) -> some View {
+        HStack(alignment: .top, spacing: layout.controlGap) {
+            Text("\(n)")
+                .textRole(.badge)
+                .foregroundStyle(.white)
+                .frame(width: layout.scaled(18), height: layout.scaled(18))
+                .background(Circle().fill(Color.accentColor))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: layout.labelGap) {
+                Text(title).textRole(.body).fontWeight(.semibold).wrapping()
+                    .accessibilityLabel("Step \(n): \(title)")
+                content()
+            }
+        }
+        .accessibilityElement(children: .contain)
     }
 
     private func status(_ ok: Bool, _ text: String) -> some View {
