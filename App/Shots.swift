@@ -628,6 +628,14 @@ enum UIShots {
         s.append(Screen(name: "settings-signals-editor-key", frame: .fixed(CGSize(width: 520, height: 760)),
                         prepare: { st in SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.night) },
                         view: { st in AnyView(SignalEditorSheet(original: st.model.library.signals![2], isNew: false)) }))
+        // A Custom Scene's live inputs in the Inspector: Air quality connected (42 AQI), a
+        // Temperature input not connected (its default, dimmed)
+        s.append(Screen(name: "editor-inputs", frame: .fit(width: 340, minHeight: 200),
+                        prepare: { st in
+                            SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.night)
+                            InputsDemo.apply(st.model)
+                        },
+                        view: { st in AnyView(InputsShot(model: st.model)) }))
         // The Screensaver card with When rules, one playing ("When: Snow day"), and the rules popover
         s.append(Screen(name: "dest-when", frame: .window,
                         prepare: { st in SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.night, active: true) },
@@ -1210,6 +1218,52 @@ private struct BounceLogoShot: View {
                       onDuplicate: {}, onRemove: {}, model: model)
                 .padding(Space.m)
                 .background(.regularMaterial)    // the inspector's ground (dark shots read on it)
+        }
+    }
+}
+
+/// UI shots: the Haze example package (metal engine examples) installed into the throwaway store
+/// with a second input, and a style using it whose Air quality input follows SignalsDemo's
+/// "Air quality" signal.
+enum InputsDemo {
+    static let style = UUID(uuidString: "5A1E0000-0000-4000-8000-0000000000B1")!
+
+    static func apply(_ model: AppModel) {
+        let store = CustomScenes.defaultStore
+        guard let engine = CustomScenes.resolveEngine(.init(id: "metal", version: ">=1.1"), store: store) else { return }
+        let src = engine.url.appendingPathComponent("examples/haze", isDirectory: true)
+        guard var m = CustomScenes.readManifest(packageAt: src).0 else { return }
+        m.inputs = (m.inputs ?? []) + [CustomSceneManifest.Input(key: "temp", label: "Temperature", range: [-10, 40], defaultValue: 15,
+                                                                  unit: "°C", suggest: "weather.tempC")]
+        let dst = CustomScenes.storePackageDir(id: m.id, store: store)
+        let fm = FileManager.default
+        try? fm.removeItem(at: dst)
+        try? fm.createDirectory(at: dst, withIntermediateDirectories: true)
+        try? fm.copyItem(at: src.appendingPathComponent("scene.metal"), to: dst.appendingPathComponent("scene.metal"))
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try? enc.encode(m).write(to: dst.appendingPathComponent("scene.json"))
+        CustomScenes.clearCaches(id: m.id)
+        var p = Preset.customScene(m)
+        p.id = style
+        p.effects[0].inputs = ["aqi": InputBinding(signal: SignalsDemo.air.uuidString)]
+        model.library.presets.removeAll { $0.id == style }
+        model.library.presets.append(p)
+        model.objectWillChange.send()
+    }
+}
+
+/// The Custom Scene effect row with its inputs, expanded (UI shots).
+private struct InputsShot: View {
+    @ObservedObject var model: AppModel
+    @State private var open = true
+
+    var body: some View {
+        if let i = model.library.presets.firstIndex(where: { $0.id == InputsDemo.style }) {
+            EffectRow(effect: $model.library.presets[i].effects[0], isExpanded: $open, isFirst: true,
+                      onDuplicate: {}, onRemove: {}, model: model)
+                .padding(Space.m)
+                .background(.regularMaterial)
         }
     }
 }

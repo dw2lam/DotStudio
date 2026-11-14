@@ -113,6 +113,9 @@ and `float inputLive[8]` (freshness 0…1). Runtime.h reads them from free u.sce
 shares DotStudio.h. A SignalLink per MetalRenderer (sibling of weatherLink) polls
 signal-values.json every 5 s. Style binding EffectInstance.inputs[key] = {signal}; unbound →
 default, inputLive 0. Bump the metal engine version / minApp.
+As built (phase 2): docs/ai/CONTRACT.md §11 — metal + cells engines 1.1 (minApp 1.6.0), u.scene[9…10]
+values / [11…12] live, Shared/Signals/SceneInputs.swift (InputBinding, SignalLink), App/SceneInputRows.swift,
+MCP bind_signal / inline `inputs` / preview_style `inputs`, `dotstudio-mcp --set-signal`.
 Phase 3 (later): drive built-in sliders from a signal (sliders only, deny-list phase-integrated
 params like speed/lapse).
 
