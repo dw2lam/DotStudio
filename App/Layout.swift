@@ -763,3 +763,101 @@ struct FlowLayout: Layout {
         }
     }
 }
+
+// MARK: - Tile grid
+
+/// The gallery's grid: LazyVGrid's adaptive columns (`tileColumns`: as many columns of at
+/// least `minimum` as fit, sharing the width, `columnSpacing` apart; each cell's content at
+/// its top) and its section header rows (`.tileGridFullRow()`: a header takes a whole row and
+/// starts the next section on a fresh row; every row, header rows too, `rowSpacing` apart) —
+/// laid out EAGERLY. The gallery holds a few dozen tiles: a lazy grid tore down each row as it
+/// scrolled out and rebuilt it as it came back (every tile's body, label, badges, menus and
+/// tooltips — a few ms per row, past a 120 Hz frame's 8.3 ms), on every pass through the
+/// page. Built once, a scroll only moves layers.
+struct TileGrid: Layout {
+    var minimum: CGFloat
+    var columnSpacing: CGFloat
+    var rowSpacing: CGFloat
+
+    struct Cache {
+        var width: CGFloat = -1
+        var rows: [Row] = []
+        var height: CGFloat = 0
+    }
+
+    struct Row {
+        var items: [Int]
+        var full: Bool
+        var height: CGFloat
+    }
+
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+    func updateCache(_ cache: inout Cache, subviews: Subviews) { cache = Cache() }
+
+    /// Columns for a width (GridItem.adaptive's count), and each column's width.
+    func columns(for width: CGFloat) -> (count: Int, width: CGFloat) {
+        let n = max(1, Int(((width + columnSpacing) / (minimum + columnSpacing)).rounded(.down)))
+        return (n, max(0, (width - columnSpacing * CGFloat(n - 1)) / CGFloat(n)))
+    }
+
+    private func rows(_ width: CGFloat, _ subviews: Subviews, _ cache: inout Cache) -> [Row] {
+        if cache.width == width { return cache.rows }
+        let (n, column) = columns(for: width)
+        var out: [Row] = []
+        var row: [Int] = []
+        func close() {
+            guard !row.isEmpty else { return }
+            let h = row.map { subviews[$0].sizeThatFits(ProposedViewSize(width: column, height: nil)).height }.max() ?? 0
+            out.append(Row(items: row, full: false, height: h))
+            row = []
+        }
+        for i in subviews.indices {
+            if subviews[i][TileGridFullRow.self] {
+                close()
+                out.append(Row(items: [i], full: true,
+                               height: subviews[i].sizeThatFits(ProposedViewSize(width: width, height: nil)).height))
+            } else {
+                row.append(i)
+                if row.count == n { close() }
+            }
+        }
+        close()
+        cache.width = width
+        cache.rows = out
+        cache.height = out.map(\.height).reduce(0, +) + rowSpacing * CGFloat(max(out.count - 1, 0))
+        return out
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        // No width offered (an ideal-size query): as wide as three minimum columns.
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? (minimum * 3 + columnSpacing * 2)
+        _ = rows(width, subviews, &cache)
+        return CGSize(width: width, height: cache.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        let column = columns(for: bounds.width).width
+        var y = bounds.minY
+        for row in rows(bounds.width, subviews, &cache) {
+            if row.full {
+                subviews[row.items[0]].place(at: CGPoint(x: bounds.minX, y: y), anchor: .topLeading,
+                                             proposal: ProposedViewSize(width: bounds.width, height: nil))
+            } else {
+                for (k, i) in row.items.enumerated() {
+                    subviews[i].place(at: CGPoint(x: bounds.minX + CGFloat(k) * (column + columnSpacing), y: y),
+                                      anchor: .topLeading, proposal: ProposedViewSize(width: column, height: nil))
+                }
+            }
+            y += row.height + rowSpacing
+        }
+    }
+}
+
+private struct TileGridFullRow: LayoutValueKey {
+    static let defaultValue = false
+}
+
+extension View {
+    /// In a TileGrid: this view (a section header) takes a whole row.
+    func tileGridFullRow() -> some View { layoutValue(key: TileGridFullRow.self, value: true) }
+}

@@ -126,6 +126,7 @@ enum PerfProbe {
             case "window": runWindow()
             case "scroll": runScroll()
             case "backdrop": runBackdrop()
+            case "onscreen": ScrollBench.run()
             default: runIdle()
             }
         }
@@ -137,7 +138,7 @@ enum PerfProbe {
 
     /// What the app sets up at launch (DotStudioApp.init + applicationDidFinishLaunching),
     /// minus anything that shows: no wallpaper is restored, no window opens.
-    @MainActor private static func bootServices() -> (AppModel, UpdateController) {
+    @MainActor static func bootServices() -> (AppModel, UpdateController) {
         let model = AppModel()
         model.storeAlert = nil
         // Music on (Show music: Corner) so the monitor watches, as for most users.
@@ -183,12 +184,12 @@ enum PerfProbe {
     private static let wakes = Perf.RunLoopWakes()
     private static var subs = Set<AnyCancellable>()
 
-    private static func spin(_ s: Double) {
+    static func spin(_ s: Double) {
         let end = Date().addingTimeInterval(s)
         while Date() < end { RunLoop.main.run(until: end) }   // one wake-up at the end, none of its own in between
     }
 
-    private static func say(_ s: String) { FileHandle.standardOutput.write(Data((s + "\n").utf8)) }
+    static func say(_ s: String) { FileHandle.standardOutput.write(Data((s + "\n").utf8)) }
 
     /// Measures `body` (which may spin the run loop) and prints one phase line + its counters.
     private static func phase(_ name: String, minutes: Bool = true, _ body: () -> Double) {
