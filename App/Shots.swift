@@ -217,6 +217,21 @@ enum UIShots {
             WallpaperSlot.shared.set(first)
             DemoHooks.hoverName = st.name(first)
         }, view: main))
+        // A When rule playing (the card: "When: Snow day"): the first tile, which it plays, says
+        // "When"; the second, the screensaver's own style, says nothing while the rule outranks it
+        s.append(Screen(name: "library-when", frame: .window, prepare: { st in
+            let scenes = st.model.library.presets.filter(\.isScene).map(\.id)
+            st.lineup([scenes.count > 1 ? scenes[1] : st.hero])
+            SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.firstScene, active: true)
+        }, view: main))
+        // …a rule with two styles over a playlist: the one on screen says "When", the other only
+        // shows the rule's symbol; the playlist's badges wait
+        s.append(Screen(name: "library-when-two", frame: .window, prepare: { st in
+            let scenes = st.model.library.presets.filter(\.isScene).map(\.id)
+            st.lineup(st.playlist)
+            SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.firstScene, active: true)
+            st.model.library.rules?[0].play = Array(scenes.prefix(2))
+        }, view: main))
 
         // Destination cards (top of the gallery) in each state
         s.append(Screen(name: "dest-single", frame: .window, view: main))
