@@ -125,6 +125,76 @@ struct CustomSceneManifest: Codable, Equatable {
         var codec: String?
     }
 
+    /// Film engine ≥ 1.1: one video of light layers mixed live (docs/film-layers.md, CustomFilm).
+    ///     "layers": { "file": "clips/layers.mov", "grid": [3, 2],
+    ///                 "tiles": ["sun", "sun_low", "sky", "cabin", "city", "mask"], "encoding": "pow4",
+    ///                 "scale": { "sun": 1.13, … }, "exposure": { "day": 1.5, "night": 3.2 },
+    ///                 "tint": { "sun_low": [1.0, 0.52, 0.22] } }
+    /// Fields this build doesn't know are kept verbatim (like the manifest's own).
+    struct Layers: Codable, Equatable {
+        struct Exposure: Codable, Equatable {
+            var day: Double?
+            var night: Double?
+        }
+        static let lightTiles = ["sun", "sun_low", "sky", "cabin", "city"]
+        static let knownTiles = Set(lightTiles + ["mask"])
+
+        var file: String
+        /// [columns, rows]; default 3×2.
+        var grid: [Int]?
+        var tiles: [String]
+        /// "pow4" (the only one so far).
+        var encoding: String?
+        var scale: [String: Double]?
+        var exposure: Exposure?
+        var tint: [String: [Double]]?
+        var unknownFields: [String: JSONValue] = [:]
+
+        private enum CodingKeys: String, CodingKey { case file, grid, tiles, encoding, scale, exposure, tint }
+
+        init(file: String, grid: [Int]? = nil, tiles: [String], encoding: String? = "pow4", scale: [String: Double]? = nil,
+             exposure: Exposure? = nil, tint: [String: [Double]]? = nil) {
+            self.file = file; self.grid = grid; self.tiles = tiles; self.encoding = encoding
+            self.scale = scale; self.exposure = exposure; self.tint = tint
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            let all = try decoder.container(keyedBy: JSONValue.AnyKey.self)
+            for k in all.allKeys where CodingKeys(stringValue: k.stringValue) == nil {
+                unknownFields[k.stringValue] = try all.decode(JSONValue.self, forKey: k)
+            }
+            file = try c.decode(String.self, forKey: .file)
+            grid = try? c.decode([Int].self, forKey: .grid)
+            tiles = (try? c.decode([String].self, forKey: .tiles)) ?? []
+            encoding = try? c.decode(String.self, forKey: .encoding)
+            scale = try? c.decode([String: Double].self, forKey: .scale)
+            exposure = try? c.decode(Exposure.self, forKey: .exposure)
+            tint = try? c.decode([String: [Double]].self, forKey: .tint)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(file, forKey: .file)
+            try c.encodeIfPresent(grid, forKey: .grid)
+            try c.encode(tiles, forKey: .tiles)
+            try c.encodeIfPresent(encoding, forKey: .encoding)
+            try c.encodeIfPresent(scale, forKey: .scale)
+            try c.encodeIfPresent(exposure, forKey: .exposure)
+            try c.encodeIfPresent(tint, forKey: .tint)
+            if !unknownFields.isEmpty {
+                var extra = encoder.container(keyedBy: JSONValue.AnyKey.self)
+                for (k, v) in unknownFields { try extra.encode(v, forKey: JSONValue.AnyKey(k)) }
+            }
+        }
+
+        /// Columns × rows (3×2 when absent or malformed).
+        var columns: Int { (grid?.count == 2 && grid![0] > 0) ? grid![0] : 3 }
+        var rows: Int { (grid?.count == 2 && grid![1] > 0) ? grid![1] : 2 }
+        /// The tile's index in the grid (left→right, top→bottom), nil when the video lacks it.
+        func index(of tile: String) -> Int? { tiles.firstIndex(of: tile) }
+    }
+
     var format: Int = 1
     var id: String
     var name: String
@@ -145,13 +215,15 @@ struct CustomSceneManifest: Codable, Equatable {
     var assets: [String]?
     /// Film engine only.
     var clips: [Clip]?
+    /// Film engine >= 1.1 only: the light layers (preferred over `clips` when present).
+    var layers: Layers?
 
     /// Fields this build doesn't know, kept verbatim.
     var unknownFields: [String: JSONValue] = [:]
 
     private enum CodingKeys: String, CodingKey {
         case format, id, name, author, licence, engine, entry, fps, stepped, params, colors, uses, description,
-             guides, assets, clips
+             guides, assets, clips, layers
     }
 
     init(id: String, name: String, engine: EngineRequirement, entry: String?) {
@@ -182,6 +254,7 @@ struct CustomSceneManifest: Codable, Equatable {
         guides = try? c.decode([String].self, forKey: .guides)
         assets = try? c.decode([String].self, forKey: .assets)
         clips = try? c.decode([Clip].self, forKey: .clips)
+        layers = try? c.decode(Layers.self, forKey: .layers)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -202,6 +275,7 @@ struct CustomSceneManifest: Codable, Equatable {
         try c.encodeIfPresent(guides, forKey: .guides)
         try c.encodeIfPresent(assets, forKey: .assets)
         try c.encodeIfPresent(clips, forKey: .clips)
+        try c.encodeIfPresent(layers, forKey: .layers)
         if !unknownFields.isEmpty {
             var extra = encoder.container(keyedBy: JSONValue.AnyKey.self)
             for (k, v) in unknownFields { try extra.encode(v, forKey: JSONValue.AnyKey(k)) }
@@ -227,6 +301,19 @@ struct CustomSceneManifest: Codable, Equatable {
     var usesSet: Set<String> { Set((uses ?? []).map { $0.lowercased() }) }
     /// The frame rate the scene steps its time at, when "stepped" (else nil: smooth).
     var steppedFPS: Double? { (stepped ?? false) ? Double(Swift.min(Swift.max(fps ?? 24, 1), 60)) : nil }
+    /// A film package playing light layers (docs/film-layers.md) rather than variant clips.
+    var isLayeredFilm: Bool { engine.id == "film" && layers != nil }
+    /// The video files a film package plays (its clips, and its layers video).
+    var filmFiles: [String] { (clips ?? []).map(\.file) + (layers.map { [$0.file] } ?? []) }
+    /// A number from the manifest's "look" block (film packages), nil when absent.
+    func lookValue(_ key: String) -> Double? {
+        guard case .object(let look)? = unknownFields["look"] else { return nil }
+        switch look[key] {
+        case .number(let d)?: return d.isFinite ? d : nil
+        case .integer(let i)?: return Double(i)
+        default: return nil
+        }
+    }
 }
 
 // MARK: - Engines
@@ -626,6 +713,12 @@ enum CustomScenes {
             clipBytes += s
             if !out.contains(c.file) { out.append(c.file) }
         }
+        if let l = m.layers {
+            if !isSafeRelativePath(l.file) { diags.append(Diagnostic(message: "layers \"\(l.file)\" must be a file inside the package")) }
+            else if let s = size(l.file) {
+                if !out.contains(l.file) { clipBytes += s; out.append(l.file) }
+            } else { diags.append(Diagnostic(message: "layers video \"\(l.file)\" is missing", file: l.file)) }
+        }
         if clipBytes > maxClipBytes { diags.append(Diagnostic(message: "clips are \(clipBytes / 1024 / 1024) MB: at most \(maxClipBytes / 1024 / 1024) MB")) }
         if !diags.isEmpty { throw CustomSceneError.invalid(diags) }
         return out
@@ -691,7 +784,7 @@ enum CustomScenes {
         let dir = packageDir(id: id, store: store)
         let m = manifest(id: id, store: store)
         var parts = ["scene.json"] + (m?.entry.map { [$0] } ?? []) + (m?.assets ?? [])
-        parts += (m?.clips ?? []).map(\.file)
+        parts += m?.filmFiles ?? []
         return parts.map { rel -> String in
             guard let s = FileStamp(path: dir.appendingPathComponent(rel).path) else { return "-" }
             return "\(s.size).\(s.sec).\(s.nsec).\(s.inode)"
@@ -910,8 +1003,12 @@ extension EffectInstance {
                 switch v { case .number(let d)?: return d; case .integer(let i)?: return Double(i); default: return nil }
             }
             if let g = num(look["grain"]), g.isFinite { e.params["ds.grain"] = Swift.min(Swift.max(g, 0), 1) }
-            if look["halation"] != nil { e.params["ds.halation"] = 0 }
+            if m.isLayeredFilm {
+                // light layers carry no look: the engine draws halation (and bloom) live
+                if let h = num(look["halation"]), h.isFinite { e.params["ds.halation"] = Swift.min(Swift.max(h, 0), 1) }
+            } else if look["halation"] != nil { e.params["ds.halation"] = 0 }
         }
+        if m.isLayeredFilm, e.params["ds.halation"] == nil { e.params["ds.halation"] = 0.15 }
         return e
     }
 
@@ -959,7 +1056,9 @@ extension Preset {
             guard let m = CustomScenes.knownManifest(id: $0) else { return false }
             if m.usesSet.contains(feature) { return true }
             // a film follows the sun, and the weather when it has a rain clip
-            if m.engine.id == "film" { return feature == "sun" || (feature == "weather" && (m.clips ?? []).contains { $0.variant.lowercased() == "rain" }) }
+            if m.engine.id == "film" {
+                return feature == "sun" || (feature == "weather" && (m.layers != nil || (m.clips ?? []).contains { $0.variant.lowercased() == "rain" }))
+            }
             return false
         }
     }
