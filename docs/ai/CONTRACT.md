@@ -160,3 +160,26 @@ CustomSceneLink.swift, GLSLTranslator.swift, CustomFilm.swift). Additions, none 
   `DOTSTUDIO_MCP_TEST_FAKES=film` = the real engines with the stand-in toolkit (real H.264 loops).
 - Clocks: `FXUniforms.still` (x = 1 in a still) settles a clock's minute changeover; `ctx.clock` is exact on every
   minute (`floor(clock / 60)` is the minute on screen). Manifests may list `"clock"` in `uses`.
+
+## 10. Signals and When rules (1.6 phase 1 — additive; design: docs/signals-design.md)
+
+- **Files.** Definitions in library.json (`signals`, `rules`; tolerant decode, a list this build can't
+  read is kept verbatim). Live values + the app's rule decision in `<store>/signal-values.json`
+  (`SignalState`: `values{id → {v, s, at, error, stale}}`, `rule{id, since, validUntil}`), written ONLY
+  by the app (App/Signals/SignalService.swift), read by every host through `SignalFeed` /
+  `SignalState.read`. Never live values in library.json. File signals read `<store>/signal-files/`.
+- **Playback.** `Playback.effectivePreset(in:now:live:)` / `(…display:live:)` / `shownPreset(…live:)` /
+  `secondsUntilNextSlot(…live:)` and `WallpaperPick.shared/preset(…live:)` take a NON-defaulted
+  `SignalState?`. Order: display pin > active When rule (lease unexpired, rule enabled, a style left)
+  > night schedule > rotation > activeID. nil = no rules.
+- **Bridge ops.** `upsertSignal`, `deleteSignal` (`force`), `testSignal` (`signal` draft or `id`;
+  answered in `BridgeResponse.test`, async in the app), `upsertRule`, `deleteRule`. Shared edit:
+  `SignalEdits.run` (Shared/AI/LibraryEdits.swift). Gates: signals → `AISettings.allowSignals`,
+  rules → `allowPlaybackChanges` (same message as set_screensaver). No message ever carries a key.
+- **MCP tools** (MCP/ToolsSignals.swift): list_signals, test_signal (openWorld; outline only),
+  create_signal, update_signal, delete_signal, list_rules (activeNow), set_rule, delete_rule.
+- **Fetch** (Shared/Signals/Fetch — app + dotstudio-mcp, excluded from the saver): `SignalPolicy`,
+  `SignalFetcher`, `SignalFileReader`, `JSONPointer`. Test-only hook `DOTSTUDIO_SIGNAL_ALLOW_LOCAL=1`
+  (DEBUG builds only) allows http/https to 127.0.0.1 / localhost for tools/mcp-selftest's fixture.
+- **Phase 2 (scene inputs)** reads values the same way: a SignalLink per MetalRenderer polling
+  `SignalFeed` every 5 s, `SignalState.value(id)` + `SignalValue.freshness(at:)` for `inputLive`.
