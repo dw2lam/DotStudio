@@ -39,9 +39,13 @@ struct WeatherMix: Equatable {
         }
     }
 
-    /// The scene's Weather menu ("weather" param): 0 = Live, then these fixed conditions.
-    static let menu = ["Live", "Clear", "Partly Cloudy", "Overcast", "Fog", "Rain", "Storm", "Snow"]
-    static let menuConditions: [WeatherCondition] = [.clear, .partlyCloudy, .cloudy, .fog, .rain, .thunderstorm, .snow]
+    /// The scene's Weather menu ("weather" param): 0 = Live, then these fixed conditions — every
+    /// condition the live weather can report. Saved styles store the index, so new conditions are
+    /// only ever APPENDED (Drizzle, Heavy Rain and Sleet came in 1.6).
+    static let menu = ["Live", "Clear", "Partly Cloudy", "Overcast", "Fog", "Rain", "Storm", "Snow",
+                       "Drizzle", "Heavy Rain", "Sleet"]
+    static let menuConditions: [WeatherCondition] = [.clear, .partlyCloudy, .cloudy, .fog, .rain, .thunderstorm, .snow,
+                                                     .drizzle, .heavyRain, .sleet]
 
     /// Fog value for a visibility in metres (log scale: 20 km → 0, 150 m → 1).
     static func fog(visibility: Double?) -> Double {

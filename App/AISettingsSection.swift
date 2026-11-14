@@ -9,6 +9,7 @@ struct AISettingsSection: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.layout) private var layout
     @ObservedObject private var ai = AIConnect.shared
+    @ObservedObject private var weather = WeatherService.shared
 
     /// The helper every client launches.
     static var helperPath: String { AIConnect.helperPath }
@@ -18,23 +19,59 @@ struct AISettingsSection: View {
         Section {
             Text("Assistants like Claude, Cursor or VS Code can design screensavers with you through DotStudio's MCP server: they read DotStudio's style guide, build styles from the scenes and looks or write new scenes of their own, preview them as images and check their GPU cost.")
                 .textRole(.body).wrapping()
-            LabeledContent("How to use it") {
-                Text("1. Connect your assistant below.\n2. \(AIConnect.restartHint)\n3. Ask it for a screensaver — “\(AIConnect.examplePrompt)”\n4. \(AIConnect.libraryHint)")
-                    .textRole(.caption).foregroundStyle(.secondary).wrapping()
-                    .multilineTextAlignment(.leading)
-                    .textSelection(.enabled)
+            // Recommended setup: each row says whether it's done, with the fix next to it.
+            LabeledContent {
+                Text(ai.anyAssistantConnected ? "Connected" : "Not yet — connect one below")
+                    .textRole(.caption).foregroundStyle(.secondary)
+            } label: {
+                recommendedLabel(ai.anyAssistantConnected, "An AI app (recommended)", AIConnect.assistantHint)
             }
             LabeledContent {
                 HStack(spacing: layout.controlGap) {
-                    Text(ai.blenderStatus).textRole(.caption).foregroundStyle(.secondary).wrapping()
+                    Text(ai.blenderReady ? "Ready" : ai.blenderStatus).textRole(.caption).foregroundStyle(.secondary).wrapping()
                     if !ai.blenderReady {
                         Button(scaled: "Get Blender…") { ai.getBlender() }
                             .help(AIConnect.blenderDownload.absoluteString)
                     }
                 }
             } label: {
-                Text("Blender (recommended)")
-                Text(AIConnect.blenderHint)
+                recommendedLabel(ai.blenderReady, "Blender (recommended for film scenes)", AIConnect.blenderHint)
+            }
+            LabeledContent {
+                HStack(spacing: layout.controlGap) {
+                    Text(weather.enabled ? "On" : "Off").textRole(.caption).foregroundStyle(.secondary)
+                    if !weather.enabled { Button(scaled: "Turn On") { weather.enabled = true } }
+                }
+            } label: {
+                recommendedLabel(weather.enabled, "Live weather (recommended)", AIConnect.weatherHint)
+            }
+            LabeledContent("How to use it") {
+                Text("1. Connect your assistant below.\n2. \(AIConnect.restartHint)\n3. Ask it for a screensaver — “\(AIConnect.examplePrompt)”\n4. \(AIConnect.libraryHint)")
+                    .textRole(.caption).foregroundStyle(.secondary).wrapping()
+                    .multilineTextAlignment(.leading)
+                    .textSelection(.enabled)
+            }
+            LabeledContent("What it can do") {
+                VStack(alignment: .leading, spacing: layout.labelGap) {
+                    ForEach(AIConnect.abilities, id: \.title) { a in
+                        (Text(a.title).fontWeight(.medium) + Text(" — " + a.detail))
+                            .textRole(.caption).foregroundStyle(.secondary).wrapping()
+                    }
+                }
+                .multilineTextAlignment(.leading)
+            }
+            LabeledContent("Try asking") {
+                VStack(alignment: .leading, spacing: layout.labelGap) {
+                    ForEach(AIConnect.examples, id: \.self) { e in
+                        HStack(alignment: .firstTextBaseline, spacing: layout.controlGap) {
+                            Text("“\(e)”").textRole(.caption).foregroundStyle(.secondary).wrapping()
+                                .textSelection(.enabled)
+                            Button(scaled: ai.copied == e ? "Copied" : "Copy") { ai.copy(e, e) }
+                                .adaptiveControlSize(.small)
+                        }
+                    }
+                }
+                .multilineTextAlignment(.leading)
             }
             Toggle("Let AI change what plays", isOn: ai.allowPlaybackBinding(store: store))
                 .formSwitchSize()
@@ -83,6 +120,19 @@ struct AISettingsSection: View {
         }
         .id(Self.anchor)
         .onAppear { ai.refresh(store: store) }
+    }
+
+    /// A recommended-setup row's label: a green tick when it's done, the title, a caption.
+    @ViewBuilder
+    private func recommendedLabel(_ ok: Bool, _ title: String, _ detail: String) -> some View {
+        Label {
+            Text(title)
+        } icon: {
+            Image(systemName: ok ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(ok ? Color.green : Color.secondary)
+        }
+        .accessibilityValue(ok ? "Done" : "Not set up")
+        Text(detail).textRole(.caption).foregroundStyle(.secondary).wrapping()
     }
 
     /// The Settings form's scroll anchor for this section (the MCP popover's "More in Settings…").
