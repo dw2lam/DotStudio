@@ -114,7 +114,7 @@ private struct GalleryPage: View {
         let sections = sections(matcher)
         return ScrollViewReader { proxy in
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: Exp.has("nopin") ? [] : [.sectionHeaders]) {
                 DestinationRow(state: state)
                     .pageColumn(layout)
                     .padding(.top, topInset)
@@ -202,33 +202,53 @@ private struct GalleryPage: View {
             .transition(.lift(reduceMotion: reduceMotion))
         } else {
             // One grid for every section, so a tile glides to its new place when the filter
-            // changes. Columns are added as the window widens (layout.tileColumns).
+            // changes. Columns are added as the window widens (layout.tileColumns' adaptive
+            // columns). Eager (TileGrid), not a LazyVGrid: see TileGrid.
+            if Exp.has("lazygrid") {
             LazyVGrid(columns: layout.tileColumns, alignment: .leading, spacing: layout.gridRowGap) {
                 ForEach(Array(sections.enumerated()), id: \.element.id) { i, section in
                     Section {
-                        ForEach(section.presets) { preset in
-                            StyleTile(model: model, preset: preset, badges: state.badges(for: preset.id),
-                                      lineup: state.lineup)
-                                .equatable()
-                                .id(preset.id)
-                                .transition(.lift(reduceMotion: reduceMotion))
-                        }
-                        switch section.kind {
-                        case .scenes: NewSceneTile()
-                        case .looks: NewTile(title: "New Look", symbol: "plus") { model.addPreset() }
-                        case .results: EmptyView()
-                        }
+                        tiles(section, state: state)
                     } header: {
-                        SectionHeader(section: section)
-                            // The grid puts gridRowGap around every row, header rows too. Re-space
-                            // the header so it sits sectionGap below the previous tiles and only
-                            // itemGap above its own (closer to what it titles than to what it ends).
-                            .padding(.top, i == 0 ? 0 : max(layout.sectionGap - layout.gridRowGap, 0))
-                            .padding(.bottom, layout.itemGap - layout.gridRowGap)
+                        header(section, index: i)
                     }
                 }
             }
+            } else {
+            TileGrid(minimum: layout.tileMinWidth, columnSpacing: layout.gridColumnGap, rowSpacing: layout.gridRowGap) {
+                ForEach(Array(sections.enumerated()), id: \.element.id) { i, section in
+                    header(section, index: i)
+                        .tileGridFullRow()
+                    tiles(section, state: state)
+                }
+            }
+            }
         }
+    }
+
+    @ViewBuilder
+    private func tiles(_ section: GallerySection, state: GalleryState) -> some View {
+        ForEach(section.presets) { preset in
+            StyleTile(model: model, preset: preset, badges: state.badges(for: preset.id),
+                      lineup: state.lineup)
+                .equatable()
+                .id(preset.id)
+                .transition(.lift(reduceMotion: reduceMotion))
+        }
+        switch section.kind {
+        case .scenes: NewSceneTile()
+        case .looks: NewTile(title: "New Look", symbol: "plus") { model.addPreset() }
+        case .results: EmptyView()
+        }
+    }
+
+    private func header(_ section: GallerySection, index i: Int) -> some View {
+        SectionHeader(section: section)
+            // The grid puts gridRowGap around every row, header rows too. Re-space
+            // the header so it sits sectionGap below the previous tiles and only
+            // itemGap above its own (closer to what it titles than to what it ends).
+            .padding(.top, i == 0 ? 0 : max(layout.sectionGap - layout.gridRowGap, 0))
+            .padding(.bottom, layout.itemGap - layout.gridRowGap)
     }
 }
 
@@ -408,7 +428,7 @@ private struct FilterBar: View {
                 let frost = min(max((150 - y) / 70, 0), 1)
                 // Not there at all until it shows: no backdrop layer (or its blur) for the
                 // window server to keep while the page scrolls under an invisible frost.
-                if frost > 0 {
+                if frost > 0 && !Exp.has("nofrost") {
                     Rectangle()
                         .fill(.ultraThinMaterial)
                         .mask(LinearGradient(stops: [.init(color: .black, location: 0),
