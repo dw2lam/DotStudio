@@ -643,6 +643,11 @@ enum UIShots {
         s.append(Screen(name: "settings-location-search", frame: .fit(width: 560, minHeight: 200), view: { _ in
             AnyView(LocationDemo.picker(query: "Toronto", state: .results(LocationDemo.results), current: LocationDemo.toronto.place))
         }))
+        // …moved down two results with the arrow keys (Return would pick Toronto, Kansas)
+        s.append(Screen(name: "settings-location-search-keys", frame: .fit(width: 560, minHeight: 200), view: { _ in
+            AnyView(LocationDemo.picker(query: "Toronto", state: .results(LocationDemo.results),
+                                        current: LocationDemo.toronto.place, highlighted: 2))
+        }))
         s.append(Screen(name: "settings-location-search-empty", frame: .fit(width: 560, minHeight: 160), view: { _ in
             AnyView(LocationDemo.picker(query: "", state: .idle, current: nil))
         }))
@@ -1200,9 +1205,9 @@ enum LocationDemo {
     ]
     static var toronto: PlaceResult { results[0] }
 
-    static func picker(query: String, state: PlaceSearchModel.State, current: NamedPlace?) -> some View {
+    static func picker(query: String, state: PlaceSearchModel.State, current: NamedPlace?, highlighted: Int = 0) -> some View {
         LocationPicker(current: current, search: PlaceSearchModel(demoQuery: query, state: state),
-                       pick: { _ in }, automatic: {})
+                       highlighted: highlighted, pick: { _ in }, automatic: {})
             .background(Color(nsColor: .windowBackgroundColor))   // (a popover brings its own)
             .overlay(Rectangle().stroke(Color.secondary.opacity(0.4)))   // its edge, to judge its width
             .padding(Space.m)
