@@ -38,7 +38,8 @@ struct LocationRow: View {
                 .popover(isPresented: $picking, arrowEdge: .bottom) {
                     LocationPicker(current: manual ? model.library.manualPlace : nil,
                                    pick: { model.setLocation($0); picking = false },
-                                   automatic: { model.setLocation(nil); picking = false })
+                                   automatic: { model.setLocation(nil); picking = false },
+                                   close: { picking = false })
                         .adaptiveLayout()   // the popover is its own root
                 }
         }
@@ -59,19 +60,34 @@ struct LocationPicker: View {
     @Environment(\.layout) private var layout
     @StateObject private var search: PlaceSearchModel
     @FocusState private var fieldFocused: Bool
+    @Environment(\.dismiss) private var dismiss
+    /// The result Return picks: the first, moved with ↑ ↓ (or the pointer) while typing.
+    @State private var highlighted: Int
+    /// When ↑ ↓ last moved it: rows the list then scrolls under a resting pointer don't take it.
+    @State private var keyMovedAt = Date.distantPast
     @ScaledLength(relativeTo: .body) private var width: CGFloat = Space.grid(85)          // 340
     @ScaledLength(relativeTo: .body) private var listMaxHeight: CGFloat = Space.grid(80)  // 320
     /// The user's own place now (nil = automatic).
     let current: NamedPlace?
     let pick: (NamedPlace) -> Void
     let automatic: () -> Void
+    /// Escape: closes the popover (else the presentation's dismiss).
+    let close: (() -> Void)?
 
-    init(current: NamedPlace?, search: PlaceSearchModel? = nil,
-         pick: @escaping (NamedPlace) -> Void, automatic: @escaping () -> Void) {
+    /// `highlighted`: the result highlighted at first (UI shots; else the first).
+    init(current: NamedPlace?, search: PlaceSearchModel? = nil, highlighted: Int = 0,
+         pick: @escaping (NamedPlace) -> Void, automatic: @escaping () -> Void, close: (() -> Void)? = nil) {
         self.current = current
+        self.close = close
         self.pick = pick
         self.automatic = automatic
         _search = StateObject(wrappedValue: search ?? PlaceSearchModel())
+        _highlighted = State(initialValue: highlighted)
+    }
+
+    private var items: [PlaceResult] {
+        if case .results(let r) = search.state { return r }
+        return []
     }
 
     var body: some View {
@@ -83,8 +99,15 @@ struct LocationPicker: View {
                     .textFieldStyle(.roundedBorder)
                     .textRole(.body)
                     .focused($fieldFocused)
-                    .onSubmit { if case .results(let r) = search.state, let first = r.first { pick(first.place) } }
+                    // Keys while typing: ↑ ↓ move through the results, Return picks the
+                    // highlighted one, Escape closes (in a text field it would otherwise only
+                    // ask for completions).
+                    .onSubmit { if items.indices.contains(highlighted) { pick(items[highlighted].place) } }
+                    .onKeyPress(.downArrow) { move(1) }
+                    .onKeyPress(.upArrow) { move(-1) }
+                    .onKeyPress(.escape) { if let close { close() } else { dismiss() }; return .handled }
                     .accessibilityLabel("Search for a place")
+                    .accessibilityHint(items.isEmpty ? "" : "Up and down arrows choose a result; Return uses it")
             }
             .padding(layout.cardPadding)
             Divider()
@@ -108,6 +131,15 @@ struct LocationPicker: View {
         .frame(width: width)
         // Ready to type (a reopened picker keeps nothing, so this is always an empty field).
         .onAppear { if search.query.isEmpty { fieldFocused = true } }
+        // New results: Return picks the first again.
+        .onChange(of: items.map(\.id)) { highlighted = 0 }
+    }
+
+    private func move(_ by: Int) -> KeyPress.Result {
+        guard !items.isEmpty else { return .ignored }
+        highlighted = min(max(highlighted + by, 0), items.count - 1)
+        keyMovedAt = Date()
+        return .handled
     }
 
     @ViewBuilder private var results: some View {
@@ -129,11 +161,16 @@ struct LocationPicker: View {
             }
             .padding(layout.cardPadding)
         case .results(let items):
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(items) { r in row(r) }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(items.enumerated()), id: \.element.id) { i, r in row(r, index: i).id(r.id) }
+                    }
+                    .padding(.vertical, layout.labelGap)
                 }
-                .padding(.vertical, layout.labelGap)
+                .onChange(of: highlighted) {
+                    if items.indices.contains(highlighted) { proxy.scrollTo(items[highlighted].id) }
+                }
             }
             .frame(maxHeight: listMaxHeight)
             .fixedSize(horizontal: false, vertical: true)
@@ -146,7 +183,7 @@ struct LocationPicker: View {
             .padding(layout.cardPadding)
     }
 
-    private func row(_ r: PlaceResult) -> some View {
+    private func row(_ r: PlaceResult, index: Int) -> some View {
         let isCurrent = current.map { abs($0.lat - r.lat) < 1e-4 && abs($0.lon - r.lon) < 1e-4 } ?? false
         return Button { pick(r.place) } label: {
             HStack(alignment: .center, spacing: layout.controlGap) {
@@ -166,26 +203,22 @@ struct LocationPicker: View {
             .padding(.vertical, layout.controlGap)
             .contentShape(Rectangle())
         }
-        .buttonStyle(PlaceRowStyle())
+        .buttonStyle(PlaceRowStyle(highlighted: index == highlighted))
+        // The pointer moves the highlight too: one highlighted row, whichever moved it last.
+        .onHover { if $0 && Date().timeIntervalSince(keyMovedAt) > 0.5 { highlighted = index } }
         .help("Use \(r.place.name)")
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(index == highlighted ? .isSelected : [])
     }
 }
 
-/// A list row that highlights under the pointer and while pressed.
+/// A list row: highlighted (the one Return picks — the keyboard's or the pointer's), darker
+/// while pressed.
 private struct PlaceRowStyle: ButtonStyle {
+    let highlighted: Bool
+
     func makeBody(configuration: Configuration) -> some View {
-        PlaceRowBody(configuration: configuration)
-    }
-}
-
-private struct PlaceRowBody: View {
-    let configuration: ButtonStyleConfiguration
-    @State private var hovering = false
-
-    var body: some View {
         configuration.label
-            .background(Color.primary.opacity(configuration.isPressed ? 0.12 : hovering ? 0.06 : 0))
-            .onHover { hovering = $0 }
+            .background(Color.primary.opacity(configuration.isPressed ? 0.12 : highlighted ? 0.07 : 0))
     }
 }
