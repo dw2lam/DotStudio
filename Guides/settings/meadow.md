@@ -20,7 +20,7 @@ Rolling summer fields in the wind under a big sky; can follow the real sun, moon
 | `live` | Follow the Sun | toggle | 0 / 1 | on |
 | `hour` | Time of Day | slider | 0 … 24 (step 0.25) | 15.5 |
 | `lapse` | Time Lapse | slider | 0 … 60 (step 1) | 0 |
-| `weather` | Weather | menu | 0 Live · 1 Clear · 2 Partly Cloudy · 3 Overcast · 4 Fog · 5 Rain · 6 Storm · 7 Snow | 0 (Live) |
+| `weather` | Weather | menu | 0 Live · 1 Clear · 2 Partly Cloudy · 3 Overcast · 4 Fog · 5 Rain · 6 Storm · 7 Snow · 8 Drizzle · 9 Heavy Rain · 10 Sleet | 0 (Live) |
 | `landscape` | Landscape | menu | 0 Meadow · 1 Rolling Hills · 2 Tall Grass · 3 Hillside | 0 (Meadow) |
 | `glow` | Glow | slider | 0 … 1 | 0.5 |
 | `dither` | Dither | slider | 0 … 1 | 0.5 |

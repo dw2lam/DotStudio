@@ -131,7 +131,7 @@ When you design a style, leave room for the corner card (bottom left by default)
 ## Live weather and the sun
 
 - **Follow the Sun** (`live` = 1 on Ocean Horizon / Golden Hour, Meadow, Shallows, Pleats, Dichroic, Sand Garden; `follow` on Window Light): the real sun, moon and stars at the library's location (`locationLat` / `locationLon`). Off: a fixed time (`sun` height on Ocean Horizon, `hour` on Meadow). `lapse` (Time Lapse, minutes per simulated day; 0 = real time) runs either clock forward.
-- **Weather** (`weather` menu on Ocean Horizon, Shallows, Meadow): 0 = Live, then Clear, Partly Cloudy, Overcast, Fog, Rain, Storm, Snow. Live needs Settings > Weather > Live weather on in the app; the app fetches Open-Meteo every 20 minutes for the approximate location (about 10 km) and stale readings fade back to clear. Weather costs 60-75 % more GPU on Meadow.
+- **Weather** (`weather` menu on Ocean Horizon, Shallows, Meadow): 0 = Live, then Clear, Partly Cloudy, Overcast, Fog, Rain, Storm, Snow, Drizzle, Heavy Rain, Sleet (every condition the live weather reports). Live needs Settings > Weather > Live weather on in the app; the app fetches Open-Meteo every 20 minutes for the approximate location (about 10 km) and stale readings fade back to clear. Weather costs 60-75 % more GPU on Meadow.
 - Clocks follow the local time; StandBy's Night Mode and the night style follow the real sunset.
 
 ## Custom and film scenes

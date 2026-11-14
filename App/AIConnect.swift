@@ -11,6 +11,9 @@ final class AIConnect: ObservableObject {
     /// What the user lets the AI do (<store>/ai-settings.json).
     @Published private(set) var settings = AISettings()
     @Published private(set) var installedInDesktop = false
+    /// `claude mcp add` wrote this helper into Claude Code's config (~/.claude.json, any scope).
+    @Published private(set) var installedInClaudeCode = false
+    var anyAssistantConnected: Bool { installedInDesktop || installedInClaudeCode }
     @Published private(set) var desktopStatus: String?
     @Published private(set) var desktopFailed = false
     /// Which copy button just copied ("code", "json", "config"), for its "Copied" title.
@@ -46,6 +49,22 @@ final class AIConnect: ObservableObject {
     static let blenderMinimum = "5.1"
     static let blenderDownload = URL(string: "https://www.blender.org/download/")!
     static let blenderHint = "Free, about 1 GB. With Blender, the AI can also make photoreal film scenes like Commute, rendered on your Mac. Everything else works without it."
+
+    // The recommended setup and what to ask, shared by the MCP popover and Settings ▸ AI.
+    static let assistantHint = "Claude Desktop or Claude Code is what DotStudio is tested with. Cursor, VS Code, Codex and other MCP apps work too."
+    static let weatherHint = "Lets scenes follow your real weather: rain, snow, storms, fog. Uses your approximate location."
+    /// What an assistant can do, with roughly how long each takes.
+    static let abilities: [(title: String, detail: String)] = [
+        ("A screensaver or wallpaper", "From DotStudio's scenes and looks. Seconds, with a preview."),
+        ("A brand-new scene", "Written as a GPU shader and checked for speed and battery. About a minute."),
+        ("A photoreal film scene", "Built in Blender. Stills take minutes; the moving loop renders in the background, often overnight. Needs Blender."),
+        ("Your settings", "Which style plays where, per display, the schedule, weather and more."),
+    ]
+    static let examples = [
+        "Make me a calm ocean screensaver with a clock, and show me a preview.",
+        "Put something warm on my second display at night.",
+        "Make a photoreal film scene of a rainy café window. Show me stills first.",
+    ]
 
     /// Blender's version if installed (Applications or ~/Applications), from its Info.plist —
     /// never launches it. Same places dotstudio-mcp looks (FilmPaths.blenderApps).
@@ -87,6 +106,8 @@ final class AIConnect: ObservableObject {
     func refresh(store: URL) {
         settings = AISettings.load(store: store)
         installedInDesktop = ClaudeDesktopConfig.installedCommand() == Self.helperPath
+        let codeConfig = SharedStore.realHome.appendingPathComponent(".claude.json")
+        installedInClaudeCode = (try? String(contentsOf: codeConfig, encoding: .utf8))?.contains(Self.helperPath) ?? false
         refreshBlender()
     }
 
@@ -165,6 +186,7 @@ struct MCPPopover: View {
     @Environment(\.layout) private var layout
     @Environment(\.openSettings) private var openSettings
     @ObservedObject private var ai = AIConnect.shared
+    @ObservedObject private var weather = WeatherService.shared
     var close: () -> Void = {}
 
     var body: some View {
@@ -190,6 +212,7 @@ struct MCPPopover: View {
                         .textRole(.caption).foregroundStyle(.orange).wrapping()
                 }
             }
+            recommended
             step(1, "Connect your assistant") {
                 VStack(alignment: .leading, spacing: layout.controlGap) {
                     Button(scaled: ai.installedInDesktop ? "Added to Claude Desktop" : "Add to Claude Desktop") { ai.addToDesktop() }
@@ -216,14 +239,6 @@ struct MCPPopover: View {
             step(4, "Find it in your Library") {
                 Text(AIConnect.libraryHint).textRole(.caption).foregroundStyle(.secondary).wrapping()
             }
-            step(nil, "Recommended: Blender") {
-                status(ai.blenderReady, ai.blenderStatus)
-                Text(AIConnect.blenderHint).textRole(.caption).foregroundStyle(.secondary).wrapping()
-                if !ai.blenderReady {
-                    Button(scaled: "Get Blender…") { ai.getBlender() }
-                        .help(AIConnect.blenderDownload.absoluteString)
-                }
-            }
             // The standard macOS switch, small and accent-tinted (as in the setup guide), its
             // label on the left and the switch at the trailing edge, like a Settings row.
             HStack(alignment: .center, spacing: layout.controlGap) {
@@ -239,7 +254,7 @@ struct MCPPopover: View {
             }
             .help("Off: assistants can still create and edit styles, but never change your screensaver or live wallpaper.")
             Divider()
-            Button(scaled: "More in Settings…") {
+            Button(scaled: "What can it do? More in Settings…") {
                 close()
                 ai.revealRequest += 1
                 openSettings()
@@ -250,8 +265,52 @@ struct MCPPopover: View {
         .onAppear { ai.refresh(store: store) }
     }
 
-    /// One how-to step: an accent number (or, for an optional extra, a star), the title, then its
-    /// controls or note.
+    /// The recommended setup as a checklist: each item ticks itself off, with a one-click fix.
+    private var recommended: some View {
+        VStack(alignment: .leading, spacing: layout.controlGap) {
+            Text("Recommended").textRole(.caption).fontWeight(.semibold).foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
+            recommendation(ai.anyAssistantConnected, "An AI app connected", AIConnect.assistantHint)
+            recommendation(ai.blenderReady, ai.blenderReady ? ai.blenderStatus : "Blender, for film scenes (optional)",
+                           AIConnect.blenderHint) {
+                if !ai.blenderReady {
+                    Button(scaled: "Get Blender…") { ai.getBlender() }
+                        .help(AIConnect.blenderDownload.absoluteString)
+                }
+            }
+            recommendation(weather.enabled, "Live weather on", AIConnect.weatherHint) {
+                if !weather.enabled {
+                    Button(scaled: "Turn On") { weather.enabled = true }
+                }
+            }
+        }
+        .padding(layout.controlGap)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.05)))
+        .accessibilityElement(children: .contain)
+    }
+
+    private func recommendation(_ ok: Bool, _ title: String, _ detail: String) -> some View {
+        recommendation(ok, title, detail) { EmptyView() }
+    }
+
+    private func recommendation<Fix: View>(_ ok: Bool, _ title: String, _ detail: String,
+                                           @ViewBuilder fix: () -> Fix) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
+            Image(systemName: ok ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(ok ? Color.green : Color.secondary)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: layout.labelGap) {
+                Text(title).textRole(.caption).fontWeight(.medium).wrapping()
+                Text(detail).textRole(.caption).foregroundStyle(.secondary).wrapping()
+                fix()
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(ok ? "Done" : "Not set up")
+    }
+
+    /// One how-to step: an accent number, the title, then its controls or note.
     private func step<Content: View>(_ n: Int?, _ title: String, @ViewBuilder _ content: () -> Content) -> some View {
         HStack(alignment: .top, spacing: layout.controlGap) {
             Group {
