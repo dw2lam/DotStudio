@@ -1,20 +1,34 @@
-//  CustomFilm.swift — the `film` engine: a scene package of looping video clips (HEVC loops
-//  rendered offline, e.g. by the Blender toolkit), one per variant of the day:
+//  CustomFilm.swift — the `film` engine: a scene package of looping video rendered offline (e.g.
+//  by the Blender toolkit), in one of two forms.
 //
+//  Variant clips (engine 1):
 //      "engine": { "id": "film" },
 //      "clips": [ { "variant": "day",    "file": "clips/day.mov",    "loop": true },
 //                 { "variant": "golden", "file": "clips/golden.mov" },
 //                 { "variant": "night",  "file": "clips/night.mov" },
 //                 { "variant": "rain",   "file": "clips/rain.mov" } ]
-//
 //  The variant follows the real sun (night below −4°, golden hour −4°…8°, day above) and the
 //  weather (rain while it rains, if the package has a rain clip), re-checked every few seconds;
 //  a change crossfades over 3 s. Each clip plays through VideoSource (AVPlayerLooper: seamless
-//  loops, hardware decode, muted), aspect-filled by the film engine's wrapper (Engines/film/1/
+//  loops, hardware decode, muted), aspect-filled by the film engine's wrapper (Engines/film/1.1/
 //  film.metal) — the same runtime-compiled pipeline path as every Custom Scene. One-off renders
 //  (thumbnails, the gallery) and the first frames before a clip decodes draw its poster frame.
+//
+//  Light layers (engine ≥ 1.1, docs/film-layers.md — FilmLayers below):
+//      "layers": { "file": "clips/layers.mov", "grid": [3, 2],
+//                  "tiles": ["sun", "sun_low", "sky", "cabin", "city", "mask"], "encoding": "pow4",
+//                  "scale": {…}, "exposure": { "day": 1.5, "night": 3.2 }, "tint": {…} }
+//  One HEVC Main10 video whose frames are a grid of light layers. Every frame the engine mixes
+//  them with weights from the real sun's elevation and the weather (ds_film_mix: a pass at the
+//  tiles' resolution, run only when the video frame or the light changed), then the screen pass
+//  draws the glass weather through the mask, bloom / halation, vignette, AgX and grain. Any time
+//  of day and every weather condition from one render, changing smoothly. The video decodes to
+//  its own 10-bit Y'CbCr planes (zero-copy, converted in the shader): 8 bits would band the pow4
+//  encoding's shadows.
+//
+//  A style can pin the weather (the engine's "Weather" menu, ds.weather: Live or a condition).
 //  Power: the hosts' media pause (MetalRenderer.setMediaPaused: the wallpaper's held stills —
-//  Low Power, On Battery Still or Efficient) pauses the clips.
+//  Low Power, On Battery Still or Efficient) pauses the video.
 
 import Foundation
 import AVFoundation
@@ -42,8 +56,13 @@ final class CustomFilm {
     private var lastCheck: CFTimeInterval = -.infinity
     private var paused = false
     private let lock = NSLock()
+    /// The light-layers player (a package with "layers").
+    let layers: FilmLayers?
 
-    init(prepared: PreparedScene) { self.prepared = prepared }
+    init(prepared: PreparedScene) {
+        self.prepared = prepared
+        layers = prepared.manifest.layers.map { FilmLayers(prepared: prepared, layers: $0) }
+    }
 
     /// The sun's variant: night below −4°, golden hour to 8°, day above.
     static func sunVariant(elevation: Double) -> String {
@@ -64,9 +83,28 @@ final class CustomFilm {
         return clips.first
     }
 
+    /// The engine's Weather menu (ds.weather): 0 = Live, then every condition in declaration order.
+    static let weatherMenu = ["Live", "Clear", "Partly Cloudy", "Overcast", "Fog", "Drizzle", "Rain", "Heavy Rain",
+                              "Thunderstorm", "Snow", "Sleet"]
+
+    /// The condition a style pinned (nil: Live).
+    static func pinnedCondition(_ inst: EffectInstance) -> WeatherCondition? {
+        let i = Int(saturating: inst.params["ds.weather"] ?? 0, .toNearestOrAwayFromZero)
+        guard i >= 1, i <= WeatherCondition.allCases.count else { return nil }
+        return WeatherCondition.allCases[i - 1]
+    }
+
+    /// The weather a film style shows: a forced one (previews: WeatherLink.forced) over the
+    /// style's pinned condition over the live weather.
+    static func weather(_ inst: EffectInstance, live: WeatherMix) -> WeatherMix {
+        if WeatherLink.forced != nil { return live }
+        return pinnedCondition(inst).map(WeatherMix.preset) ?? live
+    }
+
     func setPaused(_ p: Bool) {
         lock.lock(); paused = p; let c = current?.video, o = previous?.video; lock.unlock()
         c?.setPaused(p); o?.setPaused(p)
+        layers?.setPaused(p)
     }
 
     /// This frame's textures: the clip showing (A), the one it's fading from (B, or A), and the
@@ -155,12 +193,18 @@ final class CustomFilm {
         return ctx.makeImage()
     }
 
-    /// The film-specific checks of validate: known variants, playable clips, a day or "any" clip.
+    /// The film-specific checks of validate: known variants, playable clips, a day or "any" clip;
+    /// for light layers, the grid, tiles, scales and the video.
     static func validate(_ p: PreparedScene) -> (diagnostics: [Diagnostic], warnings: [String]) {
         var d: [Diagnostic] = []
         var w: [String] = []
         let clips = p.manifest.clips ?? []
-        if clips.isEmpty { d.append(Diagnostic(message: "a film scene needs \"clips\": [{\"variant\": \"day\", \"file\": \"clips/day.mov\"}, …]", file: "scene.json")) }
+        if let l = p.manifest.layers {
+            let r = FilmLayers.validate(l, packageDir: p.packageDir, engineVersion: p.engine?.version)
+            d += r.diagnostics; w += r.warnings
+        } else if clips.isEmpty {
+            d.append(Diagnostic(message: "a film scene needs \"clips\": [{\"variant\": \"day\", \"file\": \"clips/day.mov\"}, …] or \"layers\" (engine >=1.1)", file: "scene.json"))
+        }
         for c in clips {
             if !variants.contains(c.variant.lowercased()) {
                 d.append(Diagnostic(message: "clip \(c.file): variant \"\(c.variant)\" isn't one of \(variants.joined(separator: ", "))", file: "scene.json"))
@@ -185,8 +229,329 @@ final class CustomFilm {
             }
         }
         let vs = Set(clips.map { $0.variant.lowercased() })
-        if !clips.isEmpty && !vs.contains("day") && !vs.contains("any") {
+        if !clips.isEmpty && !vs.contains("day") && !vs.contains("any") && p.manifest.layers == nil {
             w.append("no \"day\" or \"any\" clip: daytime falls back to \(clips[0].variant)")
+        }
+        return (d, w)
+    }
+}
+
+// MARK: - Light layers
+
+/// A layered film package's player: the layers video (live) or its first frame (stills), the
+/// mix pass into an HDR texture (+ highlights), and the screen pass's uniforms.
+final class FilmLayers {
+    static let mixFunction = "ds_film_mix"
+    static let hdrFormat: MTLPixelFormat = .rgba16Float
+    static let glowFormat: MTLPixelFormat = .rg16Float
+
+    let prepared: PreparedScene
+    let layers: CustomSceneManifest.Layers
+    let url: URL
+    let fps: Float
+    private let lock = NSLock()
+    private var video: VideoSource?
+    private var paused = false
+    private var cache: CVMetalTextureCache?
+    private var cacheDevice: UInt64 = 0
+
+    /// What the mix pass made, per kind of render (live / one-off), so a thumbnail drawn by a
+    /// live renderer never overwrites the texture its in-flight frames read.
+    final class Target {
+        var hdr: MTLTexture?
+        var glow: MTLTexture?
+        var key: [Float] = []
+        var frameObject: ObjectIdentifier?
+        /// The screen pass's uniforms for what's in `hdr` (u.scene[0…3]).
+        var screen: [simd_float4] = []
+    }
+    private var targets: [Bool: Target] = [:]
+
+    init(prepared: PreparedScene, layers: CustomSceneManifest.Layers) {
+        self.prepared = prepared
+        self.layers = layers
+        url = prepared.packageDir.appendingPathComponent(layers.file)
+        let rate = AVURLAsset(url: url).tracks(withMediaType: .video).first?.nominalFrameRate ?? 24
+        fps = rate > 1 ? rate : 24
+    }
+
+    func setPaused(_ p: Bool) {
+        lock.lock(); paused = p; let v = video; lock.unlock()
+        v?.setPaused(p)
+    }
+
+    // MARK: The light
+
+    /// The mix's weights for a sun elevation (°), weather and time (s): per light tile an rgb
+    /// weight (before scale / exposure), the exposure (EV), the sun's gate (clear sky) with the
+    /// cloud-shadow amount, and the lightning flash. docs/film-layers.md "The mix", extended to
+    /// every condition: snow (colder, softer, brighter sky), fog, storms (lightning).
+    struct Mix: Equatable {
+        var sun: Float = 0, sunLow: Float = 0, cabin: Float = 1, city: Float = 0
+        var sky = SIMD3<Float>(repeating: 0)
+        var ev: Float = 0
+        var clear: Float = 1
+        var shadow: Float = 0
+        var flash: Float = 0
+    }
+
+    static func smoothstep(_ a: Double, _ b: Double, _ x: Double) -> Double {
+        let t = min(max((x - a) / (b - a), 0), 1)
+        return t * t * (3 - 2 * t)
+    }
+
+    static func mix(elevation e: Double, weather w: WeatherMix, time: Double, day: Double = 1.5, night: Double = 3.2) -> Mix {
+        let rain = w.precip * (1 - w.snow), snow = w.precip * w.snow
+        let cloud = max(w.cover, w.fog)
+        let up = smoothstep(-6, 4, e)
+        let low = smoothstep(-2, 6, e) * (1 - smoothstep(10, 22, e))
+        let high = smoothstep(8, 20, e)
+        let clear = 1 - smoothstep(0.3, 0.92, max(cloud, 2 * rain, 2 * snow))
+        func v(_ x: Double, _ y: Double, _ z: Double) -> SIMD3<Double> { SIMD3(x, y, z) }
+        func lerp(_ a: SIMD3<Double>, _ b: SIMD3<Double>, _ k: Double) -> SIMD3<Double> { a + (b - a) * k }
+        let warm = lerp(v(1, 1, 1), v(1, 0.80, 0.60), low * clear)
+        var sky = (v(0.75, 0.85, 1.0) * 0.08 * (1 - up) + warm * up * (0.4 + 0.6 * high))
+            * (1 - 0.68 * rain) * lerp(v(1, 1, 1), v(0.75, 0.78, 0.82), cloud * (1 - rain))
+        // snow: a colder, softer, brighter sky (the snow lights everything from below); fog: greyer
+        sky *= lerp(v(1, 1, 1), v(0.95, 1.0, 1.12) * 1.25, snow)
+        sky *= lerp(v(1, 1, 1), v(0.96, 0.98, 1.0), w.fog)
+        var m = Mix()
+        m.flash = Float(lightning(time: time, storm: w.storm))
+        if m.flash > 0 {                         // a spike of the sky's light, cool (milder by day)
+            let f = Double(m.flash)
+            sky = sky * (1 + 3 * f * (1 - 0.75 * up)) + v(0.8, 0.9, 1.15) * 0.05 * f * (1 - 0.6 * up)
+        }
+        m.sky = SIMD3<Float>(sky)
+        m.sun = Float(high)
+        m.sunLow = Float(low)
+        m.clear = Float(clear)
+        // partly cloudy: shadows drift over the sun's light (strongest halfway between clear and overcast)
+        m.shadow = Float(min(1, 4 * clear * (1 - clear) * 1.2))
+        m.cabin = Float(1 + 1.2 * rain + 0.3 * cloud + 0.4 * snow)
+        m.city = Float(1 - up)
+        m.ev = Float(night * (1 - up) + up * (day + 0.1 * low) + 0.45 * rain + 0.3 * cloud * (1 - rain) + 0.15 * snow)
+        return m
+    }
+
+    /// Lightning, 0…1: a brief double flash with a flicker, at most one every 8–20 s (14 s slots,
+    /// a random start within the first 6 s of each), only in a storm. Gentle by design: two
+    /// pulses ~0.2 s apart, decaying in ~0.1 s, never strobing.
+    static func lightning(time t: Double, storm: Double) -> Double {
+        guard storm > 0.05 else { return 0 }
+        let slot = (t / 14).rounded(.down)
+        func hash(_ x: Double) -> Double { let s = sin(x * 12.9898 + 78.233) * 43758.5453; return s - s.rounded(.down) }
+        guard hash(slot) < storm * 0.85 else { return 0 }           // not every slot
+        let start = slot * 14 + hash(slot + 0.37) * 6
+        let dt = t - start
+        guard dt >= 0, dt < 1.2 else { return 0 }
+        var f = exp(-dt / 0.09)
+        if dt > 0.21 { f += 0.7 * exp(-(dt - 0.21) / 0.12) }
+        let flicker = 0.85 + 0.15 * sin(dt * 90)
+        return min(max(f * flicker * min(storm * 1.2, 1), 0), 1)
+    }
+
+    /// The per-tile mix uniforms (u.scene[5…10]) for `m`: weight × scale × tint × 2^EV.
+    func weights(_ m: Mix) -> [simd_float4] {
+        let exposure = Float(pow(2.0, Double(m.ev)))
+        func w(_ tile: String, _ rgb: SIMD3<Float>) -> simd_float4 {
+            guard let i = layers.index(of: tile) else { return simd_float4(0, 0, 0, -1) }
+            let s = Float(layers.scale?[tile] ?? 1)
+            var tint = SIMD3<Float>(repeating: 1)
+            if let t = layers.tint?[tile], t.count >= 3 { tint = SIMD3(Float(t[0]), Float(t[1]), Float(t[2])) }
+            let v = rgb * tint * s * exposure
+            return simd_float4(v.x, v.y, v.z, Float(i))
+        }
+        let one = SIMD3<Float>(repeating: 1)
+        return [w("sun", one * m.sun), w("sun_low", one * m.sunLow), w("sky", m.sky), w("cabin", one * m.cabin),
+                w("city", one * m.city),
+                simd_float4(layers.index(of: "mask").map(Float.init) ?? -1, m.clear, m.shadow, 0)]
+    }
+
+    // MARK: Frames
+
+    private func textureCache(_ device: MTLDevice) -> CVMetalTextureCache? {
+        if let c = cache, cacheDevice == device.registryID { return c }
+        var c: CVMetalTextureCache?
+        CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &c)
+        cache = c; cacheDevice = device.registryID
+        return c
+    }
+
+    private static let posterLock = NSLock()
+    private static var posters: [String: YCbCrFrame] = [:]
+
+    /// The video's first frame (stills), cached per file and size/mtime.
+    func poster(_ device: MTLDevice) -> YCbCrFrame? {
+        let st = FileStamp(path: url.path)
+        let key = "\(device.registryID)|\(url.path)|\(st?.size ?? 0)|\(st?.sec ?? 0)|\(st?.nsec ?? 0)"
+        FilmLayers.posterLock.lock()
+        if let f = FilmLayers.posters[key] { FilmLayers.posterLock.unlock(); return f }
+        FilmLayers.posterLock.unlock()
+        lock.lock(); let c = textureCache(device); lock.unlock()
+        guard let c, let f = YCbCrFrame.firstFrame(url, cache: c) else { return nil }
+        FilmLayers.posterLock.lock()
+        if FilmLayers.posters.count > 8 { FilmLayers.posters.removeAll() }
+        FilmLayers.posters[key] = f
+        FilmLayers.posterLock.unlock()
+        return f
+    }
+
+    /// The frame to mix: the playing video's newest (live; its first frame until it decodes one),
+    /// else the first frame.
+    private func source(_ device: MTLDevice, live: Bool) -> YCbCrFrame? {
+        if live {
+            lock.lock()
+            if video == nil {
+                let fmt = YCbCrFrame.pixelFormat(for: AVURLAsset(url: url).tracks(withMediaType: .video).first)
+                video = VideoSource(url: url, device: device, pixelFormat: fmt)
+                if paused { video?.setPaused(true) }
+            }
+            let v = video
+            lock.unlock()
+            if let f = v?.currentPlanes() { return f }
+        }
+        return poster(device)
+    }
+
+    private func texture(_ device: MTLDevice, _ fmt: MTLPixelFormat, _ w: Int, _ h: Int, _ old: MTLTexture?) -> MTLTexture? {
+        if let old, old.width == w, old.height == h, old.pixelFormat == fmt { return old }
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: fmt, width: w, height: h, mipmapped: true)
+        d.usage = [.renderTarget, .shaderRead]
+        d.storageMode = .private
+        return device.makeTexture(descriptor: d)
+    }
+
+    /// Encodes the mix pass on `cmd` when the frame or the light changed (else keeps the last
+    /// one), and returns what the screen pass binds: (HDR, highlights) and its u.scene[0…3].
+    /// nil while the mix pipeline compiles (`wait`: compile now) or before a frame decodes.
+    func encode(_ cmd: MTLCommandBuffer, device: MTLDevice, elevation: Double, weather: WeatherMix, time: Double,
+                live: Bool, wait: Bool) -> (hdr: MTLTexture, glow: MTLTexture, screen: [simd_float4])? {
+        guard let pso = CustomScenePipelines.pipeline(prepared, device: device, format: FilmLayers.hdrFormat, wait: wait,
+                                                      fragment: FilmLayers.mixFunction, extraFormats: [FilmLayers.glowFormat]),
+              let frame = source(device, live: live) else { return nil }
+        let cols = layers.columns, rows = layers.rows
+        let vw = frame.luma.width, vh = frame.luma.height
+        let tw = max(vw / cols, 1), th = max(vh / rows, 1)
+        let m = FilmLayers.mix(elevation: elevation, weather: weather, time: time,
+                               day: layers.exposure?.day ?? 1.5, night: layers.exposure?.night ?? 3.2)
+        let exposure = Float(pow(2.0, Double(m.ev)))
+        var w = weights(m)
+        // the cloud shadows' drift (slow, faster in wind)
+        w[5].w = m.shadow > 0.01 ? Float((time * 0.012 * weather.driftRate).truncatingRemainder(dividingBy: 1000)) : 0
+        let head: [simd_float4] = [simd_float4(Float(vw), Float(vh), Float(tw), Float(th)),
+                                   simd_float4(Float(cols), Float(rows), 2 * exposure, 3 * exposure),
+                                   frame.rows.0, frame.rows.1, frame.rows.2]
+        let all = head + w
+        lock.lock()
+        let target = targets[live] ?? Target()
+        targets[live] = target
+        lock.unlock()
+        let key = [Float(frame.serial)] + all.flatMap { [$0.x, $0.y, $0.z, $0.w] }
+        let screen = screenUniforms(m, weather: weather, tileWidth: tw, tileHeight: th)
+        let object = ObjectIdentifier(frame.luma)
+        if key == target.key, object == target.frameObject, let h = target.hdr, let g = target.glow { return (h, g, screen) }
+
+        guard let hdr = texture(device, FilmLayers.hdrFormat, tw, th, target.hdr),
+              let glow = texture(device, FilmLayers.glowFormat, tw, th, target.glow) else { return nil }
+        let rpd = MTLRenderPassDescriptor()
+        rpd.colorAttachments[0].texture = hdr
+        rpd.colorAttachments[1].texture = glow
+        for i in 0..<2 { rpd.colorAttachments[i].loadAction = .dontCare; rpd.colorAttachments[i].storeAction = .store }
+        guard let enc = cmd.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
+        var u = FXUniforms()
+        u.resolution = simd_float2(Float(tw), Float(th))
+        u.time = Float(time.truncatingRemainder(dividingBy: 3600))
+        withUnsafeMutableBytes(of: &u.scene) { raw in
+            let s = raw.bindMemory(to: simd_float4.self)
+            for (i, v) in all.enumerated() where i < 16 { s[i] = v }
+        }
+        enc.setRenderPipelineState(pso)
+        enc.setFragmentBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
+        let ph = CustomSceneAssets.placeholder(device)
+        enc.setFragmentTexture(frame.luma, index: 9)
+        enc.setFragmentTexture(frame.chroma, index: 10)
+        enc.setFragmentTexture(ph, index: 11)
+        enc.setFragmentTexture(ph, index: 12)
+        enc.setFragmentSamplerState(CustomSceneAssets.sampler(device), index: 0)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        enc.endEncoding()
+        if let blit = cmd.makeBlitCommandEncoder() {
+            blit.generateMipmaps(for: hdr)
+            blit.generateMipmaps(for: glow)
+            blit.endEncoding()
+        }
+        // the frame's buffers stay alive until the GPU is done with them
+        cmd.addCompletedHandler { _ in withExtendedLifetime(frame) {} }
+        target.hdr = hdr; target.glow = glow; target.key = key; target.screen = screen; target.frameObject = object
+        return (hdr, glow, screen)
+    }
+
+    /// The screen pass's u.scene[0…3] (film.metal's header).
+    func screenUniforms(_ m: Mix, weather: WeatherMix, tileWidth: Int, tileHeight: Int) -> [simd_float4] {
+        let look = prepared.manifest
+        let bloom = Float(min(max(look.lookValue("bloom") ?? 0.25, 0), 1)) * (0.32 / 0.25)
+        let vignette = Float(min(max(look.lookValue("vignette") ?? 0.22, 0), 1))
+        let wd = Double(tileWidth)
+        let halLod = Float(log2(max(0.02 * wd, 1))), bloomLod = Float(log2(max(0.05 * wd, 1)))
+        let rain = weather.precip * (1 - weather.snow), snow = weather.precip * weather.snow
+        return [simd_float4(Float(tileWidth), Float(tileHeight), 0, 0),
+                simd_float4(0, fps, 1, bloom),
+                simd_float4(Float(rain), Float(snow), Float(weather.fog), m.flash),
+                simd_float4(vignette, halLod, bloomLod, Float(min(max(weather.wind / 20, 0), 1)))]
+    }
+
+    // MARK: Validate
+
+    static func validate(_ l: CustomSceneManifest.Layers, packageDir: URL, engineVersion: String?) -> (diagnostics: [Diagnostic], warnings: [String]) {
+        var d: [Diagnostic] = []
+        var w: [String] = []
+        func err(_ s: String, _ file: String = "scene.json") { d.append(Diagnostic(message: "layers: " + s, file: file)) }
+        if let v = engineVersion, CustomScenes.compareVersions(v, "1.1") < 0 {
+            err("light layers need the film engine 1.1 or later (\"engine\": {\"id\": \"film\", \"version\": \">=1.1\"})")
+        }
+        let cols = l.columns, rows = l.rows
+        if let g = l.grid, g.count != 2 || g.contains(where: { $0 < 1 || $0 > 8 }) { err("\"grid\" must be [columns, rows], each 1…8") }
+        if l.tiles.isEmpty { err("\"tiles\" is empty: list the grid's tiles left→right, top→bottom") }
+        if l.tiles.count != cols * rows { err("\(l.tiles.count) tiles for a \(cols)×\(rows) grid: they must match") }
+        if Set(l.tiles).count != l.tiles.count { err("a tile is listed twice") }
+        for t in l.tiles where !CustomSceneManifest.Layers.knownTiles.contains(t) {
+            w.append("layers: tile \"\(t)\" isn't one of \(CustomSceneManifest.Layers.lightTiles.joined(separator: ", ")), mask — it's ignored")
+        }
+        if !l.tiles.contains(where: { ["sun", "sky", "cabin"].contains($0) }) { err("no light tiles (sun, sky or cabin)") }
+        if let e = l.encoding, e != "pow4" { err("encoding \"\(e)\": this build reads \"pow4\"") }
+        for t in l.tiles where CustomSceneManifest.Layers.lightTiles.contains(t) {
+            guard let s = l.scale?[t] else { err("no \"scale\" for the \(t) tile (its 99.95th percentile, linear)"); continue }
+            if !(s > 0 && s < 1000) { err("scale for \(t) is \(s): expected a positive number (linear, ~0.1…10)") }
+        }
+        if !l.tiles.contains("mask") { w.append("layers: no mask tile — no rain, snow or fog on the glass") }
+        if let e = l.exposure, [e.day, e.night].contains(where: { $0.map { !$0.isFinite || abs($0) > 16 } ?? false }) {
+            err("exposure day / night must be EV values within ±16")
+        }
+        for (k, v) in l.tint ?? [:] where v.count != 3 || v.contains(where: { !$0.isFinite || $0 < 0 || $0 > 4 }) {
+            err("tint \(k) must be [r, g, b], each 0…4")
+        }
+        let url = packageDir.appendingPathComponent(l.file)
+        guard FileManager.default.fileExists(atPath: url.path) else { return (d, w) }      // (packageFiles reports it)
+        let asset = AVURLAsset(url: url)
+        guard let track = asset.tracks(withMediaType: .video).first, asset.isPlayable else {
+            err("\(l.file) isn't a playable video", l.file); return (d, w)
+        }
+        let dur = CMTimeGetSeconds(asset.duration)
+        if !(dur > 0.4) { err(String(format: "%@ is %.2f s: too short to loop", l.file, dur), l.file) }
+        let s = track.naturalSize.applying(track.preferredTransform)
+        let vw = Int(abs(s.width)), vh = Int(abs(s.height))
+        if vw > 8192 || vh > 8192 { err("\(l.file) is \(vw)×\(vh): at most 8192 px a side (hardware decode)", l.file) }
+        if vw % cols != 0 || vh % rows != 0 { w.append("layers: \(vw)×\(vh) doesn't split evenly into \(cols)×\(rows) tiles") }
+        let tw = vw / max(cols, 1)
+        if tw < 640 { w.append("layers: tiles are \(tw) px wide: soft full-screen (1600×1000 is the default)") }
+        if let fd = track.formatDescriptions.first {
+            let f = fd as! CMFormatDescription
+            if CMFormatDescriptionGetMediaSubType(f) != kCMVideoCodecType_HEVC {
+                err("\(l.file) must be HEVC Main10 (10-bit): 8-bit video bands the layers' shadows", l.file)
+            }
+            if CMFormatDescriptionGetExtension(f, extensionKey: kCMFormatDescriptionExtension_YCbCrMatrix) == nil {
+                w.append("layers: \(l.file) has no colour matrix tag: read as BT.709 (encode with -colorspace bt709)")
+            }
         }
         return (d, w)
     }
