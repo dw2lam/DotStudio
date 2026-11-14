@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.5.0-beta.1 — Make your own with AI (beta)
+## 1.5.0 — Commute, and make your own with AI (beta)
 
 ### New
 - **Commute.** A short film: a penguin in a suit dozes on the train home while the city slides
@@ -10,20 +10,20 @@
 - **Penguin.** A little penguin on a glowing LED panel: it waddles, waves, belly-slides, dances
   and dozes off by its igloo, under snow, stars and a rippling aurora at night or a bright sun by
   day. Every part of the scene can be switched off, and you can swap in your own character image.
-- **Make your own with AI.** DotStudio now includes an MCP server, so an assistant like Claude,
+- **Make your own with AI (beta).** DotStudio now includes an MCP server, so an assistant like Claude,
   Cursor or VS Code can design screensavers with you. It reads DotStudio's style guide (and any
   guides of your own, like a brand guide), builds styles from the scenes and looks, shows you
   previews, checks how hard each one works your Mac, and — only when you ask — sets it as your
   screensaver or live wallpaper. Every change it makes shows a small notice with Undo. Set it up
   in Settings ▸ AI (one click for Claude Desktop); a switch there keeps the AI from changing
   what plays at all.
-- **Custom Scenes.** An assistant can also write a brand-new scene for you: DotStudio compiles
+- **Custom Scenes (beta).** An assistant can also write a brand-new scene for you: DotStudio compiles
   it on your Mac and plays it in the screensaver, the live wallpaper and the gallery like any
   other style, with its own settings in the Inspector. Scenes can be smooth shader art, an LED
   panel of dots or pixels like Bloom and Penguin, or a port of a Shadertoy you wrote (that
   engine downloads the first time it's needed). If a scene can't be drawn, its style shows a
   calm gradient and the Inspector says why.
-- **Films over AI.** With Blender installed, an assistant can render film scenes like Commute
+- **Films over AI (beta).** With Blender installed, an assistant can render film scenes like Commute
   for you — stills to try ideas, then a looping film for your screensaver or wallpaper.
 
 ### Fixed
