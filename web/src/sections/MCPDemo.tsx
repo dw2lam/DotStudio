@@ -174,21 +174,26 @@ export function MCPDemo() {
       className="section-pad mcp-fit relative bg-black"
     >
       <div className="mx-auto flex w-full max-w-7xl flex-col">
-        <header className="mb-[var(--head-gap)] flex flex-col gap-3 md:mb-[clamp(0.75rem,3svh,2rem)] md:flex-row md:items-end md:justify-between md:gap-10">
-          <h2
-            id="mcp-title"
-            className="text-4xl font-medium leading-[0.95] tracking-[-0.04em] sm:text-5xl md:text-[clamp(2.5rem,7.5svh,4rem)]"
-            style={{ color: CREAM }}
-          >
-            <WordsPullUpMultiStyle
-              className="!justify-start"
-              segments={[
-                { text: "Now with" },
-                { text: "MCP.", className: "font-serif font-normal italic tracking-[-0.02em] text-primary/75" },
-              ]}
-            />
-          </h2>
-          <p className="max-w-md text-sm leading-relaxed text-gray-400 [text-wrap:balance] md:pb-1 md:text-right md:text-base">
+        <header className="mb-[var(--head-gap)] flex flex-col gap-4 md:mb-[clamp(0.75rem,3svh,2rem)] md:flex-row md:items-end md:justify-between md:gap-10">
+          <div className="flex shrink-0 flex-col gap-3 md:gap-[clamp(0.5rem,1.5svh,1rem)]">
+            <span className="text-[10px] uppercase tracking-[0.25em] text-primary sm:text-xs">
+              New in 1.5 <span aria-hidden="true">·</span> Beta
+            </span>
+            <h2
+              id="mcp-title"
+              className="whitespace-nowrap pr-[0.12em] text-4xl font-medium leading-[0.95] tracking-[-0.04em] sm:text-5xl md:text-[clamp(2.5rem,7.5svh,4rem)]"
+              style={{ color: CREAM }}
+            >
+              <WordsPullUpMultiStyle
+                className="!flex-nowrap !justify-start"
+                segments={[
+                  { text: "Now with" },
+                  { text: "MCP.", className: "font-serif font-normal italic tracking-[-0.02em] text-primary/75" },
+                ]}
+              />
+            </h2>
+          </div>
+          <p className="max-w-md text-sm leading-relaxed text-gray-400 [text-wrap:balance] md:min-w-0 md:pb-1 md:text-right md:text-base">
             Any MCP app, on any model, can now make screensavers with DotStudio.
           </p>
         </header>
