@@ -109,8 +109,23 @@ final class SignalService: ObservableObject {
 
     func isNeeded(_ s: Signal) -> Bool { neededSignals.contains { $0.id == s.id } }
 
+    /// What in the library the service depends on: anything else (a slider drag in the editor,
+    /// a rename) changes nothing here and costs nothing.
+    private struct Inputs: Equatable {
+        var signals: [Signal]?
+        var rules: [PlayRule]?
+        var styles: [UUID]
+        var lat: Double?
+        var lon: Double?
+    }
+    private var lastInputs: Inputs?
+
     private func libraryChanged() {
-        guard started, !demo else { return }
+        guard started, !demo, let lib = library else { return }
+        let inputs = Inputs(signals: lib.signals, rules: lib.rules, styles: lib.presets.map(\.id),
+                            lat: lib.locationLat, lon: lib.locationLon)
+        guard inputs != lastInputs else { return }
+        lastInputs = inputs
         guard isActive else { shutDown(); return }
         let needed = neededSignals
         let ids = Set(needed.map(\.id))
