@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.6.0 — Live light, every kind of weather, and your own signals (unreleased)
+## 1.6.0 — Live light, every kind of weather, and your own signals
 
 ### New
 - **Commute, relit live.** Film scenes can now be rendered once per light source — the sun,
