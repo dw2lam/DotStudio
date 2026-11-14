@@ -50,9 +50,14 @@ enum FakeApp {
                             : SignalFetcher.fetchSync(s, secret: nil, location: lib.signalLocation, forAI: req.signal != nil || s.createdByAI)
                         r = BridgeResponse(ok: true, test: t)
                     } else { r = .fail("No such signal. Call list_signals.") }
+                } else if req.op == .ping {
+                    r = BridgeResponse(ok: true)
                 } else {
-                    r = LibraryExecutor.run(req, library: &lib, wallpaper: &wall, displays: Displays.connected(),
-                                            settings: AISettings.load(store: dir))
+                    // What the real app does (AIBridgeHost.libraryEdit): LibraryOps on its memory.
+                    var choice = WallpaperChoice(json: wall)
+                    r = LibraryOps.apply(req, library: &lib, wallpaper: &choice,
+                                         LibraryAccess.context(dir, AISettings.load(store: dir)))
+                    if r.ok { wall = choice.merged(into: wall) }
                 }
                 if r.ok, req.op != .ping, req.op != .testSignal {
                     store.save(lib)

@@ -77,10 +77,26 @@ final class WeatherLink {
         return WeatherMix.menuConditions[i - 1]
     }
 
-    /// Whether this style follows the live weather (the app fetches only while one does).
+    /// Whether this style reads the LIVE weather (the app fetches only while something does):
+    /// a built-in scene whose Weather menu is Live, or a Custom Scene that reads it — a film
+    /// with a rain clip or light layers, or a manifest that "uses" the weather — unless the style
+    /// pins a film's weather (Preset.customUses). A scene pinned to a condition draws that
+    /// condition and never looks at weather.json.
     static func followsLive(_ preset: Preset) -> Bool {
         preset.effects.contains { $0.enabled && usesWeather($0.kind) && fixedCondition($0) == nil }
-            || preset.customUses("weather")        // a Custom Scene whose manifest "uses" the weather
+            || preset.customUses("weather")
+    }
+
+    /// Whether anything in `lib` reads the LIVE weather — a style that follows it (followsLive),
+    /// an enabled When rule testing a weather.* signal, or a scene input bound to one (Signals) —
+    /// so the app fetches it (WeatherService, with Settings ▸ Weather ▸ Live weather on).
+    /// `store`: where Custom Scene packages live; their manifests are read first, so a film style
+    /// counts before any renderer has drawn it (customUses only knows manifests already read).
+    static func needed(by lib: Library, store: URL?) -> Bool {
+        if let store {
+            for id in Set(lib.presets.flatMap(\.customSceneIDs)) { _ = CustomScenes.manifest(id: id, store: store) }
+        }
+        return lib.presets.contains(where: followsLive) || lib.referencedSignalKeys.contains { $0.hasPrefix("weather.") }
     }
 
     /// The live weather right now (eased), polling the feed when due.

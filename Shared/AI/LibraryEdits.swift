@@ -219,12 +219,14 @@ extension Library {
 }
 
 /// The signal and When-rule requests (upsertSignal, deleteSignal, upsertRule, deleteRule) on a
-/// library — the same edit for the running app (AIBridgeHost) and dotstudio-mcp's offline path
-/// (LibraryExecutor). Gates: signal edits need AISettings.allowSignals; rule edits change what
-/// plays, so they need allowPlaybackChanges, exactly like set_screensaver.
+/// library — part of LibraryOps.apply (Shared/AI/LibraryOps.swift), which the running app
+/// (AIBridgeHost) and dotstudio-mcp's offline path both call. Gates: signal edits need
+/// AISettings.allowSignals; rule edits change what plays, so they need allowPlaybackChanges,
+/// exactly like set_screensaver — and so does deleting a signal with force while a When rule
+/// tests it (that edits or removes the rule).
 enum SignalEdits {
     static let signalsOff = "The user has turned off “Let AI add live data signals” in DotStudio ▸ Settings ▸ AI. Ask the user to add the signal themselves in Settings ▸ Signals, or to turn that setting on."
-    static let playbackOff = "The user has turned off “Let AI change what plays” in DotStudio ▸ Settings ▸ AI. Styles can still be created; ask the user to set it themselves, or to turn that setting on."
+    static var playbackOff: String { LibraryOps.playbackOff }
 
     static func run(_ req: BridgeRequest, library lib: inout Library, settings: AISettings) -> BridgeResponse {
         switch req.op {
@@ -238,6 +240,12 @@ enum SignalEdits {
         case .deleteSignal:
             guard settings.allowSignals else { return .fail(signalsOff) }
             guard let id = req.id, let s = lib.signal(id) else { return .fail("No such signal. Call list_signals.") }
+            // Forcing it out of a When rule changes what plays.
+            let users = lib.rules(using: s.key)
+            if req.force == true, !users.isEmpty, !settings.allowPlaybackChanges {
+                return .fail(playbackOff + " (Deleting “\(s.name)” with force would change "
+                             + users.map { "“\($0.name)”" }.joined(separator: ", ") + ", which decides what plays.)")
+            }
             if let why = lib.deleteSignal(id, force: req.force ?? false) { return .fail(why) }
             return BridgeResponse(ok: true, id: id, name: s.name, message: "Deleted the signal “\(s.name)”.")
         case .testSignal:
