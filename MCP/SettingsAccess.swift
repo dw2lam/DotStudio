@@ -75,7 +75,7 @@ enum SettingsExecutor {
                     prefs: inout [String: Bool], store: SharedStore, ai: AISettings,
                     live: [String: JSONValue], appActions: Bool = false) -> BridgeResponse {
         var state = AppSettings.State(library: lib, wallpaper: (try? JSON.decode([String: JSONValue].self, from: wall)) ?? [:],
-                                      prefs: prefs, ai: ai)
+                                      prefs: prefs, ai: ai, store: store.baseDir)
         switch req.op {
         case .getSettings:
             var values = AppSettings.read(state)
@@ -89,7 +89,7 @@ enum SettingsExecutor {
             }
             let gated = AppSettings.gatedKeys(changes)
             if !gated.isEmpty, !ai.allowPlaybackChanges {
-                return .fail(LibraryExecutor.playbackOff + " (Refused: \(gated.joined(separator: ", ")) change what plays; the other settings can be sent on their own.)")
+                return .fail(LibraryOps.playbackOff + " (Refused: \(gated.joined(separator: ", ")) change what plays; the other settings can be sent on their own.)")
             }
             if let app = changes.first(where: \.def.needsApp), !appActions {
                 return .fail("\(app.def.key) can only be changed while DotStudio is running (the app registers its own login item). Ask the user to open DotStudio, then try again — nothing was changed.")

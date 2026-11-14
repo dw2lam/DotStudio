@@ -152,18 +152,29 @@ struct WallpaperSettings: Codable, Equatable {
     }
 }
 
+extension WallpaperSettings {
+    /// The fields an assistant's requests and a style's deletion change (Shared/AI/LibraryOps.swift
+    /// decides them, for the app and dotstudio-mcp alike).
+    var choice: WallpaperChoice {
+        get { WallpaperChoice(enabled: enabled, presetID: presetID, followsScreensaver: followsScreensaver, displayStyles: displayStyles) }
+        set {
+            enabled = newValue.enabled
+            presetID = newValue.presetID
+            followsScreensaver = newValue.followsScreensaver
+            displayStyles = newValue.displayStyles
+        }
+    }
+}
+
 /// What the live wallpaper shows, per display — pure functions of (settings, library, clock),
-/// shared by WallpaperController and the self-tests.
+/// shared by WallpaperController and the self-tests. The picks an edit makes are
+/// WallpaperChoice's (Shared/AI/LibraryOps.swift), so dotstudio-mcp makes the same ones.
 enum WallpaperPick {
     /// The shared pick (every display without a style of its own): the chosen style — or, while
     /// following the screensaver, what the screensaver's lineup shows now. nil = none (no pick,
     /// or the pick was deleted).
     static func shared(_ settings: WallpaperSettings, _ lib: Library, now: Date = Date(), live: SignalState?) -> Preset? {
-        if settings.followsScreensaver {
-            return lib.presets.isEmpty ? nil : Playback.effectivePreset(in: lib, now: now, live: live)
-        }
-        guard let id = settings.presetID else { return nil }
-        return lib.presets.first { $0.id == id }
+        settings.choice.sharedPick(lib, now: now, live: live)
     }
 
     /// One display's style. Following the screensaver: exactly what the screensaver shows on
@@ -188,12 +199,7 @@ enum WallpaperPick {
     static func leavingSync(_ settings: WallpaperSettings, _ lib: Library, now: Date = Date(), live: SignalState?,
                             pin: DisplayPin, display: String) -> WallpaperSettings {
         var s = settings
-        if let shown = shared(settings, lib, now: now, live: live) { s.presetID = shown.id }
-        s.followsScreensaver = false
-        let ids = Set(lib.presets.map(\.id))
-        var pins = (lib.displayStyles ?? [:]).filter { ids.contains($0.value.presetID) }
-        pins[display] = pin
-        s.displayStyles = pins
+        s.choice = settings.choice.leavingSync(lib, now: now, live: live, pin: pin, display: display)
         return s
     }
 
@@ -202,18 +208,14 @@ enum WallpaperPick {
     /// that surviving style) rather than the whole wallpaper stopping. nil = nothing survives:
     /// stop, as before. Pure.
     static func sharedReplacement(pins: [String: DisplayPin], _ lib: Library, connected: [String]) -> UUID? {
-        let ids = Set(lib.presets.map(\.id))
-        let survivors = connected.compactMap { pins[$0]?.presetID }.filter(ids.contains)
-        guard let first = survivors.first else { return nil }
-        return lib.activeID.flatMap { ids.contains($0) ? $0 : nil } ?? first
+        WallpaperChoice.sharedReplacement(pins: pins, lib, connected: connected)
     }
 
     /// The pins whose style still exists (WallpaperController drops a deleted style's pins with
     /// it: forgetDisplayStyles).
     static func pruned(_ settings: WallpaperSettings, _ lib: Library) -> WallpaperSettings {
         var s = settings
-        let ids = Set(lib.presets.map(\.id))
-        s.displayStyles = s.displayStyles.filter { ids.contains($0.value.presetID) }
+        s.choice = settings.choice.pruned(lib)
         return s
     }
 }

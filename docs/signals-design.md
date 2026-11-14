@@ -64,7 +64,7 @@ Auth: `auth {in: header|query, name}` — the VALUE lives only in the macOS Keyc
 password, service com.davidlam.DotStudio.signal, account = signal UUID), never in any file, bridge
 message or MCP output. Refuse URLs whose query has key-like params (key|apikey|api_key|token|
 access_token|appid|secret|password|sig|signature) → point to auth.
-AI-created signals: refuse localhost, *.local, loopback/private/link-local/ULA IP literals.
+AI-created signals: refuse localhost, *.local, loopback/private/link-local/ULA IP literals — and host names that resolve to any such address (getaddrinfo before each fetch and redirect; the connected peer re-checked from URLSessionTaskMetrics.remoteAddress, the body discarded if private; DEBUG hook DOTSTUDIO_SIGNAL_FAKE_DNS for tests).
 
 **file** (user/AI): a file in `<store>/signal-files/` only (realpath must stay inside). JSON +
 pointer, or plain text with one number/word. 64 KB cap, stat every 10 s while needed. Covers

@@ -6,8 +6,9 @@
 //  ~0.1° (about 10 km) before it leaves the Mac, and writes weather.json atomically into
 //  SharedStore.baseDir, where every renderer host reads it (WeatherLink).
 //
-//  When: at launch and every 20 minutes while a style in the library follows the live weather
-//  (WeatherLink.followsLive) and Settings › Weather has it on; after a failure it backs off
+//  When: at launch and every 20 minutes while something reads the live weather (WeatherLink.needed:
+//  a style whose Weather is Live — not one pinned to a condition — or a When rule / scene input
+//  on weather.*) and Settings › Weather has it on; after a failure it backs off
 //  (1, 2, 5, 10, 20 min). Turning it off deletes weather.json, so the scenes go back to clear.
 //
 //      WeatherService.shared.attach(model:)   // App.init
@@ -71,11 +72,12 @@ final class WeatherService: ObservableObject {
         reevaluate()
     }
 
-    /// A style in the library follows the live weather — or an enabled When rule tests it
-    /// or a Custom Scene input is bound to a weather.* signal (SignalService.needsWeather) — and
-    /// the user hasn't turned it off.
+    /// Something reads the LIVE weather — a style whose Weather is Live (not pinned to a
+    /// condition), an unpinned film that follows it, an enabled When rule or a scene input on a
+    /// weather.* signal (WeatherLink.needed) — and the user hasn't turned it off.
     var isNeeded: Bool {
-        enabled && ((model?.library.presets.contains(where: WeatherLink.followsLive) ?? false) || SignalService.shared.needsWeather)
+        guard enabled, let model else { return false }
+        return WeatherLink.needed(by: model.library, store: model.store.baseDir)
     }
 
     /// Settings' Retry: fetch now, whatever the schedule says.

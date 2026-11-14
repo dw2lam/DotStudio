@@ -550,27 +550,44 @@ final class AppModel: ObservableObject {
         // The style goes, and every reference with it: active, rotation, schedule, lineup, pins
         // (Shared/AI/LibraryEdits.swift — dotstudio-mcp deletes the same way).
         library.removePreset(id)
-        // A wallpaper showing exactly this style stops — unless a connected display still plays a
-        // wallpaper of its own: then the others move on (WallpaperPick.sharedReplacement). Not
-        // one matching the screensaver: its style is whatever the lineup shows now
-        // (WallpaperController.libraryChanged moves it on).
-        let slot = WallpaperSlot.shared
-        if !WallpaperController.shared.followsScreensaver, slot.styleID == id {
-            if let next = WallpaperPick.sharedReplacement(pins: slot.pins, library,
-                                                          connected: DisplayRoster.shared.displays.map(\.key)) {
-                slot.setShared(next)
-            } else {
-                slot.stop()
-            }
-        }
-        // Displays that played it as a style of their own go back to the shared pick (the
-        // screensaver's pins are dropped by save()).
-        WallpaperSlot.shared.forget(id)
+        styleDeleted(id, at: idx)
+        save()
+        _thumbnailer?.retain(ids: Set(library.presets.map(\.id)))
+    }
+
+    /// What follows a style's deletion outside the library (`library`: after it): the wallpaper —
+    /// WallpaperChoice.styleDeleted, the same rule delete_style follows (Shared/AI/LibraryOps.swift):
+    /// a wallpaper showing exactly this style moves to a surviving display's style or stops, and
+    /// displays that had it as their own go back to the shared pick — and the selection.
+    private func styleDeleted(_ id: UUID, at idx: Int) {
+        let w = WallpaperController.shared
+        var wall = w.settings.choice
+        wall.styleDeleted(id, in: library, connected: DisplayRoster.shared.displays.map(\.key))
+        if wall != w.settings.choice { w.adopt(wall) }
         if editingID == id { editingID = nil }
         let neighbor = library.presets.indices.contains(idx) ? idx : library.presets.count - 1
         selectedID = neighbor >= 0 ? library.presets[neighbor].id : nil
+    }
+
+    /// An assistant's library change, decided and made by LibraryOps (AIBridgeHost): take the
+    /// edited library, and do what the gallery's own Delete / Duplicate do around it (selection,
+    /// thumbnails) — except that an assistant's delete moves the selection only off the style it
+    /// deleted, never away from the one the user is looking at. The wallpaper's part is the
+    /// caller's (WallpaperController.adopt).
+    func adoptAIEdit(_ lib: Library, deleted: UUID?, duplicate: UUID?) {
+        let idx = deleted.flatMap { id in library.presets.firstIndex { $0.id == id } }
+        library = lib
+        if let deleted, let idx {
+            Breadcrumbs.note("AI delete \(deleted.uuidString.prefix(8))")
+            if editingID == deleted { editingID = nil }
+            if selectedID == deleted {
+                let neighbor = library.presets.indices.contains(idx) ? idx : library.presets.count - 1
+                selectedID = neighbor >= 0 ? library.presets[neighbor].id : nil
+            }
+        }
+        if let duplicate { selectedID = duplicate }
         save()
-        _thumbnailer?.retain(ids: Set(library.presets.map(\.id)))
+        if deleted != nil { _thumbnailer?.retain(ids: Set(library.presets.map(\.id))) }
     }
 
     // MARK: Preset sharing (.dotstudiopreset)

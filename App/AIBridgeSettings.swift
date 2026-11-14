@@ -22,7 +22,7 @@ extension AIBridgeHost {
             prefs["SUAutomaticallyUpdate"] = u.automaticallyInstalls
         }
         return AppSettings.State(library: model.library, wallpaper: wallJSON, prefs: prefs,
-                                 ai: AISettings.load(store: model.store.baseDir))
+                                 ai: AISettings.load(store: model.store.baseDir), store: model.store.baseDir)
     }
 
     /// Every setting's value, plus what only the running app can read.

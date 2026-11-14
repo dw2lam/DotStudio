@@ -121,9 +121,6 @@ final class SignalService: ObservableObject {
         return (lib.signals ?? []).filter { $0.enabled && keys.contains($0.key) }
     }
 
-    /// An enabled rule tests the weather, or an input is bound to it (WeatherService fetches for it too).
-    var needsWeather: Bool { (library?.referencedSignalKeys ?? []).contains { $0.hasPrefix("weather.") } }
-
     func isNeeded(_ s: Signal) -> Bool { neededSignals.contains { $0.id == s.id } }
 
     /// What in the library the service depends on: anything else (a slider drag in the editor,

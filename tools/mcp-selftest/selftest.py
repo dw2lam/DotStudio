@@ -1183,6 +1183,8 @@ class _Fixture(http.server.BaseHTTPRequestHandler):
             self._send(429, "{}", headers={"Retry-After": "120"})
         elif p == "/redir-private":
             self._send(302, "", headers={"Location": "https://10.0.0.1/x"})
+        elif p == "/redir-rebind":
+            self._send(302, "", headers={"Location": "https://rebind.test/x"})
         else:
             self._send(404, "{}")
 
@@ -1396,9 +1398,235 @@ check(c.call("list_rules")["structuredContent"]["rules"][0]["activeNow"] is True
 c.close()
 happ.stdin.close()
 happ.wait(5)
+
+# DNS: a public NAME that points at a private address (rebinding / LAN probing) is refused for
+# AI-made signals, before the fetch and on every redirect. DOTSTUDIO_SIGNAL_FAKE_DNS (a DEBUG-only
+# hook) replaces the lookups with a fixed table: no real DNS, and a refused fetch never connects.
+print("== signals: where a host name points (a fake resolver)")
+FAKE_DNS = "rebind.test=10.9.8.7;mixed.test=93.184.216.34,192.168.0.9;v6.test=fd00::1;mapped.test=::ffff:127.0.0.1"
+
+
+def dns_refusals(cl, where):
+    for host, needle in [("rebind.test", "10.9.8.7"), ("mixed.test", "192.168.0.9"), ("v6.test", "fd00::1"), ("mapped.test", "127.0.0.1")]:
+        st_ = cl.call("test_signal", {"draft": {"url": f"https://{host}/v1/aqi", "pointer": "/aqi"}})["structuredContent"]
+        check(st_["ok"] is False and "local network" in st_.get("error", "") and needle in st_.get("error", ""),
+              f"{where}: {host} resolves to a private address → refused ({st_.get('error', '')[:60]}…)")
+    st_ = cl.call("test_signal", {"draft": {"url": "https://nowhere.test/x"}})["structuredContent"]
+    check(st_["ok"] is False and st_.get("error") == "Host not found", f"{where}: a name the resolver doesn't know → Host not found (no real lookup)")
+    st_ = cl.call("test_signal", {"draft": {"url": FX + "/redir-rebind"}})["structuredContent"]
+    check(st_["ok"] is False and "Redirected" in st_.get("error", "") and "10.9.8.7" in st_.get("error", ""),
+          f"{where}: a redirect to a name that points inside is re-checked and refused")
+    st_ = cl.call("test_signal", {"draft": {"url": FX + "/aqi.json", "pointer": "/data/aqi"}})["structuredContent"]
+    check(st_.get("value") == 42, f"{where}: the local fixture (test hook) still answers")
+
+
+D = new_store()
+c = Client(D, DOTSTUDIO_SIGNAL_ALLOW_LOCAL=1, DOTSTUDIO_SIGNAL_FAKE_DNS=FAKE_DNS)
+c.init()
+dns_refusals(c, "offline")
+res = c.call("create_signal", {"name": "Rebound", "url": "https://rebind.test/v1/aqi", "pointer": "/aqi"})
+ok(res, "create_signal accepts a public-looking name (where it points is checked at each fetch)")
+st = c.call("test_signal", {"signal": "Rebound"})["structuredContent"]
+check(st["ok"] is False and "10.9.8.7" in st.get("error", ""), "  → a saved AI-made signal is refused at fetch time too")
+c.close()
+dapp = subprocess.Popen([BIN, "--fake-app"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                        env=env_for(D, DOTSTUDIO_SIGNAL_ALLOW_LOCAL=1, DOTSTUDIO_SIGNAL_FAKE_DNS=FAKE_DNS))
+check(dapp.stdout.readline().strip() == b"ready", "stand-in app ready (fake resolver)")
+c = Client(D, DOTSTUDIO_SIGNAL_ALLOW_LOCAL=1, DOTSTUDIO_SIGNAL_FAKE_DNS=FAKE_DNS)
+c.init()
+dns_refusals(c, "via the app")
+c.close()
+dapp.stdin.close()
+dapp.wait(5)
+shutil.rmtree(D, ignore_errors=True)
 fx.shutdown()
 for d in (G, H):
     shutil.rmtree(d, ignore_errors=True)
+
+# ---------------------------------------------------------------- one implementation: offline == via the app
+# Every library request is decided by LibraryOps (Shared/AI/LibraryOps.swift) — on the files when
+# the app isn't running, on the app's memory when it is (the stand-in app runs exactly what
+# AIBridgeHost runs). The same script both ways must give the same answers and the same files.
+print("== library edits: offline and through the app agree")
+
+
+def lib_state(store):
+    l = library(store)
+    w = wall(store)
+    styles = {p["id"]: p["name"] for p in l["presets"]}
+    nm = lambda i: styles.get(i, i)
+    return {"names": sorted(styles.values()),
+            "active": nm(l.get("activeID")),
+            "rotation": [nm(i) for i in (l.get("rotation") or {}).get("presetIDs", [])],
+            "rotates": (l.get("rotation") or {}).get("enabled"),
+            "night": nm((l.get("schedule") or {}).get("nightPresetID")) if (l.get("schedule") or {}).get("enabled") else None,
+            "pins": {k: nm(v["presetID"]) for k, v in (l.get("displayStyles") or {}).items()},
+            "rules": sorted(r["name"] for r in l.get("rules", [])),
+            "signals": sorted(x["name"] for x in l.get("signals", [])),
+            "wall": {"on": w.get("enabled"), "style": nm(w.get("presetID")), "follows": w.get("followsScreensaver"),
+                     "pins": {k: nm(v["presetID"]) for k, v in (w.get("displayStyles") or {}).items()}}}
+
+
+def outcome(res):
+    if res.get("isError"):
+        return ("refused", text(res))
+    m = res["structuredContent"].get("message", "")
+    return ("ok", m.replace(" It plays while DotStudio runs.", ""))
+
+
+SCRIPT = [
+    ("unpin a display nobody has (screensaver)", "set_screensaver", {"mode": "unpin", "display": "NOPE"}),
+    ("unpin a display nobody has (wallpaper)", "set_wallpaper", {"mode": "unpin", "display": "NOPE"}),
+    ("unpin a connected display with no pin", "set_screensaver", {"mode": "unpin", "display": "DISPLAY-B"}),
+    ("pin the screensaver on a display", "set_screensaver", {"style": "Golden Hour", "display": "DISPLAY-A"}),
+    ("a display with another mode", "set_screensaver", {"style": "Golden Hour", "mode": "add", "display": "DISPLAY-A"}),
+    ("add a style already in the rotation", "set_screensaver", {"style": "Liquid Chrome", "mode": "add"}),
+    ("add a second style", "set_screensaver", {"style": "Aurora", "mode": "add"}),
+    ("night style", "set_screensaver", {"style": "Night Sky", "mode": "night"}),
+    ("wallpaper follows the screensaver", "set_wallpaper", {"mode": "follow"}),
+    ("a display's own wallpaper while following", "set_wallpaper", {"style": "Aurora", "display": "DISPLAY-B"}),
+    ("wallpaper off with a display", "set_wallpaper", {"mode": "off", "display": "DISPLAY-B"}),
+    ("wallpaper unpin", "set_wallpaper", {"mode": "unpin", "display": "DISPLAY-B"}),
+    ("wallpaper unpin again", "set_wallpaper", {"mode": "unpin", "display": "DISPLAY-B"}),
+    ("wallpaper on one style, everywhere", "set_wallpaper", {"style": "Currents"}),
+    ("a display of its own, not following", "set_wallpaper", {"style": "StandBy", "display": "DISPLAY-B"}),
+    ("duplicate (default name)", "duplicate_style", {"style": "Currents"}),
+    ("duplicate again (unique name)", "duplicate_style", {"style": "Currents"}),
+    ("duplicate named like an existing style", "duplicate_style", {"style": "Currents", "name": "Aurora"}),
+    ("delete the wallpaper's shared pick (a display keeps its own)", "delete_style", {"style": "Currents", "confirm": True}),
+    ("screensaver unpin the pinned display", "set_screensaver", {"mode": "unpin", "display": "DISPLAY-A"}),
+    ("a signal", "create_signal", {"name": "Level", "kind": "file", "file": "level.json", "pointer": "/v"}),
+    ("a rule on it", "set_rule", {"name": "High", "when": {"all": [{"signal": "Level", "op": "gt", "value": 5}]}, "play": ["Aurora"]}),
+    ("delete the signal without force", "delete_signal", {"signal": "Level"}),
+    ("dayOnly", "set_screensaver", {"mode": "dayOnly"}),
+]
+GATED = [
+    ("playback off: unpin", "set_screensaver", {"mode": "unpin", "display": "DISPLAY-A"}),
+    ("playback off: wallpaper", "set_wallpaper", {"mode": "off"}),
+    ("playback off: delete a signal a rule tests, with force", "delete_signal", {"signal": "Level", "force": True}),
+    ("playback off: a rule", "set_rule", {"rule": "High", "enabled": False}),
+]
+
+
+def run_script(store, via_app):
+    out = []
+    cl = Client(store)
+    cl.init()
+    for what, tool, args in SCRIPT:
+        res = cl.call(tool, args)
+        if not res.get("isError") and "liveInApp" in res.get("structuredContent", {}):
+            check(res["structuredContent"]["liveInApp"] is via_app, f"{'app' if via_app else 'offline'}: {what} took the expected path")
+        out.append((what, outcome(res)))
+        time.sleep(0.05)
+    with open(os.path.join(store, "ai-settings.json"), "w") as f:
+        json.dump({"allowPlaybackChanges": False}, f)
+    for what, tool, args in GATED:
+        out.append((what, outcome(cl.call(tool, args))))
+    os.remove(os.path.join(store, "ai-settings.json"))
+    cl.close()
+    time.sleep(0.4)        # the stand-in's own saves
+    return out, lib_state(store)
+
+
+O = new_store()
+off, off_state = run_script(O, False)
+Q = new_store()
+qapp = subprocess.Popen([BIN, "--fake-app", "--clobber-ms", "120"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL, env=env_for(Q))
+check(qapp.stdout.readline().strip() == b"ready", "stand-in app ready")
+via, via_state = run_script(Q, True)
+for (what, a), (_, b) in zip(off, via):
+    check(a == b, f"same answer both ways: {what} — {a[0]}" + ("" if a == b else f" (offline {a} / app {b})"))
+check(off_state == via_state, "the same library and wallpaper both ways" + ("" if off_state == via_state else f": {off_state} / {via_state}"))
+res = dict(off)
+check(res["unpin a display nobody has (screensaver)"][0] == "refused" and "NOPE" in res["unpin a display nobody has (screensaver)"][1]
+      and res["unpin a display nobody has (wallpaper)"][0] == "refused", "unpinning an unknown display key is refused (both destinations)")
+check("already" in res["unpin a connected display with no pin"][1] and "already" in res["wallpaper unpin again"][1], "an unpin with nothing pinned says so")
+check(res["a display with another mode"][0] == "refused" and res["wallpaper off with a display"][0] == "refused", "`display` only with the modes that take one")
+check("already" in res["add a style already in the rotation"][1], "adding a style already in the rotation says so")
+check(off_state["wall"]["pins"] == {"DISPLAY-B": "StandBy"}, "the deleted style's pins are gone, the other display's kept")
+check(off_state["wall"]["on"] is True and off_state["wall"]["style"] not in ("Currents", None), "deleting the shared pick: the others move on (a display still has its own)")
+check({"Currents Copy", "Currents Copy 2", "Aurora 2"} <= set(off_state["names"]), "duplicates get unique names (as the gallery's)")
+check(res["delete the signal without force"][0] == "refused" and off_state["signals"] == ["Level"], "a signal a rule tests needs force")
+check(all(res[w][0] == "refused" and "turned off" in res[w][1] for w, _, _ in GATED), "every gated request refused with playback off (incl. force-deleting a rule's signal)")
+check(off_state["rules"] == ["High"] and off_state["pins"] == {}, "…and nothing changed by them")
+qapp.stdin.close()
+qapp.wait(5)
+
+# leaving "Same as Screensaver" for one display keeps what's on screen (both ways)
+for store, label in ((new_store(), "offline"), (new_store(), "via the app")):
+    papp = None
+    if label == "via the app":
+        papp = subprocess.Popen([BIN, "--fake-app"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env_for(store))
+        papp.stdout.readline()
+    cl = Client(store)
+    cl.init()
+    ok(cl.call("set_screensaver", {"style": "Liquid Chrome"}), f"{label}: the very first edit of a store with no library.json, by name (the default library keeps its ids until written)")
+    cl.call("set_screensaver", {"style": "Aurora", "display": "DISPLAY-A"})
+    cl.call("set_wallpaper", {"mode": "follow"})
+    cl.call("set_wallpaper", {"style": "StandBy", "display": "DISPLAY-B"})
+    cl.close()
+    if papp:
+        papp.stdin.close()
+        papp.wait(5)
+    w = lib_state(store)["wall"]
+    check(w == {"on": True, "style": "Liquid Chrome", "follows": False, "pins": {"DISPLAY-A": "Aurora", "DISPLAY-B": "StandBy"}},
+          f"{label}: a display's own wallpaper while following: the shared pick = what the lineup shows, the screensaver's pin kept ({w})")
+    shutil.rmtree(store, ignore_errors=True)
+for d in (O, Q):
+    shutil.rmtree(d, ignore_errors=True)
+
+# weather.inUse: the live weather is fetched only while something reads it — never for pinned weather
+print("== live weather: only what reads it")
+W = new_store()
+c = Client(W)
+c.init()
+c.call("set_screensaver", {"mode": "dayOnly"})       # writes the default library.json
+check(settings_of(c.call("get_settings", {"keys": ["weather.inUse"]}))["weather.inUse"]["value"] is True,
+      "the default library (Golden Hour, Meadow on Live weather): in use")
+lib = library(W)
+for p_ in lib["presets"]:
+    for e_ in p_["effects"]:
+        if e_["kind"] in ("oceanHorizon", "shallows", "meadow"):
+            e_.setdefault("params", {})["weather"] = 2
+        if e_["kind"] == "custom":
+            e_.setdefault("params", {})["ds.weather"] = 7
+with open(os.path.join(W, "library.json"), "w") as f:
+    json.dump(lib, f)
+
+
+def in_use():
+    return settings_of(c.call("get_settings", {"keys": ["weather.inUse"]}))["weather.inUse"]["value"]
+
+
+check(in_use() is False, "every scene's Weather pinned (the Commute film's too, though its manifest uses the weather): not in use")
+for p_ in lib["presets"]:
+    for e_ in p_["effects"]:
+        if e_["kind"] == "custom":
+            e_["params"].pop("ds.weather", None)
+with open(os.path.join(W, "library.json"), "w") as f:
+    json.dump(lib, f)
+check(in_use() is True, "the film back on Live weather: in use")
+for p_ in lib["presets"]:
+    for e_ in p_["effects"]:
+        if e_["kind"] == "custom":
+            e_["params"]["ds.weather"] = 7
+with open(os.path.join(W, "library.json"), "w") as f:
+    json.dump(lib, f)
+ok(c.call("set_rule", {"name": "Wet", "when": {"all": [{"signal": "weather.condition", "op": "eq", "value": "rain"}]}, "play": ["Aurora"]}),
+   "a When rule on weather.condition")
+check(in_use() is True, "  → in use (the rule reads it)")
+c.close()
+wapp = subprocess.Popen([BIN, "--fake-app"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env_for(W))
+wapp.stdout.readline()
+c = Client(W)
+c.init()
+ok(c.call("delete_rule", {"rule": "Wet"}), "delete it (through the app)")
+check(in_use() is False, "  → not in use, read through the app")
+c.close()
+wapp.stdin.close()
+wapp.wait(5)
+shutil.rmtree(W, ignore_errors=True)
 
 # ---------------------------------------------------------------- the running app
 print("== routing through a running app (stand-in that clobbers direct writes)")
