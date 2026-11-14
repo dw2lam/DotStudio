@@ -12,12 +12,25 @@ struct GalleryState {
     let wallpaperID: UUID?
     /// With more than one display: what each one shows (DisplayStyles.swift).
     let displays: DisplayLineup
+    /// A When rule playing now (it outranks the playlist and the night style), and its styles.
+    let rule: ActiveRule?
+
+    struct ActiveRule {
+        let name: String
+        let symbol: String
+        let styles: Set<UUID>
+    }
 
     init(model: AppModel, wallpaperID: UUID?, displays: DisplayLineup = .single) {
         lineup = model.screensaverLineup
         nowPlaying = model.nowPlayingID
         self.wallpaperID = wallpaperID
         self.displays = displays
+        let lib = model.library
+        rule = lib.activeRule(live: SignalService.shared.live, now: Date()).map {
+            ActiveRule(name: RuleText.short($0.rule, in: lib), symbol: RuleText.symbol($0.rule, in: lib),
+                       styles: Set($0.styles.map(\.id)))
+        }
     }
 
     /// Styles on any destination (the "Playing" filter).
@@ -25,6 +38,7 @@ struct GalleryState {
         var s = Set(lineup.playlist)
         if let n = lineup.night { s.insert(n) }
         if let w = wallpaperID { s.insert(w) }
+        if let r = rule { s.formUnion(r.styles) }
         s.formUnion(displays.screensaverPinned.compactMap { displays.screensaver[$0] })
         s.formUnion(displays.wallpaperPinned.compactMap { displays.wallpaper[$0] })
         return s
@@ -41,7 +55,9 @@ struct GalleryState {
                    screensaverDisplay: displays.onlyDisplay(id, in: displays.screensaver)?.shortName,
                    wallpaperDisplay: displays.onlyDisplay(id, in: displays.wallpaper)?.shortName,
                    lineupOffScreen: displays.lineupOffScreen,
-                   sharedWallpaperOffScreen: displays.sharedWallpaperOffScreen)
+                   sharedWallpaperOffScreen: displays.sharedWallpaperOffScreen,
+                   ruleActive: rule != nil,
+                   rule: rule.flatMap { $0.styles.contains(id) ? TileBadges.Rule(name: $0.name, symbol: $0.symbol) : nil })
     }
 }
 
@@ -61,8 +77,24 @@ struct TileBadges: Equatable {
     /// no screen, so it isn't announced (the actions still go by `onScreensaver` / `wallpaper`).
     var lineupOffScreen = false
     var sharedWallpaperOffScreen = false
+    /// A When rule plays now in the lineup's place: the playlist and the night style aren't on
+    /// screen, so they aren't announced (the actions still go by `onScreensaver` / `night`).
+    var ruleActive = false
+    /// …and this style is one it plays (its name and symbol, as on the Screensaver card).
+    var rule: Rule? = nil
+
+    struct Rule: Equatable {
+        var name: String
+        var symbol: String
+    }
+
+    /// The playlist / night badges are on screen (no rule in their place, the lineup on a display).
+    var showsLineup: Bool { !lineupOffScreen && !ruleActive }
+    /// The When badge is on screen.
+    var showsRule: Bool { rule != nil && !lineupOffScreen }
+
     var isEmpty: Bool {
-        !((onScreensaver || night) && !lineupOffScreen) && !(wallpaper && !sharedWallpaperOffScreen)
+        !((onScreensaver || night) && showsLineup) && !showsRule && !(wallpaper && !sharedWallpaperOffScreen)
             && !pinnedScreensaver && !pinnedWallpaper
     }
 }
