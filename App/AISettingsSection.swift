@@ -24,6 +24,18 @@ struct AISettingsSection: View {
                     .multilineTextAlignment(.leading)
                     .textSelection(.enabled)
             }
+            LabeledContent {
+                HStack(spacing: layout.controlGap) {
+                    Text(ai.blenderStatus).textRole(.caption).foregroundStyle(.secondary).wrapping()
+                    if !ai.blenderReady {
+                        Button(scaled: "Get Blender…") { ai.getBlender() }
+                            .help(AIConnect.blenderDownload.absoluteString)
+                    }
+                }
+            } label: {
+                Text("Blender (recommended)")
+                Text(AIConnect.blenderHint)
+            }
             Toggle("Let AI change what plays", isOn: ai.allowPlaybackBinding(store: store))
                 .formSwitchSize()
                 .help("Off: assistants can still create and edit styles, but never change your screensaver or live wallpaper.")
