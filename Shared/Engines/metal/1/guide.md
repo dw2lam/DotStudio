@@ -67,7 +67,7 @@ my-scene/
 | `float clock` | local wall-clock seconds since midnight (0…86400). `floor(clock / 3600)` and `floor(clock / 60)` are exactly the hour and minute on screen at every instant (draw digits from them); the seconds stop 50 ms short of each minute |
 | `DSDate date` | `year`, `month` 1–12, `day` 1–31, `weekday` 1 = Sunday … 7 |
 | `DSSun sun` | `elevation` (° above horizon, −90…90), `azimuth` (° from north, clockwise), `isDay` |
-| `DSWeather weather` | `cloud`, `rain`, `snow`, `fog`, `wind`, all 0…1 (eased; clear sky when unknown) |
+| `DSWeather weather` | `cloud`, `rain`, `snow`, `fog`, `wind`, `storm` (thunderstorm), `gust`, all 0…1 (eased; clear sky when unknown); `condition`: the exact condition as a number — `DS_CLEAR` 0, `DS_PARTLY_CLOUDY` 1, `DS_CLOUDY` 2, `DS_FOG` 3, `DS_DRIZZLE` 4, `DS_RAIN` 5, `DS_HEAVY_RAIN` 6, `DS_THUNDERSTORM` 7, `DS_SNOW` 8, `DS_SLEET` 9 (`int(ctx.weather.condition + 0.5) == DS_SNOW`). Branch on the condition for distinct looks; ease with the 0…1 values so changes stay smooth |
 | `DSMusic music` | `playing`, `level` (smooth 0…1 envelope while playing — not an audio meter), `a`, `b`, `c` (album-art palette, display sRGB, grey when none) |
 | `float p[16]` | your params |
 | `float3 colorA, colorB` | the style's colours, display sRGB |

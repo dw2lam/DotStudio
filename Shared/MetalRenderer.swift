@@ -1325,6 +1325,13 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
             let target: PassTarget = isLast ? final : .texture(i % 2 == 0 ? pingA : pingB)
 
+            // A layered film mixes its light layers first (its own pass, at the tiles' size).
+            if let inst, inst.kind == .custom {
+                customLink.prepass(cmd, inst: inst, wall: wall, location: location,
+                                   weather: weatherLink.live(now: CACurrentMediaTime(), wall: wall), time: Double(time),
+                                   live: !thumbnailing, wait: waitsForScenePipelines || thumbnailing)
+            }
+
             // The pass's effect id (as packed below): its own pipeline if it has one, else the
             // über-shader. (Ocean Horizon, Shallows, Meadow: WeatherLink.fill binds theirs.)
             let effectID: Int32 = i == 0 ? (useGradient ? 1 : 0) : serialBlit ? 38

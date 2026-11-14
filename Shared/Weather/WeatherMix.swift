@@ -95,6 +95,21 @@ struct WeatherMix: Equatable {
             && abs(wind - c.wind) < 0.05 && abs(gust - c.gust) < 0.1
     }
 
+    /// The condition this mix is closest to (forced previews, a pinned menu pick and live readings
+    /// alike: the presets classify as themselves). Custom scenes read it as DSWeather.condition.
+    var condition: WeatherCondition {
+        if storm > 0.5 { return .thunderstorm }
+        if precip > 0.06 {
+            if snow > 0.7 { return .snow }
+            if snow > 0.25 { return .sleet }
+            return precip < 0.32 ? .drizzle : precip < 0.75 ? .rain : .heavyRain
+        }
+        if fog > 0.6 { return .fog }
+        if cover >= 0.85 { return .cloudy }
+        if cover >= 0.45 { return .partlyCloudy }
+        return .clear
+    }
+
     /// Cloud drift speed relative to the scene's own (1 at the clear default's 4 m/s).
     var driftRate: Double { min(max((5 + wind) / 9, 0.5), 3.0) }
 

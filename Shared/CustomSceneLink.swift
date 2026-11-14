@@ -28,6 +28,8 @@ final class CustomSceneLink {
         var prepared: PreparedScene?
         var assetsTex: [MTLTexture]?
         var film: CustomFilm?
+        /// A layered film's mix this frame (prepass), per kind of render (live / one-off).
+        var layered: [Bool: (hdr: MTLTexture, glow: MTLTexture, screen: [simd_float4])] = [:]
     }
     private var entries: [String: Entry] = [:]
 
@@ -40,6 +42,7 @@ final class CustomSceneLink {
         var paths = ["scene.json"]
         if let e = m?.entry { paths.append(e) }
         paths += (m?.assets ?? [])
+        paths += m?.filmFiles ?? []
         // (other sources a package includes: the folder's own stamp moves when one is replaced)
         var out = paths.map { FileStamp(path: dir.appendingPathComponent($0).path) }
         out.append(FileStamp(path: dir.path))
@@ -69,7 +72,7 @@ final class CustomSceneLink {
         }
         lock.lock()
         e.stamps = st
-        if e.prepared?.hash != p?.hash { e.assetsTex = nil; e.film = nil }
+        if e.prepared?.hash != p?.hash { e.assetsTex = nil; e.film = nil; e.layered = [:] }
         e.prepared = p
         lock.unlock()
         return p
@@ -125,11 +128,28 @@ final class CustomSceneLink {
             guard let p = prepared(id), p.source != nil else { continue }
             if CustomScenePipelines.pipeline(p, device: device, format: format, wait: false) == nil,
                case .building = CustomScenePipelines.state(p, device: device, format: format) { ready = false }
+            if p.manifest.isLayeredFilm,          // its mix pass too
+               CustomScenePipelines.pipeline(p, device: device, format: FilmLayers.hdrFormat, wait: false,
+                                             fragment: FilmLayers.mixFunction, extraFormats: [FilmLayers.glowFormat]) == nil,
+               case .building = CustomScenePipelines.state(p, device: device, format: FilmLayers.hdrFormat,
+                                                           fragment: FilmLayers.mixFunction) { ready = false }
         }
         return ready
     }
 
     // MARK: Filling a pass
+
+    /// Before a Custom Scene pass's encoder opens: a layered film encodes its mix pass on `cmd`
+    /// (only when its video frame or light changed), which `fill` then binds. Others: nothing.
+    func prepass(_ cmd: MTLCommandBuffer, inst: EffectInstance, wall: Date, location: (lat: Double, lon: Double)?,
+                 weather: WeatherMix, time: Double, live: Bool, wait: Bool, now: CFTimeInterval = CACurrentMediaTime()) {
+        guard let id = inst.custom?.id, let p = prepared(id, now: now), p.manifest.isLayeredFilm,
+              let film = film(id), let layers = film.layers else { return }
+        let w = CustomFilm.weather(inst, live: weather)
+        let el = CustomSceneLink.sun(at: wall, location: location).elevation
+        let out = layers.encode(cmd, device: cmd.device, elevation: el, weather: w, time: time, live: live, wait: wait)
+        lock.lock(); entries[id]?.layered[live] = out; lock.unlock()
+    }
 
     /// Fills `u` for a Custom Scene pass and binds its pipeline and assets on `encoder` when
     /// they're there. Returns the hash of the pipeline bound (nil: the stand-in draws) so the
@@ -142,10 +162,17 @@ final class CustomSceneLink {
               now: CFTimeInterval = CACurrentMediaTime()) -> String? {
         u.effect = CustomScenes.fallbackShaderID
         guard let id = inst.custom?.id, let p = prepared(id, now: now) else { return nil }
+        let weather = p.isFilm ? CustomFilm.weather(inst, live: weather) : weather
         CustomSceneLink.fillStatic(&u, inst: inst, prepared: p, wall: wall, location: location, weather: weather,
                                    musicPlaying: musicPlaying, musicLevel: musicLevel, cache: self)
         var tex: [MTLTexture]
-        if p.isFilm {
+        if p.manifest.isLayeredFilm {
+            lock.lock(); let out = entries[id]?.layered[live]; lock.unlock()
+            guard let out, out.screen.count >= 4 else { return nil }      // (no prepass yet: the stand-in)
+            u.scene.0 = out.screen[0]; u.scene.1 = out.screen[1]; u.scene.2 = out.screen[2]; u.scene.3 = out.screen[3]
+            let ph = CustomSceneAssets.placeholder(encoder.device)
+            tex = [out.hdr, out.glow, ph, ph]
+        } else if p.isFilm {
             guard let film = film(id),
                   let f = film.frame(device: encoder.device, now: now, wall: wall, location: location, weather: weather, live: live)
             else { return nil }
@@ -237,8 +264,10 @@ final class CustomSceneLink {
         u.scene.4 = simd_float4(Float(sun.elevation), Float(sun.azimuth), sun.elevation > -0.833 ? 1 : 0, location != nil ? 1 : 0)
         let rain = weather.precip * (1 - weather.snow), snow = weather.precip * weather.snow
         u.scene.5 = simd_float4(Float(weather.cover), Float(rain), Float(snow), Float(weather.fog))
-        u.scene.6 = simd_float4(Float(min(max(weather.wind / 20, 0), 1)), seed(inst.id), Float(m.steppedFPS ?? 0), 0)
-        u.scene.7 = simd_float4(musicPlaying ? 1 : 0, Float(min(max(musicLevel, 0), 1)), 0, 0)
+        u.scene.6 = simd_float4(Float(min(max(weather.wind / 20, 0), 1)), seed(inst.id), Float(m.steppedFPS ?? 0),
+                                Float(min(max(weather.storm, 0), 1)))
+        u.scene.7 = simd_float4(musicPlaying ? 1 : 0, Float(min(max(musicLevel, 0), 1)),
+                                Float(min(max(weather.gust / 30, 0), 1)), Float(weather.condition.index))
         u.scene.8 = packed.e
     }
 

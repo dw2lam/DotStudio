@@ -111,6 +111,8 @@ enum CustomSceneCompiler {
             chain.insert(be, at: 0)
         }
         parts.append("#define DS_ENGINE_\(engine.kind.uppercased().replacingOccurrences(of: "-", with: "_")) 1\n")
+        // a film of light layers compiles the engine's layer shaders (variant clips: the lean one)
+        if engine.kind == "film", m.layers != nil { parts.append("#define DS_FILM_LAYERS 1\n") }
         for e in chain {
             for h in e.manifest.headers ?? [] {
                 guard CustomScenes.isSafeRelativePath(h), let text = try? String(contentsOf: e.url.appendingPathComponent(h), encoding: .utf8) else {
@@ -242,7 +244,10 @@ enum CustomSceneCompiler {
 
     /// Compiles the prepared source into a pipeline for `format` (blocking: call off the main
     /// thread). Errors come back mapped to the package's lines.
-    static func build(_ p: PreparedScene, device: MTLDevice, format: MTLPixelFormat) -> Result<MTLRenderPipelineState, CompileFailure> {
+    /// - fragment / extraFormats: another fragment function of the same source and its further
+    ///   colour attachments (the film engine's layer-mix pass).
+    static func build(_ p: PreparedScene, device: MTLDevice, format: MTLPixelFormat, fragment: String = fragmentFunction,
+                      extraFormats: [MTLPixelFormat] = []) -> Result<MTLRenderPipelineState, CompileFailure> {
         guard let source = p.source, !p.hasErrors else {
             return .failure(CompileFailure(p.diagnostics.isEmpty ? [Diagnostic(message: "nothing to compile")] : p.diagnostics))
         }
@@ -251,13 +256,14 @@ enum CustomSceneCompiler {
             let log = (error as NSError).userInfo[NSLocalizedDescriptionKey] as? String ?? "\(error)"
             return .failure(CompileFailure(parseLog(log, prepared: p)))
         }
-        guard let v = lib.makeFunction(name: vertexFunction), let f = lib.makeFunction(name: fragmentFunction) else {
-            return .failure(CompileFailure([Diagnostic(message: "the engine's wrapper defines no ds_fragment")]))
+        guard let v = lib.makeFunction(name: vertexFunction), let f = lib.makeFunction(name: fragment) else {
+            return .failure(CompileFailure([Diagnostic(message: "the engine's wrapper defines no \(fragment)")]))
         }
         let d = MTLRenderPipelineDescriptor()
         d.vertexFunction = v
         d.fragmentFunction = f
         d.colorAttachments[0].pixelFormat = format
+        for (i, x) in extraFormats.enumerated() { d.colorAttachments[i + 1].pixelFormat = x }
         do { return .success(try device.makeRenderPipelineState(descriptor: d)) } catch {
             return .failure(CompileFailure([Diagnostic(message: "pipeline: \(error.localizedDescription)")]))
         }
@@ -284,15 +290,20 @@ enum CustomScenePipelines {
     private static var disabled: [String: String] = [:]
     private static let queue = DispatchQueue(label: "com.davidlam.DotStudio.customscenes", qos: .userInitiated, attributes: .concurrent)
 
-    private static func key(_ hash: String, _ device: MTLDevice, _ format: MTLPixelFormat) -> String {
-        "\(device.registryID)/\(format.rawValue)/\(hash)"
+    private static func key(_ hash: String, _ device: MTLDevice, _ format: MTLPixelFormat,
+                            _ fragment: String = CustomSceneCompiler.fragmentFunction) -> String {
+        fragment == CustomSceneCompiler.fragmentFunction ? "\(device.registryID)/\(format.rawValue)/\(hash)"
+            : "\(device.registryID)/\(format.rawValue)/\(fragment)/\(hash)"
     }
 
     /// The pipeline for `p`, if built. `wait`: build it on this thread (tools, validate);
     /// otherwise the build starts in the background and this returns nil until it's done.
-    static func pipeline(_ p: PreparedScene, device: MTLDevice, format: MTLPixelFormat, wait: Bool) -> MTLRenderPipelineState? {
+    /// - fragment / extraFormats: another pipeline of the same source (CustomSceneCompiler.build).
+    static func pipeline(_ p: PreparedScene, device: MTLDevice, format: MTLPixelFormat, wait: Bool,
+                         fragment: String = CustomSceneCompiler.fragmentFunction,
+                         extraFormats: [MTLPixelFormat] = []) -> MTLRenderPipelineState? {
         guard !p.hash.isEmpty, p.source != nil else { return nil }
-        let k = key(p.hash, device, format)
+        let k = key(p.hash, device, format, fragment)
         lock.lock()
         if disabled[p.hash] != nil { lock.unlock(); return nil }
         switch slots[k] {
@@ -313,17 +324,17 @@ enum CustomScenePipelines {
         lock.unlock()
         let work = {
             let t0 = CFAbsoluteTimeGetCurrent()
-            let r = CustomSceneCompiler.build(p, device: device, format: format)
+            let r = CustomSceneCompiler.build(p, device: device, format: format, fragment: fragment, extraFormats: extraFormats)
             lock.lock()
             switch r {
             case .success(let pso): slots[k] = .ready(pso)
             case .failure(let f): slots[k] = .failed(f.diagnostics)
             }
-            lastCompileMs[p.hash] = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+            if fragment == CustomSceneCompiler.fragmentFunction { lastCompileMs[p.hash] = (CFAbsoluteTimeGetCurrent() - t0) * 1000 }
             lock.unlock()
             g.leave()
         }
-        if wait { work(); return pipeline(p, device: device, format: format, wait: false) }
+        if wait { work(); return pipeline(p, device: device, format: format, wait: false, fragment: fragment, extraFormats: extraFormats) }
         queue.async(execute: work)
         return nil
     }
@@ -332,11 +343,12 @@ enum CustomScenePipelines {
     /// How long the last compile of `hash` took (ms).
     static func compileMs(_ hash: String) -> Double? { lock.lock(); defer { lock.unlock() }; return lastCompileMs[hash] }
 
-    static func state(_ p: PreparedScene, device: MTLDevice, format: MTLPixelFormat) -> State {
+    static func state(_ p: PreparedScene, device: MTLDevice, format: MTLPixelFormat,
+                      fragment: String = CustomSceneCompiler.fragmentFunction) -> State {
         if p.source == nil { return .failed(p.diagnostics) }
         lock.lock(); defer { lock.unlock() }
         if let r = disabled[p.hash] { return .disabled(r) }
-        switch slots[key(p.hash, device, format)] {
+        switch slots[key(p.hash, device, format, fragment)] {
         case .ready?: return .ready
         case .failed(let d)?: return .failed(d)
         default: return .building
@@ -462,6 +474,10 @@ final class CustomSceneBench {
     var params: [String: Double] = [:]
     /// Textures for slots 9…12 in place of the package's assets (tools: a film's clip frames).
     var textures: [MTLTexture]?
+    /// A layered film's light (its first frame is mixed for the sun and weather here).
+    var sunElevation: Double = 30
+    var weather: WeatherMix = .clear
+    private lazy var layers: FilmLayers? = prepared.manifest.layers.map { FilmLayers(prepared: prepared, layers: $0) }
 
     init(device: MTLDevice, pso: MTLRenderPipelineState, prepared: PreparedScene) {
         self.device = device; self.pso = pso; self.prepared = prepared
@@ -484,10 +500,18 @@ final class CustomSceneBench {
         vals.merge(params) { _, b in b }
         var instP = inst; instP.params = vals
         CustomSceneLink.fillStatic(&u, inst: instP, prepared: prepared, wall: Date(), location: nil,
-                                   weather: .clear, musicPlaying: false, musicLevel: 0)
+                                   weather: weather, musicPlaying: false, musicLevel: 0)
         u.resolution = simd_float2(Float(width), Float(height))
-        let assets = textures.map { $0 + CustomSceneAssets.textures(for: prepared, device: device) }
+        var assets = textures.map { $0 + CustomSceneAssets.textures(for: prepared, device: device) }
             ?? CustomSceneAssets.textures(for: prepared, device: device)
+        if let layers {
+            // (the mix pass runs once per command buffer, as live: only a new frame re-mixes)
+            guard let out = layers.encode(cmd, device: device, elevation: sunElevation, weather: weather, time: Double(time),
+                                          live: false, wait: true) else { lastError = "the layers video has no frame"; return nil }
+            u.scene.0 = out.screen[0]; u.scene.1 = out.screen[1]; u.scene.2 = out.screen[2]; u.scene.3 = out.screen[3]
+            u.scene.4.x = Float(sunElevation)
+            assets[0] = out.hdr; assets[1] = out.glow
+        }
         for f in 0..<frames {
             u.time = time + Float(f) * 0.37
             let rpd = MTLRenderPassDescriptor()
