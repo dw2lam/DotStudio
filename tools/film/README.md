@@ -88,6 +88,9 @@ python3 -I job.py stills --blender B --spec SPEC --out DIR --work DIR --variants
 python3 -I job.py loop --blender B --spec SPEC --out DIR --work DIR --variants day \
     [--seconds 24] [--fps 24] [--res 3840x2160] [--quality draft|standard|final] [--lock FILE] [--keep-frames] [--dry-run]
     # -> WORK/<variant>/frames (resumable) -> DIR/<variant>.mov (HEVC Main10 hvc1, encode.py); frames deleted once encoded
+python3 -I job.py loop … --variants layers [--res 1600x1000] [--still-frame N | --frames A-B]
+    # the light-layer loop (see "Light layers"): --res is the TILE size (default 1600x1000)
+    # -> WORK/layers/tiles/<tile>/####.exr (resumable) -> DIR/layers.mov + DIR/layers.json; EXRs deleted once packed
 ```
 
 - It runs `run.py` once per variant and turns its `PROGRESS` lines into `{"fraction", "stage", "eta_s"}`
@@ -101,6 +104,123 @@ python3 -I job.py loop --blender B --spec SPEC --out DIR --work DIR --variants d
 - A spec with `"scene": "local", "scene_dir": DIR` loads `DIR/scene.py` instead of `scenes/<scene>/`.
 - `--dry-run` prints each Blender command line (`BLENDER …`) without running anything.
 - Templates are `scenes/<id>/template.json` (name, summary, editable params) next to the spec.
+  `templates` also lists each scene's `layers` (its `LAYERS` tiles; empty = no light layers).
+- `layers` is a loop kind next to the variants (`--variants layers` or `day,layers`). Its progress
+  stages read `layers: tile sky frame 12/576 (300/3456 tile-frames)` with run.py's `eta_s`; then
+  `layers: packing frame i/N`. Packing needs numpy: the job uses its own python3 if it has numpy,
+  else Blender's bundled interpreter (`Blender.app/Contents/Resources/<ver>/python/bin/python3.x`).
+  The RESULT gains `"layers": {"tile": [w, h], "file": …/layers.mov, "manifest": …/layers.json}`.
+  `--still-frame N` renders one frame (a relightable still, a one-frame `layers.mov`); `--frames A-B`
+  a slice for timing (not a loop).
+
+## Light layers (one render per light source; the app mixes them live)
+
+The contract is `docs/film-layers.md` (DotStudio 1.6, film engine >= 1.1). Light adds up: render the
+scene once per light source, and the app mixes those renders with weights from the sun's elevation
+and the weather, live — every time of day and every weather from ONE render, changing smoothly
+instead of crossfading clips.
+
+| tile | lit by (everything else off; EEVEE probes re-baked per tile) |
+|---|---|
+| `sun` | the scene's day sun lamp |
+| `sun_low` | a second, low sun (the `golden` preset's elevation/azimuth/strength), rendered **white**; the manifest's `tint` colours it |
+| `sky` | the world (HDRI) only |
+| `cabin` | the scene's own lamps and emitters (every lamp/emitter not claimed by another tile) |
+| `city` | the outside's night emitters (lit windows, signs, street lamps, shop fronts) |
+| `mask` | not light: glass = 1, else 0 (rain, fog and condensation are drawn live on the glass) |
+
+```
+Blender -b --factory-startup --python run.py -- SPEC.json --layers-still PREFIX --frame N [--full]
+    # one frame, every tile -> PREFIX-<tile>.exr + PREFIX-layers.json (--full: + all lights, to check additivity)
+Blender -b --factory-startup --python run.py -- SPEC.json --layers-anim DIR [--frames A-B]
+    # tile by tile -> DIR/<tile>/####.exr (resumable: existing frames are skipped) + DIR/layers-render.json
+    [--tiles sun,sky,…] [--tile-samples sky=64,city=16] [--res WxH (default 1600x1000)] [--samples N]
+python3 -I dsfilm/layerpack.py pack DIR OUT [--quality 70] [--encoder auto|videotoolbox|x265]
+    # -> OUT/layers.mov (3x2 grid, HEVC Main10 hvc1) + OUT/layers.json (the manifest's "layers" block)
+python3 -I dsfilm/layerpack.py check DIR OUT/layers.mov [--frames 1,12,24]   # decode + compare with the EXRs
+```
+
+- Layers render the scene's layered build (`spec.build(…, layers=True)`, `ctx.layers`): the base
+  variant's geometry and materials (day: dry streets, day facades) plus every source the tiles need,
+  each switchable. Weather that changes geometry or materials (snow, wet streets, water on the
+  glass) is not in the layers — see "Choosing" below.
+- Everything else is the same for every tile: camera, motion, frame numbers, motion blur. No film
+  look (bloom, halation, vignette, fog) and no exposure: half-float EXR, scene-linear Rec.709.
+- Order: tile by tile (`sun` frames 1…N, then `sun_low` …), so the probes are re-baked 5 times per
+  loop (~2.5 s each), not per frame.
+- Packing: per light tile `scale` = the 99.95th percentile of the per-pixel max channel, pooled over
+  the loop (an even sample of up to 96 frames), rounded up to 3 digits; `v = clamp(lin/scale, 0, 1)^(1/4)`;
+  the mask as is. The atlas becomes Y'CbCr **BT.709, video range, 4:2:0 (2x2-averaged chroma)**,
+  tagged BT.709 — a reader must undo exactly that and apply no colour management.
+- Reading EXRs outside Blender: ffmpeg's decoder clamps to 0…1 whenever it converts float formats,
+  so `layerpack.read_exr` asks for the file's native `gbrpf16le`; it can't read one-channel EXRs, so
+  the mask is written RGB.
+
+### Declaring light groups (a scene)
+
+`build(ctx)` returns, when `ctx.layers` is set (see `dsfilm/layers.py`):
+
+```python
+out["layers"] = {
+    "groups": {"sun": {"lights": [rig.sun]}, "sun_low": {"lights": [low_sun]}, "sky": {"world": True},
+               "cabin": {}, "city": {"emitters": city_emitter_materials}},
+    "other": "cabin",                  # every lamp / emitting material not listed goes here
+    "glass": ["WindowGlass"],          # material names the mask marks as glass
+    "tint": {"sun_low": [1.0, 0.52, 0.22]},   # colours of suns rendered white
+    # "samples": {"city": 0.25}        # optional per-tile overrides (fraction of --samples, or a count)
+}
+```
+
+and lists `LAYERS = ["sun", "sun_low", "sky", "cabin", "city", "mask"]` at module level (job.py
+reads it without Blender). Emitters are switched through their emission-strength socket (an
+Emission node's Strength, a Principled BSDF's Emission Strength, or the constant of a Math MULTIPLY
+driving it, as in `materials.facade_grid`); lamps through energy + hide_render; the world through
+its Background strength. `lighting.add_sun(coll, name, preset, color=(1, 1, 1))` makes the second
+sun; give it the same periodic wobble as the first. Night-only emitters must exist in the layered
+build at their night strength (Commute's city builds them whenever `P["layers"]` is set).
+
+### Cost (M5 Pro, measured on Commute, EEVEE, 64 base samples)
+
+| Tile | samples | s / frame, 1600×1000 | s / frame, 960×600 |
+|---|---|---|---|
+| `sun` | 32 (½) | 12.4 | LAYER_ANIM_SUN |
+| `sun_low` | 32 (½) | ~12.4 | LAYER_ANIM_SUNLOW |
+| `sky` | 64 | 22.6 | LAYER_ANIM_SKY |
+| `cabin` | 64 | 22.2 | LAYER_ANIM_CABIN |
+| `city` | 16 (¼) | 6.5 | LAYER_ANIM_CITY |
+| `mask` | 8 (flat emission, no RT/GI/shadows) | 1–2 | LAYER_ANIM_MASK |
+| **all six** | | **~77** (117 with every tile at 64) | LAYER_ANIM_ALL |
+
+- EEVEE's cost here is in the samples, not the pixels: a 960×600 tile costs the same as 1600×1000.
+  Lower resolution for "soft" tiles saves nothing; fewer samples do (time is linear in samples,
+  ~0.34 s per sample per tile + ~1 s).
+- Why those samples: the error a tile adds to the mixed picture, in 8-bit display levels (mean / 99th
+  percentile) vs every tile at 64 — noise floor: the sky at 64 vs 128 differs by 0.27 / 2.3 by day.
+  `sun` at 32: 0.09 / 0.9 (at 16: 0.19 / 2.1). `city` at 16: 0.06 / 1.3 at night (32: 0.03 / 0.6).
+  `sky` at 32: 0.43 / 3.7 by day — visible, so 64. `cabin` at 32: 0.57 / 4.1 at night, 0.91 / 6.3
+  on a rainy night (it's the main light then) — so 64. `mask` at 4 vs 32: 0.0015 mean.
+- Probe re-bake: ~2.5 s per tile (~4 s the first). Build ~13 s. Packing: LAYER_PACK.
+- **Full Commute loop (576 frames) at 1600×1000 tiles: ~77 s × 576 ≈ 12.3 h** (18.7 h with every
+  tile at 64), versus ~3.5–4 h per variant clip — i.e. one layered loop costs about as much as three
+  variant loops and replaces all four (and every weather in between).
+- Disk: half-float EXR (ZIP) per frame at 1600×1000 ≈ 5 MB per light tile, 1.5 MB mask: ~15 GB for a
+  576-frame loop (deleted after packing unless `--keep-frames`). The video: LAYER_MOV_SIZE.
+- Additivity (frame 1, 1600×1000): sun + sky + cabin + city vs an all-lights render of the same
+  frame: mean absolute error **4.05 %** of the mean (3.97 % off the glass, 4.19 % on it), signed −2.5 %
+  (the sum is a little darker: EEVEE's GI denoise/clamps aren't exactly linear); in display terms
+  0.0066 of full range.
+
+### Choosing: no render, layer stills, a layered loop, or variant loops
+
+| What the user wants | Make | Cost |
+|---|---|---|
+| Stylised, graphic, abstract, or anything a shader can draw | **no render**: a shader scene (the `metal` engine) | seconds; lives with the sun and weather by construction |
+| A photoreal set that may sit still (a room, a view), relit live by time and weather | **layer stills**: `--variants layers --still-frame N` (a one-frame `layers.mov`) | ~1.5 min at 1600×1000 (77 s of tiles + build + bakes) |
+| A photoreal set with motion, every time of day and weather | **a layered loop** (`--variants layers`) | overnight: ~12 h for 24 s at 1600×1000 tiles |
+| Weather that changes geometry or materials: snow cover, wet reflective streets, water running on the glass, fog volumes, a different sky that must be seen sharply | **variant loops** (`--variants day,rain,…`), possibly together with layers | ~3.5–4 h per variant at 1920×1200 |
+
+Always render the layer stills of a scene before its layered loop (show the mixes), and time 24
+frames (`--frames 1-24`) before committing to the night.
 
 ## Packaging (the "film" engine pack)
 
@@ -175,7 +295,10 @@ does).
 | `geometry.Batch` | `Batch(name, coll)`: `.box(size, loc, mat, rot_z)`, `.cylinder(r, h, loc, mat)`, `.poly(verts, faces, mat, loc)`, `.finish()` | Thousands of parts merged into one mesh per material (a city is a few dozen objects) |
 | `materials.facade_grid` | `facade_grid(name, wall, glass, pitch, floor_h, win_w, win_h, sill, curtain_prob, lit, lit_prob)` | A procedural building wall with recessed windows, curtains and, at night, lit rooms; no textures needed |
 | `encode` | `encode(frames_dir, out_base)`, `web(frames_dir, out_base, size, max_mb)`, `seam(frames_dir)` | HEVC main10 `hvc1` via VideoToolbox + an H.264 preview; two-pass VP9 webm + H.264 mp4 sized for the web; no grain (the app adds it live) |
-| `spec` | `load(path)`, `scene_module(name)`, `build(spec, variant, engine, res, samples)` | what run.py uses |
+| `spec` | `load(path)`, `scene_module(name)`, `build(spec, variant, engine, res, samples, layers=False)` | what run.py uses; `layers=True` = the light-layer build |
+| `layers` | `Rig(scene, decl)`: `.use(tile, samples)`, `.render(path, frame)`, `.lights_on(set)`, `.rebake()`; `Rig.prepare(scene)`; `emission_controls(mat)`, `tile_samples(tile, base)`, `manifest_info(spec, decl)` | the light-layer renderer (see "Light layers") |
+| `layerpack` | `pack(dir, out)`, `check(dir, mov)`, `scales(dir, tiles)`, `read_exr(path)`, `rgb_to_yuv420p10` / `yuv420p10_to_rgb` | plain python3 + numpy + ffmpeg |
+| `lighting.add_sun` | `add_sun(coll, name, preset, color=None)` | a second sun lamp (light layers' `sun_low`) |
 
 ### Lighting presets
 

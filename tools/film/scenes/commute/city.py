@@ -38,18 +38,25 @@ SIGN_COLORS = [(0.85, 0.12, 0.10), (0.95, 0.75, 0.10), (0.10, 0.35, 0.75), (0.95
 
 
 def build_tile(tile, lib, P, period, seed=11):
+    """Builds one period of scenery into `tile`. Returns the outside's night emitters (lit windows,
+    signs, street lamps, shop fronts): the materials the light layers' `city` tile switches.
+    P["layers"] (the light-layer build): the day city (day facades, dry) with every night emitter
+    built at its night strength, so the layers can turn them on for `city` and off for the rest."""
     night = P.get("night", False)
+    layered = P.get("layers", False)
+    emit = night or layered              # build the night emitters
+    swap = night and not layered         # night-only facade scans (their lit counterparts)
     r = random.Random(seed)
-    lit = 0.35 if night else 0.0
+    lit = 0.35 if emit else 0.0
     wet = P.get("rain", False)           # rain: darker, glossier surfaces everywhere (no extra RNG draws)
     wk = 0.78 if wet else 1.0
 
     # ------------------------------------------------------------------ materials
     def acg(name, size):
-        n = NIGHT.get(name, name) if night else name
+        n = NIGHT.get(name, name) if swap else name
         return mt.acg_pbr(f"F_{n}_{r.random():.4f}", n, size_m=size * r.uniform(0.9, 1.1), nor_strength=0.4,
                           tint=r.choice([(1, 1, 1), (1.05, 1.0, 0.92), (0.88, 0.92, 0.98), (0.8, 0.8, 0.8)]),
-                          emission_strength=(0.35 if night else 0.0), rough_mul=0.5 if wet else 1.0)
+                          emission_strength=(0.35 if emit else 0.0), rough_mul=0.5 if wet else 1.0)
     office = [acg(n, s) for n, s in OFFICE]
     towers = [acg(n, s) for n, s in TOWER]
     houses = [mt.facade_grid(f"HouseWall{i}", wall=tuple(v * wk for v in c), wall_rough=0.35 if wet else 0.8, pitch=r.uniform(2.3, 2.9), floor_h=2.9, win_w=0.42, win_h=0.44,
@@ -68,7 +75,7 @@ def build_tile(tile, lib, P, period, seed=11):
     steel = mt.principled("Steel", (0.45, 0.46, 0.47), 0.45, 0.8)
     tank = mt.principled("Tank", (0.72, 0.74, 0.70), 0.5, 0.2)
     wire = mt.principled("Wire", (0.04, 0.04, 0.04), 0.4, 0.5)
-    signs = [mt.principled(f"Sign{i}", c, 0.35, **({"Emission Color": c, "Emission Strength": 0.8} if night else {}))
+    signs = [mt.principled(f"Sign{i}", c, 0.35, **({"Emission Color": c, "Emission Strength": 0.8} if emit else {}))
              for i, c in enumerate(SIGN_COLORS)]
     concrete = mt.ph_pbr("ViaductConcrete", "concrete_wall_008", size_m=3.0, desat=True, tint=(0.62, 0.62, 0.60))
     gravel = mt.acg_pbr("Ballast", "Gravel022", size_m=1.5)
@@ -80,13 +87,13 @@ def build_tile(tile, lib, P, period, seed=11):
         lot = mt.ph_pbr("Lot", "asphalt_02", size_m=7.0, desat=True, tint=(0.50, 0.49, 0.47))
     grass = mt.acg_pbr("Grass", "Grass004", size_m=3.0)
     pole_mat = mt.noise_bump(mt.principled("PoleConcrete", (0.55, 0.55, 0.52), 0.7), scale=30, strength=0.1)
-    lamp = mt.emission("StreetLamp", (1.0, 0.85, 0.6), 4.0 if night else 0.0)
+    lamp = mt.emission("StreetLamp", (1.0, 0.85, 0.6), 4.0 if emit else 0.0)
     car_paint = [mt.principled(f"CarPaint{i}", c, 0.25, 0.5, **{"Coat Weight": 1.0, "Coat Roughness": 0.05})
                  for i, c in enumerate(CAR_COLORS)]
     car_glass = mt.principled("CarGlass", (0.02, 0.025, 0.03), 0.05, **{"Coat Weight": 1.0})
     tyre = mt.principled("Tyre", (0.02, 0.02, 0.02), 0.8)
     shop_front = mt.principled("ShopFront", (0.05, 0.05, 0.06), 0.15, **{"Specular IOR Level": 0.8,
-                               **({"Emission Color": (1.0, 0.85, 0.65), "Emission Strength": 0.25} if night else {})})
+                               **({"Emission Color": (1.0, 0.85, 0.65), "Emission Strength": 0.25} if emit else {})})
 
     B = Batch("City", tile)
     L = period + 0.5
@@ -272,4 +279,5 @@ def build_tile(tile, lib, P, period, seed=11):
         px = r.uniform(40, period - 60)
         B.box((26, 20, 0.1), (px, -48, GROUND + 0.02), grass)
     B.finish()
+    return office + towers + houses + flats + shops + signs + [lamp, shop_front]
 

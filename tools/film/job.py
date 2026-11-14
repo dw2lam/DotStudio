@@ -13,8 +13,14 @@ and it turns run.py's PROGRESS lines into the MCP's progress file.
         -> DIR/<variant>.png (Cycles; the look baked in)
     python3 -I job.py loop   --blender B --spec SPEC --out DIR --work DIR --variants day
                             [--seconds 24] [--fps 24] [--res 3840x2160] [--quality draft|standard|final]
-                            [--lock FILE] [--keep-frames] [--dry-run]
+                            [--lock FILE] [--keep-frames] [--still-frame N] [--frames A-B] [--dry-run]
         -> DIR/<variant>.mov (HEVC Main10 hvc1); frames in WORK/<variant>/frames (resumable)
+        "layers" in --variants: the light-layer loop (docs/film-layers.md) — one render per light
+        source, --res is the TILE size (default 1600x1000 when --res isn't given) ->
+        DIR/layers.mov (3x2 tiles, pow4, HEVC Main10) + DIR/layers.json (the manifest's "layers"
+        block); EXR tiles in WORK/layers/tiles (resumable). --still-frame N: only frame N (a
+        relightable still: a one-frame layers.mov); --frames A-B: only those frames (a timing
+        test, not a loop).
 
 Progress: JSON {"fraction": 0..1, "stage": "...", "eta_s": seconds} written atomically to the path
 in $DSFILM_PROGRESS. Blender's own log and run.py's PROGRESS/RESULT lines pass through to stdout.
@@ -44,6 +50,9 @@ import time
 ROOT = os.path.dirname(os.path.abspath(__file__))
 RUN = os.path.join(ROOT, "run.py")
 VARIANTS = ["day", "golden", "night", "rain"]
+LAYERS = "layers"                # the light-layer loop kind, alongside the variants
+LAYER_TILE = (1600, 1000)        # the contract's default tile
+HEVC_MAX = (8192, 4320)
 
 # dsfilm.post.DEFAULT, and the slider value that maps to it (keep in step with MCP/Film.swift FilmLook).
 POST_DEFAULT = {
@@ -153,7 +162,7 @@ def module_info(path):
             info[node.name] = True
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
             for t in (node.targets if isinstance(node, ast.Assign) else [node.target]):
-                if isinstance(t, ast.Name) and t.id in ("ASSETS", "VARIANTS", "CAMERAS"):
+                if isinstance(t, ast.Name) and t.id in ("ASSETS", "VARIANTS", "CAMERAS", "LAYERS"):
                     try:
                         info[t.id] = ast.literal_eval(node.value)
                     except Exception:
@@ -199,6 +208,7 @@ def templates():
         out.append({"id": meta.get("id", name), "name": meta.get("name", name.title()),
                     "summary": meta.get("summary", ""), "order": meta.get("order", 100),
                     "variants": info.get("VARIANTS") or VARIANTS, "cameras": info.get("CAMERAS") or [],
+                    "layers": info.get("LAYERS") or [],
                     "loop": sp.get("loop", {"seconds": 24, "fps": 24}), "params": params, "spec": sp})
     out.sort(key=lambda t: (t.pop("order"), t["id"]))
     return out
@@ -278,6 +288,10 @@ def validate(sp):
         err("variants must be a non-empty list")
         vs = None
     for v in (vs or []) + ([sp["variant"]] if "variant" in sp else []):
+        if v == LAYERS and v in (vs or []):
+            if info is not None and not info.get("LAYERS"):
+                err("the scene declares no light layers (scene.py: LAYERS = [...] and build() returning \"layers\")")
+            continue
         if v not in VARIANTS:
             err(f"variant \"{v}\" isn't one of {', '.join(VARIANTS)}")
         elif v not in known_v:
@@ -507,6 +521,98 @@ def cmd_stills(a):
     emit("RESULT", {"ok": True, "outputs": outputs, "dry_run": bool(a.dry_run)})
 
 
+def numpy_python(blender):
+    """A python3 with numpy for dsfilm.layerpack: this one, else Blender's bundled interpreter."""
+    import glob
+    import importlib.util
+    if importlib.util.find_spec("numpy") is not None:
+        return sys.executable
+    app = os.path.dirname(os.path.dirname(os.path.abspath(blender)))       # …/Blender.app/Contents
+    for py in sorted(glob.glob(os.path.join(app, "Resources", "*", "python", "bin", "python3*")), reverse=True):
+        if os.access(py, os.X_OK):
+            return py
+    raise JobError("packing the light layers needs numpy: none in this python3 and no Blender-bundled python found")
+
+
+def run_pack(py, tiles_dir, out_dir, fps, on_progress):
+    argv = [py, "-I", os.path.join(ROOT, "dsfilm", "layerpack.py"), "pack", tiles_dir, out_dir, "--fps", str(fps), "--progress"]
+    p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                         errors="replace", bufsize=1)
+    CHILD["p"] = p
+    last = []
+    for line in p.stdout:
+        tag, _, rest = line.strip().partition(" ")
+        if tag == "PROGRESS":
+            try:
+                on_progress(json.loads(rest))
+            except ValueError:
+                pass
+            continue
+        sys.stdout.write(line)
+        last = (last + [line.strip()])[-5:]
+    rc = p.wait()
+    CHILD["p"] = None
+    if rc != 0:
+        raise JobError("packing the light layers failed: " + " / ".join(last))
+
+
+def layers_loop(a, sp, spec_path, progress, frames, fps, engine, samples, i, n, label, outputs):
+    """One "layers" entry of a loop job: render every tile (run.py --layers-anim), pack, clean up."""
+    if a.res_given:
+        w, h = parse_res(a.res)
+    else:
+        w, h = tuple((sp.get("layers") or {}).get("tile", LAYER_TILE))
+    q = QUALITY[a.quality]
+    scale = max(q["scale"], min(1.0, 960 / w))
+    w, h = max(2, int(w * scale) // 2 * 2), max(2, int(h * scale) // 2 * 2)
+    if 3 * w > HEVC_MAX[0] or 2 * h > HEVC_MAX[1]:
+        raise JobError(f"tile {w}x{h}: the 3x2 layer video would be {3 * w}x{2 * h}, over HEVC's {HEVC_MAX[0]}x{HEVC_MAX[1]}")
+    work = os.path.join(a.work, LAYERS)
+    td = os.path.join(work, "tiles")
+    rng = f"{a.still_frame}-{a.still_frame}" if a.still_frame else (a.frames or f"1-{frames}")
+    if not re.match(r"^\d+-\d+$", rng):
+        raise JobError(f"--frames {rng!r}: use A-B")
+    argv = blender_argv(a.blender, spec_path, "--layers-anim", td, "--frames", rng, "--res", f"{w}x{h}",
+                        "--samples", samples, "--engine", engine)
+    if a.dry_run:
+        print("BLENDER " + shlex.join(argv), flush=True)
+        return None
+    os.makedirs(td, exist_ok=True)
+    n_frames = 1 + int(rng.split("-")[1]) - int(rng.split("-")[0])
+
+    def on(o):
+        st = o.get("stage")
+        if st == "fetch":
+            progress((i + 0.005) / n, f"{label}: downloading CC0 assets")
+        elif st == "build":
+            progress((i + (0.03 if o.get("done") else 0.01)) / n, f"{label}: building the scene")
+        elif st == "layer" and o.get("tile"):
+            progress((i + 0.03 + 0.9 * o["done"] / max(o["of"], 1)) / n,
+                     f"{label}: tile {o['tile']}: re-baking light probes")
+        elif st == "frame" and o.get("of"):
+            progress((i + 0.03 + 0.9 * o["done"] / o["of"]) / n,
+                     f"{label}: tile {o.get('tile')} frame {o.get('frame')}/{n_frames} ({o['done']}/{o['of']} tile-frames)",
+                     o.get("eta_s"))
+
+    progress(i / n, f"{label}: starting Blender ({engine}, tiles {w}×{h}, {samples} samples, {n_frames} frames × 6 tiles)")
+    with blender_slot(a.lock, a.blender, progress, i / n, label):
+        run_blender(argv, on)
+    py = numpy_python(a.blender)
+
+    def on_pack(o):
+        progress((i + 0.93 + 0.07 * o.get("fraction", 0)) / n, f"{label}: {o.get('stage', 'packing')}")
+
+    run_pack(py, td, a.out, fps, on_pack)
+    dst = os.path.join(a.out, "layers.mov")
+    if not os.path.exists(dst) or not os.path.exists(os.path.join(a.out, "layers.json")):
+        raise JobError("packing left no layers.mov / layers.json")
+    outputs += [dst, os.path.join(a.out, "layers.json")]
+    if not a.keep_frames:
+        shutil.rmtree(td, ignore_errors=True)       # half-float EXR tiles: ~20 GB for a 576-frame loop
+    progress((i + 1) / n, f"{label}: done")
+    return [w, h]
+
+
 def cmd_loop(a):
     progress = Progress()
     with open(a.spec) as f:
@@ -534,8 +640,12 @@ def cmd_loop(a):
     from dsfilm import encode
     os.makedirs(a.out, exist_ok=True)
     n, outputs, frame_s = len(a.variants), [], []
+    tile = None
     for i, v in enumerate(a.variants):
         label = stage_label(a.variants, i, v)
+        if v == LAYERS:
+            tile = layers_loop(a, sp, spec_path, progress, frames, fps, engine, samples, i, n, label, outputs)
+            continue
         vd = os.path.join(a.work, v)
         fd = os.path.join(vd, "frames")
         argv = blender_argv(a.blender, spec_path, "--variant", v, "--anim", fd, "--frames", f"1-{frames}",
@@ -578,8 +688,11 @@ def cmd_loop(a):
         progress((i + 1) / n, f"{label}: done")
     if not a.dry_run:
         progress(1.0, "done", 0)
-    emit("RESULT", {"ok": True, "outputs": outputs, "frames": frames, "engine": engine, "samples": samples,
-                    "res": [w, h], "dry_run": bool(a.dry_run)})
+    r = {"ok": True, "outputs": outputs, "frames": frames, "engine": engine, "samples": samples,
+         "res": [w, h], "dry_run": bool(a.dry_run)}
+    if tile:
+        r["layers"] = {"tile": tile, "file": os.path.join(a.out, "layers.mov"), "manifest": os.path.join(a.out, "layers.json")}
+    emit("RESULT", r)
 
 
 def parse_args(argv):
@@ -605,10 +718,15 @@ def parse_args(argv):
         else:
             s.add_argument("--seconds", type=float)
             s.add_argument("--fps", type=int)
-            s.add_argument("--res", default="3840x2160")
+            s.add_argument("--res")
             s.add_argument("--quality", default="standard")
             s.add_argument("--keep-frames", action="store_true")
+            s.add_argument("--still-frame", type=int, help="layers only: render just this frame")
+            s.add_argument("--frames", help="layers only: just frames A-B (a timing test)")
     a = p.parse_args(argv)
+    if a.cmd == "loop":
+        a.res_given = a.res is not None
+        a.res = a.res or "3840x2160"
     if getattr(a, "seconds", None) is not None and a.seconds == int(a.seconds):
         a.seconds = int(a.seconds)
     return a
@@ -634,6 +752,8 @@ def main(argv):
         return 0
     signal.signal(signal.SIGTERM, _terminate)
     for v in a.variants:
+        if v == LAYERS and a.cmd == "loop":
+            continue
         if v not in VARIANTS:
             raise JobError(f"variant {v!r}: {', '.join(VARIANTS)}")
     if not a.dry_run and not os.path.exists(a.blender):

@@ -14,6 +14,17 @@ Headless only (never opens the Blender UI):
     --camera NAME, --frame N, --engine cycles|eevee, --res WxH, --samples N, --no-post
     --save FILE.blend     save the built scene
 
+  Light layers (dsfilm.layers; the layered build, no film look, scene-linear half-float EXR):
+    --layers-still PREFIX one frame (--frame N), every tile -> PREFIX-<tile>.exr + PREFIX-layers.json
+                          (--full also renders PREFIX-full.exr: all lights but sun_low, to check
+                           that the tiles add up)
+    --layers-anim DIR     the loop, tile by tile -> DIR/<tile>/####.exr, resumable; --frames A-B;
+                          DIR/layers-render.json (exposures, tints, s/frame per tile)
+    --tiles a,b,...       only these tiles (default: all the scene declares + mask)
+    --tile-samples k=n,.. per-tile EEVEE samples (default: dsfilm.layers.SAMPLE_SCALE x --samples /
+                          the animation's: sun, sun_low 1/2, city 1/4, sky, cabin 1; mask 8)
+    --res                 the TILE size (default: the spec's "layers": {"tile": [w, h]}, else 1600x1000)
+
 Machine-readable output (one JSON object per line, after the tag; everything else is Blender's
 log):
     PROGRESS {"stage": "build"|"still"|"frame"|"sample", "done": i, "of": n, "eta_s": s, ...}
@@ -57,13 +68,16 @@ def main():
     if hasattr(mod, "prepare"):
         mod.prepare()
     anim = sp.get("animation", {})
-    is_anim = bool(opt("--anim"))
+    is_layers = bool(opt("--layers-still") or opt("--layers-anim"))
+    is_anim = bool(opt("--anim")) or is_layers
     res = tuple(int(v) for v in opt("--res").split("x")) if opt("--res") else (tuple(anim["res"]) if is_anim and "res" in anim else None)
+    if is_layers and not opt("--res"):
+        res = tuple((sp.get("layers") or {}).get("tile", (1600, 1000)))     # the contract's default tile
     samples = int(opt("--samples")) if opt("--samples") else (anim.get("samples") if is_anim else None)
     engine = opt("--engine") or (anim.get("engine") if is_anim else None)
     emit("PROGRESS", {"stage": "build", "done": 0, "of": 1})
     t = time.time()
-    ctx, out = spec.build(sp, variant=opt("--variant"), engine=engine, res=res, samples=samples)
+    ctx, out = spec.build(sp, variant=opt("--variant"), engine=engine, res=res, samples=samples, layers=is_layers)
     timings["build_s"] = round(time.time() - t, 1)
     emit("PROGRESS", {"stage": "build", "done": 1, "of": 1, "elapsed_s": timings["build_s"]})
     scene = ctx.scene
@@ -129,7 +143,9 @@ def main():
         emit("PROGRESS", {"stage": "still", "done": len(todo), "of": len(todo)})
     if opt("--build-sequence"):
         build_sequence(opt("--build-sequence"), scene, ctx, cams.get(cam_name), int(opt("--frame", 1)), still, with_grain)
-    if is_anim:
+    if is_layers:
+        layers_mode(sp, scene, ctx, out, cams.get(cam_name), outputs, timings)
+    elif is_anim:
         d = opt("--anim")
         os.makedirs(d, exist_ok=True)
         a, b = (opt("--frames") or f"1-{ctx.loop.frames}").split("-")
@@ -155,6 +171,96 @@ def main():
     timings["total_s"] = round(time.time() - t_start, 1)
     emit("RESULT", {"ok": True, "outputs": outputs, "timings": timings, "variant": ctx.variant,
                     "camera": cam_name, "spec": os.path.abspath(argv[0])})
+
+
+def layers_mode(sp, scene, ctx, out, cam, outputs, timings):
+    """--layers-still / --layers-anim (see the module docstring and dsfilm.layers)."""
+    from dsfilm import layers
+    rig = layers.Rig(scene, out.get("layers"))
+    layers.Rig.prepare(scene)
+    if cam is not None:
+        scene.camera = cam
+    tiles = list(rig.tiles)
+    if opt("--tiles"):
+        want = [t for t in opt("--tiles").split(",") if t]
+        bad = [t for t in want if t not in tiles + ["full"]]
+        if bad:
+            raise ValueError(f"--tiles: {', '.join(bad)} (the scene has {', '.join(tiles)})")
+        tiles = want
+    per = {}
+    for kv in (opt("--tile-samples") or "").split(","):
+        if "=" in kv:
+            k, v = kv.split("=")
+            per[k.strip()] = int(v)
+    info = layers.manifest_info(sp, out["layers"], engine=ctx.engine)
+    info.update({"tiles": [t for t in rig.tiles], "res": [scene.render.resolution_x, scene.render.resolution_y],
+                 "engine": ctx.engine, "samples": {t: per.get(t) or rig.samples_for(t) for t in tiles},
+                 "fps": ctx.loop.fps, "frames": ctx.loop.frames, "camera": scene.camera.name if scene.camera else None})
+    if opt("--layers-still"):
+        prefix = os.path.abspath(opt("--layers-still"))
+        os.makedirs(os.path.dirname(prefix), exist_ok=True)
+        frame = int(opt("--frame", 1))
+        todo = tiles + (["full"] if opt("--full") and "full" not in tiles else [])
+        for i, t in enumerate(todo):
+            emit("PROGRESS", {"stage": "layer", "tile": t, "done": i, "of": len(todo)})
+            bake = rig.use(t, per.get(t))
+            p = f"{prefix}-{t}.exr"
+            dt = rig.render(p, frame)
+            outputs.append(p)
+            timings[t] = round(dt, 1)
+            timings[t + "_bake"] = round(bake, 1)
+        emit("PROGRESS", {"stage": "layer", "done": len(todo), "of": len(todo)})
+        info["frame"] = frame
+        info["timings"] = timings
+        with open(prefix + "-layers.json", "w") as f:
+            json.dump(info, f, indent=1)
+        outputs.append(prefix + "-layers.json")
+        return
+    d = os.path.abspath(opt("--layers-anim"))
+    a, b = (opt("--frames") or f"1-{ctx.loop.frames}").split("-")
+    frames = list(range(int(a), int(b) + 1))
+    path = lambda t, f: os.path.join(d, t, f"{f:04d}.exr")
+    todo = {t: [f for f in frames if not os.path.exists(path(t, f))] for t in tiles}
+    total = sum(len(v) for v in todo.values())
+    s_per = {}                      # measured seconds per frame, per tile
+    done = 0
+    t_layers = time.time()
+
+    n_samples = info["samples"]
+
+    def eta():
+        # tiles not rendered yet: EEVEE's time is ~linear in samples (README "Light layers")
+        per_sample = [v / n_samples[k] for k, v in s_per.items() if k != "mask"]
+        if not per_sample:
+            return None
+        c = sum(per_sample) / len(per_sample)
+        return sum(len(todo[t]) * s_per.get(t, 1.5 if t == "mask" else c * n_samples[t]) for t in tiles)
+
+    for t in tiles:
+        if not todo[t]:
+            continue
+        os.makedirs(os.path.join(d, t), exist_ok=True)
+        emit("PROGRESS", {"stage": "layer", "tile": t, "done": done, "of": total})
+        bake = rig.use(t, per.get(t))
+        timings[t + "_bake"] = round(bake, 1)
+        dts = []
+        while todo[t]:
+            f = todo[t][0]
+            dt = rig.render(path(t, f), f)
+            todo[t].pop(0)
+            dts.append(dt)
+            s_per[t] = sum(dts[-24:]) / len(dts[-24:])
+            done += 1
+            e = eta()
+            emit("PROGRESS", {"stage": "frame", "tile": t, "frame": f, "done": done, "of": total,
+                              "frame_s": round(dt, 2), **({"eta_s": round(e)} if e is not None else {})})
+        timings[t + "_s_per_frame"] = round(sum(dts) / len(dts), 2)
+    timings["layers_s"] = round(time.time() - t_layers, 1)
+    info["timings"] = timings
+    info["frames_range"] = [frames[0], frames[-1]]
+    with open(os.path.join(d, "layers-render.json"), "w") as f:
+        json.dump(info, f, indent=1)
+    outputs.append(d)
 
 
 def build_sequence(d, scene, ctx, cam, frame, still, with_grain):
