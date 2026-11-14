@@ -179,8 +179,19 @@ struct Library: Codable, Equatable {
     var source: SourceSpec = SourceSpec()
     var activeID: UUID?
     var version: Int = 4          // 3 = slideshow source era, 4 = seenBuiltIns (see AppModel.migrate)
-    var locationLat: Double?     // resolved device location (for the Universe marker)
+    /// The location every reader uses (the sky and sun, the Universe marker, the live weather,
+    /// Signals' {lat}/{lon}, previews): the IP lookup's answer, or the user's own place
+    /// (`manualPlace`) while `locationMode` is "manual" — the app keeps these two in step.
+    var locationLat: Double?
     var locationLon: Double?
+    /// "manual" = the user set the place (Settings ▸ Weather ▸ Location; no IP lookup);
+    /// nil / "auto" / anything else = from the internet connection. Additive: an older build
+    /// keeps these three in unknownFields (and may refresh locationLat/Lon by IP meanwhile —
+    /// AppModel.migrate puts the manual place back).
+    var locationMode: String?
+    var manualPlace: NamedPlace?
+    /// The last IP lookup's answer, with its city name (shown in Settings while automatic).
+    var autoPlace: NamedPlace?
     /// Saver render resolution as a fraction of native (1 = full Retina). Optional so
     /// older builds still decode the library; nil means full quality.
     var renderScale: Double?
@@ -281,7 +292,8 @@ extension Preset {
 extension Library {
     private enum CodingKeys: String, CodingKey {
         case presets, source, activeID, version, locationLat, locationLon, renderScale, rotation,
-             schedule, music, seenBuiltIns, syncTimeBase, displayStyles, signals, rules
+             schedule, music, seenBuiltIns, syncTimeBase, displayStyles, signals, rules,
+             locationMode, manualPlace, autoPlace
     }
 
     init(from decoder: Decoder) throws {
@@ -300,6 +312,10 @@ extension Library {
         version = try c.decode(Int.self, forKey: .version)
         locationLat = try c.decodeIfPresent(Double.self, forKey: .locationLat)
         locationLon = try c.decodeIfPresent(Double.self, forKey: .locationLon)
+        // Tolerant: a malformed place never costs the user the library (it's just dropped).
+        locationMode = (try? c.decodeIfPresent(String.self, forKey: .locationMode)) ?? nil
+        manualPlace = ((try? c.decodeIfPresent(NamedPlace.self, forKey: .manualPlace)) ?? nil).flatMap { $0.isValid ? $0 : nil }
+        autoPlace = ((try? c.decodeIfPresent(NamedPlace.self, forKey: .autoPlace)) ?? nil).flatMap { $0.isValid ? $0 : nil }
         renderScale = try c.decodeIfPresent(Double.self, forKey: .renderScale)
         rotation = try c.decodeIfPresent(RotationSpec.self, forKey: .rotation)
         schedule = try c.decodeIfPresent(ScheduleSpec.self, forKey: .schedule)
@@ -330,6 +346,9 @@ extension Library {
         try c.encode(version, forKey: .version)
         try c.encodeIfPresent(locationLat, forKey: .locationLat)
         try c.encodeIfPresent(locationLon, forKey: .locationLon)
+        try c.encodeIfPresent(locationMode, forKey: .locationMode)
+        try c.encodeIfPresent(manualPlace, forKey: .manualPlace)
+        try c.encodeIfPresent(autoPlace, forKey: .autoPlace)
         try c.encodeIfPresent(renderScale, forKey: .renderScale)
         try c.encodeIfPresent(rotation, forKey: .rotation)
         try c.encodeIfPresent(schedule, forKey: .schedule)
@@ -355,7 +374,54 @@ extension Library {
     }
 }
 
+/// A place on Earth with a name ("Toronto, Ontario, Canada"): the user's own location
+/// (Library.manualPlace) or the IP lookup's answer (Library.autoPlace).
+struct NamedPlace: Codable, Equatable, Hashable {
+    var name: String
+    var lat: Double
+    var lon: Double
+
+    static func validCoordinates(_ lat: Double, _ lon: Double) -> Bool {
+        lat.isFinite && lon.isFinite && abs(lat) <= 90 && abs(lon) <= 180
+    }
+    var isValid: Bool { Self.validCoordinates(lat, lon) }
+
+    /// "43.7° N, 79.4° W" — a name for bare coordinates.
+    static func coordinateName(_ lat: Double, _ lon: Double) -> String {
+        String(format: "%.1f° %@, %.1f° %@", abs(lat), lat >= 0 ? "N" : "S", abs(lon), lon >= 0 ? "E" : "W")
+    }
+}
+
 extension Library {
+    static let manualLocationMode = "manual"
+
+    /// The user set the location themselves: no IP lookup, locationLat/Lon = manualPlace.
+    var usesManualLocation: Bool { locationMode == Self.manualLocationMode && manualPlace != nil }
+
+    /// The user's own place: every reader follows it, and the IP lookup stops.
+    mutating func setManualLocation(_ place: NamedPlace) {
+        locationMode = Self.manualLocationMode
+        manualPlace = place
+        locationLat = place.lat
+        locationLon = place.lon
+    }
+
+    /// Back to the internet connection's location: the last IP answer (if any) until the next
+    /// lookup, which the app starts at once.
+    mutating func setAutomaticLocation() {
+        locationMode = nil
+        manualPlace = nil
+        if let a = autoPlace { locationLat = a.lat; locationLon = a.lon }
+    }
+
+    /// The name of the place in use, when one is known ("Toronto, Ontario"): the user's own, or
+    /// the IP lookup's while it still matches locationLat/Lon.
+    var locationPlaceName: String? {
+        if usesManualLocation { return manualPlace?.name }
+        guard let a = autoPlace, a.lat == locationLat, a.lon == locationLon, !a.name.isEmpty else { return nil }
+        return a.name
+    }
+
     /// The renderer time base the screensaver uses for this library.
     var rendererTimeBase: MetalRenderer.TimeBase { (syncTimeBase ?? false) ? .wallClock : .instance }
 }

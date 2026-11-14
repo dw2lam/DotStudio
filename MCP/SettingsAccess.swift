@@ -140,6 +140,13 @@ extension Toolbox {
         case .photos: return ["description": desc, "anyOf": [S.str("\"builtIn\"", enum: ["builtIn"]),
                                                              S.arr(S.str("Absolute path to an image.", pattern: "^/"), "Image files.", min: 1, max: 200)]]
         case .mediaFile: return S.str(desc, pattern: "^/")
+        case .location:
+            return ["description": desc, "anyOf": [
+                S.str("\"auto\": from the internet connection", enum: ["auto"]),
+                S.obj(["name": S.str("What to call it, e.g. \"Toronto, Ontario\" (optional).", max: AppSettings.maxPlaceName),
+                       "lat": S.num("Latitude.", min: -90, max: 90),
+                       "lon": S.num("Longitude.", min: -180, max: 180)], required: ["lat", "lon"]),
+            ]]
         case .readOnly: return [:]
         }
     }
@@ -147,7 +154,7 @@ extension Toolbox {
     var settingsTools: [Tool] {
         [
             Tool(name: "get_settings", title: "Get DotStudio's settings",
-                 description: "Every setting the user can change in the DotStudio app — General (menu bar, open at login), Screensaver (playlist interval, shuffle, crossfade, quality), Music, Weather, Live Wallpaper (on, same as screensaver, style, frame rate, quality, on battery, lock screen picture), the Source that Looks restyle, Updates — with each one's current value, allowed values, where it is in the app, a one-line meaning and whether it changes what plays. Also the read-only state macOS owns (is the screensaver installed and chosen, idle time, display sleep, login item, Accessibility, text size) with how the user changes it, and the app_action list. Change settings with update_settings.",
+                 description: "Every setting the user can change in the DotStudio app — General (menu bar, open at login), Screensaver (playlist interval, shuffle, crossfade, quality), Music, Weather (live weather, the location), Live Wallpaper (on, same as screensaver, style, frame rate, quality, on battery, lock screen picture), the Source that Looks restyle, Updates — with each one's current value, allowed values, where it is in the app, a one-line meaning and whether it changes what plays. Also the read-only state macOS owns (is the screensaver installed and chosen, idle time, display sleep, login item, Accessibility, text size) with how the user changes it, and the app_action list. Change settings with update_settings.",
                  input: S.obj(["group": S.str("Only this group.", enum: Self.settingGroups),
                                "keys": S.arr(S.str("A setting key, e.g. music.show"), "Only these settings.", min: 1, max: 80)]),
                  readOnly: true, idempotent: true) { [unowned self] a in try self.getSettings(a) },
@@ -224,6 +231,7 @@ extension Toolbox {
         case .style: return "style id or name"
         case .photos: return "\"builtIn\" | [image paths]"
         case .mediaFile: return "image/video path"
+        case .location: return "\"auto\" | {name?, lat, lon}"
         case .readOnly: return nil
         }
     }

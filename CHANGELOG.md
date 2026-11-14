@@ -30,6 +30,11 @@
   calm gradient and the Inspector says why.
 - **Films over AI (beta).** With Blender installed, an assistant can render film scenes like Commute
   for you — stills to try ideas, then a looping film for your screensaver or wallpaper.
+- **Set your own location.** Settings ▸ Weather ▸ Location shows where DotStudio thinks you are
+  — for the live weather, the real sun and stars, and Universe's marker — and Change… finds
+  your city (or takes coordinates). Handy on a VPN, which can put you in the wrong city; once
+  set, DotStudio stops looking your location up. If the usual lookup is down, a second one
+  is tried before giving up.
 
 ### Fixed
 - Clock styles in the gallery, and a live wallpaper holding a still frame (On Battery: Still,

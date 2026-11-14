@@ -520,6 +520,44 @@ do {
     check(bl.referencedSignalKeys.isEmpty, "a hidden effect's bindings aren't watched")
 }
 
+// MARK: Location (Library.locationMode / manualPlace / autoPlace)
+
+print("location")
+do {
+    /// A library as an older build writes it (37.77, -122.42 from the IP lookup), plus `extra` keys.
+    func lib(_ extra: String) -> Library? {
+        var base = Library(); base.locationLat = 37.77; base.locationLon = -122.42
+        guard var obj = (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(base))) as? [String: Any],
+              let more = (try? JSONSerialization.jsonObject(with: Data("{\(extra.dropFirst())}".utf8))) as? [String: Any] ?? (extra.isEmpty ? [:] : nil)
+        else { return nil }
+        obj.merge(more) { _, new in new }
+        return (try? JSONSerialization.data(withJSONObject: obj)).flatMap { try? JSONDecoder().decode(Library.self, from: $0) }
+    }
+    func roundTrip(_ l: Library) -> Library? {
+        (try? JSONEncoder().encode(l)).flatMap { try? JSONDecoder().decode(Library.self, from: $0) }
+    }
+    var l = lib("")!
+    check(!l.usesManualLocation && l.locationPlaceName == nil, "an older library: automatic, no name yet")
+    l.autoPlace = NamedPlace(name: "San Francisco, California", lat: 37.77, lon: -122.42)
+    check(l.locationPlaceName == "San Francisco, California", "the IP lookup's name while it matches the location")
+    l.setManualLocation(NamedPlace(name: "Toronto, Ontario", lat: 43.65, lon: -79.38))
+    check(l.usesManualLocation && l.locationLat == 43.65 && l.locationLon == -79.38 && l.locationPlaceName == "Toronto, Ontario",
+          "manual: every reader's locationLat/Lon follow the user's place")
+    let back = roundTrip(l)
+    check(back == l && back?.locationMode == "manual" && back?.manualPlace?.name == "Toronto, Ontario", "manual place round-trips")
+    l.setAutomaticLocation()
+    check(!l.usesManualLocation && l.manualPlace == nil && l.locationLat == 37.77 && l.locationPlaceName == "San Francisco, California",
+          "back to automatic: the last IP answer until the next lookup")
+    let bad = lib(#","locationMode":"manual","manualPlace":{"name":"Nowhere","lat":200,"lon":0},"autoPlace":"oops""#)
+    check(bad != nil && bad?.manualPlace == nil && bad?.autoPlace == nil && bad?.usesManualLocation == false,
+          "a malformed place is dropped, never the library (and without one it's automatic)")
+    let future = lib(#","locationMode":"device""#)
+    check(future?.usesManualLocation == false && roundTrip(future!)?.locationMode == "device", "an unknown mode is automatic here, kept for its build")
+    let stale = lib(#","autoPlace":{"name":"Elsewhere","lat":1,"lon":2}"#)
+    check(stale?.locationPlaceName == nil, "an IP name for another location isn't shown")
+    check(NamedPlace.coordinateName(-33.87, 151.21) == "33.9° S, 151.2° E", "coordinates name a place")
+}
+
 // MARK: LockScreenPicture
 
 /// The desktop, in memory: what each screen shows, and every set call.

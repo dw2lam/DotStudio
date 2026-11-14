@@ -88,8 +88,11 @@ final class AppModel: ObservableObject {
         selectedID = library.activeID ?? library.presets.first?.id
         save()
         // A cached location resolved within the day waits out the rest of it; otherwise ask now.
+        // (Never while the user has set their own place.)
         let age = Date().timeIntervalSince1970 - UserDefaults.standard.double(forKey: Self.locationResolvedAtKey)
-        if locationTuple != nil, age >= 0, age < Self.locationRefreshInterval {
+        if library.usesManualLocation {
+            // nothing to look up
+        } else if locationTuple != nil, age >= 0, age < Self.locationRefreshInterval {
             scheduleLocation(after: Self.locationRefreshInterval - age)
         } else {
             resolveLocation()
@@ -127,7 +130,27 @@ final class AppModel: ObservableObject {
         return nil
     }
 
-    // MARK: Location (IP geolocation, cached in the library for the saver)
+    // MARK: Location (IP geolocation, or the user's own place; cached in the library for the saver)
+
+    /// Settings ▸ Weather ▸ Location (and update_settings' weather.location): the user's own
+    /// place — every reader follows it and the IP lookup stops — or nil to go back to the
+    /// internet connection's location, looked up again at once.
+    func setLocation(_ place: NamedPlace?) {
+        if let place {
+            library.setManualLocation(place)
+            locationWork?.cancel(); locationWork = nil
+            save()
+        } else {
+            let wasManual = library.locationMode != nil || library.manualPlace != nil
+            library.setAutomaticLocation()
+            save()
+            if wasManual || locationTuple == nil {
+                locationFailures = 0
+                resolveLocation()
+            }
+        }
+        WeatherService.shared.locationChanged()
+    }
 
     /// A resolved location is refreshed about once a day (a laptop travels); a failed lookup
     /// retries with backoff instead of leaving the sky, the Universe marker and the weather
@@ -147,29 +170,34 @@ final class AppModel: ObservableObject {
     /// Resolve the device location now (launch: also refreshes a cached one) and cache it in
     /// the library; then again about daily, or sooner with backoff after a failure.
     private func resolveLocation() {
-        guard !Self.locationDisabled, !locationInFlight else { return }
+        guard !Self.locationDisabled, !locationInFlight, !library.usesManualLocation else { return }
         locationWork?.cancel(); locationWork = nil
         locationInFlight = true
         locationAttempt += 1
         let attempt = locationAttempt
-        LocationFetcher.fetch { [weak self] lat, lon in
+        LocationFetcher.fetch { [weak self] place in
             guard let self else { return }
             // A late answer after its attempt was written off still counts.
             self.locationInFlight = false
             self.locationFailures = 0
+            // The user set their own place while this was out: theirs stands.
+            guard !self.library.usesManualLocation else { return }
             UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.locationResolvedAtKey)
-            if self.library.locationLat != lat || self.library.locationLon != lon {
-                self.library.locationLat = lat
-                self.library.locationLon = lon
+            if self.library.locationLat != place.lat || self.library.locationLon != place.lon
+                || self.library.autoPlace != place {
+                self.library.locationLat = place.lat
+                self.library.locationLon = place.lon
+                self.library.autoPlace = place
                 self.save()
             }
             self.scheduleLocation(after: Self.locationRefreshInterval)
         }
-        // LocationFetcher only ever reports success (its request times out after 8 s): no answer
-        // by now is a failure — retry with backoff.
+        // LocationFetcher only ever reports success (each of its two lookups times out after
+        // 8 s): no answer by now is a failure — retry with backoff.
         DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in
             guard let self, self.locationInFlight, self.locationAttempt == attempt else { return }
             self.locationInFlight = false
+            guard !self.library.usesManualLocation else { return }   // set by the user meanwhile
             let delay = Self.locationBackoff[min(self.locationFailures, Self.locationBackoff.count - 1)]
             self.locationFailures += 1
             self.scheduleLocation(after: delay)
@@ -210,6 +238,8 @@ final class AppModel: ObservableObject {
             lib.version = 3
         }
         for i in lib.presets.indices { lib.presets[i].source = nil }   // strip legacy field
+        // The user's own location wins over an IP answer an older build may have written meanwhile.
+        if lib.usesManualLocation, let m = lib.manualPlace { lib.locationLat = m.lat; lib.locationLon = m.lon }
         // Live weather (Ocean Horizon's new Weather menu defaults to Live): Afterlight keeps its
         // clear sky. Only where the param is missing, so a user's own pick sticks.
         for i in lib.presets.indices where lib.presets[i].name == "Afterlight" {

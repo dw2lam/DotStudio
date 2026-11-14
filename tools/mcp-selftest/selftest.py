@@ -468,6 +468,37 @@ check(res["structuredContent"]["changed"]["music.show"] == "fullScreen" and res[
       and "Music ▸ Show music" in text(res), "  → says what changed, offline")
 ok(upd({"weather.live": False}), "weather: live off")
 check(prefs(T).get("weatherEnabled") is False and prefs(T).get("menuBarMode") is False, "  → app-prefs.json, other prefs kept")
+# weather.location: the user's own place (no IP lookup), and back to automatic
+loc = settings_of(tc.call("get_settings", {"keys": ["weather.location"]}))["weather.location"]
+check(loc["value"]["mode"] == "auto" and loc["changesWhatPlays"] is False and loc["readOnly"] is False
+      and "auto" in json.dumps(loc["allowed"]), "weather.location: automatic by default, not gated, says what it takes")
+lib = library(T)
+lib["locationLat"], lib["locationLon"] = 37.7749, -122.4194
+lib["autoPlace"] = {"name": "San Francisco, California", "lat": 37.7749, "lon": -122.4194}
+with open(os.path.join(T, "library.json"), "w") as f:
+    json.dump(lib, f)
+loc = settings_of(tc.call("get_settings", {"keys": ["weather.location"]}))["weather.location"]["value"]
+check(loc == {"mode": "auto", "name": "San Francisco, California", "lat": 37.8, "lon": -122.4},
+      "  → reads the IP lookup's place, coordinates rounded to 0.1°")
+res = upd({"weather.location": {"name": "Toronto, Ontario", "lat": 43.65107, "lon": -79.347015}})
+ok(res, "weather.location: set by the user")
+lib = library(T)
+check(lib.get("locationMode") == "manual" and lib.get("manualPlace") == {"name": "Toronto, Ontario", "lat": 43.65107, "lon": -79.347015}
+      and lib["locationLat"] == 43.65107 and lib["locationLon"] == -79.347015,
+      "  → library.json: the manual place, and locationLat/Lon (what every reader uses) follow it")
+check(res["structuredContent"]["changed"]["weather.location"] == {"mode": "manual", "name": "Toronto, Ontario", "lat": 43.7, "lon": -79.3}
+      and "Weather ▸ Location: Toronto, Ontario" in text(res), "  → read back rounded to 0.1°, says what changed")
+check(lib.get("autoPlace", {}).get("name") == "San Francisco, California", "  → the IP lookup's last answer is kept")
+ok(upd({"weather.location": {"lat": -33.8688, "lon": 151.2093}}), "weather.location: bare coordinates")
+check(library(T)["manualPlace"]["name"] == "33.9° S, 151.2° E" and library(T)["locationLon"] == 151.2093, "  → named by its coordinates")
+ok(upd({"weather.location": {"name": "  ", "lat": 90, "lon": -180}}), "weather.location: the poles' edge is allowed, a blank name is replaced")
+check(library(T)["manualPlace"]["name"] == "90.0° N, 180.0° W", "  → named by its coordinates")
+res = upd({"weather.location": "auto"})
+ok(res, "weather.location: back to automatic")
+lib = library(T)
+check("locationMode" not in lib and "manualPlace" not in lib and lib["locationLat"] == 37.7749 and lib["locationLon"] == -122.4194,
+      "  → manual place gone; the last IP answer is back until the app looks again")
+check(res["structuredContent"]["changed"]["weather.location"]["mode"] == "auto" and "automatic" in text(res), "  → says so")
 ok(upd({"wallpaper.on": True, "wallpaper.frameRate": "smooth", "wallpaper.quality": "full", "wallpaper.onBattery": "still",
         "wallpaper.lockScreenPicture": True}), "wallpaper: on, frame rate, quality, battery, lock screen")
 w = wall(T)
@@ -523,6 +554,13 @@ err(upd({"wallpaper.style": "No Such Style"}), "unknown style", "No style")
 err(upd({"source.photos": ["/no/such.png"]}), "missing photo", "can't read")
 err(upd({}), "empty patch", "at least one")
 err(upd({"music.size": "small", "music.corner": "middle"}), "one bad value refuses the whole patch", "isn't one of")
+err(upd({"weather.location": {"lat": 91, "lon": 0}}), "weather.location: latitude past the pole refused", "90")
+err(upd({"weather.location": {"lat": 10, "lon": -180.5}}), "weather.location: longitude past ±180 refused", "180")
+err(upd({"weather.location": {"lat": 10}}), "weather.location: no longitude refused", "lon")
+err(upd({"weather.location": {"lat": "43.6", "lon": -79.4}}), "weather.location: a coordinate as text refused", "number")
+err(upd({"weather.location": "manual"}), "weather.location: a bare word other than auto refused", "auto")
+err(upd({"weather.location": {"name": "x" * 81, "lat": 1, "lon": 1}}), "weather.location: an over-long name refused", "80")
+err(upd({"weather.location": {"lat": 1, "lon": 1}, "music.size": "huge"}), "a good location with a bad value elsewhere: whole patch refused", "isn't one of")
 check((library(T), wall(T), prefs(T)) == before, "refused patches changed nothing")
 
 # the user's “Let AI change what plays”
@@ -534,6 +572,9 @@ err(upd({"wallpaper.on": True}), "wallpaper on refused too", "turned off")
 err(upd({"screensaver.shuffle": False, "music.size": "small"}), "a mixed patch is refused whole, naming the gated keys", "screensaver.shuffle")
 check(library(T)["music"]["cardSize"] == "large", "  → nothing changed")
 ok(upd({"music.size": "small", "wallpaper.quality": "efficient"}), "settings that don't change what plays still work")
+ok(upd({"weather.location": {"name": "Reykjavík", "lat": 64.1466, "lon": -21.9426}}), "the location isn't gated (it's the user's place, not what plays)")
+check(library(T)["manualPlace"]["name"] == "Reykjavík", "  → set (unicode name kept)")
+ok(upd({"weather.location": "auto"}), "  → and back to automatic")
 os.remove(os.path.join(T, "ai-settings.json"))
 err(tc.call("app_action", {"action": "show_setup_guide"}), "app_action needs the running app", "isn't running")
 err(tc.call("app_action", {"action": "format_disk"}), "unknown action", "isn't one of")
@@ -1390,6 +1431,18 @@ check(res["structuredContent"]["liveInApp"] is True and "live" in text(res), "  
 time.sleep(0.4)  # the app's own saves
 check(library(A)["music"]["cardSize"] == "small" and prefs(A).get("weatherEnabled") is False, "  → survives the app's saves")
 check(any("applied updateSettings ok=true" in l for l in applied), "  → the app applied it")
+res = c.call("update_settings", {"settings": {"weather.location": {"name": "Toronto, Ontario", "lat": 43.65107, "lon": -79.347015}}})
+ok(res, "weather.location via the app")
+time.sleep(0.4)
+lib = library(A)
+check(res["structuredContent"]["liveInApp"] is True and lib.get("locationMode") == "manual" and lib["locationLat"] == 43.65107
+      and lib["manualPlace"]["name"] == "Toronto, Ontario", "  → the user's place, surviving the app's saves")
+check(settings_of(c.call("get_settings", {"keys": ["weather.location"]}))["weather.location"]["value"]
+      == {"mode": "manual", "name": "Toronto, Ontario", "lat": 43.7, "lon": -79.3}, "  → get_settings via the app reads it, rounded")
+err(c.call("update_settings", {"settings": {"weather.location": {"lat": -95, "lon": 0}}}), "the app path refuses bad coordinates too", "90")
+ok(c.call("update_settings", {"settings": {"weather.location": "auto"}}), "weather.location back to automatic via the app")
+time.sleep(0.4)
+check("locationMode" not in library(A) and "manualPlace" not in library(A), "  → automatic again")
 with open(os.path.join(A, "ai-settings.json"), "w") as f:
     json.dump({"allowPlaybackChanges": False}, f)
 err(c.call("update_settings", {"settings": {"music.show": "off"}}), "the app refuses gated settings too", "turned off")
