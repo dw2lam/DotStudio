@@ -58,7 +58,14 @@ final class Toolbox {
     }
 
     var builderContext: StyleBuilder.Context {
-        StyleBuilder.Context(scenes: scenes)
+        let l = try? lib.library()
+        var ctx = StyleBuilder.Context(scenes: scenes)
+        ctx.signalKey = { [unowned self] ref in
+            guard let l else { throw ToolError("Couldn't read the library to find signal \"\(ref)\".") }
+            return try self.signalKey(ref, l)
+        }
+        ctx.signalType = { key in l?.signalInfo(key)?.type }
+        return ctx
     }
 
     func buildEffects(_ items: [Any], existing: [EffectInstance] = []) throws -> [JSONObject] {
@@ -198,7 +205,8 @@ final class Toolbox {
                                "effects": Self.effectsSchema,
                                "patch": S.arr(S.obj(["index": S.num("Which effect (0 = first).", min: 0, integer: true),
                                                      "params": ["type": "object", "additionalProperties": ["type": ["number", "boolean", "string"]], "description": "Params to change."],
-                                                     "colorA": S.color, "colorB": S.color, "enabled": S.bool("On/off.")],
+                                                     "colorA": S.color, "colorB": S.color, "enabled": S.bool("On/off."),
+                                                     "inputs": StyleBuilder.inputsSchema],
                                                     required: ["index"]), "Edits to individual effects.", min: 1, max: 6)],
                               required: ["style"])) { [unowned self] a in
                 var p = try self.resolve(a)
@@ -217,7 +225,7 @@ final class Toolbox {
                         let i = (pt["index"] as! NSNumber).intValue
                         guard p.effects.indices.contains(i) else { throw ToolError("patch index \(i): the style has \(p.effects.count) effect(s) (0…\(p.effects.count - 1)).") }
                         var e: JSONObject = ["kind": p.effects[i].kind.rawValue]
-                        for k in ["params", "colorA", "colorB", "enabled"] { if let v = pt[k] { e[k] = v } }
+                        for k in ["params", "colorA", "colorB", "enabled", "inputs"] { if let v = pt[k] { e[k] = v } }
                         effectsJSON[i] = try StyleBuilder.effect(e, index: i, ctx: self.builderContext, existing: p.effects[i])
                     }
                 }
@@ -261,6 +269,8 @@ final class Toolbox {
                                "clock": S.str("Local wall-clock time HH:mm (clocks and Follow the Sun), default now.", pattern: "^([01]?[0-9]|2[0-3]):[0-5][0-9]$"),
                                "date": S.str("YYYY-MM-DD for `clock` (default today).", pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"),
                                "weather": S.str("Force a weather condition for live-weather scenes.", enum: PreviewRenderer.weatherNames),
+                               "inputs": ["type": "object", "additionalProperties": ["type": "number"],
+                                          "description": "Custom Scenes with inputs: pin them for this preview, by key, in their units — e.g. {\"aqi\": 180} — as if their signal read that (unpinned inputs read what they're bound to, or their default)."] as JSONObject,
                                "music_card": S.bool("Show the corner music card with a sample song (default false)."),
                                "frames": S.num("Contact sheet: this many frames (2–12) instead of one still.", min: 1, max: 12, integer: true),
                                "span": S.num("Contact sheet: seconds covered (default 120).", min: 1, max: 86_400),
@@ -355,8 +365,9 @@ final class Toolbox {
 
         Signals and When rules: list_signals shows live values DotStudio watches (weather, sun, time, battery, music, \
         and the user's own HTTPS-JSON or file signals); set_rule makes "when ⟨condition⟩, play ⟨style⟩" (snowing → \
-        a snowy style, battery low → a light one). Read read_guide("signals") first — never put a key in a URL, never \
-        ask the user to paste a key into the chat.
+        a snowy style, battery low → a light one); bind_signal connects a Custom Scene's declared input to one \
+        (air quality thickening a haze, the temperature warming a palette). Read read_guide("signals") first — never \
+        put a key in a URL, never ask the user to paste a key into the chat.
 
         """
         t += "This Mac: DotStudio is \(running ? "running (changes appear live, with a notice)" : "not running (changes are written to its library and show when it opens)"). "
@@ -371,7 +382,7 @@ final class Toolbox {
         return .ok(t, ["appRunning": running, "allowPlaybackChanges": settings.allowPlaybackChanges, "styles": l.presets.count,
                        "aiStyles": created, "nowPlaying": playing.name, "userGuides": user,
                        "readFirst": ["style/dotstudio", "settings/index", "power", "burn-in", "signals"] + user,
-                       "allowSignals": settings.allowSignals, "signalTools": ["list_signals", "test_signal", "create_signal", "set_rule", "list_rules"],
+                       "allowSignals": settings.allowSignals, "signalTools": ["list_signals", "test_signal", "create_signal", "set_rule", "list_rules", "bind_signal"],
                        "settingsTools": ["get_settings", "update_settings", "app_action"],
                        "customScenes": scenes.isAvailable, "film": film.isAvailable, "store": store.path])
     }
@@ -385,6 +396,24 @@ final class Toolbox {
         o.time = (a["t"] as? NSNumber)?.doubleValue ?? 4
         o.weather = a["weather"] as? String
         o.musicCard = a["music_card"] as? Bool ?? false
+        if let ins = a["inputs"] as? JSONObject, !ins.isEmpty {
+            // Strict, like params: every key must be an input of a Custom Scene in the style, in range.
+            let declared = p.effects.filter { $0.enabled && $0.kind == .custom }
+                .flatMap { e in e.custom.flatMap { scenes.inputs(scene: $0.id) } ?? [] }
+            var pinned: [String: Double] = [:]
+            for (k, v) in ins.sorted(by: { $0.key < $1.key }) {
+                guard let spec = declared.first(where: { $0.key == k }) else {
+                    throw ToolError(declared.isEmpty ? "inputs: “\(p.name)” has no Custom Scene with inputs."
+                                    : "inputs: no input \"\(k)\" in “\(p.name)”. Its inputs: \(Array(Set(declared.map(\.key))).sorted().joined(separator: ", ")).")
+                }
+                guard let n = (v as? NSNumber)?.doubleValue, n.isFinite else { throw ToolError("inputs.\(k): a number") }
+                guard n >= spec.lo - 1e-9, n <= spec.hi + 1e-9 else {
+                    throw ToolError("inputs.\(k): \(Schema.fmt(n)) is outside \(spec.label)'s range \(Schema.fmt(spec.lo))…\(Schema.fmt(spec.hi)).")
+                }
+                pinned[k] = n
+            }
+            o.inputs = pinned
+        }
         if let c = a["clock"] as? String {
             let day = (a["date"] as? String) ?? {
                 let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.locale = Locale(identifier: "en_US_POSIX"); return f.string(from: Date())
@@ -413,6 +442,7 @@ final class Toolbox {
         }
         if let c = a["clock"] as? String { note += ", clock \(c)" }
         if let w = o.weather { note += ", weather \(w)" }
+        if let ins = o.inputs { note += ", inputs " + ins.sorted { $0.key < $1.key }.map { "\($0.key) = \(Schema.fmt($0.value))" }.joined(separator: ", ") }
         if o.musicCard { note += ", music card on" }
         let st = PreviewRenderer.stats(cg)
         meta["meanLuminance"] = Catalog.round3(st.mean)

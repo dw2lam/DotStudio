@@ -188,7 +188,7 @@ tnames = [t["name"] for t in tools]
 expected = ["get_started", "list_guides", "read_guide", "list_scenes", "describe_scene", "list_styles", "get_style",
             "create_style", "update_style", "duplicate_style", "delete_style", "preview_style", "benchmark_style",
             "export_style", "import_style", "list_displays", "set_screensaver", "set_wallpaper",
-            "list_signals", "test_signal", "create_signal", "update_signal", "delete_signal", "list_rules", "set_rule", "delete_rule",
+            "list_signals", "test_signal", "create_signal", "update_signal", "delete_signal", "list_rules", "set_rule", "delete_rule", "bind_signal",
             "get_settings", "update_settings", "app_action", "list_engines",
             "pull_engine", "list_custom_scenes", "validate_custom_scene", "create_custom_scene", "update_custom_scene",
             "film_status", "list_film_templates", "create_film_scene", "get_film_scene", "update_film_scene", "render_film_stills", "render_film_loop", "film_job_status", "cancel_film_job"]
@@ -833,6 +833,93 @@ for sid_, name_ in ((panes_style, "metal"), (dot_style, "cells")):
     check(0 < res["structuredContent"].get("minMs", 0) < 100, f"…{res['structuredContent'].get('minMs', 0):.2f} ms at 5K")
 ok(c.call("set_screensaver", {"style": panes_style}), "set_screensaver to the custom style (temp store)")
 check(library(E)["activeID"] == panes_style, "the screensaver plays it")
+
+# scene inputs (docs/signals-design.md §4): a package declares them; a style binds them to signals
+print("== scene inputs (bind_signal, inline inputs, preview_style inputs)")
+glow_src = ("#include <DotStudio.h>\n"
+            "// A field of colour B whose brightness follows the input (no numbers on screen).\n"
+            "float4 dsScene(float2 uv, DSContext ctx) {\n"
+            "    float k = ctx.input[0] / 300.0;\n"
+            "    return float4(mix(ctx.colorA, ctx.colorB, k), 1.0);\n"
+            "}\n")
+glow = {"name": "Test Glow", "engine": {"id": "metal", "version": ">=1.1"}, "fps": 24,
+        "inputs": [{"key": "aqi", "label": "Air quality", "range": [0, 300], "default": 0, "unit": "AQI", "suggest": "weather.precip"}],
+        "colors": {"a": {"label": "Clean", "default": [0.02, 0.02, 0.05, 1]}, "b": {"label": "Smoke", "default": [0.95, 0.6, 0.2, 1]}}}
+res = c.call("validate_custom_scene", {"manifest": glow, "source": glow_src})
+ok(res, "validate_custom_scene: a scene with an input")
+check([i["key"] for i in res["structuredContent"].get("inputs", [])] == ["aqi"] and res["structuredContent"]["inputs"][0]["range"] == [0, 300]
+      and "ctx.input[0] aqi" in text(res) and "burn-in" in text(res), "  → reports its inputs (ctx.input[0]) and the burn-in rule")
+res = c.call("validate_custom_scene", {"manifest": dict(glow, engine={"id": "metal", "version": ">=1"}), "source": glow_src})
+check(any(">=1.1" in w for w in res["structuredContent"]["warnings"] + [d["message"] for d in res["structuredContent"]["diagnostics"]])
+      and ">=1.1" in text(res), "  → advises engine >=1.1 for a package with inputs")
+err(c.call("validate_custom_scene", {"manifest": dict(glow, inputs=[{"key": "aqi", "label": "A", "range": [0, 10], "default": 20}]), "source": glow_src}),
+    "an input's default outside its range is refused", "outside its range")
+res = c.call("create_custom_scene", {"manifest": glow, "source": glow_src})
+ok(res, "create_custom_scene with an input")
+glow_id = res["structuredContent"].get("id", "")
+check(next(s for s in c.call("list_custom_scenes")["structuredContent"]["scenes"] if s["id"] == glow_id)["inputs"][0]["key"] == "aqi",
+      "list_custom_scenes shows the inputs")
+# inline: create_style effects take inputs
+res = c.call("create_style", {"name": "Glow", "effects": [{"kind": "custom", "scene": glow_id, "inputs": {"aqi": {"signal": "power.battery"}}}]})
+ok(res, "create_style with an inline input binding")
+glow_style = res["structuredContent"]["id"]
+def glow_fx():
+    return next(p for p in library(E)["presets"] if p["id"] == glow_style)["effects"][0]
+check(glow_fx().get("inputs") == {"aqi": {"signal": "power.battery"}}, "  → stored as effects[0].inputs {aqi: {signal}}")
+err(c.call("create_style", {"name": "X", "effects": [{"kind": "custom", "scene": glow_id, "inputs": {"nope": {"signal": "power.battery"}}}]}),
+    "inline: an unknown input key is refused", "no input")
+err(c.call("create_style", {"name": "X", "effects": [{"kind": "custom", "scene": glow_id, "inputs": {"aqi": {"signal": "weather.nope"}}}]}),
+    "inline: an unknown signal is refused", "No signal")
+err(c.call("create_style", {"name": "X", "effects": [{"kind": "halftone", "inputs": {"aqi": {"signal": "power.battery"}}}]}),
+    "inline: inputs on a built-in look are refused", "only Custom Scenes")
+# bind_signal: to one of the user's signals (a file signal: no network), by name
+os.makedirs(os.path.join(E, "signal-files"), exist_ok=True)
+with open(os.path.join(E, "signal-files", "air.txt"), "w") as f:
+    f.write("180\n")
+ok(c.call("create_signal", {"name": "Air", "kind": "file", "file": "air.txt", "unit": "AQI", "range": [0, 300]}), "create_signal (a file) to bind")
+air_id = next(s["id"] for s in library(E)["signals"] if s["name"] == "Air")
+r_ = subprocess.run([BIN, "--set-signal", "air=200"], capture_output=True, env=env_for(E))
+check(r_.returncode == 0 and open(os.path.join(E, "signal-files", "air.txt")).read().strip() == "200", "--set-signal air=200 writes signal-files/air.txt")
+check(c.call("test_signal", {"signal": "Air"})["structuredContent"].get("value") == 200, "  → the file signal reads it")
+check(subprocess.run([BIN, "--set-signal", "../evil=1"], capture_output=True, env=env_for(E)).returncode == 2
+      and not os.path.exists(os.path.join(E, "evil.txt")), "--set-signal refuses anything but a plain file name")
+res = c.call("bind_signal", {"style": "Glow", "input": "aqi", "signal": "Air"})
+ok(res, "bind_signal to the user's signal by name")
+check(glow_fx()["inputs"] == {"aqi": {"signal": air_id}} and res["structuredContent"]["changed"] is True, "  → stores the signal's id")
+res = c.call("bind_signal", {"style": "Glow", "input": "aqi", "signal": "Air"})
+check(res["structuredContent"]["changed"] is False, "binding again changes nothing")
+sl = c.call("list_signals")["structuredContent"]
+air_row = next(s for s in sl["signals"] if s["id"] == air_id)
+check(air_row["boundBy"] == [{"style": "Glow", "styleId": glow_style, "input": "aqi"}] and "Glow ← aqi" in air_row["referencedBy"],
+      "list_signals: referencedBy / boundBy include the binding")
+err(c.call("delete_signal", {"signal": "Air"}), "delete_signal refused while a scene input is bound to it", "scene input")
+err(c.call("bind_signal", {"style": "Glow", "input": "nope", "signal": "Air"}), "bind_signal: an unknown input key", "no input")
+err(c.call("bind_signal", {"style": "Glow", "input": "aqi", "signal": "Nope"}), "bind_signal: an unknown signal", "No signal")
+err(c.call("bind_signal", {"style": "Glow", "input": "aqi", "signal": "weather.condition"}), "bind_signal: a word signal", "is a word")
+err(c.call("bind_signal", {"style": panes_style, "input": "aqi", "signal": "Air"}), "bind_signal: a scene that declares no inputs", "declares no inputs")
+ok(c.call("create_style", {"name": "Plain Look", "effects": [{"kind": "halftone"}]}), "a style without a Custom Scene")
+err(c.call("bind_signal", {"style": "Plain Look", "input": "aqi", "signal": "Air"}), "bind_signal: no Custom Scene in the style", "no Custom Scene")
+err(c.call("bind_signal", {"style": "Plain Look", "effect_index": 0, "input": "aqi", "signal": "Air"}), "bind_signal: to a non-custom effect", "not a Custom Scene")
+err(c.call("bind_signal", {"style": "Glow", "effect_index": 3, "input": "aqi", "signal": "Air"}), "bind_signal: effect_index out of range", "effect(s)")
+# update_style patch: inputs merge; null disconnects
+ok(c.call("update_style", {"style": "Glow", "patch": [{"index": 0, "inputs": {"aqi": {"signal": "weather.precip"}}}]}), "update_style patch inputs")
+check(glow_fx()["inputs"] == {"aqi": {"signal": "weather.precip"}}, "  → rebound")
+ok(c.call("bind_signal", {"style": "Glow", "input": "aqi", "signal": None}), "bind_signal null disconnects")
+check("inputs" not in glow_fx(), "  → no binding left (the input reads its default)")
+ok(c.call("delete_signal", {"signal": "Air"}), "…then delete_signal works")
+# preview_style inputs pin the value: the pixels follow it
+def glow_mean(ins):
+    r = c.call("preview_style", {"style": "Glow", "width": 160, "height": 100, "inputs": ins} if ins is not None else {"style": "Glow", "width": 160, "height": 100})
+    return region_mean(png_pixels(image(r)), 0.1, 0.9, 0.1, 0.9), r
+lo_, r0 = glow_mean({"aqi": 0})
+hi_, r1 = glow_mean({"aqi": 300})
+un_, _ = glow_mean(None)
+ok(r1, "preview_style with inputs")
+check(hi_[0] > lo_[0] + 0.5 and abs(un_[0] - lo_[0]) < 0.02 and "aqi = 300" in text(r1),
+      f"preview_style inputs change the pixels (aqi 0 {lo_[0]:.2f} → 300 {hi_[0]:.2f}); unpinned = the default ({un_[0]:.2f})")
+err(c.call("preview_style", {"style": "Glow", "inputs": {"nope": 1}}), "preview_style: an unknown input key", "no input")
+err(c.call("preview_style", {"style": "Glow", "inputs": {"aqi": 400}}), "preview_style: an input out of its range", "outside")
+err(c.call("preview_style", {"style": "Panes", "inputs": {"aqi": 1}}), "preview_style: a style without inputs", "no Custom Scene with inputs")
 
 # film: the toolkit's stand-in renders real H.264 loops; they install and play through the real film engine
 res = c.call("film_status")

@@ -32,6 +32,8 @@ struct CSReport {
     var diagnostics: [CSDiagnostic]
     var gpuMsAt5K: Double?
     var warnings: [String]
+    /// The manifest's scene inputs as read (key, label, range, default, unit, suggest).
+    var inputs: [CustomSceneManifest.Input] = []
 }
 
 struct CSEngine {
@@ -71,6 +73,17 @@ protocol CustomScenesAPI {
     /// A style's effect for installed scene `id` at its package's defaults, and every param it
     /// takes (the manifest's, then its engine's, e.g. the cells engine's `ds.render`); nil = not installed.
     func effect(scene id: String) -> (EffectInstance, [ParamSpec])?
+    /// Installed scene `id`'s declared inputs (ctx.input[0…7]), [] for none; nil = not installed.
+    func inputs(scene id: String) -> [CustomSceneManifest.Input]?
+}
+
+extension CustomScenesAPI {
+    /// An installed scene's inputs from its scene.json (as installed() lists it).
+    func manifestInputs(scene id: String) -> [CustomSceneManifest.Input]? {
+        guard let m = installed().first(where: { $0["id"] as? String == id }) else { return nil }
+        guard let raw = m["inputs"] else { return [] }
+        return ((try? JSON.decode([CustomSceneManifest.Input].self, from: raw)) ?? []).prefix(CustomScenes.maxInputs).map { $0 }
+    }
 }
 
 // MARK: - The engine side
@@ -99,7 +112,8 @@ struct CustomScenesBridge: CustomScenesAPI {
                         },
                         gpuMsAt5K: r.gpuMsAt5K,
                         // (warning diagnostics are listed above already)
-                        warnings: r.warnings.filter { w in !r.diagnostics.contains { $0.formatted == w } })
+                        warnings: r.warnings.filter { w in !r.diagnostics.contains { $0.formatted == w } },
+                        inputs: r.manifest?.inputSpecs ?? [])
     }
 
     func install(packageAt url: URL) throws -> String {
@@ -136,6 +150,10 @@ struct CustomScenesBridge: CustomScenesAPI {
         }
         let e = try Self.wait { try await CustomScenes.pullEngine(id: id, store: store) }
         return CSEngine(id: e.id, version: e.version, kind: e.kind, builtIn: false, guide: e.guideURL, summary: e.summary)
+    }
+
+    func inputs(scene id: String) -> [CustomSceneManifest.Input]? {
+        CustomScenes.manifest(id: id, store: store)?.inputSpecs
     }
 
     func effect(scene id: String) -> (EffectInstance, [ParamSpec])? {
@@ -178,6 +196,7 @@ struct UnavailableCustomScenes: CustomScenesAPI {
     func availableEngines() throws -> [CSEngineIndexEntry] { throw ToolError(Self.message) }
     func pullEngine(id: String) throws -> CSEngine { throw ToolError(Self.message) }
     func effect(scene id: String) -> (EffectInstance, [ParamSpec])? { nil }
+    func inputs(scene id: String) -> [CustomSceneManifest.Input]? { nil }
 }
 
 /// Self-test stand-in (DOTSTUDIO_MCP_TEST_FAKES=1): checks packages structurally, "compiles"
@@ -201,8 +220,11 @@ struct FakeCustomScenes: CustomScenesAPI {
         if !src.contains("dsScene("), !src.contains("mainImage(") {
             diags.append(CSDiagnostic(line: 1, column: 1, message: "no dsScene(uv, ctx) function", severity: "error"))
         }
-        return CSReport(ok: diags.isEmpty, diagnostics: diags, gpuMsAt5K: diags.isEmpty ? 2.5 : nil, warnings: [])
+        let inputs = (m["inputs"]).flatMap { try? JSON.decode([CustomSceneManifest.Input].self, from: $0) } ?? []
+        return CSReport(ok: diags.isEmpty, diagnostics: diags, gpuMsAt5K: diags.isEmpty ? 2.5 : nil, warnings: [], inputs: inputs)
     }
+
+    func inputs(scene id: String) -> [CustomSceneManifest.Input]? { manifestInputs(scene: id) }
 
     func install(packageAt url: URL) throws -> String {
         let m = JSON.parse(try Data(contentsOf: url.appendingPathComponent("scene.json"))) as? JSONObject ?? [:]

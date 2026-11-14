@@ -1,8 +1,10 @@
 //  ToolsSignals.swift — the MCP tools for Signals and When rules (docs/signals-design.md §6):
 //  list_signals, test_signal, create_signal, update_signal, delete_signal, list_rules, set_rule,
-//  delete_rule. Every change goes through LibraryAccess.perform (the running app, or the files
-//  under the lock); the gates live in both executors: signal edits need AISettings.allowSignals,
-//  rule edits need allowPlaybackChanges (they change what plays).
+//  delete_rule, bind_signal. Every change goes through LibraryAccess.perform (the running app, or
+//  the files under the lock); the gates live in both executors: signal edits need
+//  AISettings.allowSignals, rule edits need allowPlaybackChanges (they change what plays).
+//  bind_signal edits a style (it connects a Custom Scene's input to a signal: what plays doesn't
+//  change), so it needs nothing beyond what update_style needs.
 //
 //  Secrets: an assistant can say WHERE a key goes (auth {in, name}) but never sees, sets or reads
 //  a key's value — no schema here has a field for one, and nothing here reads the Keychain. A
@@ -37,7 +39,7 @@ extension Toolbox {
     var signalTools: [Tool] {
         [
             Tool(name: "list_signals", title: "List signals",
-                 description: "The live values DotStudio can react to: the built-ins (weather.condition, weather.precip/snow/cloud/fog/storm 0…1, weather.wind m/s, weather.tempC, sun.elevation, sun.isDay, time.hour, time.weekday, power.battery %, power.onAC, music.playing) and the user's own signals (web: an https JSON value; file: a file in signal-files). Each: id, name, kind, where it comes from (host or file), type, unit, the current value and how fresh it is, the last error, and the When rules that use it. Values come from signal-values.json, which the running app writes (fetched only while a rule uses the signal).",
+                 description: "The live values DotStudio can react to: the built-ins (weather.condition, weather.precip/snow/cloud/fog/storm 0…1, weather.wind m/s, weather.tempC, sun.elevation, sun.isDay, time.hour, time.weekday, power.battery %, power.onAC, music.playing) and the user's own signals (web: an https JSON value; file: a file in signal-files). Each: id, name, kind, where it comes from (host or file), type, unit, the current value and how fresh it is, the last error, and what uses it (referencedBy: When rules, and styles whose Custom Scene inputs are bound to it — boundBy). Values come from signal-values.json, which the running app writes (fetched only while a rule or a binding uses the signal).",
                  input: S.obj([:]), readOnly: true, idempotent: true) { [unowned self] _ in try self.listSignals() },
             Tool(name: "test_signal", title: "Test a signal",
                  description: "Fetch a signal once and show what came back: the value it reads, HTTP status, time, size, and an OUTLINE of the document (up to 60 JSON Pointer → leaf values) to pick `pointer` from — never the raw body or headers. Pass `signal` (a saved one) or a `draft` (kind/url/file/pointer/valueType…) before create_signal. A signal with a key can only be tested while DotStudio runs (the app holds the key). Assistants can't reach localhost or the local network; https only.",
@@ -47,20 +49,29 @@ extension Toolbox {
                                                "scale": Self.signalFields["scale"]!, "offset": Self.signalFields["offset"]!])]),
                  readOnly: true, openWorld: true) { [unowned self] a in try self.testSignal(a) },
             Tool(name: "create_signal", title: "Create a signal",
-                 description: "Add a live data signal the user's When rules can react to: an https JSON value (kind web: url + pointer; fetched at most every 5 minutes, and only while an enabled When rule uses it) or a file in DotStudio's signal-files folder (kind file: for Shortcuts, scripts, Home Assistant). test_signal first to find the pointer. If the API needs a key: NEVER put it in the URL and NEVER ask the user to paste it into the chat — set `auth` {in, name} and tell the user to paste the key in DotStudio ▸ Settings ▸ Signals ▸ <name> (it goes to the Keychain; you can never read or set it). Assistants can't add signals for localhost or the local network. Read read_guide(\"signals\") first.",
+                 description: "Add a live data signal the user's When rules can react to, or a Custom Scene's input can follow (bind_signal): an https JSON value (kind web: url + pointer; fetched at most every 5 minutes, and only while an enabled When rule or a binding uses it) or a file in DotStudio's signal-files folder (kind file: for Shortcuts, scripts, Home Assistant). test_signal first to find the pointer. If the API needs a key: NEVER put it in the URL and NEVER ask the user to paste it into the chat — set `auth` {in, name} and tell the user to paste the key in DotStudio ▸ Settings ▸ Signals ▸ <name> (it goes to the Keychain; you can never read or set it). Assistants can't add signals for localhost or the local network. Read read_guide(\"signals\") first.",
                  input: S.obj(Self.signalFields, required: ["name"])) { [unowned self] a in try self.createSignal(a) },
             Tool(name: "update_signal", title: "Update a signal",
                  description: "Change one of the user's signals: any field of create_signal (name, url, pointer, valueType, scale, offset, unit, range, pollMinutes, auth, enabled), or remove_auth. Keys still only go in through Settings ▸ Signals.",
                  input: S.obj(Self.signalFields.merging(["signal": Self.signalRef, "remove_auth": S.bool("Stop sending a key.")]) { a, _ in a },
                               required: ["signal"])) { [unowned self] a in try self.updateSignal(a) },
             Tool(name: "delete_signal", title: "Delete a signal",
-                 description: "Remove one of the user's signals (its stored key goes too). Refused while a When rule tests it, unless force: true, which also removes those tests (and a rule left with none).",
+                 description: "Remove one of the user's signals (its stored key goes too). Refused while a When rule tests it or a style's scene input is bound to it, unless force: true, which also removes those tests (and a rule left with none) and disconnects those inputs (they read their defaults).",
                  input: S.obj(["signal": Self.signalRef, "force": S.bool("Also remove the rule tests that use it.")], required: ["signal"]),
                  destructive: true) { [unowned self] a in
                 let s = try self.userSignal(a["signal"] as! String)
                 let (r, viaApp) = try self.perform(BridgeRequest(op: .deleteSignal, id: s.id, force: a["force"] as? Bool))
                 return .ok((r.message ?? "Deleted.") + " " + self.whereNote(viaApp), ["deleted": s.id.uuidString, "liveInApp": viaApp])
             },
+            Tool(name: "bind_signal", title: "Connect a scene input to a signal",
+                 description: "Connect one input of a Custom Scene in a style (the package declares them: list_custom_scenes `inputs`, e.g. aqi \"Air quality\" 0…300) to a signal — a built-in (weather.tempC, weather.precip, sun.elevation, power.battery…) or one of the user's (list_signals) — so the scene follows it live: ctx.input[i] eases to the value over ~20 s; while the signal is missing or stale the input eases back to its default. `signal: null` disconnects. Numbers and yes/no signals only. It edits the style (what plays doesn't change); from then on DotStudio watches that signal while the style exists. Inline form: create_style / update_style effects take `inputs` too.",
+                 input: S.obj(["style": Self.styleRef,
+                               "effect_index": S.num("Which effect (0 = first). Default: the first Custom Scene that declares `input`.", min: 0, integer: true),
+                               "input": S.str("The input's key, from the scene's manifest (e.g. \"aqi\").", pattern: "^[a-z][A-Za-z0-9_]{0,31}$"),
+                               "signal": ["type": ["string", "null"], "maxLength": 80,
+                                          "description": "A built-in signal id (weather.tempC…) or one of the user's signals by id or exact name; null disconnects."] as JSONObject],
+                              required: ["style", "input", "signal"]),
+                 idempotent: true) { [unowned self] a in try self.bindSignal(a) },
             Tool(name: "list_rules", title: "List When rules",
                  description: "The user's When rules — \"when ⟨condition⟩, play ⟨style⟩\" — in priority order (the first that matches plays): id, name, enabled, the condition (all/any tests on signals, optional timeOfDay), the styles, holdMinutes, a sentence, and activeNow (the rule the running app says plays now). Precedence on screen: a display's own style > the active When rule > the night style > the rotation.",
                  input: S.obj([:]), readOnly: true, idempotent: true) { [unowned self] _ in try self.listRules() },
@@ -114,7 +125,7 @@ extension Toolbox {
         if let id = UUID(uuidString: ref), all.contains(where: { $0.id == id }) { return id.uuidString }
         let m = all.filter { $0.name.compare(ref, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }
         if m.count == 1 { return m[0].key }
-        throw ToolError("No signal \"\(ref)\" for a rule test. Built-ins: \(BuiltInSignals.all.map(\.id).joined(separator: ", ")); or one of the user's (list_signals).")
+        throw ToolError("No signal \"\(ref)\". Built-ins: \(BuiltInSignals.all.map(\.id).joined(separator: ", ")); or one of the user's (list_signals).")
     }
 
     func resolveRule(_ ref: String) throws -> PlayRule {
@@ -127,8 +138,8 @@ extension Toolbox {
 
     func signalJSON(_ s: Signal, _ l: Library, _ st: SignalState?, now: Date) -> JSONObject {
         var o: JSONObject = ["id": s.id.uuidString, "name": s.name, "kind": s.kind.rawValue, "valueType": s.valueType.rawValue,
-                             "enabled": s.enabled, "createdByAI": s.createdByAI, "hasKey": s.auth != nil,
-                             "referencedBy": l.rules(using: s.key).map(\.name)]
+                             "enabled": s.enabled, "createdByAI": s.createdByAI, "hasKey": s.auth != nil]
+        uses(&o, s.key, l)
         if s.kind == .web {
             o["host"] = s.host ?? ""
             // The URL the AI chose is its own; the user's own URLs stay with the user (host only).
@@ -146,6 +157,14 @@ extension Toolbox {
         return o
     }
 
+    /// What uses a signal: referencedBy (rule names, then "<style> ← <input>" for bindings) and
+    /// boundBy ([{style, styleId, input}]).
+    func uses(_ o: inout JSONObject, _ key: String, _ l: Library) {
+        let bound = l.inputBindings(using: key)
+        o["referencedBy"] = l.rules(using: key).map(\.name) + bound.map { "\($0.style.name) ← \($0.input)" }
+        o["boundBy"] = bound.map { ["style": $0.style.name, "styleId": $0.style.id.uuidString, "input": $0.input] as JSONObject }
+    }
+
     func valueFields(_ o: inout JSONObject, _ v: SignalValue?, type: SignalValueType, unit: String?, now: Date) {
         guard let v else { o["value"] = NSNull(); o["freshness"] = 0; return }
         o["value"] = v.s.map { $0 as Any } ?? v.v.map { type == .bool ? ($0 > 0.5) as Any : $0 as Any } ?? NSNull()
@@ -161,8 +180,8 @@ extension Toolbox {
         let l = try lib.library()
         let st = liveState, now = Date()
         let builtIns: [JSONObject] = BuiltInSignals.all.map { b in
-            var o: JSONObject = ["id": b.id, "name": b.name, "kind": "builtin", "valueType": b.type.rawValue,
-                                 "referencedBy": l.rules(using: b.id).map(\.name)]
+            var o: JSONObject = ["id": b.id, "name": b.name, "kind": "builtin", "valueType": b.type.rawValue]
+            uses(&o, b.id, l)
             if let u = b.unit { o["unit"] = u }
             if let r = b.range { o["range"] = [r.lowerBound, r.upperBound] }
             if let opts = b.options { o["options"] = opts }
@@ -179,7 +198,7 @@ extension Toolbox {
                     + ((o["error"] as? String).map { " (last error: \($0))" } ?? "")
             }.joined(separator: "\n")
         }
-        if st == nil { text += "\nNo live values yet: DotStudio writes them while it runs and a When rule uses a signal." }
+        if st == nil { text += "\nNo live values yet: DotStudio writes them while it runs and a When rule or a scene input uses a signal." }
         return .ok(text, ["builtIn": builtIns, "signals": mine, "appWritesValues": st != nil])
     }
 
@@ -268,7 +287,7 @@ extension Toolbox {
         if s.auth != nil {
             t += " It sends a key (\(s.auth!.placement.rawValue) \(s.auth!.name)): ask the user to paste it in DotStudio ▸ Settings ▸ Signals ▸ \(s.name) — never in this chat. You can't set or read it."
         }
-        t += " DotStudio fetches it only while an enabled When rule uses it (set_rule)"
+        t += " DotStudio fetches it only while an enabled When rule (set_rule) or a style's scene input (bind_signal) uses it"
         if s.kind == .web { t += ", every \(Int(s.interval / 60)) min" }
         return t + "."
     }
@@ -315,6 +334,62 @@ extension Toolbox {
             "- \(o["name"]!)\((o["enabled"] as? Bool) == false ? " (off)" : "")\((o["activeNow"] as? Bool) == true ? " — PLAYING NOW" : ""): \(o["summary"]!) [\(o["id"]!)]"
         }.joined(separator: "\n")
         return .ok(text, ["rules": items, "activeNow": active.map { $0.uuidString as Any } ?? NSNull()])
+    }
+
+    /// bind_signal: connect (or disconnect) one Custom Scene input of a style.
+    func bindSignal(_ a: JSONObject) throws -> ToolResult {
+        let l = try lib.library()
+        var p = try resolve(a)
+        let key = a["input"] as! String
+        let ref = a["signal"] as? String                     // nil (JSON null) = disconnect
+        let customs = p.effects.indices.filter { p.effects[$0].kind == .custom }
+        let index: Int
+        if let n = (a["effect_index"] as? NSNumber)?.intValue {
+            guard p.effects.indices.contains(n) else {
+                throw ToolError("effect_index \(n): “\(p.name)” has \(p.effects.count) effect(s) (0…\(max(p.effects.count - 1, 0))).")
+            }
+            guard p.effects[n].kind == .custom else {
+                throw ToolError("effect \(n) of “\(p.name)” is \(p.effects[n].kind.displayName), not a Custom Scene: only Custom Scenes have inputs.")
+            }
+            index = n
+        } else {
+            guard !customs.isEmpty else { throw ToolError("“\(p.name)” has no Custom Scene, so it has no inputs to connect (only Custom Scenes declare inputs).") }
+            index = customs.first { i in (p.effects[i].custom.flatMap { scenes.inputs(scene: $0.id) } ?? []).contains { $0.key == key } } ?? customs[0]
+        }
+        guard let scene = p.effects[index].custom?.id else { throw ToolError("effect \(index) of “\(p.name)” has no scene package.") }
+        guard let declared = scenes.inputs(scene: scene) else {
+            throw ToolError("The scene package \(scene) isn't installed (list_custom_scenes).")
+        }
+        let before = p.effects[index].inputs?[key]?.signal
+        try StyleBuilder.bind(&p.effects[index], input: key, signal: ref, declared: declared, scene: scene,
+                              where_: "input \(key)", ctx: builderContext)
+        let after = p.effects[index].inputs?[key]?.signal
+        let spec = declared.first { $0.key == key }!
+        let sigName = after.flatMap { l.signalInfo($0)?.name } ?? ref
+        var o: JSONObject = ["style": p.name, "styleId": p.id.uuidString, "effectIndex": index, "input": key,
+                             "signal": after.map { $0 as Any } ?? NSNull(), "default": spec.def]
+        if before == after {
+            o["changed"] = false
+            return .ok(after == nil ? "“\(p.name)” \(key) wasn't connected; nothing changed." : "“\(p.name)” \(key) already follows \(sigName ?? after!).", o)
+        }
+        let (_, viaApp) = try perform(BridgeRequest(op: .upsertStyle, preset: p))
+        o["changed"] = true
+        o["liveInApp"] = viaApp
+        var text: String
+        if let after {
+            text = "Connected “\(p.name)” \(spec.label) (\(key)) ← \(sigName ?? after). The scene follows it, eased over ~20 s; while it's missing or stale it reads \(SignalValue.format(spec.def))\(RuleText.unitSuffix(spec.unit))."
+            let now = Date()
+            if let r = SignalLink.reading(after, state: liveState, wall: now) {
+                let v = spec.clamp(r.value)
+                o["valueNow"] = v
+                text += " Now: \(SignalValue.format(v))\(RuleText.unitSuffix(spec.unit))\(r.freshness < 0.5 ? " (stale)" : "")."
+            } else {
+                text += " No value yet: DotStudio fetches it while it runs."
+            }
+        } else {
+            text = "Disconnected “\(p.name)” \(spec.label) (\(key)): it reads its default, \(SignalValue.format(spec.def))\(RuleText.unitSuffix(spec.unit))."
+        }
+        return .ok(text + " " + whereNote(viaApp), o)
     }
 
     func setRule(_ a: JSONObject) throws -> ToolResult {
