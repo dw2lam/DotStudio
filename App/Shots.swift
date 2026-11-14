@@ -217,6 +217,21 @@ enum UIShots {
             WallpaperSlot.shared.set(first)
             DemoHooks.hoverName = st.name(first)
         }, view: main))
+        // A When rule playing (the card: "When: Snow day"): the first tile, which it plays, says
+        // "When"; the second, the screensaver's own style, says nothing while the rule outranks it
+        s.append(Screen(name: "library-when", frame: .window, prepare: { st in
+            let scenes = st.model.library.presets.filter(\.isScene).map(\.id)
+            st.lineup([scenes.count > 1 ? scenes[1] : st.hero])
+            SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.firstScene, active: true)
+        }, view: main))
+        // …a rule with two styles over a playlist: the one on screen says "When", the other only
+        // shows the rule's symbol; the playlist's badges wait
+        s.append(Screen(name: "library-when-two", frame: .window, prepare: { st in
+            let scenes = st.model.library.presets.filter(\.isScene).map(\.id)
+            st.lineup(st.playlist)
+            SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.firstScene, active: true)
+            st.model.library.rules?[0].play = Array(scenes.prefix(2))
+        }, view: main))
 
         // Destination cards (top of the gallery) in each state
         s.append(Screen(name: "dest-single", frame: .window, view: main))
@@ -627,6 +642,11 @@ enum UIShots {
         }, view: { _ in AnyView(SettingsSectionPreview { WeatherSettingsSection() }) }))
         s.append(Screen(name: "settings-location-search", frame: .fit(width: 560, minHeight: 200), view: { _ in
             AnyView(LocationDemo.picker(query: "Toronto", state: .results(LocationDemo.results), current: LocationDemo.toronto.place))
+        }))
+        // …moved down two results with the arrow keys (Return would pick Toronto, Kansas)
+        s.append(Screen(name: "settings-location-search-keys", frame: .fit(width: 560, minHeight: 200), view: { _ in
+            AnyView(LocationDemo.picker(query: "Toronto", state: .results(LocationDemo.results),
+                                        current: LocationDemo.toronto.place, highlighted: 2))
         }))
         s.append(Screen(name: "settings-location-search-empty", frame: .fit(width: 560, minHeight: 160), view: { _ in
             AnyView(LocationDemo.picker(query: "", state: .idle, current: nil))
@@ -1185,9 +1205,9 @@ enum LocationDemo {
     ]
     static var toronto: PlaceResult { results[0] }
 
-    static func picker(query: String, state: PlaceSearchModel.State, current: NamedPlace?) -> some View {
+    static func picker(query: String, state: PlaceSearchModel.State, current: NamedPlace?, highlighted: Int = 0) -> some View {
         LocationPicker(current: current, search: PlaceSearchModel(demoQuery: query, state: state),
-                       pick: { _ in }, automatic: {})
+                       highlighted: highlighted, pick: { _ in }, automatic: {})
             .background(Color(nsColor: .windowBackgroundColor))   // (a popover brings its own)
             .overlay(Rectangle().stroke(Color.secondary.opacity(0.4)))   // its edge, to judge its width
             .padding(Space.m)

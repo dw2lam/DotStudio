@@ -446,7 +446,14 @@ struct TileBadgeCluster: View {
             let ssOn = badges.screensaverDisplay.map { " \u{00B7} \($0)" } ?? ""
             let wpOn = badges.wallpaperDisplay.map { " \u{00B7} \($0)" } ?? ""
             FlowLayout(spacing: GlassBadge.spacing, lineSpacing: GlassBadge.spacing) {
-                if badges.onScreensaver && !badges.lineupOffScreen {
+                if let rule = badges.rule, badges.showsRule {
+                    // A When rule plays it in the lineup's place (the Screensaver card says
+                    // "When: <rule>"). Of several, the one on screen says so; the rest wait.
+                    GlassBadge(text: badges.playingNow ? "When" + ssOn : nil, symbol: rule.symbol)
+                        .help(badges.playingNow ? "Playing now for the When rule \u{201C}\(rule.name)\u{201D}"
+                                                : "Plays for the When rule \u{201C}\(rule.name)\u{201D}")
+                        .accessibilityLabel(badges.playingNow ? "Playing for When rule \(rule.name)" : "When rule \(rule.name)")
+                } else if badges.onScreensaver && badges.showsLineup {
                     if rotates {
                         // On screen now: the lineup's pick, or a display's own style.
                         let now = badges.playingNow || badges.pinnedScreensaver
@@ -461,7 +468,7 @@ struct TileBadgeCluster: View {
                     GlassBadge(text: "Screensaver" + ssOn, symbol: "play.fill")
                         .help("Plays as the screensaver\(badges.screensaverDisplay.map { " on \($0)" } ?? " on some displays")")
                 }
-                if badges.night && !badges.lineupOffScreen {
+                if badges.night && badges.showsLineup {
                     GlassBadge(text: badges.onScreensaver || badges.pinnedScreensaver ? nil : "Night", symbol: "moon.fill")
                         .help("Plays at night")
                 }
@@ -504,7 +511,7 @@ struct GlassBadge: View {
 
 private extension TileBadges {
     var isOnlyWallpaper: Bool {
-        let ss = (onScreensaver || night) && !lineupOffScreen
+        let ss = ((onScreensaver || night) && showsLineup) || showsRule
         return ((wallpaper && !sharedWallpaperOffScreen) || pinnedWallpaper) && !ss && !pinnedScreensaver
     }
 }

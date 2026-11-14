@@ -6,6 +6,7 @@
 import SwiftUI
 
 struct WeatherSettingsSection: View {
+    @EnvironmentObject var model: AppModel
     @ObservedObject private var weather = WeatherService.shared
     @Environment(\.layout) private var layout
     @ScaledLength(relativeTo: .title2) private var iconBox: CGFloat = SettingsMetrics.iconBox
@@ -81,7 +82,7 @@ struct WeatherSettingsSection: View {
             return weather.status == .fetching ? "Getting the weather…" : "No weather yet"
         }
         var parts = [r.summary]
-        if let place = r.place { parts.insert("\(place) area", at: 0) }
+        if let place = Self.placeName(of: r, in: model.library) { parts.insert(place, at: 0) }
         if let at = r.fetchedDate {
             let mins = Int(max(0, now.timeIntervalSince(at)) / 60)
             parts.append(mins < 1 ? "updated just now"
@@ -89,6 +90,19 @@ struct WeatherSettingsSection: View {
                          : "updated " + RelativeDateTimeFormatter().localizedString(for: at, relativeTo: now))
         }
         return parts.joined(separator: " · ")
+    }
+
+    /// Where a reading is, in words: the place in use by name — the one the user picked, or the
+    /// IP lookup's city — when the reading is for it (a reading is rounded to about 10 km; one
+    /// from before the location changed is still the old place's); else the weather service's
+    /// reverse-geocoded name, as an area ("Toronto area").
+    static func placeName(of r: WeatherState, in lib: Library) -> String? {
+        if let name = lib.locationPlaceName, let lat = lib.locationLat, let lon = lib.locationLon {
+            let near = (r.latitude.map { abs($0 - lat) <= 0.2 } ?? true)
+                && (r.longitude.map { abs($0 - lon) <= 0.2 } ?? true)
+            if near { return name }
+        }
+        return r.place.map { "\($0) area" }
     }
 
     private func detail(now: Date) -> String {
