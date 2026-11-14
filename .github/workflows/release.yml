@@ -44,7 +44,9 @@ jobs:
 
       - name: Build (version from tag)
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          # A tag like v1.5.0-beta.1 is a beta: the app's version stays numeric (1.5.0; scene
+          # packages compare it as numbers) and only the release name carries "-beta.1".
+          VERSION="${GITHUB_REF_NAME#v}"; VERSION="${VERSION%%-*}"
           # Sparkle orders updates by CFBundleVersion — the commit count only ever
           # grows, and is always above local dev builds (project.yml says 1).
           BUILD=$(git rev-list --count HEAD)
@@ -61,9 +63,10 @@ jobs:
           test -d "$APP"
           BUILT=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")
           SAVER=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Resources/DotStudio.saver/Contents/Info.plist")
+          WANT="${GITHUB_REF_NAME#v}"; WANT="${WANT%%-*}"
           echo "app=$BUILT saver=$SAVER tag=${GITHUB_REF_NAME#v}"
-          test "$BUILT" = "${GITHUB_REF_NAME#v}"
-          test "$SAVER" = "${GITHUB_REF_NAME#v}"
+          test "$BUILT" = "$WANT"
+          test "$SAVER" = "$WANT"
           codesign --verify --deep "$APP"
 
       - name: Sign with the stable release identity
@@ -160,8 +163,15 @@ jobs:
         run: |
           ASSETS="dist/DotStudio.dmg"
           [ -f dist/appcast.xml ] && ASSETS="$ASSETS dist/appcast.xml"
-          gh release create "$GITHUB_REF_NAME" $ASSETS \
+          # A beta tag (v1.5.0-beta.1) is a pre-release, never "latest": SUFeedURL reads
+          # releases/latest/download/appcast.xml, so installed apps aren't offered a beta.
+          BETA=""; HEAD="Already installed? It updates itself — no download needed."
+          case "$GITHUB_REF_NAME" in *-*)
+            BETA="--prerelease --latest=false"
+            HEAD="**Beta.** Installed copies aren't offered this update — download the DMG to try it. It updates itself to the final release when that ships.";;
+          esac
+          gh release create "$GITHUB_REF_NAME" $ASSETS $BETA \
             --title "DotStudio ${GITHUB_REF_NAME#v}" \
             --generate-notes \
-            --notes "> **New install:** DotStudio isn't notarized. Drag it to Applications, open it once, then go to **System Settings → Privacy & Security** and click **Open Anyway**. Already installed? It updates itself — no download needed.
+            --notes "> **New install:** DotStudio isn't notarized. Drag it to Applications, open it once, then go to **System Settings → Privacy & Security** and click **Open Anyway**. $HEAD
           $(awk "/^## ${GITHUB_REF_NAME#v}/{f=1;next} /^## /{f=0} f" CHANGELOG.md 2>/dev/null || true)"
