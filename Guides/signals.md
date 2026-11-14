@@ -20,7 +20,7 @@ Signals are live values DotStudio watches — the weather, the sun, the time, th
 
 - https only, GET only, no cookies, no cache; 10 s timeout, 256 KB at most, 3 redirects (each checked again).
 - A web signal is fetched at most every 5 minutes (default 15, ±10 %), twice as slowly in Low Power Mode, and only while an enabled When rule tests it or a style's scene input is bound to it; about 60 fetches an hour in all. Failures back off; 429/503 Retry-After is honoured.
-- Signals an assistant makes can't reach this Mac or the local network (localhost, *.local, private, loopback, link-local and ULA addresses). For a local service, the user adds the signal themselves in Settings, or a script writes a file signal.
+- Signals an assistant makes can't reach this Mac or the local network (localhost, *.local, private, loopback, link-local and ULA addresses), whether the URL names the address or a host name that resolves to one: every fetch and redirect checks where the name points (a test reports "can't reach this Mac or the local network"). For a local service, the user adds the signal themselves in Settings, or a script writes a file signal.
 - At most 16 signals. Nothing leaves the Mac beyond the URL you give (plus the rounded location only with `{lat}` / `{lon}`). No telemetry.
 - test_signal shows an **outline** (pointer → value, strings cut to 40 characters), never the raw body or headers: pick `pointer` from it.
 

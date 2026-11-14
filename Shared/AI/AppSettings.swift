@@ -166,6 +166,10 @@ enum AppSettings {
         SettingDef(key: "weather.location", label: "Location", place: "Settings ▸ Weather ▸ Location",
                    meaning: "Where DotStudio places this Mac: the live weather, the real sun, moon and stars (Follow the Sun), the night style's sunset, Universe's marker and signals that ask for {lat}/{lon}. \"auto\" = approximate, from the internet connection (IP; a VPN can put it in the wrong city); or the user's own place {name?, lat, lon} — then nothing is looked up. Read back as {mode, name, lat, lon}, coordinates rounded to 0.1° (about 10 km). It's the user's location: set it only when they asked.",
                    type: .location, store: .library),
+        SettingDef(key: "weather.inUse", label: "Weather in use", place: "—",
+                   meaning: "Whether anything reads the live weather now: a style whose Weather menu is Live (Ocean Horizon, Shallows, Meadow), a film scene that follows the weather with its Weather left on Live, or a When rule / scene input on a weather.* signal. DotStudio fetches the weather only while this is true and weather.live is on; a style pinned to a condition never needs it.",
+                   type: .readOnly, store: .library,
+                   howToChange: "Follows the library: set a style's Weather to Live (update_style), or test weather.* in a When rule (set_rule)."),
 
         // Live wallpaper
         SettingDef(key: "wallpaper.on", label: "Use a style as your desktop wallpaper", place: "Settings ▸ Live Wallpaper (and the Wallpaper card)",
@@ -283,6 +287,9 @@ enum AppSettings {
         /// AppPrefs values (missing = the setting's default).
         var prefs: [String: Bool]
         var ai: AISettings
+        /// The store, for what reads Custom Scene packages (weather.inUse); nil = only the
+        /// manifests already read.
+        var store: URL? = nil
     }
 
     // MARK: Read
@@ -320,6 +327,7 @@ enum AppSettings {
         o["music.source"] = .string(m.sourcePreference.rawValue)
 
         o["weather.location"] = location(lib)
+        o["weather.inUse"] = .bool(WeatherLink.needed(by: lib, store: s.store))
 
         let w = s.wallpaper
         let enabled = w["enabled"]?.boolValue ?? false

@@ -18,7 +18,7 @@ ln -sfn "$ROOT/Shared/Films" "$BIN/Films"   # built-in film scenes (CustomScenes
 xcrun -sdk macosx swiftc -O -suppress-warnings -import-objc-header "$ROOT/Shared/Bridging.h" -I "$ROOT/Shared" \
   "$ROOT"/Shared/*.swift "$ROOT"/Shared/Scenes/*.swift "$ROOT"/Shared/Music/*.swift "$ROOT"/Shared/Weather/*.swift \
   "$ROOT"/Shared/Signals/*.swift "$ROOT"/Shared/Signals/Fetch/*.swift \
-  "$ROOT/Shared/AI/LibraryEdits.swift" "$ROOT/Shared/AI/AIBridge.swift" "$ROOT/Shared/AI/AIStore.swift" \
+  "$ROOT/Shared/AI/LibraryEdits.swift" "$ROOT/Shared/AI/LibraryOps.swift" "$ROOT/Shared/AI/AIBridge.swift" "$ROOT/Shared/AI/AIStore.swift" \
   "$ROOT/App/WallpaperPower.swift" "$ROOT/App/LockScreenPicture.swift" \
   "$ROOT/tools/wallpaper-selftest/main.swift" -o "$BIN/wallpaper-selftest"
 TMP="$(mktemp -d)"
