@@ -150,20 +150,20 @@ do {
     let now = Date()
 
     // The screensaver: default / override / unknown display / deleted style
-    check(Playback.effectivePreset(in: lib, now: now, display: nil).id == chrome, "no display (thumbnail, not known yet): the lineup")
-    check(Playback.effectivePreset(in: lib, now: now, display: lg).id == chrome, "no pins: every display plays the lineup")
+    check(Playback.effectivePreset(in: lib, now: now, display: nil, live: nil).id == chrome, "no display (thumbnail, not known yet): the lineup")
+    check(Playback.effectivePreset(in: lib, now: now, display: lg, live: nil).id == chrome, "no pins: every display plays the lineup")
     lib.displayStyles = [lg: DisplayPin(presetID: aurora, name: "LG HDR 4K")]
-    check(Playback.effectivePreset(in: lib, now: now, display: lg).id == aurora, "pinned display plays its own style")
-    check(Playback.effectivePreset(in: lib, now: now, display: builtIn).id == chrome, "other displays keep the lineup")
-    check(Playback.effectivePreset(in: lib, now: now, display: nil).id == chrome, "the thumbnail keeps the lineup")
+    check(Playback.effectivePreset(in: lib, now: now, display: lg, live: nil).id == aurora, "pinned display plays its own style")
+    check(Playback.effectivePreset(in: lib, now: now, display: builtIn, live: nil).id == chrome, "other displays keep the lineup")
+    check(Playback.effectivePreset(in: lib, now: now, display: nil, live: nil).id == chrome, "the thumbnail keeps the lineup")
     var rot = lib
     rot.rotation = RotationSpec(enabled: true, intervalMinutes: 5, presetIDs: [chrome, standby, universe])
-    check(Playback.effectivePreset(in: rot, now: now, display: lg).id == aurora
-          && Playback.effectivePreset(in: rot, now: now, display: builtIn).id == Playback.effectivePreset(in: rot, now: now).id,
+    check(Playback.effectivePreset(in: rot, now: now, display: lg, live: nil).id == aurora
+          && Playback.effectivePreset(in: rot, now: now, display: builtIn, live: nil).id == Playback.effectivePreset(in: rot, now: now, live: nil).id,
           "a pin overrides the rotation; the others rotate in step")
     var deleted = lib
     deleted.presets.removeAll { $0.id == aurora }
-    check(Playback.effectivePreset(in: deleted, now: now, display: lg).id == chrome, "deleted pinned style: that display falls back to the lineup")
+    check(Playback.effectivePreset(in: deleted, now: now, display: lg, live: nil).id == chrome, "deleted pinned style: that display falls back to the lineup")
     check(deleted.pruneDisplayStyles() && deleted.displayStyles == nil, "…and the pin is dropped on save (prune)")
     var kept = lib
     check(!kept.pruneDisplayStyles() && kept.displayStyles?[lg]?.presetID == aurora, "prune keeps a live pin")
@@ -173,7 +173,7 @@ do {
     newer.unknownPresets = [UnknownPreset(index: 0, preset: gone)]
     check(!newer.pruneDisplayStyles(), "prune keeps a pin to a style only a newer build can draw")
     lib.displayStyles?[unplugged] = DisplayPin(presetID: standby, name: "Studio Display")
-    check(Playback.effectivePreset(in: lib, now: now, display: builtIn).id == chrome
+    check(Playback.effectivePreset(in: lib, now: now, display: builtIn, live: nil).id == chrome
           && lib.displayStyles?[unplugged] != nil, "a disconnected display's pin is kept and changes nothing here")
 
     // library.json: old libraries, round trip, unknown fields, malformed pins
@@ -203,27 +203,27 @@ do {
     var ws = WallpaperSettings()
     ws.enabled = true
     ws.presetID = universe
-    check(WallpaperPick.preset(display: lg, ws, lib, now: now)?.id == universe, "wallpaper: no pin → the shared pick")
+    check(WallpaperPick.preset(display: lg, ws, lib, now: now, live: nil)?.id == universe, "wallpaper: no pin → the shared pick")
     ws.displayStyles = [lg: DisplayPin(presetID: standby, name: "LG HDR 4K")]
-    check(WallpaperPick.preset(display: lg, ws, lib, now: now)?.id == standby
-          && WallpaperPick.preset(display: builtIn, ws, lib, now: now)?.id == universe
-          && WallpaperPick.shared(ws, lib, now: now)?.id == universe, "wallpaper pin on its display only")
+    check(WallpaperPick.preset(display: lg, ws, lib, now: now, live: nil)?.id == standby
+          && WallpaperPick.preset(display: builtIn, ws, lib, now: now, live: nil)?.id == universe
+          && WallpaperPick.shared(ws, lib, now: now, live: nil)?.id == universe, "wallpaper pin on its display only")
     var noStandby = lib
     noStandby.presets.removeAll { $0.id == standby }
-    check(WallpaperPick.preset(display: lg, ws, noStandby, now: now)?.id == universe, "deleted pinned wallpaper style → the shared pick")
+    check(WallpaperPick.preset(display: lg, ws, noStandby, now: now, live: nil)?.id == universe, "deleted pinned wallpaper style → the shared pick")
     check(WallpaperPick.pruned(ws, noStandby).displayStyles.isEmpty && WallpaperPick.pruned(ws, lib) == ws, "wallpaper prune drops only dead pins")
     var synced = ws
     synced.followsScreensaver = true
-    check(WallpaperPick.preset(display: lg, synced, lib, now: now)?.id == aurora,
+    check(WallpaperPick.preset(display: lg, synced, lib, now: now, live: nil)?.id == aurora,
           "SYNC: the LG wallpaper shows the LG screensaver's own style (not its wallpaper pin)")
-    check(WallpaperPick.preset(display: builtIn, synced, lib, now: now)?.id == chrome
-          && WallpaperPick.shared(synced, lib, now: now)?.id == chrome, "SYNC: other displays show the lineup")
-    check(WallpaperPick.preset(display: lg, synced, rot, now: now)?.id == aurora
-          && WallpaperPick.preset(display: builtIn, synced, rot, now: now)?.id == Playback.effectivePreset(in: rot, now: now).id,
+    check(WallpaperPick.preset(display: builtIn, synced, lib, now: now, live: nil)?.id == chrome
+          && WallpaperPick.shared(synced, lib, now: now, live: nil)?.id == chrome, "SYNC: other displays show the lineup")
+    check(WallpaperPick.preset(display: lg, synced, rot, now: now, live: nil)?.id == aurora
+          && WallpaperPick.preset(display: builtIn, synced, rot, now: now, live: nil)?.id == Playback.effectivePreset(in: rot, now: now, live: nil).id,
           "SYNC with a rotation: pinned display holds, others rotate with the screensaver")
     var shared0 = ws
     shared0.presetID = UUID()
-    check(WallpaperPick.shared(shared0, lib, now: now) == nil, "deleted shared pick: nothing (the controller stops)")
+    check(WallpaperPick.shared(shared0, lib, now: now, live: nil) == nil, "deleted shared pick: nothing (the controller stops)")
     check(decode(#"{"enabled":true,"presetID":"\#(universe.uuidString)"}"#).displayStyles.isEmpty, "a 1.4.5 wallpaper.json: no pins")
     check(decode(#"{"enabled":true,"displayStyles":{"a":7}}"#).enabled, "malformed wallpaper pins are ignored, the rest decodes")
     let wurl = tmp.appendingPathComponent("wallpaper-pins.json")
@@ -235,17 +235,17 @@ do {
     check(rawNone["displayStyles"] == nil, "no displayStyles key while there are no pins")
 
     // 1. One display connected with a style of its own: that's what the app names as playing.
-    check(Playback.shownPreset(in: lib, now: now, displays: [lg]).id == aurora,
+    check(Playback.shownPreset(in: lib, now: now, displays: [lg], live: nil).id == aurora,
           "one display, pinned: the app names its own style as playing")
-    check(Playback.shownPreset(in: lib, now: now, displays: [builtIn]).id == chrome,
+    check(Playback.shownPreset(in: lib, now: now, displays: [builtIn], live: nil).id == chrome,
           "one display, unpinned: the lineup")
-    check(Playback.shownPreset(in: lib, now: now, displays: [builtIn, lg]).id == chrome,
+    check(Playback.shownPreset(in: lib, now: now, displays: [builtIn, lg], live: nil).id == chrome,
           "two displays, one pinned: the lineup (it's on screen)")
     var allPinned = lib
     allPinned.displayStyles?[builtIn] = DisplayPin(presetID: standby, name: "Built-in Retina Display")
-    check(Playback.shownPreset(in: allPinned, now: now, displays: [builtIn, lg]).id == standby,
+    check(Playback.shownPreset(in: allPinned, now: now, displays: [builtIn, lg], live: nil).id == standby,
           "every display pinned: the first display's style")
-    check(Playback.shownPreset(in: lib, now: now, displays: []).id == chrome, "no displays known: the lineup")
+    check(Playback.shownPreset(in: lib, now: now, displays: [], live: nil).id == chrome, "no displays known: the lineup")
 
     // 3. Leaving sync by giving one display a wallpaper of its own changes nothing else.
     var syncedStale = WallpaperSettings()
@@ -253,15 +253,15 @@ do {
     syncedStale.followsScreensaver = true
     syncedStale.presetID = standby                                   // the old own pick, not on screen
     syncedStale.displayStyles = [builtIn: DisplayPin(presetID: universe, name: "Built-in")]   // stale
-    let left = WallpaperPick.leavingSync(syncedStale, rot, now: now,
+    let left = WallpaperPick.leavingSync(syncedStale, rot, now: now, live: nil,
                                          pin: DisplayPin(presetID: universe, name: "Studio"), display: unplugged)
-    check(!left.followsScreensaver && left.presetID == Playback.effectivePreset(in: rot, now: now).id,
+    check(!left.followsScreensaver && left.presetID == Playback.effectivePreset(in: rot, now: now, live: nil).id,
           "leaving sync: the shared pick becomes what the lineup shows now")
     check(left.displayStyles[lg]?.presetID == aurora && left.displayStyles[builtIn] == nil
           && left.displayStyles[unplugged]?.presetID == universe,
           "…the screensaver's pins become wallpaper pins, stale wallpaper pins go, the pick is added")
     for d in [builtIn, lg] {
-        check(WallpaperPick.preset(display: d, left, rot, now: now)?.id == WallpaperPick.preset(display: d, syncedStale, rot, now: now)?.id,
+        check(WallpaperPick.preset(display: d, left, rot, now: now, live: nil)?.id == WallpaperPick.preset(display: d, syncedStale, rot, now: now, live: nil)?.id,
               "…display \(d.prefix(4)) shows the same style before and after")
     }
 
@@ -361,6 +361,201 @@ do {
         check(DisplayIdentity.key(screen) == DisplayIdentity.displayID(screen).flatMap(DisplayIdentity.key),
               "NSScreen → NSScreenNumber → key")
     }
+}
+
+// MARK: When rules (Shared/Signals: Playback's overlay, the lease, RuleEngine)
+
+print("when rules")
+do {
+    let base = DefaultPresets.makeLibrary()
+    func id(_ n: String) -> UUID { base.presets.first { $0.name == n }!.id }
+    let chrome = id("Liquid Chrome"), aurora = id("Aurora"), standby = id("StandBy"), universe = id("Universe")
+    let lg = "A1B2C3D4-0000-1111-2222-333344445555"
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let t = now.timeIntervalSince1970
+    let snow = PlayRule(name: "Snow day", when: RuleCondition(all: [RuleClause(signal: "weather.condition", op: .eq, value: .string("snow"))]),
+                        play: [aurora])
+    func lease(_ r: UUID?, since: Double = t - 60, until: Double = t + 1800) -> SignalState {
+        var s = SignalState(); s.rule = RuleLease(id: r, since: since, validUntil: until); return s
+    }
+    var lib = base
+    lib.activeID = chrome
+    lib.rotation = RotationSpec(enabled: true, intervalMinutes: 5, presetIDs: [chrome, standby, universe])
+    lib.schedule = nil
+    lib.rules = [snow]
+    let live = lease(snow.id)
+
+    // Precedence: pin > rule > night > rotation
+    let rotating = Playback.effectivePreset(in: lib, now: now, live: nil).id
+    check([chrome, standby, universe].contains(rotating), "no lease: the rotation plays")
+    check(Playback.effectivePreset(in: lib, now: now, live: live).id == aurora, "an active rule beats the rotation")
+    var night = lib
+    night.schedule = ScheduleSpec(enabled: true, dayPresetID: standby, nightPresetID: standby)
+    check(Playback.effectivePreset(in: night, now: now, live: nil).id == standby
+          && Playback.effectivePreset(in: night, now: now, live: live).id == aurora, "…and the day/night schedule")
+    var pinned = lib
+    pinned.displayStyles = [lg: DisplayPin(presetID: universe, name: "LG")]
+    check(Playback.effectivePreset(in: pinned, now: now, display: lg, live: live).id == universe
+          && Playback.effectivePreset(in: pinned, now: now, display: nil, live: live).id == aurora,
+          "a display's own style beats the rule; the others play the rule")
+    check(Playback.shownPreset(in: lib, now: now, displays: [lg], live: live).id == aurora, "shownPreset follows the rule")
+    var off = lib
+    off.rules?[0].enabled = false
+    check(Playback.effectivePreset(in: off, now: now, live: live).id == rotating, "a disabled rule's lease is ignored")
+    var gone = lib
+    gone.presets.removeAll { $0.id == aurora }
+    check(Playback.effectivePreset(in: gone, now: now, live: live).id != aurora, "a rule whose style is gone: the lineup")
+    var two = lib
+    two.rules = [PlayRule(id: snow.id, name: "Snow", when: snow.when, play: [aurora, standby])]
+    two.rotation?.enabled = false
+    let a = Playback.effectivePreset(in: two, now: now, live: live).id
+    let b = Playback.effectivePreset(in: two, now: now.addingTimeInterval(300), live: live).id
+    check(Set([a, b]) == Set([aurora, standby]), "a rule with two styles rotates them (the playlist's interval)")
+    check(Playback.secondsUntilNextSlot(in: two, now: now, live: live) != nil && Playback.secondsUntilNextSlot(in: two, now: now, live: nil) == nil,
+          "…so the next slot is scheduled even with the rotation off")
+
+    // Lease expiry: a quit app's decision runs out
+    check(lease(snow.id, until: t - 1).activeRuleID(at: now) == nil
+          && Playback.effectivePreset(in: lib, now: now, live: lease(snow.id, until: t - 1)).id == rotating,
+          "an expired lease: the lineup again")
+    check(lease(nil).activeRuleID(at: now) == nil && lease(snow.id).activeRuleID(at: now) == snow.id, "lease: id while valid, nil for “no rule”")
+    let leaseJSON = try! JSONEncoder().encode(live)
+    check((try? JSONDecoder().decode(SignalState.self, from: leaseJSON)) == live, "signal-values.json round-trips")
+    check((try? JSONDecoder().decode(SignalState.self, from: Data(#"{"values":{"x":{"v":1}},"future":true}"#.utf8)))?.values["x"]?.v == 1,
+          "a newer writer's extra fields don't break the readers")
+
+    // Wallpaper "Same as Screensaver" follows the rule
+    var ws = WallpaperSettings()
+    ws.enabled = true
+    ws.followsScreensaver = true
+    check(WallpaperPick.shared(ws, lib, now: now, live: live)?.id == aurora
+          && WallpaperPick.preset(display: lg, ws, pinned, now: now, live: live)?.id == universe,
+          "the wallpaper matching the screensaver plays the rule (a pinned display keeps its style)")
+
+    // Pruning on style delete
+    var pr = lib
+    pr.rules = [snow, PlayRule(name: "Two", when: snow.when, play: [aurora, standby])]
+    pr.removePreset(aurora)
+    check(pr.rules?.count == 1 && pr.rules?[0].play == [standby], "deleting a style: rules lose it; one left with none goes")
+    pr.removePreset(standby)
+    check(pr.rules == nil, "…and no rules left: the field goes")
+
+    // library.json: round trip, and a newer build's rules kept verbatim
+    var withSignal = lib
+    var sig = Signal(name: "Air quality")
+    sig.url = "https://example.com/aqi"; sig.pointer = "/aqi"; sig.range = [0, 300]
+    sig.auth = SignalAuth(placement: .header, name: "X-API-Key")
+    withSignal.signals = [sig]
+    let enc = JSONEncoder(); enc.outputFormatting = [.sortedKeys]
+    let data = try! enc.encode(withSignal)
+    let back = try! JSONDecoder().decode(Library.self, from: data)
+    check(back.signals == [sig] && back.rules == lib.rules, "signals and rules round-trip")
+    check(String(data: data, encoding: .utf8)!.contains(#""auth":{"in":"header","name":"X-API-Key"}"#), "auth stores where the key goes, no value")
+    var raw = try! JSONSerialization.jsonObject(with: data) as! [String: Any]
+    raw["rules"] = [["id": UUID().uuidString, "name": "Future", "when": ["all": [["signal": "x", "op": "matchesRegex", "value": "a"]]], "play": []]]
+    let fut = try! JSONDecoder().decode(Library.self, from: JSONSerialization.data(withJSONObject: raw))
+    let futBack = try! JSONSerialization.jsonObject(with: enc.encode(fut)) as! [String: Any]
+    check(fut.rules == nil && ((futBack["rules"] as? [[String: Any]])?.first?["name"] as? String) == "Future",
+          "rules a newer build wrote (an op this build doesn't know) survive a save verbatim")
+
+    // RuleEngine: first match wins, hysteresis, hold, stale
+    func val(_ v: Double, age: Double = 60) -> SignalValue { SignalValue(v: v, at: t - age, stale: 1800) }
+    let low = PlayRule(name: "Low battery", when: RuleCondition(all: [RuleClause(signal: "power.battery", op: .lt, value: .number(20))]),
+                       play: [standby], holdMinutes: 0)
+    let range: (String) -> ClosedRange<Double>? = { lib.signalInfo($0)?.range }
+    let styles = Set(lib.presets.map(\.id))
+    func decide(_ rules: [PlayRule], _ values: [String: SignalValue], prev: RuleLease? = nil, night: Bool = false, at: Date = now) -> UUID? {
+        RuleEngine.decide(rules: rules, styles: styles, values: { values[$0] }, range: range, isNight: night, previous: prev, now: at).id
+    }
+    check(decide([low], ["power.battery": val(19)]) == low.id && decide([low], ["power.battery": val(21)]) == nil, "lt 20: 19 on, 21 off")
+    let on = RuleLease(id: low.id, since: t - 3600, validUntil: t + 600)
+    check(decide([low], ["power.battery": val(24)], prev: on) == low.id, "hysteresis: once on, 24 still holds (5 % of 0…100 back)")
+    check(decide([low], ["power.battery": val(26)], prev: on) == nil, "…26 lets go")
+    check(decide([low], ["power.battery": val(19, age: 3600)]) == nil, "a stale value counts as false")
+    check(decide([low], [:]) == nil, "a missing value counts as false")
+    var held = low
+    held.holdMinutes = 10
+    check(decide([held], ["power.battery": val(80)], prev: RuleLease(id: low.id, since: t - 60, validUntil: t + 600)) == low.id,
+          "hold: a rule on for 1 minute stays (10-minute hold) though it no longer matches")
+    check(decide([held], ["power.battery": val(80)], prev: RuleLease(id: low.id, since: t - 660, validUntil: t + 600)) == nil,
+          "…and lets go after its hold")
+    let both: [String: SignalValue] = ["power.battery": val(10), "weather.condition": SignalValue(s: "Snow", at: t - 60, stale: 1800)]
+    check(decide([snow, low], both) == snow.id && decide([low, snow], both) == low.id, "the first matching rule in list order wins (words match any case)")
+    var disabled = snow
+    disabled.enabled = false
+    check(decide([disabled, low], both) == low.id, "a disabled rule is skipped")
+    let nowhere = PlayRule(name: "Nowhere", when: snow.when, play: [UUID()])
+    check(decide([nowhere, low], both) == low.id, "a rule with no style left is skipped")
+    var nightOnly = snow
+    nightOnly.when.timeOfDay = "night"
+    check(decide([nightOnly], both, night: false) == nil && decide([nightOnly], both, night: true) == snow.id, "timeOfDay night")
+    let keep = RuleEngine.decide(rules: [snow], styles: styles, values: { both[$0] }, range: range, isNight: false,
+                                 previous: RuleLease(id: snow.id, since: t - 500, validUntil: t + 100), now: now)
+    check(keep.since == t - 500 && keep.validUntil == t + SignalState.leaseSeconds, "the same rule keeps its start; the lease is renewed")
+    let between = PlayRule(name: "Mild", when: RuleCondition(all: [RuleClause(signal: "weather.tempC", op: .between, values: [.number(10), .number(20)])]), play: [aurora])
+    check(decide([between], ["weather.tempC": val(15)]) == between.id && decide([between], ["weather.tempC": val(22)]) == nil
+          && decide([between], ["weather.tempC": val(22)], prev: RuleLease(id: between.id, since: t - 3600, validUntil: t)) == between.id,
+          "between 10–20: 15 on, 22 off, 22 held once on (5 % of −30…45 ≈ 3.75)")
+    check(RuleEngine.validate(PlayRule(name: "x", when: RuleCondition(all: [RuleClause(signal: "weather.condition", op: .gt, value: .number(1))]), play: [aurora]), in: lib)
+            .contains { $0.contains("is a word") }, "validate: op vs type")
+    check(RuleText.condition(snow.when, in: lib) == "Weather is Snow", "a rule in words")
+
+    // Scene inputs: a binding makes a signal watched (like a rule test) and holds it on delete.
+    var bl = Library()
+    var air = Signal(name: "Air")
+    air.kind = .file; air.file = "air.txt"
+    bl.signals = [air]
+    var custom = EffectInstance(.custom)
+    custom.custom = CustomSceneRef(id: "haze-3a71c0de")
+    custom.inputs = ["aqi": InputBinding(signal: air.key.lowercased()), "warm": InputBinding(signal: "weather.tempC")]
+    bl.presets = [Preset(name: "Haze", effects: [custom])]
+    check(bl.ruleSignalKeys.isEmpty && bl.referencedSignalKeys == [air.key, "weather.tempC"],
+          "bindings count as references (a UUID in any case): the app fetches them, the weather too")
+    check(bl.deleteSignal(air.id, force: false)?.contains("scene input") == true && bl.signals?.count == 1,
+          "deleting a signal a scene input is bound to: refused")
+    check(bl.deleteSignal(air.id, force: true) == nil && bl.signals == nil
+          && bl.presets[0].effects[0].inputs == ["warm": InputBinding(signal: "weather.tempC")],
+          "…force: the signal goes and the input is disconnected (the other binding stays)")
+    bl.presets[0].effects[0].enabled = false
+    check(bl.referencedSignalKeys.isEmpty, "a hidden effect's bindings aren't watched")
+}
+
+// MARK: Location (Library.locationMode / manualPlace / autoPlace)
+
+print("location")
+do {
+    /// A library as an older build writes it (37.77, -122.42 from the IP lookup), plus `extra` keys.
+    func lib(_ extra: String) -> Library? {
+        var base = Library(); base.locationLat = 37.77; base.locationLon = -122.42
+        guard var obj = (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(base))) as? [String: Any],
+              let more = (try? JSONSerialization.jsonObject(with: Data("{\(extra.dropFirst())}".utf8))) as? [String: Any] ?? (extra.isEmpty ? [:] : nil)
+        else { return nil }
+        obj.merge(more) { _, new in new }
+        return (try? JSONSerialization.data(withJSONObject: obj)).flatMap { try? JSONDecoder().decode(Library.self, from: $0) }
+    }
+    func roundTrip(_ l: Library) -> Library? {
+        (try? JSONEncoder().encode(l)).flatMap { try? JSONDecoder().decode(Library.self, from: $0) }
+    }
+    var l = lib("")!
+    check(!l.usesManualLocation && l.locationPlaceName == nil, "an older library: automatic, no name yet")
+    l.autoPlace = NamedPlace(name: "San Francisco, California", lat: 37.77, lon: -122.42)
+    check(l.locationPlaceName == "San Francisco, California", "the IP lookup's name while it matches the location")
+    l.setManualLocation(NamedPlace(name: "Toronto, Ontario", lat: 43.65, lon: -79.38))
+    check(l.usesManualLocation && l.locationLat == 43.65 && l.locationLon == -79.38 && l.locationPlaceName == "Toronto, Ontario",
+          "manual: every reader's locationLat/Lon follow the user's place")
+    let back = roundTrip(l)
+    check(back == l && back?.locationMode == "manual" && back?.manualPlace?.name == "Toronto, Ontario", "manual place round-trips")
+    l.setAutomaticLocation()
+    check(!l.usesManualLocation && l.manualPlace == nil && l.locationLat == 37.77 && l.locationPlaceName == "San Francisco, California",
+          "back to automatic: the last IP answer until the next lookup")
+    let bad = lib(#","locationMode":"manual","manualPlace":{"name":"Nowhere","lat":200,"lon":0},"autoPlace":"oops""#)
+    check(bad != nil && bad?.manualPlace == nil && bad?.autoPlace == nil && bad?.usesManualLocation == false,
+          "a malformed place is dropped, never the library (and without one it's automatic)")
+    let future = lib(#","locationMode":"device""#)
+    check(future?.usesManualLocation == false && roundTrip(future!)?.locationMode == "device", "an unknown mode is automatic here, kept for its build")
+    let stale = lib(#","autoPlace":{"name":"Elsewhere","lat":1,"lon":2}"#)
+    check(stale?.locationPlaceName == nil, "an IP name for another location isn't shown")
+    check(NamedPlace.coordinateName(-33.87, 151.21) == "33.9° S, 151.2° E", "coordinates name a place")
 }
 
 // MARK: LockScreenPicture

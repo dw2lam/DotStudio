@@ -30,6 +30,7 @@ final class PreviewRenderer {
         var time: Double = 4
         var clock: Date?
         var weather: String?               // a WeatherCondition raw value; nil = the scene's own pick
+        var inputs: [String: Double]?      // Custom Scene inputs pinned by key (SignalLink.forced)
         var musicCard = false
         var location: (lat: Double, lon: Double)?
     }
@@ -41,7 +42,8 @@ final class PreviewRenderer {
         let r = try shared()
         r.location = o.location ?? library.locationLat.flatMap { la in library.locationLon.map { (la, $0) } }
         r.clockOverride = o.clock
-        defer { r.clockOverride = nil; WeatherLink.forced = nil }
+        defer { r.clockOverride = nil; WeatherLink.forced = nil; SignalLink.forced = nil }
+        SignalLink.forced = o.inputs
         if let w = o.weather {
             guard let c = WeatherCondition(rawValue: w) else { throw ToolError("Unknown weather \(w). Use one of \(Self.weatherNames.joined(separator: ", ")).") }
             WeatherLink.forced = WeatherMix.preset(c)

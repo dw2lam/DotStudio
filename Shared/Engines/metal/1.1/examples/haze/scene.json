@@ -1,0 +1,24 @@
+{
+  "format": 1,
+  "id": "haze-3a71c0de",
+  "name": "Haze",
+  "author": "DotStudio",
+  "licence": "MIT",
+  "engine": { "id": "metal", "version": ">=1.1" },
+  "entry": "scene.metal",
+  "fps": 24,
+  "stepped": false,
+  "params": [
+    { "key": "drift", "label": "Drift", "kind": "slider", "min": 0, "max": 1, "default": 0.35 },
+    { "key": "ridges", "label": "Ridges", "kind": "toggle", "default": 1 }
+  ],
+  "inputs": [
+    { "key": "aqi", "label": "Air quality", "range": [0, 300], "default": 0, "unit": "AQI" }
+  ],
+  "colors": {
+    "a": { "label": "Clear Sky", "default": [0.16, 0.26, 0.42, 1] },
+    "b": { "label": "Haze", "default": [0.54, 0.41, 0.28, 1] }
+  },
+  "description": "Layered ridges under a calm evening sky. Connect Air quality and the air itself shows it: clean air is crisp and blue, smoky air turns the sky ochre and swallows the far ridges.",
+  "guides": ["style/dotstudio", "signals"]
+}

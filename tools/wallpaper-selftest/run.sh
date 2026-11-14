@@ -1,7 +1,8 @@
 #!/bin/zsh
 # Headless checks of the live wallpaper's power settings and the lock-screen picture:
 # wallpaper.json migration (Freeze on battery → On Battery), WallpaperBudget, and
-# LockScreenPicture's save / render / write / rotate / restore against a FAKE desktop —
+# LockScreenPicture's save / render / write / rotate / restore against a FAKE desktop, and the
+# When rules (Shared/Signals: precedence, lease expiry, pruning, hysteresis and hold) —
 # it never reads or sets the real desktop picture, and writes only under a temp dir.
 # usage: tools/wallpaper-selftest/run.sh      (exit status 0 = all checks passed)
 set -e
@@ -16,6 +17,8 @@ rm -rf "$BIN/Engines" && cp -R "$ROOT/Shared/Engines" "$BIN/Engines"
 ln -sfn "$ROOT/Shared/Films" "$BIN/Films"   # built-in film scenes (CustomScenes.builtInPackagesDirs)
 xcrun -sdk macosx swiftc -O -suppress-warnings -import-objc-header "$ROOT/Shared/Bridging.h" -I "$ROOT/Shared" \
   "$ROOT"/Shared/*.swift "$ROOT"/Shared/Scenes/*.swift "$ROOT"/Shared/Music/*.swift "$ROOT"/Shared/Weather/*.swift \
+  "$ROOT"/Shared/Signals/*.swift "$ROOT"/Shared/Signals/Fetch/*.swift \
+  "$ROOT/Shared/AI/LibraryEdits.swift" "$ROOT/Shared/AI/AIBridge.swift" "$ROOT/Shared/AI/AIStore.swift" \
   "$ROOT/App/WallpaperPower.swift" "$ROOT/App/LockScreenPicture.swift" \
   "$ROOT/tools/wallpaper-selftest/main.swift" -o "$BIN/wallpaper-selftest"
 TMP="$(mktemp -d)"

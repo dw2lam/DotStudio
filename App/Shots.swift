@@ -610,6 +610,67 @@ enum UIShots {
         s.append(Screen(name: "settings-wallpaper-match", frame: .fit(width: 460, minHeight: 300), prepare: { _ in
             WallpaperController.shared.update { $0.enabled = true; $0.followsScreensaver = true }
         }, view: { _ in AnyView(SettingsSectionPreview { WallpaperSettingsSection() }) }))
+        // Settings › Weather › Location: automatic (the IP lookup's city), set by the user, and
+        // with Live weather off (the row stays: the sun and Universe use it); then the Change…
+        // popover with search results (a fixture: nothing is fetched), before typing, and none found
+        s.append(Screen(name: "settings-weather-location-auto", frame: .fit(width: 460, minHeight: 200), prepare: { st in
+            st.model.library.setAutomaticLocation()
+            st.model.library.autoPlace = NamedPlace(name: "San Francisco, California", lat: 37.77, lon: -122.42)
+            st.model.library.locationLat = 37.77; st.model.library.locationLon = -122.42
+        }, view: { _ in AnyView(SettingsSectionPreview { WeatherSettingsSection() }) }))
+        s.append(Screen(name: "settings-weather-location-manual", frame: .fit(width: 460, minHeight: 200), prepare: { st in
+            st.model.library.setManualLocation(LocationDemo.toronto.place)
+        }, view: { _ in AnyView(SettingsSectionPreview { WeatherSettingsSection() }) }))
+        s.append(Screen(name: "settings-weather-location-off", frame: .fit(width: 460, minHeight: 160), prepare: { st in
+            WeatherService.shared.enabled = false
+            st.model.library.setManualLocation(LocationDemo.toronto.place)
+        }, view: { _ in AnyView(SettingsSectionPreview { WeatherSettingsSection() }) }))
+        s.append(Screen(name: "settings-location-search", frame: .fit(width: 560, minHeight: 200), view: { _ in
+            AnyView(LocationDemo.picker(query: "Toronto", state: .results(LocationDemo.results), current: LocationDemo.toronto.place))
+        }))
+        s.append(Screen(name: "settings-location-search-empty", frame: .fit(width: 560, minHeight: 160), view: { _ in
+            AnyView(LocationDemo.picker(query: "", state: .idle, current: nil))
+        }))
+        s.append(Screen(name: "settings-location-search-nomatch", frame: .fit(width: 560, minHeight: 160), view: { _ in
+            AnyView(LocationDemo.picker(query: "Zxqvbn", state: .noMatch, current: LocationDemo.toronto.place))
+        }))
+
+        // Settings › Signals: none of the user's yet; then four (an AI one, a file, a key that
+        // needs re-entry, a failing one) and the editor sheet with a test's outline
+        s.append(Screen(name: "settings-signals-empty", frame: .fit(width: 460, minHeight: 160),
+                        prepare: { st in SignalsDemo.apply(st.model, signals: false, hero: st.hero, other: st.night) },
+                        view: { _ in AnyView(SettingsSectionPreview { SignalsSettingsSection() }) }))
+        s.append(Screen(name: "settings-signals", frame: .fit(width: 460, minHeight: 300),
+                        prepare: { st in SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.night) },
+                        view: { _ in AnyView(SettingsSectionPreview { SignalsSettingsSection() }) }))
+        s.append(Screen(name: "settings-signals-editor", frame: .fixed(CGSize(width: 520, height: 760)),
+                        prepare: { st in
+                            SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.night)
+                            SignalEditorSheet.demoResult = SignalsDemo.testResult
+                        },
+                        view: { st in AnyView(SignalEditorSheet(original: st.model.library.signals![0], isNew: false)) }))
+        s.append(Screen(name: "settings-signals-editor-key", frame: .fixed(CGSize(width: 520, height: 760)),
+                        prepare: { st in SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.night) },
+                        view: { st in AnyView(SignalEditorSheet(original: st.model.library.signals![2], isNew: false)) }))
+        // A Custom Scene's live inputs in the Inspector: Air quality connected (42 AQI), a
+        // Temperature input not connected (its default, dimmed)
+        s.append(Screen(name: "editor-inputs", frame: .fit(width: 340, minHeight: 200),
+                        prepare: { st in
+                            SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.night)
+                            InputsDemo.apply(st.model)
+                        },
+                        view: { st in AnyView(InputsShot(model: st.model)) }))
+        // The Screensaver card with When rules, one playing ("When: Snow day"), and the rules popover
+        s.append(Screen(name: "dest-when", frame: .window,
+                        prepare: { st in SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.night, active: true) },
+                        view: main))
+        s.append(Screen(name: "dest-when-editor", frame: .fixed(CGSize(width: 440, height: 420)),
+                        prepare: { st in SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.night, active: true) },
+                        view: { _ in AnyView(WhenRulesEditor().background(Color(nsColor: .windowBackgroundColor))) }))   // (a popover brings its own)
+        s.append(Screen(name: "dest-when-sentence", frame: .fit(width: 440, minHeight: 120),
+                        prepare: { st in SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.night, active: true) },
+                        view: { st in AnyView(RuleSentenceEditor(draft: .constant(RuleDraft(st.model.library.rules![1], in: st.model.library)),
+                                                                 onDone: {}).padding(16).background(Color(nsColor: .windowBackgroundColor))) }))
 
         // The DotStudio menu-bar menu, laid out as a plain column (menus can't render offscreen):
         // wallpaper off, playing, paused, a rotating screensaver playlist, and not set up
@@ -728,8 +789,10 @@ enum UIShots {
             MusicDemo.apply(.idle)   // watching, nothing playing (music screens set their own)
             if WallpaperController.shared.userPaused { WallpaperController.shared.togglePause() }
             AppPresence.shared.menuBarMode = true   // the default (prefs are in-memory here)
+            if !WeatherService.shared.enabled { WeatherService.shared.enabled = true }
             LoginItem.demoStatus = .off             // never SMAppService here (SetupGuide.swift)
             LoginNudge.shared.setDemo(nil)
+            SignalService.shared.setDemo(values: [:], rule: nil, statuses: [:])   // no When rule playing
             lineup([hero])
         }
 
@@ -1111,6 +1174,85 @@ private struct SettingsSectionPreview<Content: View>: View {
     }
 }
 
+/// The location picker for the UI shots: Open-Meteo-shaped results, never fetched.
+enum LocationDemo {
+    static let results: [PlaceResult] = [
+        PlaceResult(id: "6167865", name: "Toronto", admin1: "Ontario", country: "Canada", lat: 43.70011, lon: -79.4163),
+        PlaceResult(id: "4672059", name: "Toronto", admin1: "Ohio", country: "United States", lat: 40.46423, lon: -80.60091),
+        PlaceResult(id: "4413258", name: "Toronto", admin1: "Kansas", country: "United States", lat: 37.79892, lon: -95.94861),
+        PlaceResult(id: "5175081", name: "Toronto", admin1: "South Dakota", country: "United States", lat: 44.57191, lon: -96.64199),
+        PlaceResult(id: "2146268", name: "Toronto", admin1: "New South Wales", country: "Australia", lat: -33.01427, lon: 151.59336),
+    ]
+    static var toronto: PlaceResult { results[0] }
+
+    static func picker(query: String, state: PlaceSearchModel.State, current: NamedPlace?) -> some View {
+        LocationPicker(current: current, search: PlaceSearchModel(demoQuery: query, state: state),
+                       pick: { _ in }, automatic: {})
+            .background(Color(nsColor: .windowBackgroundColor))   // (a popover brings its own)
+            .overlay(Rectangle().stroke(Color.secondary.opacity(0.4)))   // its edge, to judge its width
+            .padding(Space.m)
+            .frame(maxWidth: .infinity)
+            .background(Color(nsColor: .underPageBackgroundColor))
+    }
+}
+
+/// Signals and When rules for the UI shots: definitions in the library, values and statuses in
+/// SignalService's demo state (it never fetches here).
+enum SignalsDemo {
+    static let air = UUID(uuidString: "5A1E0000-0000-4000-8000-000000000001")!
+    static let office = UUID(uuidString: "5A1E0000-0000-4000-8000-000000000002")!
+    static let pollen = UUID(uuidString: "5A1E0000-0000-4000-8000-000000000003")!
+    static let tide = UUID(uuidString: "5A1E0000-0000-4000-8000-000000000004")!
+    static let snowRule = UUID(uuidString: "5A1E0000-0000-4000-8000-0000000000A1")!
+
+    static var testResult: SignalFetchResult {
+        SignalFetchResult(value: SignalValue(v: 42, at: Date().timeIntervalSince1970), status: 200, ms: 184, bytes: 3_412,
+                          outline: [SignalOutlineItem(pointer: "/data/aqi", value: .number(42)),
+                                    SignalOutlineItem(pointer: "/data/city/name", value: .string("Toronto")),
+                                    SignalOutlineItem(pointer: "/data/iaqi/pm25/v", value: .number(11.5)),
+                                    SignalOutlineItem(pointer: "/status", value: .string("ok"))])
+    }
+
+    static func apply(_ model: AppModel, signals: Bool, hero: UUID, other: UUID, active: Bool = false) {
+        SignalEditorSheet.demoResult = nil
+        let t = Date().timeIntervalSince1970
+        guard signals else {
+            model.library.signals = nil
+            model.library.rules = nil
+            SignalService.shared.setDemo(values: [:], rule: nil, statuses: [:])
+            return
+        }
+        var a = Signal(id: air, name: "Air quality")
+        a.url = "https://api.waqi.info/feed/here/"; a.pointer = "/data/aqi"; a.unit = "AQI"; a.range = [0, 300]; a.createdBy = "ai"
+        var o = Signal(id: office, name: "Office temperature", kind: .file)
+        o.file = "office.json"; o.pointer = "/temp"; o.unit = "°C"
+        var p = Signal(id: pollen, name: "Pollen")
+        p.url = "https://api.pollen.example/v2/now"; p.pointer = "/index"; p.auth = SignalAuth(placement: .header, name: "X-API-Key")
+        var d = Signal(id: tide, name: "Tide height")
+        d.url = "https://tides.example.org/station/9414290.json"; d.pointer = "/height"; d.unit = "m"
+        model.library.signals = [a, o, p, d]
+        let rules = [
+            PlayRule(id: snowRule, name: "Snow day", when: RuleCondition(all: [RuleClause(signal: "weather.condition", op: .in, values: [.string("snow"), .string("sleet")])]), play: [other]),
+            PlayRule(name: "Bad air", when: RuleCondition(all: [RuleClause(signal: air.uuidString, op: .gt, value: .number(150))], timeOfDay: "night"), play: [hero]),
+            PlayRule(name: "Low battery", enabled: false, when: RuleCondition(all: [RuleClause(signal: "power.battery", op: .lt, value: .number(20))]), play: [hero]),
+            PlayRule(name: "High tide", when: RuleCondition(all: [RuleClause(signal: tide.uuidString, op: .gt, value: .number(2))]), play: [other]),
+            PlayRule(name: "Pollen", when: RuleCondition(all: [RuleClause(signal: pollen.uuidString, op: .gt, value: .number(6))]), play: [other]),
+        ]
+        model.library.rules = rules
+        let values: [String: SignalValue] = [
+            air.uuidString: SignalValue(v: 42, at: t - 180, stale: 2700),
+            office.uuidString: SignalValue(v: 23.5, at: t - 600, stale: 10 * 365 * 86400),
+            tide.uuidString: SignalValue(v: 1.4, at: t - 3 * 3600, error: "HTTP 503", stale: 2700),
+            "weather.condition": SignalValue(s: "snow", at: t - 300, stale: 10800),
+        ]
+        var st: [UUID: SignalService.Status] = [:]
+        st[pollen] = SignalService.Status(lastAttempt: Date(), error: "Key needs re-entry", key: .needsReentry)
+        st[tide] = SignalService.Status(lastAttempt: Date(), error: "HTTP 503")
+        SignalService.shared.setDemo(values: values, rule: active ? snowRule : nil, statuses: st)
+        model.objectWillChange.send()
+    }
+}
+
 /// The Bounce effect's row, expanded, editing the library's Bounce style (UI shots).
 private struct BounceLogoShot: View {
     @ObservedObject var model: AppModel
@@ -1123,6 +1265,52 @@ private struct BounceLogoShot: View {
                       onDuplicate: {}, onRemove: {}, model: model)
                 .padding(Space.m)
                 .background(.regularMaterial)    // the inspector's ground (dark shots read on it)
+        }
+    }
+}
+
+/// UI shots: the Haze example package (metal engine examples) installed into the throwaway store
+/// with a second input, and a style using it whose Air quality input follows SignalsDemo's
+/// "Air quality" signal.
+enum InputsDemo {
+    static let style = UUID(uuidString: "5A1E0000-0000-4000-8000-0000000000B1")!
+
+    static func apply(_ model: AppModel) {
+        let store = CustomScenes.defaultStore
+        guard let engine = CustomScenes.resolveEngine(.init(id: "metal", version: ">=1.1"), store: store) else { return }
+        let src = engine.url.appendingPathComponent("examples/haze", isDirectory: true)
+        guard var m = CustomScenes.readManifest(packageAt: src).0 else { return }
+        m.inputs = (m.inputs ?? []) + [CustomSceneManifest.Input(key: "temp", label: "Temperature", range: [-10, 40], defaultValue: 15,
+                                                                  unit: "°C", suggest: "weather.tempC")]
+        let dst = CustomScenes.storePackageDir(id: m.id, store: store)
+        let fm = FileManager.default
+        try? fm.removeItem(at: dst)
+        try? fm.createDirectory(at: dst, withIntermediateDirectories: true)
+        try? fm.copyItem(at: src.appendingPathComponent("scene.metal"), to: dst.appendingPathComponent("scene.metal"))
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try? enc.encode(m).write(to: dst.appendingPathComponent("scene.json"))
+        CustomScenes.clearCaches(id: m.id)
+        var p = Preset.customScene(m)
+        p.id = style
+        p.effects[0].inputs = ["aqi": InputBinding(signal: SignalsDemo.air.uuidString)]
+        model.library.presets.removeAll { $0.id == style }
+        model.library.presets.append(p)
+        model.objectWillChange.send()
+    }
+}
+
+/// The Custom Scene effect row with its inputs, expanded (UI shots).
+private struct InputsShot: View {
+    @ObservedObject var model: AppModel
+    @State private var open = true
+
+    var body: some View {
+        if let i = model.library.presets.firstIndex(where: { $0.id == InputsDemo.style }) {
+            EffectRow(effect: $model.library.presets[i].effects[0], isExpanded: $open, isFirst: true,
+                      onDuplicate: {}, onRemove: {}, model: model)
+                .padding(Space.m)
+                .background(.regularMaterial)
         }
     }
 }

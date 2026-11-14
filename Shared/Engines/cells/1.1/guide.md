@@ -1,4 +1,4 @@
-# The `cells` engine (v1)
+# The `cells` engine (v1.1)
 
 The CellKit look of DotStudio's Bloom scene: your scene, sampled once per cell, drawn as
 **LED dots**, **rounded LED pixels** or **glyphs** (△ ▽ C Z O ☆ · ( )) over a soft glow of its
@@ -36,5 +36,9 @@ float4 dsScene(float2 uv, DSContext ctx) {
 - Glyphs are picked per cell from its brightness (dim · ( ) C Z O △ ▽ ☆ bright), so brightness
   variation shows as texture in Glyphs mode.
 
-Package: as for `metal`, with `"engine": { "id": "cells", "version": ">=1" }`. Same 3 ms budget at
-5120×2880. Examples in `examples/`.
+- Live inputs (`"inputs"` in the manifest → `ctx.input[0…7]`, `ctx.inputLive[0…7]`) work exactly as
+  in the `metal` guide; a package that reads them needs `"version": ">=1.1"`. Light more or fewer
+  cells, shift their colour — never spell the value out in cells (burn-in).
+
+Package: as for `metal`, with `"engine": { "id": "cells", "version": ">=1" }` (`">=1.1"` with
+inputs). Same 3 ms budget at 5120×2880. Examples in `examples/`.

@@ -75,6 +75,8 @@ extension EffectInstance {
         // Its params have no spec here (they're the package manifest's): kept while finite, and
         // clamped to the manifest's ranges when they're packed (CustomSceneLink).
         if let ref = custom, kind != .custom || !CustomScenes.isValidID(ref.id) { custom = nil; changed = true }
+        // Inputs belong to Custom Scenes only (SceneInputs.swift).
+        if inputs != nil, kind != .custom { inputs = nil; changed = true }
         guard !params.isEmpty else { return changed }
         let specs = kind.params
         for (key, v) in params {

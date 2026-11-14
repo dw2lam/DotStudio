@@ -210,7 +210,7 @@ struct DisplayLineup: Equatable {
         guard !displays.isEmpty, !model.library.presets.isEmpty else { self = .single; return }
         let lib = model.library
         let now = Date()
-        let shared = Playback.effectivePreset(in: lib, now: now).id
+        let shared = Playback.effectivePreset(in: lib, now: now, live: SignalService.shared.live).id
         var ss: [String: UUID] = [:], wp: [String: UUID] = [:]
         var ssPinned = Set<String>(), wpPinned = Set<String>()
         for d in displays {

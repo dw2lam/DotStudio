@@ -21,7 +21,7 @@ Clear knee-deep water over rippled sand, netted with sunlight.
 | `live` | Follow the Sun | toggle | 0 / 1 | off |
 | `lapse` | Time Lapse | slider | 0 … 60 (step 1) | 0 |
 | `clouds` | Clouds | slider | 0 … 1 | 0.3 |
-| `weather` | Weather | menu | 0 Live · 1 Clear · 2 Partly Cloudy · 3 Overcast · 4 Fog · 5 Rain · 6 Storm · 7 Snow | 0 (Live) |
+| `weather` | Weather | menu | 0 Live · 1 Clear · 2 Partly Cloudy · 3 Overcast · 4 Fog · 5 Rain · 6 Storm · 7 Snow · 8 Drizzle · 9 Heavy Rain · 10 Sleet | 0 (Live) |
 
 ## Colours
 

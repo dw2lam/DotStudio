@@ -9,6 +9,8 @@
 //    <store>/.ai-bridge.sock       the running app's AI bridge (AIBridge.swift)
 //    <store>/ai-settings.json      what the user allows the AI to do (Settings ▸ AI; app-written)
 //    <store>/ai-created.json       ids of the styles the AI created (dotstudio-mcp-written)
+//    <store>/signal-values.json    live signal values + the app's When-rule lease (Shared/Signals)
+//    <store>/signal-files/         files that file signals read (Shortcuts, cron, scripts write them)
 //    <store>/guides/*.md           the user's own guides (brand guides…), listed for the AI
 //    <store>/scenes/<id>/          custom scene packages (CustomScenes, engine side)
 //    <store>/engines/<id>/<ver>/   pulled engines (engine side)
@@ -33,12 +35,16 @@ struct AISettings: Codable, Equatable {
     var allowPlaybackChanges: Bool = true
     /// Each change the AI makes to what plays shows a small notice in the app (with Undo).
     var showNotices: Bool = true
+    /// The AI may add, change and delete live-data signals (Settings ▸ AI, "Let AI add live data
+    /// signals"). It can never read or set their keys either way.
+    var allowSignals: Bool = true
 
     init() {}
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         allowPlaybackChanges = (try? c.decodeIfPresent(Bool.self, forKey: .allowPlaybackChanges)) ?? nil ?? true
         showNotices = (try? c.decodeIfPresent(Bool.self, forKey: .showNotices)) ?? nil ?? true
+        allowSignals = (try? c.decodeIfPresent(Bool.self, forKey: .allowSignals)) ?? nil ?? true
     }
 
     static func load(store: URL) -> AISettings {

@@ -110,6 +110,17 @@ final class LibraryAccess {
         var lib = try library()
         var wall = Self.loadWallpaper(dir)
         let settings = AISettings.load(store: dir)
+        if req.op == .getSettings || req.op == .updateSettings || req.op == .appAction {
+            var prefs = PrefsStore.load(dir)
+            let before = prefs
+            let r = SettingsExecutor.run(req, library: &lib, wallpaper: &wall, prefs: &prefs, store: store, ai: settings,
+                                         live: SettingsExecutor.offlineSystem())
+            guard r.ok, req.op == .updateSettings else { return r }
+            if !store.save(lib) { throw ToolError("Couldn't write library.json: \(store.lastSaveError ?? "unknown error")") }
+            Self.saveWallpaper(wall, dir)
+            PrefsStore.save(prefs, changed: prefs.keys.filter { prefs[$0] != before[$0] }, dir)
+            return r
+        }
         let r = LibraryExecutor.run(req, library: &lib, wallpaper: &wall, displays: Displays.connected(), settings: settings)
         guard r.ok else { return r }
         if !store.save(lib) { throw ToolError("Couldn't write library.json: \(store.lastSaveError ?? "unknown error")") }
@@ -175,9 +186,14 @@ enum LibraryExecutor {
         case .setWallpaper:
             guard settings.allowPlaybackChanges else { return .fail(playbackOff) }
             return wallpaper(req, &lib, &wall, displays)
+        case .getSettings, .updateSettings, .appAction:
+            return .fail("settings requests go through SettingsExecutor")
+        case .upsertSignal, .deleteSignal, .testSignal, .upsertRule, .deleteRule:
+            return SignalEdits.run(req, library: &lib, settings: settings)
         }
     }
 
+    static var signalsOff: String { SignalEdits.signalsOff }
     static let playbackOff = "The user has turned off “Let AI change what plays” in DotStudio ▸ Settings ▸ AI. Styles can still be created; ask the user to set it themselves, or to turn that setting on."
 
     private static func screensaver(_ req: BridgeRequest, _ lib: inout Library, _ displays: [DisplayEntry]) -> BridgeResponse {

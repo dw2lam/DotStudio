@@ -26,6 +26,24 @@ struct BridgeRequest: Codable, Equatable {
         case setScreensaver
         /// `mode`: set | off | follow; `display`: one display's key (set).
         case setWallpaper
+        /// The app's settings now (AppSettings), with what only the running app knows (the
+        /// login item, the setup checks, weather, updates) — answered in `settings`.
+        case getSettings
+        /// Apply `settings` (a patch AppSettings.validate accepts) live, as the Settings window would.
+        case updateSettings
+        /// `mode`: one of AppSettings.actions (install_screensaver, show_setup_guide, …).
+        case appAction
+        /// Signals (docs/signals-design.md): add `signal` (new id) or replace the one with its id.
+        /// Gated by AISettings.allowSignals. The key's VALUE never travels here — only Keychain.
+        case upsertSignal
+        /// `id`; `force`: also remove the rule tests that use it.
+        case deleteSignal
+        /// Fetch `signal` (a draft) or the saved signal `id` once, with its Keychain key: answered
+        /// in `test` (value, status, an outline — never the body).
+        case testSignal
+        /// When rules: add `rule` or replace the one with its id. Gated by allowPlaybackChanges.
+        case upsertRule
+        case deleteRule
     }
     var op: Op
     var preset: Preset?
@@ -33,6 +51,14 @@ struct BridgeRequest: Codable, Equatable {
     var name: String?
     var display: String?
     var mode: String?
+    /// updateSettings: setting key → value.
+    var settings: [String: JSONValue]?
+    /// upsertSignal / testSignal (a draft). Never carries a key's value.
+    var signal: Signal?
+    /// upsertRule.
+    var rule: PlayRule?
+    /// deleteSignal: also remove the rule tests that use it.
+    var force: Bool?
     /// Who asks ("Claude", "Cursor"…), for the notice.
     var client: String?
 }
@@ -45,6 +71,10 @@ struct BridgeResponse: Codable, Equatable {
     var appVersion: String?
     /// What happened, in a sentence (shown to the AI).
     var message: String?
+    /// getSettings / updateSettings: setting key → value (after the change).
+    var settings: [String: JSONValue]?
+    /// testSignal: what one fetch got (value, status, timing, an outline of the document).
+    var test: SignalFetchResult?
 
     static func fail(_ error: String) -> BridgeResponse { BridgeResponse(ok: false, error: error) }
 }

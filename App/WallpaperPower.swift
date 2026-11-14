@@ -158,9 +158,9 @@ enum WallpaperPick {
     /// The shared pick (every display without a style of its own): the chosen style — or, while
     /// following the screensaver, what the screensaver's lineup shows now. nil = none (no pick,
     /// or the pick was deleted).
-    static func shared(_ settings: WallpaperSettings, _ lib: Library, now: Date = Date()) -> Preset? {
+    static func shared(_ settings: WallpaperSettings, _ lib: Library, now: Date = Date(), live: SignalState?) -> Preset? {
         if settings.followsScreensaver {
-            return lib.presets.isEmpty ? nil : Playback.effectivePreset(in: lib, now: now)
+            return lib.presets.isEmpty ? nil : Playback.effectivePreset(in: lib, now: now, live: live)
         }
         guard let id = settings.presetID else { return nil }
         return lib.presets.first { $0.id == id }
@@ -170,25 +170,25 @@ enum WallpaperPick {
     /// that display (its own screensaver style, else the lineup) — the wallpaper's own pins are
     /// kept but unused. Otherwise the display's own wallpaper style while it still exists, else
     /// the shared pick. nil = the wallpaper has nothing to show.
-    static func preset(display: String?, _ settings: WallpaperSettings, _ lib: Library, now: Date = Date()) -> Preset? {
+    static func preset(display: String?, _ settings: WallpaperSettings, _ lib: Library, now: Date = Date(), live: SignalState?) -> Preset? {
         if settings.followsScreensaver {
-            return lib.presets.isEmpty ? nil : Playback.effectivePreset(in: lib, now: now, display: display)
+            return lib.presets.isEmpty ? nil : Playback.effectivePreset(in: lib, now: now, display: display, live: live)
         }
         if let display, let id = settings.displayStyles[display]?.presetID,
            let p = lib.presets.first(where: { $0.id == id }) {
             return p
         }
-        return shared(settings, lib, now: now)
+        return shared(settings, lib, now: now, live: live)
     }
 
     /// Leaving "Same as Screensaver" by giving one display a wallpaper of its own: nothing else on
     /// screen changes. The shared pick becomes what the lineup shows now, every display whose
     /// screensaver has a style of its own keeps it as its wallpaper (replacing wallpaper pins left
     /// from before syncing, which weren't on screen), and then `display` gets `pin`. Pure.
-    static func leavingSync(_ settings: WallpaperSettings, _ lib: Library, now: Date = Date(),
+    static func leavingSync(_ settings: WallpaperSettings, _ lib: Library, now: Date = Date(), live: SignalState?,
                             pin: DisplayPin, display: String) -> WallpaperSettings {
         var s = settings
-        if let shown = shared(settings, lib, now: now) { s.presetID = shown.id }
+        if let shown = shared(settings, lib, now: now, live: live) { s.presetID = shown.id }
         s.followsScreensaver = false
         let ids = Set(lib.presets.map(\.id))
         var pins = (lib.displayStyles ?? [:]).filter { ids.contains($0.value.presetID) }

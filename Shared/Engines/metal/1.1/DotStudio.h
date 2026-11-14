@@ -1,4 +1,4 @@
-//  DotStudio.h — the `metal` engine, version 1: everything a scene package can use.
+//  DotStudio.h — the `metal` engine, version 1.1: everything a scene package can use.
 //
 //  A scene is one function:
 //
@@ -32,7 +32,17 @@ struct DSWeather {
     float snow;         // snow intensity
     float fog;          // 0 = 20 km visibility … 1 = ~150 m
     float wind;         // 0 = calm … 1 = gale (≈ 20 m/s)
+    // (DotStudio 1.6: appended, so the fields above keep their places)
+    float storm;        // thunderstorm 0…1: towering cloud, lightning
+    float gust;         // gusts, 0 = calm … 1 = ≈ 30 m/s
+    float condition;    // the condition as a number, to branch on it exactly: 0 clear, 1 partly
+                        // cloudy, 2 cloudy, 3 fog, 4 drizzle, 5 rain, 6 heavy rain,
+                        // 7 thunderstorm, 8 snow, 9 sleet (int(condition + 0.5))
 };
+
+// DSWeather.condition values
+constant int DS_CLEAR = 0, DS_PARTLY_CLOUDY = 1, DS_CLOUDY = 2, DS_FOG = 3, DS_DRIZZLE = 4, DS_RAIN = 5,
+             DS_HEAVY_RAIN = 6, DS_THUNDERSTORM = 7, DS_SNOW = 8, DS_SLEET = 9;
 
 /// What's playing in Spotify / Music. `a`, `b`, `c` = the album art's palette (display sRGB,
 /// brightest first; grey when there's no artwork).
@@ -65,6 +75,12 @@ struct DSContext {
     float3    colorA;       // the style's two colours (manifest "colors" a / b), display sRGB
     float3    colorB;
     float     seed;         // 0…1, fixed per style: vary layouts between copies of a scene
+    // Live inputs (engine 1.1 / DotStudio 1.6): the manifest's "inputs" in order. A style
+    // connects each to a signal (air quality, temperature, battery…). In the input's declared
+    // units, clamped to its range, eased over ~20 s; its default while not connected or stale.
+    // Use them to MODULATE colour, density or motion — never draw them as numbers (burn-in).
+    float     input[8];
+    float     inputLive[8]; // 0…1: how live input[i] is (0 = not connected / stale: at its default)
     // Assets (manifest "assets"; transparent black when there's no such asset). Sample with
     // `ctx.asset0.sample(ctx.smp, uv)` — uv 0…1, y up, colours display sRGB.
     texture2d<float> asset0;
