@@ -145,8 +145,20 @@ extension Library {
         let problems = SignalPolicy.validate(s, forAI: strict)
         if !problems.isEmpty { return problems.joined(separator: " ") }
         if let i {
-            // Who made it never changes, and only the user's Settings change a key.
-            s.createdBy = list[i].createdBy
+            let old = list[i]
+            let urlChanged = old.url != s.url
+            // A key is tied to its signal, not to a host: an assistant must never be able to point a
+            // signal that holds the user's key at a host of its choosing (the key would be sent there
+            // on the next fetch or test_signal). Same host: fine. Another host: only the user, in Settings.
+            if forAI, urlChanged, old.auth != nil, Self.signalHost(old.url) != Self.signalHost(s.url) {
+                return "“\(old.name)” sends an API key to \(Self.signalHost(old.url) ?? "its server"). Pointing it at "
+                    + "\(Self.signalHost(s.url) ?? "another address") would send the key there too, so only the user can do that, "
+                    + "in DotStudio ▸ Settings ▸ Signals. Or create a new signal for the new address."
+            }
+            // Whoever chose the address decides the fetch policy: an address an assistant picked is
+            // fetched under the AI rules (DNS and peer-address checks) from then on, and one the user
+            // sets in Settings is the user's again. Only the user's Settings change a key.
+            if urlChanged { s.createdBy = forAI ? "ai" : nil } else { s.createdBy = old.createdBy }
             list[i] = s
         } else {
             if forAI { s.createdBy = "ai" }
@@ -154,6 +166,11 @@ extension Library {
         }
         signals = list
         return nil
+    }
+
+    /// A web signal's host, lowercased (nil for a file signal or an unparseable address).
+    static func signalHost(_ url: String?) -> String? {
+        url.flatMap { URLComponents(string: $0)?.host?.lowercased() }
     }
 
     /// Remove a signal. While a rule tests it or a style's scene input is bound to it: refused,

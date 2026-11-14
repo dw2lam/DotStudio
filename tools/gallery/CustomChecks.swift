@@ -31,7 +31,7 @@ func gpuBudgetMs(budget: Double, warmup: Int = 2, runs: Int = 8, patience: Doubl
     repeat {
         if i > warmup { Thread.sleep(forTimeInterval: 0.25) }
         for _ in 0..<runs {
-            guard let ms = run(i) else { return best }
+            guard let ms = run(i) else { return .infinity }   // a render that fails fails the check
             best = min(best, ms)
             i += 1
         }

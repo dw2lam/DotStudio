@@ -26,6 +26,7 @@ ln -sfn "$ROOT/Shared/Films" "$BIN/Films"   # built-in film scenes (CustomScenes
     -o "$BIN/libperfhooks.dylib" "$ROOT/tools/perf/hooks.c"
   xcrun -sdk macosx swiftc "${OPT[@]}" -suppress-warnings -D DOTSTUDIO_PERF -import-objc-header "$ROOT/tools/perf/PerfBridging.h" -I "$ROOT/Shared" \
     "$ROOT"/Shared/*.swift "$ROOT"/Shared/Scenes/*.swift "$ROOT"/Shared/Music/*.swift "$ROOT"/Shared/Weather/*.swift \
+    "$ROOT"/Shared/Signals/*.swift "$ROOT"/Shared/Signals/Fetch/*.swift "$ROOT"/Shared/AI/*.swift \
     "$ROOT/Saver/DotSaverView.swift" "$ROOT/App/WallpaperRenderLoop.swift" "$ROOT/App/WallpaperPower.swift" \
     "$ROOT/App/WallpaperPacingStats.swift" "$ROOT/tools/perf/main.swift" \
     -L "$BIN" -lperfhooks -Xlinker -rpath -Xlinker "$BIN" -framework ScreenSaver -o "$BIN/perf"
