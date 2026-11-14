@@ -21,7 +21,7 @@ final class WeatherService: ObservableObject {
     static let shared = WeatherService()
     static let interval: TimeInterval = 20 * 60
     private static let backoff: [TimeInterval] = [60, 120, 300, 600, 1200]
-    private static let enabledKey = "weatherEnabled"
+    static let enabledKey = "weatherEnabled"
     private static let placeKey = "weatherPlace"
 
     enum Status: Equatable {
@@ -36,9 +36,11 @@ final class WeatherService: ObservableObject {
     @Published private(set) var reading: WeatherState?
     @Published private(set) var status: Status = .idle
     /// Settings › Weather › Live weather.
-    @Published var enabled: Bool = UserDefaults.standard.object(forKey: WeatherService.enabledKey) as? Bool ?? true {
+    /// An AppPrefs switch (UserDefaults; <store>/app-prefs.json under DOTSTUDIO_STORE_DIR, where
+    /// dotstudio-mcp's update_settings writes it while the app isn't running).
+    @Published var enabled: Bool = AppPrefs.shared.bool(WeatherService.enabledKey, default: true) {
         didSet {
-            UserDefaults.standard.set(enabled, forKey: Self.enabledKey)
+            AppPrefs.shared.set(enabled, Self.enabledKey)
             if !enabled { clear() }
             reevaluate()
         }

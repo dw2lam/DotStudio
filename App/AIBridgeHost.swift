@@ -4,7 +4,8 @@
 //  thread through AppModel / WallpaperSlot — exactly the paths the gallery's own buttons take —
 //  so the UI, the saver's library.json and the live wallpaper all follow at once. Changes to
 //  what plays honour Settings ▸ AI ("Let AI change what plays") and show a small notice with
-//  Undo (AINoticePanel).
+//  Undo (AINoticePanel). The app's own settings (get/update_settings, app_action) are in
+//  AIBridgeSettings.swift.
 
 import AppKit
 import Combine
@@ -76,6 +77,12 @@ final class AIBridgeHost {
                 AINoticePanel.shared.show("\(who): \(msg)", undo: undo)
             }
             return r
+        case .getSettings:
+            return BridgeResponse(ok: true, appVersion: appVersion, settings: settingsNow(model))
+        case .updateSettings:
+            return updateSettings(req, model, who: who)
+        case .appAction:
+            return appAction(req.mode ?? "", model)
         }
     }
 
