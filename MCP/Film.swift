@@ -63,8 +63,9 @@ protocol FilmToolkitAPI {
     /// The command reports progress by writing JSON {fraction, stage, eta_s} to $DSFILM_PROGRESS.
     func stillsCommand(spec: URL, outDir: URL, variants: [String], width: Int, height: Int, samples: Int) throws -> FilmCommand
     /// A seamless loop per variant (HEVC) into `outDir`, same progress protocol.
+    /// `stillFrame` (layers only): render just that frame — a relightable still, a one-frame layers video.
     func loopCommand(spec: URL, outDir: URL, variants: [String], seconds: Double, fps: Int, width: Int, height: Int,
-                     quality: String) throws -> FilmCommand
+                     quality: String, stillFrame: Int?) throws -> FilmCommand
     /// Turn a finished loop's output into a scene package (scene.json with engine "film" and a
     /// `clips` list, plus the clip files) in `package`.
     func package(loopOutput: URL, spec: JSONObject, sceneID: String, into package: URL) throws
@@ -248,7 +249,7 @@ struct UnavailableFilmToolkit: FilmToolkitAPI {
     func templates() -> [JSONObject] { [] }
     func validate(spec: JSONObject) -> CSReport { CSReport(ok: false, diagnostics: [CSDiagnostic(message: Self.message, severity: "error")], warnings: []) }
     func stillsCommand(spec: URL, outDir: URL, variants: [String], width: Int, height: Int, samples: Int) throws -> FilmCommand { throw ToolError(Self.message) }
-    func loopCommand(spec: URL, outDir: URL, variants: [String], seconds: Double, fps: Int, width: Int, height: Int, quality: String) throws -> FilmCommand { throw ToolError(Self.message) }
+    func loopCommand(spec: URL, outDir: URL, variants: [String], seconds: Double, fps: Int, width: Int, height: Int, quality: String, stillFrame: Int?) throws -> FilmCommand { throw ToolError(Self.message) }
     func package(loopOutput: URL, spec: JSONObject, sceneID: String, into package: URL) throws { throw ToolError(Self.message) }
 }
 
@@ -311,7 +312,7 @@ struct FakeFilmToolkit: FilmToolkitAPI {
         guard pulled else { throw ToolError(Self.notInstalled) }
         return worker("stills", outDir, variants, seconds: 0)
     }
-    func loopCommand(spec: URL, outDir: URL, variants: [String], seconds: Double, fps: Int, width: Int, height: Int, quality: String) throws -> FilmCommand {
+    func loopCommand(spec: URL, outDir: URL, variants: [String], seconds: Double, fps: Int, width: Int, height: Int, quality: String, stillFrame: Int?) throws -> FilmCommand {
         guard pulled else { throw ToolError(Self.notInstalled) }
         return worker("loop", outDir, variants, seconds: seconds)
     }

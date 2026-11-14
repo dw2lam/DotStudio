@@ -244,6 +244,11 @@ extension Toolbox {
 
     var filmTools: [Tool] {
         let variants = S.arr(S.str("variant", enum: ["day", "golden", "night", "rain"]), "Lighting/weather variants (default all four).", min: 1, max: 4)
+        // render_film_loop also takes "layers": one render per light source, mixed live by the
+        // film engine for every time of day and weather (docs/film-layers.md)
+        let loopVariants = S.arr(S.str("variant", enum: ["layers", "day", "golden", "night", "rain"]),
+                                 "\"layers\" (recommended: one render that DotStudio relights live for any time of day and weather — see read_guide film) and/or fixed variants (default: the draft's variants).",
+                                 min: 1, max: 5)
         return [
             Tool(name: "film_status", title: "Film status",
                  description: "START HERE for film scenes (photoreal, ray-traced Blender renders played as seamless video loops). Reports Blender (installed? version — with install steps for the user if it's missing or too old; DotStudio never installs it), whether the film toolkit is installed (the film engine that plays the clips is built in), the GPU, recent film jobs, and the steps. Film scenes are big: stills take about a minute each, a loop hours, and clips are 150–250 MB per variant — tell the user before starting.",
@@ -371,23 +376,27 @@ extension Toolbox {
                 return try self.jobStatus(job.id)
             },
             Tool(name: "render_film_loop", title: "Render a film loop",
-                 description: "Start the long render: a seamless video loop per variant (Blender headless, nice'd, in the background — it keeps going if this chat ends). Returns a job id at once; poll film_job_status (progress, ETA, log tail). When it finishes, the clips are packaged as a film scene and installed; its id goes into create_style {\"kind\": \"custom\", \"scene\": id}. Confirm with the user first: it can take hours and hundreds of MB.",
-                 input: S.obj(["draft": S.str("Draft id.", pattern: "^film-[0-9a-f]{8}$"), "variants": variants,
+                 description: "Start the long render: a seamless video loop per variant, or (recommended) \"layers\" — one render per light source that DotStudio relights live for every time of day and weather (Blender headless, nice'd, in the background — it keeps going if this chat ends). Check a layers render first with still_frame (minutes). Returns a job id at once; poll film_job_status (progress, ETA, log tail). When it finishes, the clips are packaged as a film scene and installed; its id goes into create_style {\"kind\": \"custom\", \"scene\": id}. Confirm with the user first: it can take hours and hundreds of MB.",
+                 input: S.obj(["draft": S.str("Draft id.", pattern: "^film-[0-9a-f]{8}$"), "variants": loopVariants,
                                "seconds": S.num("Loop length (default: the draft's loop.seconds).", min: 4, max: 120),
                                "fps": ["type": "integer", "enum": [24, 30], "description": "Default: the draft's loop.fps (24 if unset)."],
-                               "width": S.num("Default 1920 (16:10; DotStudio scales it to the display).", min: 640, max: 7680, integer: true),
-                               "height": S.num("Default 1200.", min: 360, max: 4320, integer: true),
+                               "width": S.num("Default 1920 (16:10; DotStudio scales it to the display). With \"layers\" this is the TILE size: default 1600.", min: 640, max: 7680, integer: true),
+                               "height": S.num("Default 1200; 1000 for a layers tile.", min: 360, max: 4320, integer: true),
+                               "still_frame": S.num("Layers only: render just this frame — a relightable still in minutes (~1.5 min at 1600×1000) to check the light before the long loop.", min: 1, max: 100_000, integer: true),
                                "quality": S.str("draft, standard (default) or final", enum: ["draft", "standard", "final"])],
                               required: ["draft"])) { [unowned self] a in
                 guard self.film.isAvailable else { throw ToolError(UnavailableFilmToolkit.message) }
                 let draft = a["draft"] as! String
                 let spec = try self.draftSpecURL(draft)
                 let vs = a["variants"] as? [String] ?? self.draftVariants(spec)
+                let layered = vs.contains("layers")
+                let stillFrame = a["still_frame"] as? Int
+                if stillFrame != nil && !layered { throw ToolError("still_frame is for \"layers\" renders: add \"layers\" to variants.") }
                 let job = try FilmJobs.start(store: self.store, kind: "loop", draft: draft, variants: vs) { out in
                     try self.film.loopCommand(spec: spec, outDir: out, variants: vs,
                                               seconds: (a["seconds"] as? NSNumber)?.doubleValue ?? self.draftLoopSeconds(spec), fps: a["fps"] as? Int ?? self.draftLoopFps(spec),
-                                              width: a["width"] as? Int ?? 1920, height: a["height"] as? Int ?? 1200,
-                                              quality: a["quality"] as? String ?? "standard")
+                                              width: a["width"] as? Int ?? (layered ? 1600 : 1920), height: a["height"] as? Int ?? (layered ? 1000 : 1200),
+                                              quality: a["quality"] as? String ?? "standard", stillFrame: stillFrame)
                 }
                 return .ok("Started \(job.id) (\(vs.joined(separator: ", "))). It runs in the background; check film_job_status(job: \"\(job.id)\").",
                            ["job": job.id, "state": "running"])

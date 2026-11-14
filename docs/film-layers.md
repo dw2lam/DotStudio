@@ -1,4 +1,4 @@
-# Film light layers (format v1 draft, DotStudio 1.6)
+# Film light layers (format v1, DotStudio 1.6 — film engine 1.1)
 
 The contract between the Blender film toolkit (tools/film, which renders layered packages) and the
 `film` engine (Shared/CustomFilm.swift + Shared/Engines/film, which plays them).
@@ -35,6 +35,15 @@ Render no film look (bloom/halation/vignette/fog) into layers: the engine applie
   before any exposure); decode `linear = scale * v^4`. `scale` per tile = its 99.95th percentile
   over the loop (measured by the toolkit), so highlights barely clip and shadows keep precision.
 - The `mask` tile stores the matte directly (0…1, no curve).
+- Tiles sit `gutter` pixels apart (the toolkit uses 8, edge-replicated), so 4:2:0 chroma never
+  bleeds between tiles: tile *i* is at x = (i % cols)·(w + gutter), y = (i / cols)·(h + gutter),
+  and the video is cols·w + (cols − 1)·gutter wide. The engine derives the pitch from the video
+  and tile sizes.
+- Colour: RGB → Y'CbCr with the **BT.709** matrix, video range, 4:2:0 (2×2-averaged chroma),
+  HEVC Main10 `hvc1`, tagged `-colorspace bt709 -color_primaries bt709 -color_trc bt709`. The
+  engine decodes the 10-bit planes directly (no colour management) with the stream's matrix
+  tag; untagged = BT.709.
+- `sun_low` is rendered with a WHITE sun and coloured live by `tint.sun_low`.
 
 ## Manifest
 
@@ -43,6 +52,7 @@ Render no film look (bloom/halation/vignette/fog) into layers: the engine applie
 "layers": {
   "file": "clips/layers.mov",
   "grid": [3, 2],
+  "gutter": 8,
   "tiles": ["sun", "sun_low", "sky", "cabin", "city", "mask"],
   "encoding": "pow4",
   "scale": { "sun": 1.13, "sun_low": 0.47, "sky": 0.42, "cabin": 0.90, "city": 0.6 },

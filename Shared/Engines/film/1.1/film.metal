@@ -15,6 +15,7 @@
 //     thresholds (glow: r, g); both mipmapped (the blurs are mip taps).
 //    u.scene[0] = (video width, height, tile width, height)   — luma pixels
 //    u.scene[1] = (columns, rows, halation threshold, bloom threshold)   — exposed units
+//    (u.scene[0] = (video w, h, tile w, h); with a gutter, tiles sit (video − tile)/(n − 1) apart)
 //    u.scene[2…4] = Y'CbCr → R'G'B' rows (rgb[i] = dot(row.xyz, (y, cb, cr)) + row.w)
 //    u.scene[5…9] = weight rgb (scale, tint, exposure folded in) + tile index (−1: none) for
 //                   sun, sun_low, sky, cabin, city
@@ -84,7 +85,10 @@ struct FilmMixOut {
 /// plane — so neither the bilinear taps nor 4:2:0 chroma reach into the neighbouring tile.
 static inline float3 film_tile(texture2d<float> y, texture2d<float> c, sampler s, float idx, float2 p,
                                float2 tile, float2 video, float cols, constant FXUniforms& u) {
-    float2 origin = float2(fmod(idx, cols), floor(idx / cols)) * tile;
+    // tile-to-tile pitch: tiles may sit apart by a gutter (video = n·tile + (n−1)·gutter)
+    float2 counts = max(u.scene[1].xy, float2(1.0));
+    float2 pitch = select(tile, (video - tile) / max(counts - 1.0, float2(1.0)), counts > 1.5);
+    float2 origin = float2(fmod(idx, cols), floor(idx / cols)) * pitch;
     float2 py = origin + clamp(p, float2(0.5), tile - 0.5);
     float2 pc = origin + clamp(p, float2(1.0), tile - 1.0);
     float3 ycc = float3(y.sample(s, py / video).r, c.sample(s, pc / video).rg);
