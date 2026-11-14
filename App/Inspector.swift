@@ -496,6 +496,10 @@ struct EffectRow: View {
                     if effect.kind.usesColors {
                         ColorWellsRow(wells: wells)
                     }
+                    if effect.kind == .custom {
+                        // a package's live inputs: which signal drives each (SceneInputRows.swift)
+                        SceneInputsSection(effect: $effect, model: model)
+                    }
                     if effect.kind == .bounce || effect.kind == .waddle, let model {
                         BounceLogoSection(effect: $effect, model: model)
                     }

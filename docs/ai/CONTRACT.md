@@ -31,7 +31,7 @@ change it, keep the change additive and say so in your report.
 
 ## 3. Engines
 An engine turns a package's entry source into a render pipeline.
-- Built-in (ship in the app bundle, always present): `metal` (v1) and `cells` (v1).
+- Built-in (ship in the app bundle, always present): `metal` (v1.1) and `cells` (v1.1) — 1.1 adds scene inputs (§11).
 - Pullable (downloaded on demand): e.g. `shadertoy` (GLSL compat, v1), later `film`.
 - Installed engines live in `<store>/engines/<id>/<version>/` with `engine.json`
   `{ "id","version","kind":"metal-source"|"glsl-source"|"cells"|"film","headers":[…],"guide":"guide.md","examples":[…],"minApp":"1.5.0" }`.
@@ -46,7 +46,7 @@ float4 dsScene(float2 uv, DSContext ctx) { … }   // uv 0…1, y up; return dis
 ```
 `DSContext` fields (read-only): `res` (px), `aspect`, `t` (seconds, stepped if manifest.stepped), `clock`
 (seconds since local midnight), `date` (y,m,d,weekday), `sun` (elevation°, azimuth°, isDay), `weather`
-(cloud, rain, snow, fog, wind 0…1), `music` (playing, level 0…1, art colours a/b/c), `p[16]` (params),
+(cloud, rain, snow, fog, wind 0…1), `music` (playing, level 0…1, art colours a/b/c), `p[16]` (params), `input[8]` + `inputLive[8]` (1.1, §11),
 `colorA`, `colorB`, `seed`. The engine wraps `dsScene` into a fragment function and compiles at runtime.
 `cells` engine: same signature but returns colour + coverage, and the engine renders it as LED dots /
 pixels / glyphs (CellKit look) with params Render / Cell Size / Glow added automatically.
@@ -183,3 +183,42 @@ CustomSceneLink.swift, GLSLTranslator.swift, CustomFilm.swift). Additions, none 
   (DEBUG builds only) allows http/https to 127.0.0.1 / localhost for tools/mcp-selftest's fixture.
 - **Phase 2 (scene inputs)** reads values the same way: a SignalLink per MetalRenderer polling
   `SignalFeed` every 5 s, `SignalState.value(id)` + `SignalValue.freshness(at:)` for `inputLive`.
+
+## 11. Scene inputs (1.6 phase 2 — additive; design: docs/signals-design.md §4)
+
+- **Manifest.** `"inputs": [{"key", "label", "range": [lo, hi], "default", "unit"?, "suggest"?}]`, at most 8
+  (`CustomSceneManifest.Input`; tolerant decode — numbers may be strings, an unreadable list is none).
+  Validated in `CustomScenes.sanitize`: key `[a-z][A-Za-z0-9_]{0,31}` and unique, two finite numbers
+  lo < hi (span ≤ 1e7), default inside the range (errors); suggest = a numeric/bool built-in, inputs on a
+  film package, and an engine requirement that still admits 1.0 (warnings). `validate` adds advice:
+  declared-but-unread, read-but-undeclared, and burn-in when an input seems to drive digits / a readout.
+- **Engines.** `metal` 1.1 and `cells` 1.1 (folders `Shared/Engines/{metal,cells}/1.1`, `minApp` 1.6.0).
+  A package that reads inputs requires `">=1.1"`, so an older DotStudio says "unknown engine" instead of
+  failing to compile; packages requiring `"1"` / `">=1"` resolve to 1.1 and recompile once, unchanged.
+- **DSContext.** `float input[8]` (declared units, clamped to range, eased ~20 s; the default while
+  unbound or stale, easing toward it as freshness drops) and `float inputLive[8]` (0…1 freshness;
+  0 = unbound/stale). Packed by `CustomSceneLink.fillStatic` into `u.scene[9…10]` (values, input[i] =
+  scene[9 + i/4][i%4]) and `u.scene[11…12]` (live); `u.scene[13…15]` stay free. A package without inputs
+  gets zeros. (Film packages overwrite `u.scene[0…3]` only.)
+- **Binding.** `EffectInstance.inputs: [String: InputBinding]?` — manifest key → `{"signal": "<built-in id>" |
+  "<user signal UUID>"}` (tolerant: unreadable → nil; bad keys / empty signals dropped; a bare string
+  reads too). Only on kind `custom` (sanitize drops it elsewhere). Strings/words can't be bound.
+- **Read side.** `SignalLink` (Shared/Signals/SceneInputs.swift), one per MetalRenderer next to
+  WeatherLink: polls `SignalFeed` at most every 5 s and only while a bound input draws; the app sets
+  `SignalLink.provider` (SignalService's thread-safe snapshot). Value = default + (clamp(v) − default) ×
+  freshness; time.* computed locally; weather.condition = its index. One-off renders (thumbnails, stills)
+  snap; live renderers ease per effect instance. `SignalLink.forced` pins inputs by key (preview_style,
+  tools). `SignalLink.lastDrawn(effectID)` is what the Inspector shows.
+- **What's watched.** `Library.referencedSignalKeys` = enabled rules' tests ∪ `boundSignalKeys` (bindings on
+  enabled custom effects in any style). SignalService runs while either is non-empty;
+  WeatherService fetches when a binding names a `weather.*` signal. `deleteSignal` refuses while bound
+  (force unbinds: `Library.unbindSignal`).
+- **MCP.** `bind_signal {style, effect_index?, input, signal | null}` (no gate beyond editing a style;
+  refuses an unknown input key, unknown signal, a word signal, a non-custom effect); create/update_style
+  effects and update_style patches take `"inputs": {"aqi": {"signal": "…"} | null}`; `preview_style
+  inputs: {"aqi": 180}` (strict: declared keys, in range); `validate_custom_scene` returns `inputs`;
+  list_signals' `referencedBy` adds "<style> ← <input>" and `boundBy`. CLI: `dotstudio-mcp --set-signal
+  name=value` writes `<store>/signal-files/<name>.txt` atomically.
+- **Inspector.** Under a Custom Scene's colours: "Live inputs", one row per input — label, a signal menu
+  (Not connected · Suggested · Built in · Your signals; numbers and yes/no only) and the value now
+  (App/SceneInputRows.swift).
