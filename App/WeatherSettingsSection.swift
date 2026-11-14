@@ -1,5 +1,7 @@
 //  WeatherSettingsSection.swift — Settings › Weather: the live weather Ocean Horizon and Shallows
-//  styles set to "Live" show (App/Weather/WeatherService.swift fetches it; Shared/Weather draws it).
+//  styles set to "Live" show (App/Weather/WeatherService.swift fetches it; Shared/Weather draws it),
+//  and the Location everything place-bound uses — automatic (IP, AppModel.resolveLocation) or set
+//  by the user with a search (LocationPicker, App/Weather/PlaceSearch.swift).
 
 import SwiftUI
 
@@ -40,11 +42,13 @@ struct WeatherSettingsSection: View {
                     }
                 }
             }
+            LocationRow()   // also with Live weather off: the sun, the sky and Universe use it too
         } header: {
             SettingsHeader("Weather")
         } footer: {
             VStack(alignment: .leading, spacing: Space.xs) {
-                SettingsNote("Ocean Horizon and Shallows styles with Weather set to Live show the sky outside — cloud, fog, rain, snow and storms — and ease from one to the next. DotStudio asks Open-Meteo for the current weather at your approximate location, rounded to about 10 km, every 20 minutes while one of those styles is in your library.")
+                SettingsNote("Ocean Horizon and Shallows styles with Weather set to Live show the sky outside — cloud, fog, rain, snow and storms — and ease from one to the next. DotStudio asks Open-Meteo for the current weather at your location, rounded to about 10 km, every 20 minutes while one of those styles is in your library.")
+                SettingsNote("Your location also places the real sun, moon and stars in scenes that follow the sun, and the marker on Universe's Earth. On a VPN the automatic one can be far off — Change… sets yours.")
                 Link(WeatherState.attribution, destination: URL(string: "https://open-meteo.com/")!)
                     .textRole(.caption)
             }
@@ -89,7 +93,7 @@ struct WeatherSettingsSection: View {
 
     private func detail(now: Date) -> String {
         if case .failed(let why) = weather.status, isProblem { return why }
-        if weather.status == .noLocation { return "Waiting for your approximate location." }
+        if weather.status == .noLocation { return "Waiting for your location." }
         guard let r = weather.reading else {
             return weather.isNeeded ? "Fetched at launch and every 20 minutes."
                                     : "No style follows the live weather right now."

@@ -47,6 +47,7 @@ struct DotStudioApp: App {
             UIShots.run(outDir: dir)  // renders the app's screens offscreen and exits
         }
         PerfProbe.runIfRequested()    // DOTSTUDIO_PERF_PROBE: headless cost measurements, then exits
+        SignalKeychain.runSelfTestIfRequested()   // DOTSTUDIO_KEYCHAIN_SELFTEST: one test item, then exits
         ClickProbe.runIfRequested()   // DOTSTUDIO_CLICK_PROBE: the gallery's click paths, headless, then exits
         SetupCoach.runSelfTestIfRequested()   // DOTSTUDIO_COACH_SELFTEST: the coach overlay's click-through checks, then exits
         if ProcessInfo.processInfo.environment["DOTSTUDIO_MIGRATE_ONLY"] != nil {
@@ -63,6 +64,7 @@ struct DotStudioApp: App {
         WallpaperController.shared.attach(model: model)   // restored in applicationDidFinishLaunching
         MusicLifecycle.shared.attach(model: model)        // started in applicationDidFinishLaunching
         WeatherService.shared.attach(model: model)        // started in applicationDidFinishLaunching
+        SignalService.shared.attach(model: model)         // Signals + When rules (App/Signals); started there too
         AppPresence.shared.attach(model: model)
         SetupGuidePanel.shared.attach(model: model)        // Help ▸ Set Up Screensaver… (SetupGuide.swift)
         LoginNudge.shared.attach(model: model)             // started in applicationDidFinishLaunching
@@ -176,6 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // need it; re-applied on every library change (MusicUI.swift).
         MusicLifecycle.shared.start()
         WeatherService.shared.start()             // live weather for the sea scenes (App/Weather)
+        SignalService.shared.start()              // live signals + the When rules' decision (App/Signals)
         AppPresence.shared.didFinishLaunching()   // login launch → menu bar; else a regular Dock app
         // "Start at login?" once, when the wallpaper or music display is turned on (after the
         // restore above, so restoring never counts as turning on).

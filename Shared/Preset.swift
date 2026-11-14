@@ -85,6 +85,10 @@ struct EffectInstance: Codable, Identifiable, Equatable, Hashable {
     // params live in `params` under the package manifest's keys, its colours in colorA / colorB.
     /// The package: <store>/scenes/<id>/.
     var custom: CustomSceneRef?
+    /// Custom Scene inputs (docs/signals-design.md §4): the package manifest's input key → the
+    /// signal that drives it (Shared/Signals/SceneInputs.swift). nil / a missing key = not
+    /// connected: the scene reads the input's default. Optional and add-only like `custom`.
+    var inputs: [String: InputBinding]?
 
     init(_ kind: EffectKind) {
         self.kind = kind
@@ -98,6 +102,30 @@ struct EffectInstance: Codable, Identifiable, Equatable, Hashable {
 /// (`[a-z0-9-]{1,48}-<8 hex>`; CustomScenes.isValidID). Anything else renders the calm stand-in.
 struct CustomSceneRef: Codable, Hashable {
     var id: String
+}
+
+extension EffectInstance {
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, enabled, params, colorA, colorB, logoKind, logoText, logoFile, custom, inputs
+    }
+
+    /// As the synthesized decoder did (an unknown kind or a malformed field still throws: the
+    /// preset keeps the effect verbatim as an UnknownEffect), except `inputs`, which is tolerant:
+    /// a binding map this build can't read is dropped, never the whole effect.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        kind = try c.decode(EffectKind.self, forKey: .kind)
+        enabled = try c.decode(Bool.self, forKey: .enabled)
+        params = try c.decode([String: Double].self, forKey: .params)
+        colorA = try c.decodeIfPresent(RGBA.self, forKey: .colorA)
+        colorB = try c.decodeIfPresent(RGBA.self, forKey: .colorB)
+        logoKind = try c.decodeIfPresent(BounceLogoKind.self, forKey: .logoKind)
+        logoText = try c.decodeIfPresent(String.self, forKey: .logoText)
+        logoFile = try c.decodeIfPresent(String.self, forKey: .logoFile)
+        custom = try c.decodeIfPresent(CustomSceneRef.self, forKey: .custom)
+        inputs = InputBinding.decodeMap(c, .inputs)
+    }
 }
 
 /// A named effect style. The source it renders is global (see Library.source).
@@ -151,8 +179,19 @@ struct Library: Codable, Equatable {
     var source: SourceSpec = SourceSpec()
     var activeID: UUID?
     var version: Int = 4          // 3 = slideshow source era, 4 = seenBuiltIns (see AppModel.migrate)
-    var locationLat: Double?     // resolved device location (for the Universe marker)
+    /// The location every reader uses (the sky and sun, the Universe marker, the live weather,
+    /// Signals' {lat}/{lon}, previews): the IP lookup's answer, or the user's own place
+    /// (`manualPlace`) while `locationMode` is "manual" — the app keeps these two in step.
+    var locationLat: Double?
     var locationLon: Double?
+    /// "manual" = the user set the place (Settings ▸ Weather ▸ Location; no IP lookup);
+    /// nil / "auto" / anything else = from the internet connection. Additive: an older build
+    /// keeps these three in unknownFields (and may refresh locationLat/Lon by IP meanwhile —
+    /// AppModel.migrate puts the manual place back).
+    var locationMode: String?
+    var manualPlace: NamedPlace?
+    /// The last IP lookup's answer, with its city name (shown in Settings while automatic).
+    var autoPlace: NamedPlace?
     /// Saver render resolution as a fraction of native (1 = full Retina). Optional so
     /// older builds still decode the library; nil means full quality.
     var renderScale: Double?
@@ -173,6 +212,12 @@ struct Library: Codable, Equatable {
     /// nil/missing = every display plays the lineup (activeID / rotation / schedule). Additive:
     /// a build without it ignores the field.
     var displayStyles: [String: DisplayPin]?
+    /// Live values DotStudio watches (Shared/Signals/Signal.swift): definitions only — their
+    /// values live in signal-values.json, never here. nil/missing = none. Additive.
+    var signals: [Signal]?
+    /// When rules (Shared/Signals/PlayRule.swift): an overlay on the lineup — display pin > active
+    /// rule > night > rotation (Playback). nil/missing = none. Additive.
+    var rules: [PlayRule]?
 
     /// Top-level fields this build doesn't know (a library written by a newer DotStudio), kept
     /// verbatim and written back on save, so a newer build's settings survive a round trip here.
@@ -247,7 +292,8 @@ extension Preset {
 extension Library {
     private enum CodingKeys: String, CodingKey {
         case presets, source, activeID, version, locationLat, locationLon, renderScale, rotation,
-             schedule, music, seenBuiltIns, syncTimeBase, displayStyles
+             schedule, music, seenBuiltIns, syncTimeBase, displayStyles, signals, rules,
+             locationMode, manualPlace, autoPlace
     }
 
     init(from decoder: Decoder) throws {
@@ -266,6 +312,10 @@ extension Library {
         version = try c.decode(Int.self, forKey: .version)
         locationLat = try c.decodeIfPresent(Double.self, forKey: .locationLat)
         locationLon = try c.decodeIfPresent(Double.self, forKey: .locationLon)
+        // Tolerant: a malformed place never costs the user the library (it's just dropped).
+        locationMode = (try? c.decodeIfPresent(String.self, forKey: .locationMode)) ?? nil
+        manualPlace = ((try? c.decodeIfPresent(NamedPlace.self, forKey: .manualPlace)) ?? nil).flatMap { $0.isValid ? $0 : nil }
+        autoPlace = ((try? c.decodeIfPresent(NamedPlace.self, forKey: .autoPlace)) ?? nil).flatMap { $0.isValid ? $0 : nil }
         renderScale = try c.decodeIfPresent(Double.self, forKey: .renderScale)
         rotation = try c.decodeIfPresent(RotationSpec.self, forKey: .rotation)
         schedule = try c.decodeIfPresent(ScheduleSpec.self, forKey: .schedule)
@@ -274,6 +324,16 @@ extension Library {
         syncTimeBase = try c.decodeIfPresent(Bool.self, forKey: .syncTimeBase)
         // Tolerant: a malformed map never costs the user the whole library.
         displayStyles = (try? c.decodeIfPresent([String: DisplayPin].self, forKey: .displayStyles)) ?? nil
+        // Signals and rules: tolerant like the pins — and one this build can't read (a newer
+        // build's op or kind) keeps the whole list verbatim for that build instead of dropping it.
+        if c.contains(.signals) {
+            if let v = try? c.decodeIfPresent([Signal].self, forKey: .signals) { signals = v }
+            else if let raw = try? c.decode(JSONValue.self, forKey: .signals) { unknownFields["signals"] = raw }
+        }
+        if c.contains(.rules) {
+            if let v = try? c.decodeIfPresent([PlayRule].self, forKey: .rules) { rules = v }
+            else if let raw = try? c.decode(JSONValue.self, forKey: .rules) { unknownFields["rules"] = raw }
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -286,6 +346,9 @@ extension Library {
         try c.encode(version, forKey: .version)
         try c.encodeIfPresent(locationLat, forKey: .locationLat)
         try c.encodeIfPresent(locationLon, forKey: .locationLon)
+        try c.encodeIfPresent(locationMode, forKey: .locationMode)
+        try c.encodeIfPresent(manualPlace, forKey: .manualPlace)
+        try c.encodeIfPresent(autoPlace, forKey: .autoPlace)
         try c.encodeIfPresent(renderScale, forKey: .renderScale)
         try c.encodeIfPresent(rotation, forKey: .rotation)
         try c.encodeIfPresent(schedule, forKey: .schedule)
@@ -293,9 +356,15 @@ extension Library {
         try c.encodeIfPresent(seenBuiltIns, forKey: .seenBuiltIns)
         try c.encodeIfPresent(syncTimeBase, forKey: .syncTimeBase)
         if let pins = displayStyles, !pins.isEmpty { try c.encode(pins, forKey: .displayStyles) }
+        if let s = signals, !s.isEmpty { try c.encode(s, forKey: .signals) }
+        if let r = rules, !r.isEmpty { try c.encode(r, forKey: .rules) }
         if !unknownFields.isEmpty {
             var extra = encoder.container(keyedBy: JSONValue.AnyKey.self)
-            for (k, v) in unknownFields { try extra.encode(v, forKey: JSONValue.AnyKey(k)) }
+            for (k, v) in unknownFields {
+                // A list this build couldn't read is kept only until this build writes its own.
+                if (k == "signals" && !(signals ?? []).isEmpty) || (k == "rules" && !(rules ?? []).isEmpty) { continue }
+                try extra.encode(v, forKey: JSONValue.AnyKey(k))
+            }
         }
     }
 
@@ -305,7 +374,54 @@ extension Library {
     }
 }
 
+/// A place on Earth with a name ("Toronto, Ontario, Canada"): the user's own location
+/// (Library.manualPlace) or the IP lookup's answer (Library.autoPlace).
+struct NamedPlace: Codable, Equatable, Hashable {
+    var name: String
+    var lat: Double
+    var lon: Double
+
+    static func validCoordinates(_ lat: Double, _ lon: Double) -> Bool {
+        lat.isFinite && lon.isFinite && abs(lat) <= 90 && abs(lon) <= 180
+    }
+    var isValid: Bool { Self.validCoordinates(lat, lon) }
+
+    /// "43.7° N, 79.4° W" — a name for bare coordinates.
+    static func coordinateName(_ lat: Double, _ lon: Double) -> String {
+        String(format: "%.1f° %@, %.1f° %@", abs(lat), lat >= 0 ? "N" : "S", abs(lon), lon >= 0 ? "E" : "W")
+    }
+}
+
 extension Library {
+    static let manualLocationMode = "manual"
+
+    /// The user set the location themselves: no IP lookup, locationLat/Lon = manualPlace.
+    var usesManualLocation: Bool { locationMode == Self.manualLocationMode && manualPlace != nil }
+
+    /// The user's own place: every reader follows it, and the IP lookup stops.
+    mutating func setManualLocation(_ place: NamedPlace) {
+        locationMode = Self.manualLocationMode
+        manualPlace = place
+        locationLat = place.lat
+        locationLon = place.lon
+    }
+
+    /// Back to the internet connection's location: the last IP answer (if any) until the next
+    /// lookup, which the app starts at once.
+    mutating func setAutomaticLocation() {
+        locationMode = nil
+        manualPlace = nil
+        if let a = autoPlace { locationLat = a.lat; locationLon = a.lon }
+    }
+
+    /// The name of the place in use, when one is known ("Toronto, Ontario"): the user's own, or
+    /// the IP lookup's while it still matches locationLat/Lon.
+    var locationPlaceName: String? {
+        if usesManualLocation { return manualPlace?.name }
+        guard let a = autoPlace, a.lat == locationLat, a.lon == locationLon, !a.name.isEmpty else { return nil }
+        return a.name
+    }
+
     /// The renderer time base the screensaver uses for this library.
     var rendererTimeBase: MetalRenderer.TimeBase { (syncTimeBase ?? false) ? .wallClock : .instance }
 }

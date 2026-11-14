@@ -550,6 +550,7 @@ struct ScreensaverCard: View {
         } keys: {
             playlistKey
             nightKey
+            WhenKey()            // When rules (WhenRules.swift)
             musicKey
             if roster.showsControls(model.screensaverPins) { displaysKey }
             if showsSong {
@@ -613,9 +614,13 @@ struct ScreensaverCard: View {
             // Lit while the screensaver is on (under the badges: it lights the picture).
             DestinationGlow(state: model.setupStatus == .ready ? .active : .off)
 
-            // Night/Day top left; Preview (what it previews, right on it) bottom right.
+            // When / Night / Day top left; Preview (what it previews, right on it) bottom right.
             VStack(alignment: .leading, spacing: 0) {
-                if lineup.night != nil {
+                if let rule = model.activeRule {
+                    // A When rule plays now: it outranks the night style and the playlist.
+                    GlassBadge(text: "When: " + RuleText.short(rule, in: model.library),
+                               symbol: RuleText.symbol(rule, in: model.library))
+                } else if lineup.night != nil {
                     GlassBadge(text: model.isNightNow ? "Night" : "Day",
                                symbol: model.isNightNow ? "moon.fill" : "sun.max.fill")
                 }
@@ -664,6 +669,7 @@ struct ScreensaverCard: View {
     }
 
     private var subtitle: String {
+        if model.activeRule != nil { return "Playing for a When rule" }
         let n = lineup.playlist.count
         if n <= 1 { return lineup.night == nil ? "Plays all the time" : "Plays by day" }
         // A no-break space before the dot: a wrapped line never starts with "·".

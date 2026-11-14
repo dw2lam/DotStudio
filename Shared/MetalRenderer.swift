@@ -106,6 +106,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private var thumbCollections: [Int: CollectionSource] = [:]
     private let store: SharedStore
     private lazy var weatherLink = WeatherLink(baseDir: store.baseDir)   // Shared/Weather
+    /// Custom Scene inputs: the bound signals' values, eased (Shared/Signals/SceneInputs.swift).
+    private lazy var signalLink = SignalLink(baseDir: store.baseDir)
     /// Custom Scenes: their packages, uniforms and runtime-compiled pipelines (CustomSceneLink.swift).
     private(set) lazy var customLink = CustomSceneLink(store: store.baseDir)
     /// The custom pipelines this frame's passes drew with (their hashes), watched for a GPU fault.
@@ -1325,6 +1327,13 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
             let target: PassTarget = isLast ? final : .texture(i % 2 == 0 ? pingA : pingB)
 
+            // A layered film mixes its light layers first (its own pass, at the tiles' size).
+            if let inst, inst.kind == .custom {
+                customLink.prepass(cmd, inst: inst, wall: wall, location: location,
+                                   weather: weatherLink.live(now: CACurrentMediaTime(), wall: wall), time: Double(time),
+                                   live: !thumbnailing, wait: waitsForScenePipelines || thumbnailing)
+            }
+
             // The pass's effect id (as packed below): its own pipeline if it has one, else the
             // über-shader. (Ocean Horizon, Shallows, Meadow: WeatherLink.fill binds theirs.)
             let effectID: Int32 = i == 0 ? (useGradient ? 1 : 0) : serialBlit ? 38
@@ -1399,7 +1408,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                     let music = fillCustomMusic(&u, now: now, wall: wall)
                     if let hash = customLink.fill(&u, inst: inst!, wall: wall, location: location,
                                                   weather: weatherLink.live(now: now, wall: wall),
-                                                  musicPlaying: music.0, musicLevel: music.1, encoder: enc,
+                                                  musicPlaying: music.0, musicLevel: music.1, signals: signalLink, encoder: enc,
                                                   format: target.pixelFormat ?? pixelFormat,
                                                   wait: waitsForScenePipelines || thumbnailing, live: !thumbnailing, now: now) {
                         frameCustomHashes.append(hash)

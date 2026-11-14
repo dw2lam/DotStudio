@@ -98,6 +98,62 @@ struct CustomSceneManifest: Codable, Equatable {
         }
     }
 
+    /// A scene input (docs/signals-design.md §4): a live value a style connects to a signal, read
+    /// as ctx.input[i] in declared units (eased, clamped to `range`; `default` while unconnected
+    /// or stale) and ctx.inputLive[i] (0…1). At most 8. Tolerant like Param: numbers may be strings.
+    ///     {"key": "aqi", "label": "Air quality", "range": [0, 300], "default": 0, "unit": "AQI",
+    ///      "suggest": "weather.tempC"}
+    struct Input: Codable, Equatable {
+        var key: String
+        var label: String
+        var range: [Double]?
+        var defaultValue: Double?
+        var unit: String?
+        /// A built-in signal id that fits (the Inspector lists it first).
+        var suggest: String?
+
+        private enum CodingKeys: String, CodingKey { case key, label, range, defaultValue = "default", unit, suggest }
+
+        init(key: String, label: String, range: [Double], defaultValue: Double? = nil, unit: String? = nil, suggest: String? = nil) {
+            self.key = key; self.label = label; self.range = range; self.defaultValue = defaultValue
+            self.unit = unit; self.suggest = suggest
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            key = (try? c.decode(String.self, forKey: .key)) ?? ""
+            label = (try? c.decode(String.self, forKey: .label)) ?? key
+            if let r = try? c.decode([Double].self, forKey: .range) { range = r }
+            else if let r = try? c.decode([String].self, forKey: .range) { range = r.compactMap(Double.init) }
+            else { range = nil }
+            defaultValue = CustomSceneManifest.number(c, .defaultValue)
+            unit = try? c.decode(String.self, forKey: .unit)
+            suggest = try? c.decode(String.self, forKey: .suggest)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(key, forKey: .key)
+            try c.encode(label, forKey: .label)
+            try c.encodeIfPresent(range, forKey: .range)
+            try c.encodeIfPresent(defaultValue, forKey: .defaultValue)
+            try c.encodeIfPresent(unit, forKey: .unit)
+            try c.encodeIfPresent(suggest, forKey: .suggest)
+        }
+
+        /// The range made sane (0…1 when it's missing or broken; validation reports that).
+        var lo: Double { bounds.lowerBound }
+        var hi: Double { bounds.upperBound }
+        var bounds: ClosedRange<Double> {
+            guard let r = range, r.count == 2, r[0].isFinite, r[1].isFinite, r[0] < r[1] else { return 0...1 }
+            return r[0]...r[1]
+        }
+        /// The default, clamped into the range (the range's low end when absent).
+        var def: Double { Swift.min(Swift.max((defaultValue ?? lo).finite(or: lo), lo), hi) }
+        /// A value clamped into the range (non-finite → the default).
+        func clamp(_ v: Double) -> Double { v.isFinite ? Swift.min(Swift.max(v, lo), hi) : def }
+    }
+
     struct ColorSlot: Codable, Equatable {
         var label: String?
         var defaultValue: [Double]?
@@ -125,6 +181,76 @@ struct CustomSceneManifest: Codable, Equatable {
         var codec: String?
     }
 
+    /// Film engine ≥ 1.1: one video of light layers mixed live (docs/film-layers.md, CustomFilm).
+    ///     "layers": { "file": "clips/layers.mov", "grid": [3, 2],
+    ///                 "tiles": ["sun", "sun_low", "sky", "cabin", "city", "mask"], "encoding": "pow4",
+    ///                 "scale": { "sun": 1.13, … }, "exposure": { "day": 1.5, "night": 3.2 },
+    ///                 "tint": { "sun_low": [1.0, 0.52, 0.22] } }
+    /// Fields this build doesn't know are kept verbatim (like the manifest's own).
+    struct Layers: Codable, Equatable {
+        struct Exposure: Codable, Equatable {
+            var day: Double?
+            var night: Double?
+        }
+        static let lightTiles = ["sun", "sun_low", "sky", "cabin", "city"]
+        static let knownTiles = Set(lightTiles + ["mask"])
+
+        var file: String
+        /// [columns, rows]; default 3×2.
+        var grid: [Int]?
+        var tiles: [String]
+        /// "pow4" (the only one so far).
+        var encoding: String?
+        var scale: [String: Double]?
+        var exposure: Exposure?
+        var tint: [String: [Double]]?
+        var unknownFields: [String: JSONValue] = [:]
+
+        private enum CodingKeys: String, CodingKey { case file, grid, tiles, encoding, scale, exposure, tint }
+
+        init(file: String, grid: [Int]? = nil, tiles: [String], encoding: String? = "pow4", scale: [String: Double]? = nil,
+             exposure: Exposure? = nil, tint: [String: [Double]]? = nil) {
+            self.file = file; self.grid = grid; self.tiles = tiles; self.encoding = encoding
+            self.scale = scale; self.exposure = exposure; self.tint = tint
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            let all = try decoder.container(keyedBy: JSONValue.AnyKey.self)
+            for k in all.allKeys where CodingKeys(stringValue: k.stringValue) == nil {
+                unknownFields[k.stringValue] = try all.decode(JSONValue.self, forKey: k)
+            }
+            file = try c.decode(String.self, forKey: .file)
+            grid = try? c.decode([Int].self, forKey: .grid)
+            tiles = (try? c.decode([String].self, forKey: .tiles)) ?? []
+            encoding = try? c.decode(String.self, forKey: .encoding)
+            scale = try? c.decode([String: Double].self, forKey: .scale)
+            exposure = try? c.decode(Exposure.self, forKey: .exposure)
+            tint = try? c.decode([String: [Double]].self, forKey: .tint)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(file, forKey: .file)
+            try c.encodeIfPresent(grid, forKey: .grid)
+            try c.encode(tiles, forKey: .tiles)
+            try c.encodeIfPresent(encoding, forKey: .encoding)
+            try c.encodeIfPresent(scale, forKey: .scale)
+            try c.encodeIfPresent(exposure, forKey: .exposure)
+            try c.encodeIfPresent(tint, forKey: .tint)
+            if !unknownFields.isEmpty {
+                var extra = encoder.container(keyedBy: JSONValue.AnyKey.self)
+                for (k, v) in unknownFields { try extra.encode(v, forKey: JSONValue.AnyKey(k)) }
+            }
+        }
+
+        /// Columns × rows (3×2 when absent or malformed).
+        var columns: Int { (grid?.count == 2 && grid![0] > 0) ? grid![0] : 3 }
+        var rows: Int { (grid?.count == 2 && grid![1] > 0) ? grid![1] : 2 }
+        /// The tile's index in the grid (left→right, top→bottom), nil when the video lacks it.
+        func index(of tile: String) -> Int? { tiles.firstIndex(of: tile) }
+    }
+
     var format: Int = 1
     var id: String
     var name: String
@@ -145,13 +271,17 @@ struct CustomSceneManifest: Codable, Equatable {
     var assets: [String]?
     /// Film engine only.
     var clips: [Clip]?
+    /// Film engine >= 1.1 only: the light layers (preferred over `clips` when present).
+    var layers: Layers?
+    /// Live inputs a style can connect to signals (metal / cells engine >= 1.1): ctx.input[0…7].
+    var inputs: [Input]?
 
     /// Fields this build doesn't know, kept verbatim.
     var unknownFields: [String: JSONValue] = [:]
 
     private enum CodingKeys: String, CodingKey {
         case format, id, name, author, licence, engine, entry, fps, stepped, params, colors, uses, description,
-             guides, assets, clips
+             guides, assets, clips, layers, inputs
     }
 
     init(id: String, name: String, engine: EngineRequirement, entry: String?) {
@@ -182,6 +312,8 @@ struct CustomSceneManifest: Codable, Equatable {
         guides = try? c.decode([String].self, forKey: .guides)
         assets = try? c.decode([String].self, forKey: .assets)
         clips = try? c.decode([Clip].self, forKey: .clips)
+        layers = try? c.decode(Layers.self, forKey: .layers)
+        inputs = try? c.decode([Input].self, forKey: .inputs)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -202,6 +334,8 @@ struct CustomSceneManifest: Codable, Equatable {
         try c.encodeIfPresent(guides, forKey: .guides)
         try c.encodeIfPresent(assets, forKey: .assets)
         try c.encodeIfPresent(clips, forKey: .clips)
+        try c.encodeIfPresent(layers, forKey: .layers)
+        try c.encodeIfPresent(inputs, forKey: .inputs)
         if !unknownFields.isEmpty {
             var extra = encoder.container(keyedBy: JSONValue.AnyKey.self)
             for (k, v) in unknownFields { try extra.encode(v, forKey: JSONValue.AnyKey(k)) }
@@ -220,6 +354,8 @@ struct CustomSceneManifest: Codable, Equatable {
 
     /// The params as ParamSpecs, in manifest order (at most 16: p[0…15]).
     var paramSpecs: [ParamSpec] { params.prefix(CustomScenes.maxParams).map(\.spec) }
+    /// The inputs, in manifest order (at most 8: ctx.input[0…7]).
+    var inputSpecs: [Input] { Array((inputs ?? []).prefix(CustomScenes.maxInputs)) }
     var defaultColorA: RGBA { colors?.a?.rgba ?? EffectKind.custom.defaultColorA ?? .black }
     var defaultColorB: RGBA { colors?.b?.rgba ?? EffectKind.custom.defaultColorB ?? .white }
     var colorALabel: String { colors?.a?.label.flatMap { $0.isEmpty ? nil : $0 } ?? "Colour A" }
@@ -227,6 +363,19 @@ struct CustomSceneManifest: Codable, Equatable {
     var usesSet: Set<String> { Set((uses ?? []).map { $0.lowercased() }) }
     /// The frame rate the scene steps its time at, when "stepped" (else nil: smooth).
     var steppedFPS: Double? { (stepped ?? false) ? Double(Swift.min(Swift.max(fps ?? 24, 1), 60)) : nil }
+    /// A film package playing light layers (docs/film-layers.md) rather than variant clips.
+    var isLayeredFilm: Bool { engine.id == "film" && layers != nil }
+    /// The video files a film package plays (its clips, and its layers video).
+    var filmFiles: [String] { (clips ?? []).map(\.file) + (layers.map { [$0.file] } ?? []) }
+    /// A number from the manifest's "look" block (film packages), nil when absent.
+    func lookValue(_ key: String) -> Double? {
+        guard case .object(let look)? = unknownFields["look"] else { return nil }
+        switch look[key] {
+        case .number(let d)?: return d.isFinite ? d : nil
+        case .integer(let i)?: return Double(i)
+        default: return nil
+        }
+    }
 }
 
 // MARK: - Engines
@@ -352,6 +501,8 @@ enum CustomSceneError: LocalizedError {
 
 enum CustomScenes {
     static let maxParams = 16
+    /// Scene inputs (ctx.input[0…7]).
+    static let maxInputs = 8
     static let maxSourceBytes = 256 * 1024
     static let maxAssetBytes = 8 * 1024 * 1024
     static let maxAssets = 4
@@ -437,6 +588,13 @@ enum CustomScenes {
         return !head.isEmpty && head.allSatisfy(ok) && hex.allSatisfy(isHex)
     }
 
+    /// An input key: `[a-z][A-Za-z0-9_]{0,31}` (what MCP's bind_signal and the binding map use).
+    static func isInputKey(_ k: String) -> Bool {
+        let b = Array(k.utf8)
+        guard let f = b.first, b.count <= 32, f >= 97, f <= 122 else { return false }
+        return b.allSatisfy { ($0 >= 48 && $0 <= 57) || ($0 >= 65 && $0 <= 90) || ($0 >= 97 && $0 <= 122) || $0 == 95 }
+    }
+
     /// A fresh id from a scene name: "aurora-lake-1a2b3c4d".
     static func makeID(name: String) -> String {
         var slug = ""
@@ -515,6 +673,42 @@ enum CustomScenes {
             if let c, let v = c.defaultValue, v.count < 3 || v.count > 4 || !v.allSatisfy(\.isFinite) {
                 warn("colors.\(slot).default should be [r, g, b] or [r, g, b, a], each 0…1")
             }
+        }
+        if let ins = m.inputs {
+            if ins.count > maxInputs { err("\(ins.count) inputs: at most \(maxInputs) (ctx.input[0…7])") }
+            var inKeys = Set<String>()
+            for (i, p) in ins.enumerated() {
+                if !isInputKey(p.key) { err("input \(i): key \"\(p.key)\" must start with a lowercase letter, then up to 31 letters, digits or _") }
+                if !inKeys.insert(p.key).inserted { err("input \(i): key \"\(p.key)\" is used twice") }
+                if let r = p.range, r.count == 2, r[0].isFinite, r[1].isFinite {
+                    if r[0] >= r[1] { err("input \"\(p.key)\": range [lo, hi] needs lo < hi") }
+                    else if r[1] - r[0] > 1e7 { err("input \"\(p.key)\": range over 1e7") }
+                    else if let d = p.defaultValue, d < r[0] || d > r[1] {
+                        err("input \"\(p.key)\": default \(SignalValue.format(d)) is outside its range \(SignalValue.format(r[0]))…\(SignalValue.format(r[1]))")
+                    }
+                } else {
+                    err("input \"\(p.key)\": needs \"range\": [lo, hi] (two numbers, in the input's units)")
+                }
+                if p.label.count > 40 { m.inputs?[i].label = String(p.label.prefix(40)) }
+                if p.label.trimmingCharacters(in: .whitespaces).isEmpty { m.inputs?[i].label = p.key }
+                if let u = p.unit, u.count > 12 { m.inputs?[i].unit = String(u.prefix(12)) }
+                if let sg = p.suggest {
+                    if let b = BuiltInSignals.find(sg) {
+                        if b.type == .string { warn("input \"\(p.key)\": suggest \"\(sg)\" is a word, not a number — inputs take numbers or yes/no signals") }
+                    } else {
+                        warn("input \"\(p.key)\": suggest \"\(sg)\" isn't a built-in signal (\(BuiltInSignals.all.filter { $0.type != .string }.map(\.id).joined(separator: ", ")))")
+                    }
+                }
+            }
+            if !ins.isEmpty {
+                if m.engine.id == "film" { warn("inputs: the film engine doesn't read them (they're for metal and cells scenes)") }
+                // A package that reads ctx.input needs engine 1.1 (DotStudio 1.6): require it, so an
+                // older DotStudio says "unknown engine" instead of failing to compile.
+                else if ["metal", "cells"].contains(m.engine.id), satisfies("1", m.engine.version) {
+                    warn("inputs need the \(m.engine.id) engine 1.1 (DotStudio 1.6): set \"engine\": {\"id\": \"\(m.engine.id)\", \"version\": \">=1.1\"} so older versions refuse it cleanly")
+                }
+            }
+            if ins.isEmpty { m.inputs = nil }
         }
         if let a = m.assets, a.count > maxAssets { err("\(a.count) assets: at most \(maxAssets)") }
         for a in m.assets ?? [] where !isSafeRelativePath(a) || !(a.hasPrefix("assets/")) || !["png", "jpg", "jpeg"].contains((a as NSString).pathExtension.lowercased()) {
@@ -626,6 +820,12 @@ enum CustomScenes {
             clipBytes += s
             if !out.contains(c.file) { out.append(c.file) }
         }
+        if let l = m.layers {
+            if !isSafeRelativePath(l.file) { diags.append(Diagnostic(message: "layers \"\(l.file)\" must be a file inside the package")) }
+            else if let s = size(l.file) {
+                if !out.contains(l.file) { clipBytes += s; out.append(l.file) }
+            } else { diags.append(Diagnostic(message: "layers video \"\(l.file)\" is missing", file: l.file)) }
+        }
         if clipBytes > maxClipBytes { diags.append(Diagnostic(message: "clips are \(clipBytes / 1024 / 1024) MB: at most \(maxClipBytes / 1024 / 1024) MB")) }
         if !diags.isEmpty { throw CustomSceneError.invalid(diags) }
         return out
@@ -691,7 +891,7 @@ enum CustomScenes {
         let dir = packageDir(id: id, store: store)
         let m = manifest(id: id, store: store)
         var parts = ["scene.json"] + (m?.entry.map { [$0] } ?? []) + (m?.assets ?? [])
-        parts += (m?.clips ?? []).map(\.file)
+        parts += m?.filmFiles ?? []
         return parts.map { rel -> String in
             guard let s = FileStamp(path: dir.appendingPathComponent(rel).path) else { return "-" }
             return "\(s.size).\(s.sec).\(s.nsec).\(s.inode)"
@@ -910,8 +1110,12 @@ extension EffectInstance {
                 switch v { case .number(let d)?: return d; case .integer(let i)?: return Double(i); default: return nil }
             }
             if let g = num(look["grain"]), g.isFinite { e.params["ds.grain"] = Swift.min(Swift.max(g, 0), 1) }
-            if look["halation"] != nil { e.params["ds.halation"] = 0 }
+            if m.isLayeredFilm {
+                // light layers carry no look: the engine draws halation (and bloom) live
+                if let h = num(look["halation"]), h.isFinite { e.params["ds.halation"] = Swift.min(Swift.max(h, 0), 1) }
+            } else if look["halation"] != nil { e.params["ds.halation"] = 0 }
         }
+        if m.isLayeredFilm, e.params["ds.halation"] == nil { e.params["ds.halation"] = 0.15 }
         return e
     }
 
@@ -959,7 +1163,9 @@ extension Preset {
             guard let m = CustomScenes.knownManifest(id: $0) else { return false }
             if m.usesSet.contains(feature) { return true }
             // a film follows the sun, and the weather when it has a rain clip
-            if m.engine.id == "film" { return feature == "sun" || (feature == "weather" && (m.clips ?? []).contains { $0.variant.lowercased() == "rain" }) }
+            if m.engine.id == "film" {
+                return feature == "sun" || (feature == "weather" && (m.layers != nil || (m.clips ?? []).contains { $0.variant.lowercased() == "rain" }))
+            }
             return false
         }
     }

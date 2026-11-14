@@ -18,6 +18,9 @@ import Foundation
 enum WeatherCondition: String, Codable, CaseIterable, Equatable {
     case clear, partlyCloudy, cloudy, fog, drizzle, rain, heavyRain, thunderstorm, snow, sleet
 
+    /// Its place in declaration order (DSWeather.condition: 0 clear … 9 sleet).
+    var index: Int { WeatherCondition.allCases.firstIndex(of: self) ?? 0 }
+
     init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
         self = WeatherCondition(rawValue: raw) ?? .clear
@@ -126,6 +129,8 @@ struct WeatherState: Codable, Equatable {
     var windGusts: Double?
     /// Horizontal visibility, metres.
     var visibility: Double?
+    /// 2 m air temperature, °C (the weather.tempC signal; optional, additive).
+    var temperature: Double?
     /// A thunderstorm: lightning in the scene.
     var lightning: Bool?
     var isDay: Bool?
@@ -201,6 +206,7 @@ extension WeatherState {
         windSpeed = num("wind_speed_10m")
         windGusts = num("wind_gusts_10m")
         visibility = num("visibility")
+        temperature = num("temperature_2m")
         lightning = cond == .thunderstorm
         isDay = num("is_day").map { $0 > 0.5 }
         fetchedAt = date.timeIntervalSince1970

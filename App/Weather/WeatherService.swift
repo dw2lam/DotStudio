@@ -21,7 +21,7 @@ final class WeatherService: ObservableObject {
     static let shared = WeatherService()
     static let interval: TimeInterval = 20 * 60
     private static let backoff: [TimeInterval] = [60, 120, 300, 600, 1200]
-    private static let enabledKey = "weatherEnabled"
+    static let enabledKey = "weatherEnabled"
     private static let placeKey = "weatherPlace"
 
     enum Status: Equatable {
@@ -36,9 +36,11 @@ final class WeatherService: ObservableObject {
     @Published private(set) var reading: WeatherState?
     @Published private(set) var status: Status = .idle
     /// Settings › Weather › Live weather.
-    @Published var enabled: Bool = UserDefaults.standard.object(forKey: WeatherService.enabledKey) as? Bool ?? true {
+    /// An AppPrefs switch (UserDefaults; <store>/app-prefs.json under DOTSTUDIO_STORE_DIR, where
+    /// dotstudio-mcp's update_settings writes it while the app isn't running).
+    @Published var enabled: Bool = AppPrefs.shared.bool(WeatherService.enabledKey, default: true) {
         didSet {
-            UserDefaults.standard.set(enabled, forKey: Self.enabledKey)
+            AppPrefs.shared.set(enabled, Self.enabledKey)
             if !enabled { clear() }
             reevaluate()
         }
@@ -69,15 +71,24 @@ final class WeatherService: ObservableObject {
         reevaluate()
     }
 
-    /// A style in the library follows the live weather, and the user hasn't turned it off.
+    /// A style in the library follows the live weather — or an enabled When rule tests it
+    /// or a Custom Scene input is bound to a weather.* signal (SignalService.needsWeather) — and
+    /// the user hasn't turned it off.
     var isNeeded: Bool {
-        enabled && (model?.library.presets.contains(where: WeatherLink.followsLive) ?? false)
+        enabled && ((model?.library.presets.contains(where: WeatherLink.followsLive) ?? false) || SignalService.shared.needsWeather)
     }
 
     /// Settings' Retry: fetch now, whatever the schedule says.
     func refresh() {
         failures = 0
         schedule(after: 0)
+    }
+
+    /// The location was set or switched back to automatic (AppModel.setLocation): a backoff
+    /// from an earlier failure doesn't hold the new place's weather back — reevaluate (on the
+    /// library change) fetches it now.
+    func locationChanged() {
+        failures = 0
     }
 
     private func reevaluate() {
@@ -132,7 +143,7 @@ final class WeatherService: ObservableObject {
         c.queryItems = [
             URLQueryItem(name: "latitude", value: String(format: "%.1f", lat)),
             URLQueryItem(name: "longitude", value: String(format: "%.1f", lon)),
-            URLQueryItem(name: "current", value: "weather_code,cloud_cover,cloud_cover_low,precipitation,rain,showers,snowfall,wind_speed_10m,wind_gusts_10m,visibility,is_day"),
+            URLQueryItem(name: "current", value: "weather_code,cloud_cover,cloud_cover_low,precipitation,rain,showers,snowfall,wind_speed_10m,wind_gusts_10m,visibility,is_day,temperature_2m"),
             URLQueryItem(name: "wind_speed_unit", value: "ms"),
             URLQueryItem(name: "timezone", value: "auto"),
         ]
@@ -162,6 +173,10 @@ final class WeatherService: ObservableObject {
                                          place: self.cachedPlace(lat, lon), at: Date())
                 self.write(state)
                 self.resolvePlace(lat, lon)
+                // The location moved to another cell while this was out: fetch the new one now.
+                if let loc = self.model?.locationTuple, Self.cell(loc.lat, loc.lon) != Self.cell(lat, lon) {
+                    self.schedule(after: 0)
+                }
             }
         }.resume()
     }

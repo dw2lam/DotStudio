@@ -20,7 +20,7 @@ final class Toolbox {
         self.film = film
     }
 
-    var all: [Tool] { core + playback + custom + filmTools }
+    var all: [Tool] { core + playback + signalTools + settingsTools + custom + filmTools }
 
     // MARK: - Helpers
 
@@ -34,6 +34,7 @@ final class Toolbox {
         if lineup.playlist.contains(p.id) { roles.append(lineup.rotates ? "screensaver rotation" : "screensaver") }
         if lineup.night == p.id { roles.append("screensaver at night") }
         for (key, pin) in l.displayStyles ?? [:] where pin.presetID == p.id { roles.append("screensaver on \(pin.name ?? key)") }
+        for r in l.rules ?? [] where r.enabled && r.play.contains(p.id) { roles.append("screensaver when \(RuleText.condition(r.when, in: l))") }
         if (wall["enabled"] as? Bool) == true {
             if (wall["followsScreensaver"] as? Bool) != true, (wall["presetID"] as? String).flatMap(UUID.init) == p.id { roles.append("live wallpaper") }
             for (_, v) in wall["displayStyles"] as? JSONObject ?? [:] {
@@ -57,7 +58,14 @@ final class Toolbox {
     }
 
     var builderContext: StyleBuilder.Context {
-        StyleBuilder.Context(scenes: scenes)
+        let l = try? lib.library()
+        var ctx = StyleBuilder.Context(scenes: scenes)
+        ctx.signalKey = { [unowned self] ref in
+            guard let l else { throw ToolError("Couldn't read the library to find signal \"\(ref)\".") }
+            return try self.signalKey(ref, l)
+        }
+        ctx.signalType = { key in l?.signalInfo(key)?.type }
+        return ctx
     }
 
     func buildEffects(_ items: [Any], existing: [EffectInstance] = []) throws -> [JSONObject] {
@@ -101,7 +109,7 @@ final class Toolbox {
     var core: [Tool] {
         [
             Tool(name: "get_started", title: "Get started",
-                 description: "START HERE. A short orientation to designing DotStudio screensavers: how styles work, the workflow (read guides → pick scenes → create_style → preview_style → benchmark_style → set_screensaver), which guides to read first (including the user's own brand guides), and this Mac's state (is DotStudio running, may the AI change what plays, custom/film scenes availability).",
+                 description: "START HERE. A short orientation to designing DotStudio screensavers: how styles work, the workflow (read guides → pick scenes → create_style → preview_style → benchmark_style → set_screensaver), the app-settings tools (get_settings / update_settings / app_action), which guides to read first (including the user's own brand guides), and this Mac's state (is DotStudio running, may the AI change what plays, custom/film scenes availability).",
                  input: S.obj([:]), readOnly: true, idempotent: true) { [unowned self] _ in try self.getStarted() },
             Tool(name: "list_guides", title: "List guides",
                  description: "Every guide the AI should know about: DotStudio's taste (style/dotstudio), per-scene settings (settings/*, generated from this build), app settings, power, burn-in, engine guides (engines/*), and the user's own guides (user/*, e.g. brand guides — honour them). Returns id, title, source and a one-line summary.",
@@ -197,7 +205,8 @@ final class Toolbox {
                                "effects": Self.effectsSchema,
                                "patch": S.arr(S.obj(["index": S.num("Which effect (0 = first).", min: 0, integer: true),
                                                      "params": ["type": "object", "additionalProperties": ["type": ["number", "boolean", "string"]], "description": "Params to change."],
-                                                     "colorA": S.color, "colorB": S.color, "enabled": S.bool("On/off.")],
+                                                     "colorA": S.color, "colorB": S.color, "enabled": S.bool("On/off."),
+                                                     "inputs": StyleBuilder.inputsSchema],
                                                     required: ["index"]), "Edits to individual effects.", min: 1, max: 6)],
                               required: ["style"])) { [unowned self] a in
                 var p = try self.resolve(a)
@@ -216,7 +225,7 @@ final class Toolbox {
                         let i = (pt["index"] as! NSNumber).intValue
                         guard p.effects.indices.contains(i) else { throw ToolError("patch index \(i): the style has \(p.effects.count) effect(s) (0…\(p.effects.count - 1)).") }
                         var e: JSONObject = ["kind": p.effects[i].kind.rawValue]
-                        for k in ["params", "colorA", "colorB", "enabled"] { if let v = pt[k] { e[k] = v } }
+                        for k in ["params", "colorA", "colorB", "enabled", "inputs"] { if let v = pt[k] { e[k] = v } }
                         effectsJSON[i] = try StyleBuilder.effect(e, index: i, ctx: self.builderContext, existing: p.effects[i])
                     }
                 }
@@ -260,6 +269,8 @@ final class Toolbox {
                                "clock": S.str("Local wall-clock time HH:mm (clocks and Follow the Sun), default now.", pattern: "^([01]?[0-9]|2[0-3]):[0-5][0-9]$"),
                                "date": S.str("YYYY-MM-DD for `clock` (default today).", pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"),
                                "weather": S.str("Force a weather condition for live-weather scenes.", enum: PreviewRenderer.weatherNames),
+                               "inputs": ["type": "object", "additionalProperties": ["type": "number"],
+                                          "description": "Custom Scenes with inputs: pin them for this preview, by key, in their units — e.g. {\"aqi\": 180} — as if their signal read that (unpinned inputs read what they're bound to, or their default)."] as JSONObject,
                                "music_card": S.bool("Show the corner music card with a sample song (default false)."),
                                "frames": S.num("Contact sheet: this many frames (2–12) instead of one still.", min: 1, max: 12, integer: true),
                                "span": S.num("Contact sheet: seconds covered (default 120).", min: 1, max: 86_400),
@@ -330,7 +341,9 @@ final class Toolbox {
         let settings = AISettings.load(store: store)
         let user = guides.all().filter { $0.source == "user" }.map(\.id)
         let created = AICreatedStyles.load(store: store).ids.filter { id in l.presets.contains { $0.id == id } }.count
-        let playing = Playback.effectivePreset(in: l, now: Date())
+        let live = SignalState.read(baseDir: store)
+        let playing = Playback.effectivePreset(in: l, now: Date(), live: live)
+        let activeRule = l.activeRule(live: live, now: Date())?.rule
         var t = """
         DotStudio makes calm, living screensavers and live wallpapers for the Mac. A STYLE is a named stack of effects: \
         a SCENE first (it draws its own image: ocean, meadow, clocks, liquid chrome, bloom…), then 0–2 LOOKS that restyle it \
@@ -344,17 +357,33 @@ final class Toolbox {
         5. benchmark_style (≤ 4 ms at 5K is the aim) — read_guide("power") and ("burn-in") for clocks and static elements.
         6. Only when the user wants it: set_screensaver / set_wallpaper (these change the user's Mac).
 
+        The app's own settings are tools too: get_settings reads every option in DotStudio (General, Music, Weather, \
+        Live Wallpaper, playlist interval and shuffle, crossfade, quality, the Source that Looks restyle, Updates) with its \
+        allowed values, plus what macOS owns (screensaver installed/chosen, idle time, login item) read-only; \
+        update_settings changes them in one checked patch; app_action presses the app's own buttons for setup \
+        (install_screensaver, show_setup_guide, guide_me, open_screensaver_settings…). Only change what the user asked for.
+
+        Signals and When rules: list_signals shows live values DotStudio watches (weather, sun, time, battery, music, \
+        and the user's own HTTPS-JSON or file signals); set_rule makes "when ⟨condition⟩, play ⟨style⟩" (snowing → \
+        a snowy style, battery low → a light one); bind_signal connects a Custom Scene's declared input to one \
+        (air quality thickening a haze, the temperature warming a palette). Read read_guide("signals") first — never \
+        put a key in a URL, never ask the user to paste a key into the chat.
+
         """
         t += "This Mac: DotStudio is \(running ? "running (changes appear live, with a notice)" : "not running (changes are written to its library and show when it opens)"). "
         t += "The AI \(settings.allowPlaybackChanges ? "may" : "may NOT") change what plays (Settings ▸ AI). "
-        t += "Library: \(l.presets.count) styles (\(created) made by the AI); the screensaver shows “\(playing.name)” now.\n"
+        t += "Library: \(l.presets.count) styles (\(created) made by the AI); the screensaver shows “\(playing.name)” now"
+            + (activeRule.map { " (When rule “\($0.name)”)" } ?? "") + ".\n"
+        t += "Signals: \((l.signals ?? []).count) of the user's, \((l.rules ?? []).count) When rule(s); the AI \(settings.allowSignals ? "may" : "may NOT") add signals.\n"
         t += user.isEmpty ? "User guides: none (they can add .md files to \(AIStore.guidesDir(store).path)).\n"
             : "User guides (read and follow these): \(user.joined(separator: ", ")).\n"
         t += "Custom shader scenes: \(scenes.isAvailable ? "available (list_engines, read_guide engines/metal)" : "not in this build"). "
         t += "Film (photoreal Blender) scenes: \(film.isAvailable ? "available (film_status)" : "not in this build").\n"
         return .ok(t, ["appRunning": running, "allowPlaybackChanges": settings.allowPlaybackChanges, "styles": l.presets.count,
                        "aiStyles": created, "nowPlaying": playing.name, "userGuides": user,
-                       "readFirst": ["style/dotstudio", "settings/index", "power", "burn-in"] + user,
+                       "readFirst": ["style/dotstudio", "settings/index", "power", "burn-in", "signals"] + user,
+                       "allowSignals": settings.allowSignals, "signalTools": ["list_signals", "test_signal", "create_signal", "set_rule", "list_rules", "bind_signal"],
+                       "settingsTools": ["get_settings", "update_settings", "app_action"],
                        "customScenes": scenes.isAvailable, "film": film.isAvailable, "store": store.path])
     }
 
@@ -367,6 +396,24 @@ final class Toolbox {
         o.time = (a["t"] as? NSNumber)?.doubleValue ?? 4
         o.weather = a["weather"] as? String
         o.musicCard = a["music_card"] as? Bool ?? false
+        if let ins = a["inputs"] as? JSONObject, !ins.isEmpty {
+            // Strict, like params: every key must be an input of a Custom Scene in the style, in range.
+            let declared = p.effects.filter { $0.enabled && $0.kind == .custom }
+                .flatMap { e in e.custom.flatMap { scenes.inputs(scene: $0.id) } ?? [] }
+            var pinned: [String: Double] = [:]
+            for (k, v) in ins.sorted(by: { $0.key < $1.key }) {
+                guard let spec = declared.first(where: { $0.key == k }) else {
+                    throw ToolError(declared.isEmpty ? "inputs: “\(p.name)” has no Custom Scene with inputs."
+                                    : "inputs: no input \"\(k)\" in “\(p.name)”. Its inputs: \(Array(Set(declared.map(\.key))).sorted().joined(separator: ", ")).")
+                }
+                guard let n = (v as? NSNumber)?.doubleValue, n.isFinite else { throw ToolError("inputs.\(k): a number") }
+                guard n >= spec.lo - 1e-9, n <= spec.hi + 1e-9 else {
+                    throw ToolError("inputs.\(k): \(Schema.fmt(n)) is outside \(spec.label)'s range \(Schema.fmt(spec.lo))…\(Schema.fmt(spec.hi)).")
+                }
+                pinned[k] = n
+            }
+            o.inputs = pinned
+        }
         if let c = a["clock"] as? String {
             let day = (a["date"] as? String) ?? {
                 let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.locale = Locale(identifier: "en_US_POSIX"); return f.string(from: Date())
@@ -395,6 +442,7 @@ final class Toolbox {
         }
         if let c = a["clock"] as? String { note += ", clock \(c)" }
         if let w = o.weather { note += ", weather \(w)" }
+        if let ins = o.inputs { note += ", inputs " + ins.sorted { $0.key < $1.key }.map { "\($0.key) = \(Schema.fmt($0.value))" }.joined(separator: ", ") }
         if o.musicCard { note += ", music card on" }
         let st = PreviewRenderer.stats(cg)
         meta["meanLuminance"] = Catalog.round3(st.mean)
@@ -422,13 +470,16 @@ final class Toolbox {
                  input: S.obj([:]), readOnly: true, idempotent: true) { [unowned self] _ in
                 let l = try self.lib.library()
                 let wall = LibraryAccess.loadWallpaper(self.store)
-                let shared = Playback.effectivePreset(in: l, now: Date())
+                let live = SignalState.read(baseDir: self.store)
+                let shared = Playback.effectivePreset(in: l, now: Date(), live: live)
+                let rule = l.activeRule(live: live, now: Date())?.rule
                 let wallOn = (wall["enabled"] as? Bool) == true
                 let wallShared = (wall["presetID"] as? String).flatMap(UUID.init).flatMap { id in l.presets.first { $0.id == id } }
                 let items: [JSONObject] = Displays.connected().map { d in
                     let own = l.pinnedPreset(display: d.key)
                     var o: JSONObject = ["key": d.key, "name": d.name, "builtIn": d.builtIn,
                                          "screensaver": (own ?? shared).name, "screensaverOwnStyle": own != nil]
+                    if own == nil, let rule { o["screensaverWhen"] = RuleText.condition(rule.when, in: l) }
                     if wallOn {
                         let pin = ((wall["displayStyles"] as? JSONObject)?[d.key] as? JSONObject)?["presetID"] as? String
                         let wp = pin.flatMap(UUID.init).flatMap { id in l.presets.first { $0.id == id } }

@@ -136,10 +136,25 @@ enum StyleBuilder {
         "colorA": S.color, "colorB": S.color,
         "enabled": S.bool("Default true."),
         "logo_text": S.str("Bounce only: the word that bounces (max 24 characters).", max: 24),
+        "inputs": inputsSchema,
     ], required: ["kind"])
+
+    /// A Custom Scene's input bindings: {"aqi": {"signal": "Air quality"}}; null unbinds.
+    static let inputsSchema: JSONObject = [
+        "type": "object",
+        "description": "kind \"custom\" only: connect the scene's declared inputs (list_custom_scenes `inputs`) to signals — {\"aqi\": {\"signal\": \"<signal id, name, or a built-in like weather.tempC>\"}}; {\"aqi\": null} disconnects. Unconnected inputs read their default. Same as bind_signal.",
+        "additionalProperties": ["type": ["object", "null"],
+                                 "properties": ["signal": ["type": ["string", "null"], "maxLength": 80,
+                                                           "description": "A built-in signal id or one of the user's signals (list_signals); null disconnects."]],
+                                 "additionalProperties": false] as JSONObject,
+    ]
 
     struct Context {
         var scenes: CustomScenesAPI           // installed packages (kind "custom")
+        /// A signal reference (id, name, built-in id) → its values-map key; throws when unknown.
+        var signalKey: (String) throws -> String = { throw ToolError("No signal \"\($0)\".") }
+        /// A signal's type (inputs take numbers and yes/no values).
+        var signalType: (String) -> SignalValueType? = { _ in nil }
     }
 
     static func effect(_ e: JSONObject, index: Int, ctx: Context, existing: EffectInstance? = nil) throws -> JSONObject {
@@ -168,6 +183,9 @@ enum StyleBuilder {
             throw ToolError("\(where_): \(kind.displayName) has no colour wells; leave colorA/colorB out.")
         }
         if let en = e["enabled"] as? Bool { inst.enabled = en }
+        if e["inputs"] != nil {
+            throw ToolError("\(where_): only Custom Scenes (kind \"custom\") have inputs; \(kind.displayName) has none.")
+        }
         if let t = e["logo_text"] as? String {
             guard kind == .bounce else { throw ToolError("\(where_): logo_text is for bounce only.") }
             inst.logoKind = .text
@@ -198,7 +216,36 @@ enum StyleBuilder {
         if let c = e["colorA"] as? JSONObject { inst.colorA = rgba(c) }
         if let c = e["colorB"] as? JSONObject { inst.colorB = rgba(c) }
         if let en = e["enabled"] as? Bool { inst.enabled = en }
+        if let ins = e["inputs"] as? JSONObject {
+            let declared = ctx.scenes.inputs(scene: id) ?? []
+            for (key, v) in ins.sorted(by: { $0.key < $1.key }) {
+                let sig: String? = (v as? JSONObject).flatMap { $0["signal"] as? String }
+                try bind(&inst, input: key, signal: sig, declared: declared, scene: id, where_: where_ + ".inputs." + key, ctx: ctx)
+            }
+        }
         return JSON.from(inst) as? JSONObject ?? [:]
+    }
+
+    /// Connect (signal non-nil) or disconnect one input of a Custom Scene effect, strictly: the
+    /// key must be declared, the signal must exist and carry a number or yes/no.
+    static func bind(_ inst: inout EffectInstance, input key: String, signal: String?, declared: [CustomSceneManifest.Input],
+                     scene: String, where_: String, ctx: Context) throws {
+        guard declared.contains(where: { $0.key == key }) else {
+            throw ToolError(declared.isEmpty
+                ? "\(where_): scene \(scene) declares no inputs (its manifest's \"inputs\"), so there's nothing to connect."
+                : "\(where_): scene \(scene) has no input \"\(key)\". Its inputs: \(declared.map(\.key).joined(separator: ", ")).")
+        }
+        var map = inst.inputs ?? [:]
+        if let ref = signal {
+            let k = try ctx.signalKey(ref)
+            if ctx.signalType(k) == .string {
+                throw ToolError("\(where_): \(ref) is a word, not a number — an input takes a number or a yes/no signal (weather.precip, weather.tempC, power.battery…).")
+            }
+            map[key] = InputBinding(signal: k)
+        } else {
+            map[key] = nil
+        }
+        inst.inputs = map.isEmpty ? nil : map
     }
 
     static func value(_ v: Any, _ spec: ParamSpec, _ path: String) throws -> Double {

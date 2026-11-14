@@ -1,4 +1,4 @@
-# The `metal` engine (v1)
+# The `metal` engine (v1.1)
 
 Write a DotStudio scene as **one Metal function**. DotStudio compiles it on the Mac's GPU at
 runtime and runs it full-screen as a screensaver or live wallpaper, at up to 5K and 120 fps — so
@@ -40,6 +40,7 @@ my-scene/
               { "key": "mood",  "label": "Mood",  "kind": "menu", "options": ["Calm","Vivid"], "default": 0 } ],
   "colors": { "a": { "label": "Sky", "default": [0.1,0.2,0.5,1] }, "b": { "label": "Glow", "default": [0.3,1,0.7,1] } },
   "uses": ["sun", "weather", "music"],
+  "inputs": [ { "key": "aqi", "label": "Air quality", "range": [0, 300], "default": 0, "unit": "AQI" } ],
   "assets": ["assets/paper.png"],
   "description": "…", "guides": ["style/dotstudio"] }
 ```
@@ -55,7 +56,9 @@ my-scene/
   film-like cadence that also saves power.
 - `uses`: what you read — `sun`, `weather`, `music`. The app only fetches the weather for scenes
   that say they use it (everything is readable regardless; unused data is calm defaults).
-- Limits: sources 256 KB, assets 8 MB, 16 params, 4 assets.
+- `inputs`: live values the scene can follow (see **Live inputs** below) → `ctx.input[0…7]`.
+  A package that reads them needs this engine's 1.1: write `"engine": {"id": "metal", "version": ">=1.1"}`.
+- Limits: sources 256 KB, assets 8 MB, 16 params, 8 inputs, 4 assets.
 
 ## `DSContext`
 
@@ -67,11 +70,13 @@ my-scene/
 | `float clock` | local wall-clock seconds since midnight (0…86400). `floor(clock / 3600)` and `floor(clock / 60)` are exactly the hour and minute on screen at every instant (draw digits from them); the seconds stop 50 ms short of each minute |
 | `DSDate date` | `year`, `month` 1–12, `day` 1–31, `weekday` 1 = Sunday … 7 |
 | `DSSun sun` | `elevation` (° above horizon, −90…90), `azimuth` (° from north, clockwise), `isDay` |
-| `DSWeather weather` | `cloud`, `rain`, `snow`, `fog`, `wind`, all 0…1 (eased; clear sky when unknown) |
+| `DSWeather weather` | `cloud`, `rain`, `snow`, `fog`, `wind`, `storm` (thunderstorm), `gust`, all 0…1 (eased; clear sky when unknown); `condition`: the exact condition as a number — `DS_CLEAR` 0, `DS_PARTLY_CLOUDY` 1, `DS_CLOUDY` 2, `DS_FOG` 3, `DS_DRIZZLE` 4, `DS_RAIN` 5, `DS_HEAVY_RAIN` 6, `DS_THUNDERSTORM` 7, `DS_SNOW` 8, `DS_SLEET` 9 (`int(ctx.weather.condition + 0.5) == DS_SNOW`). Branch on the condition for distinct looks; ease with the 0…1 values so changes stay smooth |
 | `DSMusic music` | `playing`, `level` (smooth 0…1 envelope while playing — not an audio meter), `a`, `b`, `c` (album-art palette, display sRGB, grey when none) |
 | `float p[16]` | your params |
 | `float3 colorA, colorB` | the style's colours, display sRGB |
 | `float seed` | 0…1, fixed per style — vary layouts between copies |
+| `float input[8]` | your manifest's `inputs` in order (engine 1.1). In the input's own units (AQI, °C, %…), clamped to its `range`, eased over ~20 s; its `default` while the style hasn't connected it or its signal is stale |
+| `float inputLive[8]` | 0…1: how live `input[i]` is (1 = a fresh reading; 0 = not connected or stale, so `input[i]` is the default) |
 | `texture2d<float> asset0…3`, `sampler smp` | your assets: `ctx.asset0.sample(ctx.smp, uv)` (y up, display sRGB) |
 
 ## Helpers (`DotStudio.h`)
@@ -99,6 +104,34 @@ width k), `dsRepeat`.
 **Sky** — `dsSky(dir, ctx)` / `dsSkyAt(dir, elevation°, azimuth°)`: a daylight-aware sky for a
 view direction (linear colour; day blue, golden at sunrise/sunset, deep night, a sun disc);
 `dsSky2D(uv, ctx)` for flat scenes.
+
+## Live inputs (engine 1.1)
+
+A package can declare up to 8 **inputs** — live values it reacts to, which the *style* connects to
+a signal (a built-in like `weather.tempC`, `power.battery`, `sun.elevation`, or one of the user's own:
+an air-quality API, a Home Assistant sensor, a file a script writes). The package never says where a
+value comes from, and declaring an input never makes a Mac fetch anything: the user (Inspector ▸
+the input's menu) or an assistant (`bind_signal`) connects it.
+
+```json
+"inputs": [
+  { "key": "aqi",  "label": "Air quality", "range": [0, 300], "default": 0,  "unit": "AQI" },
+  { "key": "warm", "label": "Warmth",      "range": [-10, 40], "default": 15, "unit": "°C", "suggest": "weather.tempC" }
+]
+```
+
+- `key` `[a-z][A-Za-z0-9_]{0,31}`, unique; `range` `[lo, hi]` with lo < hi, in the input's units;
+  `default` inside the range (what the scene sees until the style connects it, and when its signal
+  goes stale); `unit` is shown in the Inspector; `suggest` names a built-in signal that fits.
+- Read `ctx.input[i]` in those units: `saturate(ctx.input[0] / 220.0)`. It's already clamped and
+  eased (a new reading drifts in over ~20 s; a stale one eases back to the default as its freshness
+  falls). `ctx.inputLive[i]` says how live it is, if you want a quieter look while nothing's connected.
+- **Modulate, never print.** Inputs should move colour, density, depth or motion — a haze that
+  thickens, a palette that warms, rain that quickens. Never draw the value as digits or a fixed
+  readout: values change slowly, and a static readout burns in (validate warns when it looks like
+  one). The scene must look right at every value, and at the default.
+- Cost: reading inputs is free (two uniforms); what you do with them is the usual budget.
+- Example: `examples/haze` — Air quality thickens and warms a calm dusk; nothing on screen is a number.
 
 ## Taste — what makes a good DotStudio scene
 

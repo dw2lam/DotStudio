@@ -39,9 +39,13 @@ struct WeatherMix: Equatable {
         }
     }
 
-    /// The scene's Weather menu ("weather" param): 0 = Live, then these fixed conditions.
-    static let menu = ["Live", "Clear", "Partly Cloudy", "Overcast", "Fog", "Rain", "Storm", "Snow"]
-    static let menuConditions: [WeatherCondition] = [.clear, .partlyCloudy, .cloudy, .fog, .rain, .thunderstorm, .snow]
+    /// The scene's Weather menu ("weather" param): 0 = Live, then these fixed conditions — every
+    /// condition the live weather can report. Saved styles store the index, so new conditions are
+    /// only ever APPENDED (Drizzle, Heavy Rain and Sleet came in 1.6).
+    static let menu = ["Live", "Clear", "Partly Cloudy", "Overcast", "Fog", "Rain", "Storm", "Snow",
+                       "Drizzle", "Heavy Rain", "Sleet"]
+    static let menuConditions: [WeatherCondition] = [.clear, .partlyCloudy, .cloudy, .fog, .rain, .thunderstorm, .snow,
+                                                     .drizzle, .heavyRain, .sleet]
 
     /// Fog value for a visibility in metres (log scale: 20 km → 0, 150 m → 1).
     static func fog(visibility: Double?) -> Double {
@@ -93,6 +97,21 @@ struct WeatherMix: Equatable {
         let c = WeatherMix.clear
         return abs(cover - c.cover) < 0.005 && precip < 0.002 && fog < 0.002 && storm < 0.002
             && abs(wind - c.wind) < 0.05 && abs(gust - c.gust) < 0.1
+    }
+
+    /// The condition this mix is closest to (forced previews, a pinned menu pick and live readings
+    /// alike: the presets classify as themselves). Custom scenes read it as DSWeather.condition.
+    var condition: WeatherCondition {
+        if storm > 0.5 { return .thunderstorm }
+        if precip > 0.06 {
+            if snow > 0.7 { return .snow }
+            if snow > 0.25 { return .sleet }
+            return precip < 0.32 ? .drizzle : precip < 0.75 ? .rain : .heavyRain
+        }
+        if fog > 0.6 { return .fog }
+        if cover >= 0.85 { return .cloudy }
+        if cover >= 0.45 { return .partlyCloudy }
+        return .clear
     }
 
     /// Cloud drift speed relative to the scene's own (1 at the clear default's 4 m/s).

@@ -85,9 +85,9 @@ Kind `custom` with `scene`: an installed scene package (`list_custom_scenes`; ma
 
 | engine | what you write | guide |
 |---|---|---|
-| `cells` v1 (built in) | The same dsScene function, but its alpha is coverage: drawn as glyphs, LED pixels or LED dots over a soft glow (the Bloom look). | `engines/cells` |
-| `film` v1 (built in) | Looping video clips (day, golden hour, night, rain) that follow the real sun and weather, crossfading between them. | `engines/film` |
-| `metal` v1 (built in) | Write a scene as one Metal function, float4 dsScene(float2 uv, DSContext ctx), with DotStudio's clock, sun, weather, music, params and helpers. | `engines/metal` |
+| `cells` v1.1 (built in) | The same dsScene function, but its alpha is coverage: drawn as glyphs, LED pixels or LED dots over a soft glow (the Bloom look). | `engines/cells` |
+| `film` v1.1 (built in) | Looping video clips that follow the real sun and weather: variant clips (day, golden hour, night, rain) crossfading, or one video of light layers relit live for any time of day and any weather. | `engines/film` |
+| `metal` v1.1 (built in) | Write a scene as one Metal function, float4 dsScene(float2 uv, DSContext ctx), with DotStudio's clock, sun, weather, music, params, live inputs and helpers. | `engines/metal` |
 | `shadertoy` (pulled: `pull_engine`) | Shadertoy-style GLSL (`mainImage`), translated to Metal. | `engines/shadertoy` once pulled |
 
-See also `settings/app` (styles, lineup, displays, wallpaper, music) and `style/dotstudio` (taste).
+See also `settings/app` (styles, lineup, displays, wallpaper, music) and `style/dotstudio` (taste). These are the settings of each style; the app's own settings (music card, live wallpaper, playlist timing, quality, weather, updates…) are read with `get_settings` and changed with `update_settings`.
