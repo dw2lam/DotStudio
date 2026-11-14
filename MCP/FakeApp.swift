@@ -6,6 +6,8 @@
 //
 //  args: [--hold-lock-ms N]  keep the lock N ms before loading (a slow launch)
 //        [--clobber-ms N]    re-save the in-memory library every N ms (UI edits)
+//  Settings requests run SettingsExecutor on its memory (prefs in <store>/app-prefs.json, as the
+//  app keeps them under DOTSTUDIO_STORE_DIR); actions are acknowledged, never performed.
 //  Prints "ready" when the bridge is up and "applied <op>" per request; exits at stdin EOF.
 
 import Foundation
@@ -24,11 +26,26 @@ enum FakeApp {
         }
         store.save(lib)
         var wall = LibraryAccess.loadWallpaper(dir)
+        var prefs = PrefsStore.load(dir)
+        // What only the running app can read, as the real app would report it.
+        let liveSystem: [String: JSONValue] = ["general.openAtLogin": .bool(false), "system.loginItemApproval": .string("off"),
+                                               "system.screensaverInstalled": .bool(true), "system.screensaverChosen": .string("on 1 of 2 displays"),
+                                               "system.startScreenSaverAfter": .number(20), "system.accessibilityForGuideMe": .bool(false)]
         let q = DispatchQueue(label: "fake-app")
         let server = AIBridge.Server(store: dir) { req, reply in
             q.async {
-                var r = LibraryExecutor.run(req, library: &lib, wallpaper: &wall, displays: Displays.connected(),
+                var r: BridgeResponse
+                if req.op == .getSettings || req.op == .updateSettings || req.op == .appAction {
+                    // As the app keeps them under DOTSTUDIO_STORE_DIR: <store>/app-prefs.json.
+                    let before = prefs
+                    r = SettingsExecutor.run(req, library: &lib, wallpaper: &wall, prefs: &prefs, store: store,
+                                             ai: AISettings.load(store: dir), live: liveSystem, appActions: true)
+                    if r.ok { PrefsStore.save(prefs, changed: prefs.keys.filter { prefs[$0] != before[$0] }, dir) }
+                    if r.ok, req.op == .appAction { r.message = "Did \(req.mode ?? "") (stand-in app)." }
+                } else {
+                    r = LibraryExecutor.run(req, library: &lib, wallpaper: &wall, displays: Displays.connected(),
                                             settings: AISettings.load(store: dir))
+                }
                 if r.ok, req.op != .ping {
                     store.save(lib)
                     LibraryAccess.saveWallpaper(wall, dir)
