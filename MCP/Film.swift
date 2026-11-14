@@ -156,7 +156,10 @@ enum FilmLook {
 /// output (day / golden / night / rain; anything else plays as `any`) with its codec, the spec's
 /// look as 0…1 numbers (its grain becomes the style's starting Grain — the film engine's own
 /// `ds.grain` param, EffectInstance.customScene — so the package adds no grain param of its own),
-/// and the clips themselves.
+/// and the clips themselves. A light-layer loop (job.py `--variants layers`, docs/film-layers.md)
+/// leaves `layers.mov` + `layers.json` (the manifest's "layers" block): the video goes to
+/// clips/layers.mov, the block into scene.json as `layers`, and the engine requirement becomes
+/// ">=1.1"; `clips` then only lists the variant clips, if any (a layers-only package has none).
 enum FilmPackage {
     static let variants: Set<String> = ["day", "golden", "night", "rain", "any"]
 
@@ -166,6 +169,7 @@ enum FilmPackage {
         var clips: [JSONObject] = []
         let files = try fm.contentsOfDirectory(at: loopOutput, includingPropertiesForKeys: nil)
             .filter { ["mov", "mp4"].contains($0.pathExtension.lowercased()) }
+            .filter { $0.deletingPathExtension().lastPathComponent.lowercased() != "layers" }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
         for f in files {
             let name = f.deletingPathExtension().lastPathComponent.lowercased()
@@ -177,14 +181,28 @@ enum FilmPackage {
             if let c = codec(f) { clip["codec"] = c }
             clips.append(clip)
         }
-        guard !clips.isEmpty else { throw ToolError("The loop render left no clips (.mov) to package.") }
+        var layers: JSONObject?
+        let layersMov = loopOutput.appendingPathComponent("layers.mov")
+        let layersJSON = loopOutput.appendingPathComponent("layers.json")
+        if fm.fileExists(atPath: layersMov.path) {
+            guard let data = try? Data(contentsOf: layersJSON),
+                  var block = (try? JSONSerialization.jsonObject(with: data)) as? JSONObject else {
+                throw ToolError("The layer render left layers.mov without its layers.json.")
+            }
+            try fm.copyItem(at: layersMov, to: package.appendingPathComponent("clips/layers.mov"))
+            block["file"] = "clips/layers.mov"
+            layers = block
+        }
+        guard !clips.isEmpty || layers != nil else { throw ToolError("The loop render left no clips (.mov) to package.") }
         // The clips' real frame rate wins over the spec's (render_film_loop can override it).
         let specFps = ((spec["loop"] as? JSONObject)?["fps"] as? NSNumber)?.intValue ?? 24
-        let fps = files.lazy.compactMap(Self.frameRate).first ?? specFps
+        let fps = (files + (layers != nil ? [layersMov] : [])).lazy.compactMap(Self.frameRate).first ?? specFps
         var m: JSONObject = ["format": 1, "id": sceneID, "name": spec["name"] as? String ?? "Film",
-                             "engine": ["id": "film", "version": ">=1"], "fps": fps, "clips": clips,
+                             "engine": ["id": "film", "version": layers != nil ? ">=1.1" : ">=1"], "fps": fps,
                              "uses": ["sun", "weather"], "look": FilmLook.scalars(spec["look"]),
                              "description": spec["description"] as? String ?? "A film scene rendered in Blender by DotStudio's film toolkit."]
+        if !clips.isEmpty { m["clips"] = clips }
+        if let layers { m["layers"] = layers }
         if let a = spec["author"] as? String { m["author"] = a }
         try JSON.data(m, pretty: true).write(to: package.appendingPathComponent("scene.json"))
     }
@@ -378,6 +396,12 @@ struct FakeFilmToolkit: FilmToolkitAPI {
             } else if !writeClip(out.appendingPathComponent("\(v).mov"), variant: v) {
                 print("[fake dsfilm] couldn't write \(v).mov")
                 exit(1)
+            } else if v == "layers" {     // a light-layer loop also leaves its manifest block (job.py)
+                let block: JSONObject = ["file": "clips/layers.mov", "grid": [3, 2], "encoding": "pow4",
+                                         "tiles": ["sun", "sun_low", "sky", "cabin", "city", "mask"],
+                                         "scale": ["sun": 1.19, "sun_low": 1.1, "sky": 0.45, "cabin": 0.9, "city": 0.45],
+                                         "exposure": ["day": 1.5, "night": 3.2], "tint": ["sun_low": [1.0, 0.52, 0.22]]]
+                try? JSON.data(block, pretty: true).write(to: out.appendingPathComponent("layers.json"))
             }
         }
         exit(0)

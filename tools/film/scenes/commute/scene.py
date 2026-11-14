@@ -7,6 +7,11 @@ bearing (the line curving), breathing and the dozing cycle are all periodic in t
 
 Params (spec "params"): penguin_color [r,g,b], penguin (bool), sway (0..2), cabin (lamp scale),
 lighting {variant: {preset overrides}}.
+
+Light layers (dsfilm.layers, `run.py --layers-…`): the layered build is the day car and city plus a
+second, low sun (the golden preset's elevation/azimuth/strength, rendered white; the manifest tints
+it) and the city's night emitters; build() returns them as "layers". Everything else that emits
+(cabin lamps and diffusers, the door screens, the penguin's eye glints) is the `cabin` tile.
 """
 import math
 import os
@@ -31,6 +36,7 @@ with open(os.path.join(os.path.dirname(__file__), "assets.json")) as _f:
     ASSETS = json.load(_f)
 VARIANTS = ["day", "golden", "night", "rain"]
 CAMERAS = ["wide", "close", "aisle"]
+LAYERS = ["sun", "sun_low", "sky", "cabin", "city", "mask"]   # light-layer tiles it can render (dsfilm.layers)
 
 JOINT = 25.0                # rail length (m); the scenery strip is a whole number of rails
 SPEED = 13.54               # m/s (~49 km/h); the strip is SPEED x loop length, rounded to whole rails
@@ -80,7 +86,7 @@ def build(ctx):
             except Exception:
                 pass
 
-    city.build_tile(tile, lib, P, period)
+    city_emitters = city.build_tile(tile, lib, P, period)
     root = geo.empty("SceneryRoot", C_OUT)
     n = math.ceil(650.0 / period) + 1                      # enough copies to cover the skyline's view
     Loop.strip(tile, C_OUT, period, root, copies=range(-n, n + 1), mirror_y=True, x_offset=period * 0.37,
@@ -93,6 +99,10 @@ def build(ctx):
                          yaw_deg=-12, color=tuple(ctx.params.get("penguin_color", (0.0, 0.42, 0.56))))
 
     rig = lighting.setup(ctx.scene, C_OUT, ctx.variant, **ctx.params.get("lighting", {}).get(ctx.variant, {}))
+    low, low_p = None, None
+    if P.get("layers"):          # the light layers' second sun: golden's low warm sun, rendered white
+        low_p = lighting.preset("golden", **ctx.params.get("lighting", {}).get("golden", {}))
+        low = lighting.add_sun(C_OUT, "SunLow", low_p, color=(1.0, 1.0, 1.0))
     cams = _cameras(C_CAR)
 
     # ---------------------------------------------------------------- motion (periodic in the loop)
@@ -121,6 +131,9 @@ def build(ctx):
             r.rotation_euler = (rot[0] + math.radians(b * 0.05), rot[1] + math.radians(roll * 0.22), rot[2] + math.radians(lat * 0.07))
         rig.sun.rotation_euler = lighting.sun_euler(base_el + 0.6 * lp.wave(t, 2, 0.4),
                                                     base_az + 4.0 * lp.wave(t, 1) + 1.5 * lp.wave(t, 3, 1.0))
+        if low is not None:      # the same bearing wobble (the line curving) around the low sun
+            low.rotation_euler = lighting.sun_euler(low_p["sun_elev"] + 0.6 * lp.wave(t, 2, 0.4),
+                                                    low_p["sun_az"] + 4.0 * lp.wave(t, 1) + 1.5 * lp.wave(t, 3, 1.0))
         for i, p in enumerate(pivots):
             ph = i * 0.37
             lat2, _ = sway(t - 0.35 - 0.02 * (i % 5))
@@ -139,7 +152,7 @@ def build(ctx):
         if M.get("rain") is not None:
             M["rain"].set(lp.wrap(t) / lp.seconds)
 
-    ids = [r for r, _, _ in rigs.values()] + [rig.sun] + pivots
+    ids = [r for r, _, _ in rigs.values()] + [rig.sun] + ([low] if low is not None else []) + pivots
     if pen:
         ids += [pen["torso"], (pen["head"], "rotation_euler")] + pen["lids"]
     if M.get("rain") is not None:
@@ -151,7 +164,18 @@ def build(ctx):
     # EEVEE: a baked volume probe over the cabin, so sky light doesn't leak through walls and ceiling
     probes = {"volumes": [((0.0, 0.0, car.CEIL / 2), ((car.CAR_X[1] - car.CAR_X[0]) / 2, car.HALF_W, car.CEIL / 2), (48, 8, 8))],
               "spheres": [((-1.0, 0.0, 1.3), 3.5)]}
-    return {"cameras": cams, "penguin": pen, "rig": rig, "probes": probes}
+    out = {"cameras": cams, "penguin": pen, "rig": rig, "probes": probes}
+    if P.get("layers"):
+        # the light groups of dsfilm.layers: lamps / the world / emitting materials per tile; every
+        # other lamp and emitter (cabin lights, diffusers, door screens, eye glints) is "cabin"
+        out["layers"] = {
+            "groups": {"sun": {"lights": [rig.sun]}, "sun_low": {"lights": [low]}, "sky": {"world": True},
+                       "cabin": {}, "city": {"emitters": city_emitters}},
+            "other": "cabin",
+            "glass": ["WindowGlass"],
+            "tint": {"sun_low": list(low_p["sun_color"])},
+        }
+    return out
 
 
 def breathing(lp, t):

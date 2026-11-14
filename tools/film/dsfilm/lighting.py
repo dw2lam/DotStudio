@@ -6,6 +6,7 @@ stuck with the photo's sun. With ``hdri=None`` a Nishita physical sky is used in
     rig = lighting.setup(scene, coll, "day", sun_az=60)      # preset name + overrides
     rig.sun.rotation_euler = lighting.sun_euler(elev, az)    # animate (deg; az 0 = +X, 90 = +Y)
     rig.mapping.inputs["Rotation"]                           # world rotation node (z = turn sky)
+    low = lighting.add_sun(coll, "SunLow", lighting.preset("golden"), color=(1, 1, 1))  # a 2nd sun (light layers)
 
 Presets (override any key):
     day     clear midday, cumulus      kloofendal_48d_partly_cloudy_puresky
@@ -62,16 +63,23 @@ def sun_euler(elev, az):
     return d.to_track_quat("Z", "Y").to_euler()
 
 
-def setup(scene, coll, name="day", **over):
-    p = preset(name, **over)
-    sun_d = bpy.data.lights.new("Sun", "SUN")
+def add_sun(coll, name, p, color=None):
+    """A sun lamp from a preset dict (sun_elev, sun_az, sun_strength, sun_color, sun_angle).
+    `color` overrides the preset's colour — light layers render a second sun white (the app tints it)."""
+    sun_d = bpy.data.lights.new(name, "SUN")
     sun_d.energy = p["sun_strength"]
-    sun_d.color = p["sun_color"]
+    sun_d.color = color or p["sun_color"]
     sun_d.angle = math.radians(p["sun_angle"])
-    sun = bpy.data.objects.new("Sun", sun_d)
+    sun = bpy.data.objects.new(name, sun_d)
     coll.objects.link(sun)
     sun.rotation_euler = sun_euler(p["sun_elev"], p["sun_az"])
     sun.hide_render = p["sun_strength"] <= 0
+    return sun
+
+
+def setup(scene, coll, name="day", **over):
+    p = preset(name, **over)
+    sun = add_sun(coll, "Sun", p)
 
     w = bpy.data.worlds.new("Sky")
     scene.world = w

@@ -2,18 +2,26 @@
   "id": "film",
   "kind": "film",
   "name": "Film — prerendered photoreal loops",
-  "version": "0.1.1",
-  "requires": {"blender": ">=5.1", "python3": ">=3.10", "ffmpeg": ">=6", "pillow": "for template textures"},
+  "version": "0.2.0",
+  "requires": {
+    "blender": ">=5.1",
+    "python3": ">=3.10",
+    "ffmpeg": ">=6",
+    "pillow": "for template textures"
+  },
   "entry": "run.py",
-  "cli": "Blender -b --factory-startup --python run.py -- SPEC.json (--stills DIR | --still FILE | --anim DIR [--frames A-B] | --build-sequence DIR) [--variant V] [--camera C] [--engine cycles|eevee] [--res WxH] [--samples N] [--no-post]",
+  "cli": "Blender -b --factory-startup --python run.py -- SPEC.json (--stills DIR | --still FILE | --anim DIR [--frames A-B] | --build-sequence DIR) [--variant V] [--camera C] [--engine cycles|eevee] [--res WxH] [--samples N] [--no-post] | --layers-still PREFIX --frame N [--full] | --layers-anim DIR [--frames A-B] [--tiles …] [--tile-samples k=n,…]",
   "protocol": {
-    "progress": "lines 'PROGRESS {json}': stage fetch|build|still|sample|frame, done, of, eta_s",
+    "progress": "lines 'PROGRESS {json}': stage fetch|build|still|sample|frame|layer, done, of, eta_s (layers: + tile)",
     "result": "final line 'RESULT {json}': ok, outputs, timings | ok=false, error"
   },
   "encode": "python3 -I dsfilm/encode.py FRAMES_DIR OUT_BASE  ->  OUT_BASE.mov (HEVC main10 hvc1) + OUT_BASE-preview.mp4",
   "fetch": "python3 -I fetch.py <template>",
-  "templates": ["commute"],
+  "templates": [
+    "commute"
+  ],
   "guide": "guide.md",
   "cache": "~/Library/Caches/DotStudio-film (override DOTSTUDIO_FILM_CACHE)",
-  "licence_of_assets": "CC0 only (Poly Haven, ambientCG); logged in <cache>/LICENSES.tsv"
+  "licence_of_assets": "CC0 only (Poly Haven, ambientCG); logged in <cache>/LICENSES.tsv",
+  "layers": "light layers (docs/film-layers.md): run.py --layers-anim DIR -> python3 -I dsfilm/layerpack.py pack DIR OUT -> OUT/layers.mov (3x2 pow4 tiles, HEVC Main10) + OUT/layers.json; job.py loop --variants layers does both"
 }

@@ -99,7 +99,7 @@ def setup(scene, engine="cycles", res=(1600, 1000), samples=None, exposure=0.0, 
         e.clamp_surface_indirect = 10.0
 
 
-def eevee_probes(scene, volumes=(), spheres=()):
+def eevee_probes(scene, volumes=(), spheres=(), bake=True):
     """Adds and bakes EEVEE light probes. Interiors need a volume probe: without one EEVEE lights
     them with the unoccluded sky (flat, far too bright, no window light). volumes: [(centre,
     half_size, (rx, ry, rz))], spheres: [(centre, radius)]. The bake is static (taken at the current
@@ -117,6 +117,8 @@ def eevee_probes(scene, volumes=(), spheres=()):
         ob = bpy.data.objects.new(f"Sphere{i}", d)
         ob.location = c
         coll.objects.link(ob)
+    if not bake:                 # light layers re-bake per layer (dsfilm.layers)
+        return
     t = time.time()
     with bpy.context.temp_override(scene=scene):
         bpy.ops.object.lightprobe_cache_bake(subset="ALL")
