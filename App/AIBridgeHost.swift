@@ -22,7 +22,12 @@ final class AIBridgeHost {
         guard server == nil else { return }
         self.model = model
         let s = AIBridge.Server(store: model.store.baseDir) { [weak self] req, reply in
-            DispatchQueue.main.async { reply(self?.handle(req) ?? .fail("DotStudio is shutting down")) }
+            DispatchQueue.main.async {
+                // A signal test waits on the network: answered when the fetch is done, never
+                // holding the main thread.
+                if req.op == .testSignal, let self { self.testSignal(req, reply: reply); return }
+                reply(self?.handle(req) ?? .fail("DotStudio is shutting down"))
+            }
         }
         if s.start() { server = s } else { Breadcrumbs.note("AI bridge: couldn't open its socket") }
     }
@@ -83,6 +88,60 @@ final class AIBridgeHost {
             return updateSettings(req, model, who: who)
         case .appAction:
             return appAction(req.mode ?? "", model)
+        case .upsertSignal, .deleteSignal:
+            let settings = AISettings.load(store: model.store.baseDir)
+            guard settings.allowSignals else { return .fail(SignalEdits.signalsOff) }
+            let undo = snapshot(model)
+            let r = signalEdit(req, model)
+            if r.ok, settings.showNotices, let msg = r.message { AINoticePanel.shared.show("\(who): \(msg)", undo: undo) }
+            return r
+        case .upsertRule, .deleteRule:
+            let settings = AISettings.load(store: model.store.baseDir)
+            guard settings.allowPlaybackChanges else { return .fail(Self.playbackOff) }
+            let undo = snapshot(model)
+            // The same pure edit as dotstudio-mcp's offline path, on the app's library.
+            var lib = model.library
+            var r = SignalEdits.run(req, library: &lib, settings: settings)
+            if r.ok {
+                model.library = lib
+                model.save()
+                SignalService.shared.evaluate()     // decide at once, not at the next minute
+                r.appVersion = appVersion
+                if settings.showNotices, let msg = r.message { AINoticePanel.shared.show("\(who): \(msg)", undo: undo) }
+            }
+            return r
+        case .testSignal:
+            return .fail("testSignal is answered asynchronously")
+        }
+    }
+
+    /// Add / change / delete a signal (AI-made: marked createdBy "ai"; a key is never part of it).
+    private func signalEdit(_ req: BridgeRequest, _ model: AppModel) -> BridgeResponse {
+        var lib = model.library
+        var r = SignalEdits.run(req, library: &lib, settings: AISettings.load(store: model.store.baseDir))
+        guard r.ok else { return r }
+        model.library = lib
+        model.save()
+        r.appVersion = appVersion
+        return r
+    }
+
+    /// test_signal: a draft (the AI host policy) or a saved signal with its Keychain key (never
+    /// prompting). Only the outcome goes back — value, status, an outline — never the key.
+    private func testSignal(_ req: BridgeRequest, reply: @escaping (BridgeResponse) -> Void) {
+        guard let model else { reply(.fail("DotStudio isn't ready yet")); return }
+        Breadcrumbs.note("AI bridge: testSignal from \(req.client ?? "AI")")
+        let target: Signal
+        let forAI: Bool
+        if let draft = req.signal {
+            target = draft
+            forAI = true
+        } else if let id = req.id, let s = model.library.signal(id) {
+            target = s
+            forAI = s.createdByAI
+        } else { reply(.fail("No such signal. Call list_signals.")); return }
+        SignalService.shared.test(target, forAI: forAI) { [appVersion] r in
+            reply(BridgeResponse(ok: true, appVersion: appVersion, test: r))
         }
     }
 
@@ -98,6 +157,8 @@ final class AIBridgeHost {
             model.library.rotation = lib.rotation
             model.library.schedule = lib.schedule
             model.library.displayStyles = lib.displayStyles
+            model.library.rules = lib.rules          // When rules and signals are part of what plays
+            model.library.signals = lib.signals
             model.save()
             let w = WallpaperController.shared
             if !wall.enabled {

@@ -32,10 +32,14 @@ extension AppModel {
     /// (Playback.shownPreset).
     var nowPlayingID: UUID? {
         library.presets.isEmpty ? nil
-            : Playback.shownPreset(in: library, now: Date(), displays: DisplayRoster.shared.displays.map(\.key)).id
+            : Playback.shownPreset(in: library, now: Date(), displays: DisplayRoster.shared.displays.map(\.key),
+                                   live: SignalService.shared.live).id
     }
 
     var isNightNow: Bool { Playback.isNight(library) }
+
+    /// The When rule playing now (the app's own decision, SignalService), if any.
+    var activeRule: PlayRule? { library.activeRule(live: SignalService.shared.live, now: Date())?.rule }
 
     // MARK: Writes
 

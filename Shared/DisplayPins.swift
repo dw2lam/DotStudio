@@ -125,12 +125,12 @@ extension Playback {
     /// the lineup's style — unless every connected display has a style of its own, then the
     /// first display's (with one display connected, its own style is simply what plays).
     /// `displays`: the connected displays' keys, in the app's order.
-    static func shownPreset(in lib: Library, now: Date, displays: [String]) -> Preset {
+    static func shownPreset(in lib: Library, now: Date, displays: [String], live: SignalState?) -> Preset {
         if let first = displays.first, displays.allSatisfy({ lib.pinnedPreset(display: $0) != nil }),
            let p = lib.pinnedPreset(display: first) {
             return p
         }
-        return effectivePreset(in: lib, now: now)
+        return effectivePreset(in: lib, now: now, live: live)
     }
 }
 

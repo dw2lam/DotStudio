@@ -20,7 +20,7 @@ final class Toolbox {
         self.film = film
     }
 
-    var all: [Tool] { core + playback + settingsTools + custom + filmTools }
+    var all: [Tool] { core + playback + signalTools + settingsTools + custom + filmTools }
 
     // MARK: - Helpers
 
@@ -34,6 +34,7 @@ final class Toolbox {
         if lineup.playlist.contains(p.id) { roles.append(lineup.rotates ? "screensaver rotation" : "screensaver") }
         if lineup.night == p.id { roles.append("screensaver at night") }
         for (key, pin) in l.displayStyles ?? [:] where pin.presetID == p.id { roles.append("screensaver on \(pin.name ?? key)") }
+        for r in l.rules ?? [] where r.enabled && r.play.contains(p.id) { roles.append("screensaver when \(RuleText.condition(r.when, in: l))") }
         if (wall["enabled"] as? Bool) == true {
             if (wall["followsScreensaver"] as? Bool) != true, (wall["presetID"] as? String).flatMap(UUID.init) == p.id { roles.append("live wallpaper") }
             for (_, v) in wall["displayStyles"] as? JSONObject ?? [:] {
@@ -330,7 +331,9 @@ final class Toolbox {
         let settings = AISettings.load(store: store)
         let user = guides.all().filter { $0.source == "user" }.map(\.id)
         let created = AICreatedStyles.load(store: store).ids.filter { id in l.presets.contains { $0.id == id } }.count
-        let playing = Playback.effectivePreset(in: l, now: Date())
+        let live = SignalState.read(baseDir: store)
+        let playing = Playback.effectivePreset(in: l, now: Date(), live: live)
+        let activeRule = l.activeRule(live: live, now: Date())?.rule
         var t = """
         DotStudio makes calm, living screensavers and live wallpapers for the Mac. A STYLE is a named stack of effects: \
         a SCENE first (it draws its own image: ocean, meadow, clocks, liquid chrome, bloom…), then 0–2 LOOKS that restyle it \
@@ -350,17 +353,25 @@ final class Toolbox {
         update_settings changes them in one checked patch; app_action presses the app's own buttons for setup \
         (install_screensaver, show_setup_guide, guide_me, open_screensaver_settings…). Only change what the user asked for.
 
+        Signals and When rules: list_signals shows live values DotStudio watches (weather, sun, time, battery, music, \
+        and the user's own HTTPS-JSON or file signals); set_rule makes "when ⟨condition⟩, play ⟨style⟩" (snowing → \
+        a snowy style, battery low → a light one). Read read_guide("signals") first — never put a key in a URL, never \
+        ask the user to paste a key into the chat.
+
         """
         t += "This Mac: DotStudio is \(running ? "running (changes appear live, with a notice)" : "not running (changes are written to its library and show when it opens)"). "
         t += "The AI \(settings.allowPlaybackChanges ? "may" : "may NOT") change what plays (Settings ▸ AI). "
-        t += "Library: \(l.presets.count) styles (\(created) made by the AI); the screensaver shows “\(playing.name)” now.\n"
+        t += "Library: \(l.presets.count) styles (\(created) made by the AI); the screensaver shows “\(playing.name)” now"
+            + (activeRule.map { " (When rule “\($0.name)”)" } ?? "") + ".\n"
+        t += "Signals: \((l.signals ?? []).count) of the user's, \((l.rules ?? []).count) When rule(s); the AI \(settings.allowSignals ? "may" : "may NOT") add signals.\n"
         t += user.isEmpty ? "User guides: none (they can add .md files to \(AIStore.guidesDir(store).path)).\n"
             : "User guides (read and follow these): \(user.joined(separator: ", ")).\n"
         t += "Custom shader scenes: \(scenes.isAvailable ? "available (list_engines, read_guide engines/metal)" : "not in this build"). "
         t += "Film (photoreal Blender) scenes: \(film.isAvailable ? "available (film_status)" : "not in this build").\n"
         return .ok(t, ["appRunning": running, "allowPlaybackChanges": settings.allowPlaybackChanges, "styles": l.presets.count,
                        "aiStyles": created, "nowPlaying": playing.name, "userGuides": user,
-                       "readFirst": ["style/dotstudio", "settings/index", "power", "burn-in"] + user,
+                       "readFirst": ["style/dotstudio", "settings/index", "power", "burn-in", "signals"] + user,
+                       "allowSignals": settings.allowSignals, "signalTools": ["list_signals", "test_signal", "create_signal", "set_rule", "list_rules"],
                        "settingsTools": ["get_settings", "update_settings", "app_action"],
                        "customScenes": scenes.isAvailable, "film": film.isAvailable, "store": store.path])
     }
@@ -429,13 +440,16 @@ final class Toolbox {
                  input: S.obj([:]), readOnly: true, idempotent: true) { [unowned self] _ in
                 let l = try self.lib.library()
                 let wall = LibraryAccess.loadWallpaper(self.store)
-                let shared = Playback.effectivePreset(in: l, now: Date())
+                let live = SignalState.read(baseDir: self.store)
+                let shared = Playback.effectivePreset(in: l, now: Date(), live: live)
+                let rule = l.activeRule(live: live, now: Date())?.rule
                 let wallOn = (wall["enabled"] as? Bool) == true
                 let wallShared = (wall["presetID"] as? String).flatMap(UUID.init).flatMap { id in l.presets.first { $0.id == id } }
                 let items: [JSONObject] = Displays.connected().map { d in
                     let own = l.pinnedPreset(display: d.key)
                     var o: JSONObject = ["key": d.key, "name": d.name, "builtIn": d.builtIn,
                                          "screensaver": (own ?? shared).name, "screensaverOwnStyle": own != nil]
+                    if own == nil, let rule { o["screensaverWhen"] = RuleText.condition(rule.when, in: l) }
                     if wallOn {
                         let pin = ((wall["displayStyles"] as? JSONObject)?[d.key] as? JSONObject)?["presetID"] as? String
                         let wp = pin.flatMap(UUID.init).flatMap { id in l.presets.first { $0.id == id } }

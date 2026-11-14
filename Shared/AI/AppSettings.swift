@@ -227,6 +227,9 @@ enum AppSettings {
         SettingDef(key: "ai.allowPlaybackChanges", label: "Let AI change what plays", place: "Settings ▸ AI",
                    meaning: "Whether assistants may change the screensaver, wallpaper and other settings marked changesWhatPlays. Styles can always be created and edited.",
                    type: .readOnly, store: .ai, howToChange: "Only the user can change this, in DotStudio ▸ Settings ▸ AI. Never ask a tool to."),
+        SettingDef(key: "ai.allowSignals", label: "Let AI add live data signals", place: "Settings ▸ AI",
+                   meaning: "Whether assistants may add, change and delete signals (live values When rules react to). They never see or set a signal's key either way.",
+                   type: .readOnly, store: .ai, howToChange: "Only the user can change this, in DotStudio ▸ Settings ▸ AI. Never ask a tool to."),
         SettingDef(key: "ai.showNotices", label: "Notices", place: "—",
                    meaning: "Each change an assistant makes shows a small notice in the app, with Undo.",
                    type: .readOnly, store: .ai, howToChange: "Only the user decides this (ai-settings.json)."),
@@ -345,6 +348,7 @@ enum AppSettings {
 
         o["ai.allowPlaybackChanges"] = .bool(s.ai.allowPlaybackChanges)
         o["ai.showNotices"] = .bool(s.ai.showNotices)
+        o["ai.allowSignals"] = .bool(s.ai.allowSignals)
         o["system.textSize"] = .string("follows macOS")
         return o
     }
@@ -575,7 +579,8 @@ enum AppSettings {
             } else {
                 // Leaving it keeps a style on screen: the chosen one, else what plays now.
                 if existing(s.wallpaper["presetID"]?.stringValue, lib) == nil, !lib.presets.isEmpty {
-                    s.wallpaper["presetID"] = .string(Playback.effectivePreset(in: lib, now: Date()).id.uuidString)
+                    // (the lineup's pick: a When rule playing now is a passing overlay, not a choice)
+                    s.wallpaper["presetID"] = .string(Playback.effectivePreset(in: lib, now: Date(), live: nil).id.uuidString)
                 }
                 s.wallpaper["followsScreensaver"] = .bool(false)
             }

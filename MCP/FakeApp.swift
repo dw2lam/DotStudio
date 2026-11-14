@@ -42,11 +42,19 @@ enum FakeApp {
                                              ai: AISettings.load(store: dir), live: liveSystem, appActions: true)
                     if r.ok { PrefsStore.save(prefs, changed: prefs.keys.filter { prefs[$0] != before[$0] }, dir) }
                     if r.ok, req.op == .appAction { r.message = "Did \(req.mode ?? "") (stand-in app)." }
+                } else if req.op == .testSignal {
+                    // As the app tests one: a draft, or a saved signal (no Keychain here: a keyed
+                    // signal answers needsSecret, as the app does before the user enters the key).
+                    if let s = req.signal ?? req.id.flatMap({ lib.signal($0) }) {
+                        let t = s.kind == .file ? SignalFileReader.read(s, store: dir)
+                            : SignalFetcher.fetchSync(s, secret: nil, location: lib.signalLocation, forAI: req.signal != nil || s.createdByAI)
+                        r = BridgeResponse(ok: true, test: t)
+                    } else { r = .fail("No such signal. Call list_signals.") }
                 } else {
                     r = LibraryExecutor.run(req, library: &lib, wallpaper: &wall, displays: Displays.connected(),
                                             settings: AISettings.load(store: dir))
                 }
-                if r.ok, req.op != .ping {
+                if r.ok, req.op != .ping, req.op != .testSignal {
                     store.save(lib)
                     LibraryAccess.saveWallpaper(wall, dir)
                 }

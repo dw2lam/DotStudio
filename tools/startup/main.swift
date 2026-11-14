@@ -40,7 +40,7 @@ func ms(_ t: CFAbsoluteTime) -> String { String(format: "%.1f", (CFAbsoluteTimeG
 
 // What the saver would show on a fresh install: the default library's active style.
 let lib = DefaultPresets.makeLibrary()
-var preset = Playback.effectivePreset(in: lib, now: Date())
+var preset = Playback.effectivePreset(in: lib, now: Date(), live: nil)
 if let only {
     guard let p = DefaultPresets.offeredBuiltIns().first(where: { $0.name.lowercased().contains(only) }) else {
         print("no built-in matching \(only)"); exit(2)

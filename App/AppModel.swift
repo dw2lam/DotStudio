@@ -114,6 +114,7 @@ final class AppModel: ObservableObject {
     func save() {
         Perf.count("AppModel.save")
         library.pruneDisplayStyles()   // a deleted style's display pins go (Shared/DisplayPins.swift)
+        library.pruneRules()           // …and When rules lose it (Shared/Signals/PlayRule.swift)
         if !store.save(library) && storeAlert == nil {
             storeAlert = StoreAlert(
                 title: "Couldn't Save Changes",
