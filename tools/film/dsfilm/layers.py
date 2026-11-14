@@ -185,28 +185,38 @@ class Rig:
         return self.rebake()
 
     # ------------------------------------------------------------------ the glass matte
-    def _mask(self):
-        white = bpy.data.materials.get("LayersMaskGlass") or bpy.data.materials.new("LayersMaskGlass")
-        if not white.node_tree.nodes.get("LayersEmit"):
-            nt = white.node_tree.nodes
+    @staticmethod
+    def _flat(name, v):
+        """A pure emission material (no BSDF: it reflects nothing)."""
+        m = bpy.data.materials.get(name) or bpy.data.materials.new(name)
+        nt = m.node_tree.nodes
+        if not nt.get("LayersEmit"):
             for n in list(nt):
                 if n.type != "OUTPUT_MATERIAL":
                     nt.remove(n)
             em = nt.new("ShaderNodeEmission")
             em.name = "LayersEmit"
-            em.inputs["Color"].default_value = (1, 1, 1, 1)
+            em.inputs["Color"].default_value = (v, v, v, 1)
             em.inputs["Strength"].default_value = 1.0
-            white.node_tree.links.new(em.outputs[0], nt.get("Material Output").inputs["Surface"])
+            m.node_tree.links.new(em.outputs[0], nt.get("Material Output").inputs["Surface"])
+        return m
+
+    def _mask(self):
+        # Glass -> white emission, EVERY other slot -> black emission. Merely switching the lights off
+        # isn't enough: glossy surfaces (poles, rings, the penguin) reflect the white panes through
+        # EEVEE's auto-updated sphere probes (measured: 0.005-0.02 on ~1/3 of the frame).
+        white, black = self._flat("LayersMaskGlass", 1.0), self._flat("LayersMaskBlack", 0.0)
         saved = []
         for ob in bpy.data.objects:
             for i, slot in enumerate(getattr(ob, "material_slots", [])):
-                if slot.material is not None and slot.material.name in self.glass:
-                    saved.append((ob, i, slot.link, slot.material if slot.link == "OBJECT" else None))
-                    slot.link = "OBJECT"
-                    slot.material = white
+                if slot.material is None:
+                    continue
+                saved.append((ob, i, slot.link, slot.material if slot.link == "OBJECT" else None))
+                is_glass = slot.material.name in self.glass
+                slot.link = "OBJECT"
+                slot.material = white if is_glass else black
         self._saved_slots = saved
-        # everything but glass renders black anyway (no lights, black world, emitters off): only AA,
-        # depth of field and motion blur matter, so no ray tracing, GI or shadows
+        # flat emission only: AA, depth of field and motion blur matter, so no ray tracing, GI or shadows
         e = self.scene.eevee
         self._eevee = (e.use_raytracing, e.use_fast_gi, e.use_shadows, e.taa_render_samples)
         e.use_raytracing = e.use_fast_gi = e.use_shadows = False

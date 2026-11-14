@@ -3,7 +3,7 @@
 python? Blender's bundled one has it: <Blender.app>/Contents/Resources/<ver>/python/bin/python3.x;
 job.py picks it automatically.)
 
-    python3 -I dsfilm/layerpack.py pack DIR OUT [--fps 24] [--quality 70] [--encoder auto|videotoolbox|x265]
+    python3 -I dsfilm/layerpack.py pack DIR OUT [--fps 24] [--quality 80] [--encoder auto|videotoolbox|x265]
                                        [--sample 96]
         DIR = run.py --layers-anim output (DIR/<tile>/####.exr + DIR/layers-render.json)
         -> OUT/layers.mov  HEVC Main10 (hvc1), the tiles in a 3x2 grid, pow4-coded, loops seamlessly
@@ -15,7 +15,10 @@ job.py picks it automatically.)
 Coding (the contract): light tiles store v = clamp(linear / scale, 0, 1) ^ (1/4) per channel,
 decoded linear = scale * v^4; `scale` per tile = the 99.95th percentile of the per-pixel max
 channel over the loop (every frame, or an even sample of --sample frames). The mask tile stores
-the matte directly. The RGB atlas is converted to Y'CbCr here (BT.709 matrix, video range,
+the matte directly. Layout: tile i (manifest order) at x = (i % 3)·(w + gutter), y = (i // 3)·(h +
+gutter); the video is 3w + 2·gutter by 2h + gutter; each gutter (GUTTER = 8 px, manifest "gutter")
+is edge-replicated, half from each neighbour, so chroma and codec blocks don't bleed between tiles.
+The RGB atlas is converted to Y'CbCr here (BT.709 matrix, video range,
 4:2:0 with 2x2-averaged chroma) and tagged BT.709 / video range: a reader must undo exactly
 that matrix and range and apply no colour management (the values are data, not pictures).
 """
@@ -30,6 +33,7 @@ import numpy as np
 
 TILES = ("sun", "sun_low", "sky", "cabin", "city", "mask")
 GRID = (3, 2)
+GUTTER = 8      # px between tiles (even, so tiles start on 4:2:0 chroma pairs); manifest "gutter"
 PERCENTILE = 99.95
 KR, KB = 0.2126, 0.0722
 KG = 1 - KR - KB
@@ -115,18 +119,41 @@ def decode_tile(v, scale):
     return scale * v.astype(np.float32) ** 4
 
 
-def atlas(d, tiles, frame_name, sc, size):
-    """One frame's atlas, 0..1 float32 (2H, 3W, 3), tiles left->right then top->bottom."""
+def atlas_size(size, gutter=GUTTER):
     w, h = size
-    cols, rows = GRID
-    a = np.zeros((rows * h, cols * w, 3), np.float32)
+    return GRID[0] * w + (GRID[0] - 1) * gutter, GRID[1] * h + (GRID[1] - 1) * gutter
+
+
+def tile_origin(i, size, gutter=GUTTER):
+    """Top-left pixel (x, y) of tile i: left->right then top->bottom, `gutter` px between tiles."""
+    w, h = size
+    return (i % GRID[0]) * (w + gutter), (i // GRID[0]) * (h + gutter)
+
+
+def atlas(d, tiles, frame_name, sc, size, gutter=GUTTER):
+    """One frame's atlas, 0..1 float32, tiles left->right then top->bottom with `gutter` px between
+    them, each gutter edge-replicated from its two neighbours (half each), so 4:2:0 chroma and the
+    codec's blocks don't bleed one tile into the next."""
+    w, h = size
+    W, H = atlas_size(size, gutter)
+    a = np.zeros((H, W, 3), np.float32)
     for i, t in enumerate(tiles):
         p = os.path.join(d, t, frame_name)
-        y, x = (i // cols) * h, (i % cols) * w
+        x, y = tile_origin(i, size, gutter)
         if t == "mask":
             a[y:y + h, x:x + w, :] = np.clip(read_exr(p, size, gray=True), 0, 1)[..., None]
         else:
             a[y:y + h, x:x + w, :] = encode_tile(read_exr(p, size), sc[t])
+    if gutter:
+        g1 = gutter // 2
+        for c in range(1, GRID[0]):                       # vertical gutters
+            x0 = c * (w + gutter) - gutter
+            a[:, x0:x0 + g1] = a[:, x0 - 1:x0]
+            a[:, x0 + g1:x0 + gutter] = a[:, x0 + gutter:x0 + gutter + 1]
+        for r in range(1, GRID[1]):                       # horizontal gutters (after: corners too)
+            y0 = r * (h + gutter) - gutter
+            a[y0:y0 + g1] = a[y0 - 1:y0]
+            a[y0 + g1:y0 + gutter] = a[y0 + gutter:y0 + gutter + 1]
     return a
 
 
@@ -174,14 +201,14 @@ def encoder_args(encoder, quality):
         encoder = "videotoolbox" if has_encoder("hevc_videotoolbox") else "x265"
     if encoder == "videotoolbox":
         return ["-pix_fmt", "p010le", "-c:v", "hevc_videotoolbox", "-profile:v", "main10", "-q:v", str(quality)]
-    crf = max(0, min(51, round(40 - quality * 0.3)))          # q 70 -> crf 19
+    crf = max(0, min(51, round(40 - quality * 0.3)))          # q 80 -> crf 16
     return ["-pix_fmt", "yuv420p10le", "-c:v", "libx265", "-profile:v", "main10", "-crf", str(crf), "-preset", "medium",
             "-x265-params", "log-level=error"]
 
 
 # ------------------------------------------------------------------------------------------ pack
 
-def pack(d, out_dir, fps=None, quality=70, encoder="auto", sample=96, progress=None, file_in_package="clips/layers.mov"):
+def pack(d, out_dir, fps=None, quality=80, encoder="auto", sample=96, progress=None, file_in_package="clips/layers.mov"):
     info = render_info(d)
     tiles = [t for t in (info.get("tiles") or TILES) if os.path.isdir(os.path.join(d, t))]
     if len(tiles) > GRID[0] * GRID[1]:
@@ -205,7 +232,7 @@ def pack(d, out_dir, fps=None, quality=70, encoder="auto", sample=96, progress=N
     os.makedirs(out_dir, exist_ok=True)
     mov = os.path.join(out_dir, "layers.mov")
     tmp = mov + ".part.mov"
-    W, H = GRID[0] * w, GRID[1] * h
+    W, H = atlas_size(size)
     cmd = ["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "yuv420p10le", "-s", f"{W}x{H}",
            "-framerate", str(fps), "-color_range", "tv", "-colorspace", "bt709", "-color_primaries", "bt709",
            "-color_trc", "bt709", "-i", "-"] + encoder_args(encoder, quality) + [
@@ -223,7 +250,8 @@ def pack(d, out_dir, fps=None, quality=70, encoder="auto", sample=96, progress=N
     if p.wait() != 0:
         raise SystemExit(f"ffmpeg failed encoding {mov}")
     os.replace(tmp, mov)
-    block = {"file": file_in_package, "grid": list(GRID), "tiles": tiles, "encoding": "pow4", "scale": sc}
+    block = {"file": file_in_package, "grid": list(GRID), "gutter": GUTTER, "tiles": tiles, "encoding": "pow4",
+             "scale": sc}
     if info.get("exposure"):
         block["exposure"] = info["exposure"]
     if info.get("tint"):
@@ -238,7 +266,7 @@ def pack(d, out_dir, fps=None, quality=70, encoder="auto", sample=96, progress=N
 def decode_frames(mov, w, h, frames):
     """Decoded frames (1-based indices) of a video as yuv420p10le bytes, in one ffmpeg pass."""
     sel = "+".join(f"eq(n\\,{f - 1})" for f in frames)
-    r = subprocess.run(["ffmpeg", "-v", "error", "-i", mov, "-vf", f"select={sel}", "-vsync", "0",
+    r = subprocess.run(["ffmpeg", "-v", "error", "-i", mov, "-vf", f"select={sel}", "-fps_mode", "passthrough",
                         "-f", "rawvideo", "-pix_fmt", "yuv420p10le", "-"], capture_output=True, check=True)
     n = w * h * 3 // 2 * 2
     return [r.stdout[i * n:(i + 1) * n] for i in range(len(r.stdout) // n)]
@@ -246,20 +274,24 @@ def decode_frames(mov, w, h, frames):
 
 def check(d, mov, frames=None, block=None):
     """Per tile and frame: mean |decoded - EXR| relative to the EXR's mean (light tiles, linear),
-    and the mask's mean absolute error. Returns {tile: {"rel_err": .., "p99_rel": ..}}."""
+    and the mask's mean absolute error; edge_rel_err = the same over the tile's outer 2 px (bleeding)."""
     if block is None:
         with open(os.path.join(os.path.dirname(mov), "layers.json")) as f:
             block = json.load(f)
     tiles = block["tiles"]
+    g = block.get("gutter", 0)
+    cols, rows = block["grid"]
     W, H = _size(mov)
-    w, h = W // block["grid"][0], H // block["grid"][1]
+    w, h = (W - (cols - 1) * g) // cols, (H - (rows - 1) * g) // rows
     names = [os.path.basename(p) for p in tile_frames(d, tiles[0])]
     frames = frames or sorted({1, len(names) // 2 + 1, len(names)})
     res = {t: [] for t in tiles}
+    edge = np.zeros((h, w), bool)                      # the tile's outer 2 px: where bleeding would show
+    edge[:2], edge[-2:], edge[:, :2], edge[:, -2:] = True, True, True, True
     for f, buf in zip(frames, decode_frames(mov, W, H, frames)):
         rgb = yuv420p10_to_rgb(buf, W, H)
         for i, t in enumerate(tiles):
-            y, x = (i // block["grid"][0]) * h, (i % block["grid"][0]) * w
+            x, y = (i % cols) * (w + g), (i // cols) * (h + g)
             v = rgb[y:y + h, x:x + w]
             p = os.path.join(d, t, names[f - 1])
             if t == "mask":
@@ -276,6 +308,7 @@ def check(d, mov, frames=None, block=None):
             q = decode_tile(np.rint(encode_tile(ref, sc) * 876) / 876, sc)
             res[t].append({"frame": f, "rel_err": float(err.mean() / mean),
                            "rel_err_p99": float(np.percentile(err.mean(-1), 99) / mean),
+                           "edge_rel_err": float(err.mean(-1)[edge].mean() / max(float(ref.mean(-1)[edge].mean()), 1e-6)),
                            "quant_rel_err": float(np.abs(q - clipped).mean() / mean),
                            "clipped_frac": float((ref.max(-1) > sc).mean())})
     return res
