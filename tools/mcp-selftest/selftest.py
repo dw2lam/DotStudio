@@ -187,7 +187,8 @@ tools = c.req("tools/list")["result"]["tools"]
 tnames = [t["name"] for t in tools]
 expected = ["get_started", "list_guides", "read_guide", "list_scenes", "describe_scene", "list_styles", "get_style",
             "create_style", "update_style", "duplicate_style", "delete_style", "preview_style", "benchmark_style",
-            "export_style", "import_style", "list_displays", "set_screensaver", "set_wallpaper", "list_engines",
+            "export_style", "import_style", "list_displays", "set_screensaver", "set_wallpaper",
+            "get_settings", "update_settings", "app_action", "list_engines",
             "pull_engine", "list_custom_scenes", "validate_custom_scene", "create_custom_scene", "update_custom_scene",
             "film_status", "list_film_templates", "create_film_scene", "get_film_scene", "update_film_scene", "render_film_stills", "render_film_loop", "film_job_status", "cancel_film_job"]
 check(sorted(tnames) == sorted(expected), f"tools/list has the {len(expected)} tools")
@@ -206,6 +207,8 @@ res = c.call("get_started")
 ok(res, "get_started")
 check("user/acme-brand" in res["structuredContent"]["userGuides"], "get_started lists the user's guide")
 check(res["structuredContent"]["appRunning"] is False, "get_started: app not running")
+check(res["structuredContent"].get("settingsTools") == ["get_settings", "update_settings", "app_action"]
+      and "update_settings" in text(res), "get_started points at the settings tools")
 res = c.call("list_guides")
 ids = [g["id"] for g in res["structuredContent"]["guides"]]
 for g in ["style/dotstudio", "settings/app", "settings/index", "settings/looks", "settings/oceanHorizon", "power", "burn-in",
@@ -382,6 +385,156 @@ err(c.call("set_wallpaper", {"style": "Golden Hour"}), "wallpaper refused too", 
 ok(c.call("create_style", {"name": "Still Allowed", "effects": [{"kind": "silk"}]}), "styles still creatable with playback off")
 os.remove(os.path.join(S, "ai-settings.json"))
 
+
+# ---------------------------------------------------------------- the app's own settings (offline)
+print("== app settings (offline)")
+T = new_store()
+tc = Client(T)
+tc.init()
+
+
+def prefs(store):
+    p = os.path.join(store, "app-prefs.json")
+    return json.load(open(p)) if os.path.exists(p) else {}
+
+
+def wall(store):
+    p = os.path.join(store, "wallpaper.json")
+    return json.load(open(p)) if os.path.exists(p) else {}
+
+
+def settings_of(res):
+    return {st["key"]: st for g in res["structuredContent"]["groups"] for st in g["settings"]}
+
+
+def upd(patch):
+    return tc.call("update_settings", {"settings": patch})
+
+
+res = tc.call("get_settings")
+ok(res, "get_settings")
+sc = res["structuredContent"]
+check(sc["appRunning"] is False and sc["allowPlaybackChanges"] is True, "get_settings: offline, playback allowed")
+check([g["id"] for g in sc["groups"]] == ["general", "screensaver", "music", "weather", "wallpaper", "source", "updates", "ai", "system"],
+      "get_settings: every group, in the app's order")
+st = settings_of(res)
+check(len(st) >= 45 and all({"key", "label", "where", "meaning", "value", "allowed", "readOnly", "changesWhatPlays"} <= set(v) for v in st.values()),
+      f"get_settings: {len(st)} settings, each with value, allowed values, where and meaning")
+check(st["music.show"]["value"] == "corner" and st["music.show"]["allowed"] == ["off", "corner", "fullScreen"] and st["music.show"]["changesWhatPlays"] is True,
+      "music.show: default corner, its choices, gated")
+check(st["screensaver.quality"]["value"] == "full" and st["wallpaper.frameRate"]["value"] == "balanced" and st["weather.live"]["value"] is True,
+      "defaults read right (quality full, 30 fps, live weather on)")
+check(all(st[k]["readOnly"] and st[k].get("howToChange") for k in st if k.startswith(("system.", "ai."))),
+      "macOS-owned and the user's AI permissions are read-only, each says how to change it")
+check(st["general.openAtLogin"].get("needsApp") is True and st["general.openAtLogin"]["value"] is None and "isn't running" in st["general.openAtLogin"].get("note", ""),
+      "open at login: needs the app, unknown offline")
+check(isinstance(st["system.screensaverInstalled"]["value"], bool) and isinstance(st["system.startScreenSaverAfter"]["value"], (int, float)),
+      "macOS state readable offline (installed, idle time)")
+check(st["system.textSize"]["value"] == "follows macOS" and "Text Size" in st["system.textSize"]["howToChange"], "text size: follows macOS, says where")
+check({a["id"] for a in sc["actions"]} >= {"install_screensaver", "show_setup_guide", "guide_me", "open_screensaver_settings"}, "actions listed")
+res = tc.call("get_settings", {"group": "music"})
+check([g["id"] for g in res["structuredContent"]["groups"]] == ["music"] and len(settings_of(res)) == 8, "get_settings group filter")
+res = tc.call("get_settings", {"keys": ["wallpaper.quality", "music.size"]})
+check(sorted(settings_of(res)) == ["music.size", "wallpaper.quality"], "get_settings keys filter")
+err(tc.call("get_settings", {"keys": ["music.nope"]}), "get_settings unknown key", "unknown setting")
+check("music.show" in json.dumps(next(t for t in tc.req("tools/list")["result"]["tools"] if t["name"] == "update_settings")["inputSchema"]),
+      "update_settings schema lists the settable keys")
+
+# each group
+ok(upd({"general.menuBarMode": False}), "general: menu-bar mode off")
+check(prefs(T).get("menuBarMode") is False, "  → app-prefs.json (a test store never touches the real defaults)")
+err(upd({"general.openAtLogin": True}), "general: open at login refused without the app", "running")
+ok(upd({"screensaver.changeEveryMinutes": 15, "screensaver.shuffle": True, "screensaver.crossfadeSeconds": 2.5, "screensaver.quality": "efficient"}),
+   "screensaver: interval, shuffle, crossfade, quality")
+lib = library(T)
+check(lib["rotation"]["intervalMinutes"] == 15 and lib["rotation"]["shuffle"] is True and lib["rotation"]["transitionSeconds"] == 2.5
+      and lib["renderScale"] == 0.5, "  → library.json rotation + renderScale")
+ok(upd({"screensaver.quality": "full"}), "screensaver: quality back to full")
+check("renderScale" not in library(T), "  → full is stored as absent, as the app does")
+res = upd({"music.show": "fullScreen", "music.layout": "stage", "music.behind": "screensaver", "music.corner": "topRight",
+           "music.size": "large", "music.onWallpaper": True, "music.keepPausedSongMinutes": 15, "music.source": "spotify"})
+ok(res, "music: every option")
+m = library(T)["music"]
+check(m["display"] == "fullScreen" and m.get("takeOver") is True and m["fullLayout"] == "stage" and m["fullBackdrop"] == "screensaver"
+      and m["cardCorner"] == "topRight" and m["cardSize"] == "large" and m["cardOnWallpaper"] is True and m["lingerMinutes"] == 15
+      and m["source"] == "spotify", "  → library.json music (legacy takeOver kept in step)")
+check(res["structuredContent"]["changed"]["music.show"] == "fullScreen" and res["structuredContent"]["liveInApp"] is False
+      and "Music ▸ Show music" in text(res), "  → says what changed, offline")
+ok(upd({"weather.live": False}), "weather: live off")
+check(prefs(T).get("weatherEnabled") is False and prefs(T).get("menuBarMode") is False, "  → app-prefs.json, other prefs kept")
+ok(upd({"wallpaper.on": True, "wallpaper.frameRate": "smooth", "wallpaper.quality": "full", "wallpaper.onBattery": "still",
+        "wallpaper.lockScreenPicture": True}), "wallpaper: on, frame rate, quality, battery, lock screen")
+w = wall(T)
+active = library(T)["activeID"]
+check(w["enabled"] is True and w["presetID"] == active and w["frameRate"] == 120 and w["quality"] == "full"
+      and w["batteryMode"] == "still" and w["freezeOnBattery"] is True and w["lockScreen"] is True,
+      "  → wallpaper.json (on plays the screensaver's style; 1.4's freezeOnBattery kept in step)")
+ok(upd({"wallpaper.sameAsScreensaver": True}), "wallpaper: same as screensaver")
+check(wall(T)["followsScreensaver"] is True and library(T).get("syncTimeBase") is True, "  → follows, and the saver's shared time base")
+ok(upd({"wallpaper.sameAsScreensaver": False, "wallpaper.style": "Golden Hour"}), "wallpaper: own style by name")
+gh = next(p["id"] for p in library(T)["presets"] if p["name"] == "Golden Hour")
+check(wall(T)["followsScreensaver"] is False and wall(T)["presetID"] == gh and "syncTimeBase" not in library(T), "  → Golden Hour, time base back to per-instance")
+ok(upd({"wallpaper.on": False}), "wallpaper: off")
+ok(upd({"wallpaper.style": "Night Sky"}), "wallpaper: style while off is only remembered")
+check(wall(T)["enabled"] is False and wall(T)["presetID"] == next(p["id"] for p in library(T)["presets"] if p["name"] == "Night Sky"), "  → stays off")
+img = os.path.join(T, "photo-in.png")
+with open(img, "wb") as f:
+    raw = b"".join(b"\x00" + bytes([200, 120, 40]) * 4 for _ in range(4))
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 4, 4, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+ok(upd({"source.kind": "gradient", "source.gradientFrom": {"r": 0.1, "g": 0.2, "b": 0.3}, "source.gradientAngle": 2, "source.gradientDrift": 0.5}),
+   "source: a gradient")
+src = library(T)["source"]
+check(src["kind"] == "gradient" and src["colorA"] == {"r": 0.1, "g": 0.2, "b": 0.3, "a": 1} and src["gradientAngle"] == 2, "  → library.json source")
+ok(upd({"source.photos": [img], "source.secondsEach": 30, "source.panAndZoom": 0.4}), "source: the user's photos")
+src = library(T)["source"]
+check(src["kind"] == "collection" and len(src["mediaFilenames"]) == 1 and os.path.exists(os.path.join(T, "media", src["mediaFilenames"][0]))
+      and src["slideSeconds"] == 30 and src["motion"] == 0.4, "  → copied into media/, slideshow of them")
+ok(upd({"source.photos": "builtIn"}), "source: built-in photos")
+check(not library(T)["source"].get("mediaFilenames"), "  → built-in set")
+err(upd({"source.kind": "video"}), "source: video without a video refused", "mediaFile")
+ok(upd({"source.mediaFile": img, "source.scaling": "fit"}), "source: one image, fit")
+check(library(T)["source"]["kind"] == "image" and library(T)["source"]["fillMode"] == 0, "  → image source, fit")
+ok(upd({"updates.checkAutomatically": False}), "updates: checks off")
+check(prefs(T).get("SUEnableAutomaticChecks") is False, "  → stored")
+err(upd({"updates.checkAutomatically": False, "updates.installAutomatically": True}), "updates: auto-install needs checks", "checkAutomatically")
+ok(upd({"updates.checkAutomatically": True, "updates.installAutomatically": False}), "updates: checks on, install off")
+st = settings_of(tc.call("get_settings"))
+check(st["music.show"]["value"] == "fullScreen" and st["wallpaper.frameRate"]["value"] == "smooth" and st["general.menuBarMode"]["value"] is False
+      and st["updates.installAutomatically"]["value"] is False and st["source.kind"]["value"] == "image"
+      and st["wallpaper.style"]["value"]["name"] == "Night Sky", "get_settings reads every change back")
+
+# refusals: nothing changes
+before = (library(T), wall(T), prefs(T))
+err(upd({"music.sise": "large"}), "typo → refused with a suggestion", "music.size")
+err(upd({"system.textSize": "large"}), "read-only key → refused, says how", "read-only")
+err(upd({"ai.allowPlaybackChanges": True}), "the AI can't grant itself playback changes", "only the user")
+err(upd({"music.show": "huge"}), "bad choice", "isn't one of")
+err(upd({"screensaver.crossfadeSeconds": 9}), "number out of range", "maximum")
+err(upd({"screensaver.changeEveryMinutes": 7}), "not one of the app's intervals", "isn't one of")
+err(upd({"wallpaper.style": "No Such Style"}), "unknown style", "No style")
+err(upd({"source.photos": ["/no/such.png"]}), "missing photo", "can't read")
+err(upd({}), "empty patch", "at least one")
+err(upd({"music.size": "small", "music.corner": "middle"}), "one bad value refuses the whole patch", "isn't one of")
+check((library(T), wall(T), prefs(T)) == before, "refused patches changed nothing")
+
+# the user's “Let AI change what plays”
+with open(os.path.join(T, "ai-settings.json"), "w") as f:
+    json.dump({"allowPlaybackChanges": False}, f)
+check(tc.call("get_settings")["structuredContent"]["allowPlaybackChanges"] is False, "get_settings reports playback changes off")
+err(upd({"music.show": "off"}), "gated setting refused while playback changes are off", "turned off")
+err(upd({"wallpaper.on": True}), "wallpaper on refused too", "turned off")
+err(upd({"screensaver.shuffle": False, "music.size": "small"}), "a mixed patch is refused whole, naming the gated keys", "screensaver.shuffle")
+check(library(T)["music"]["cardSize"] == "large", "  → nothing changed")
+ok(upd({"music.size": "small", "wallpaper.quality": "efficient"}), "settings that don't change what plays still work")
+os.remove(os.path.join(T, "ai-settings.json"))
+err(tc.call("app_action", {"action": "show_setup_guide"}), "app_action needs the running app", "isn't running")
+err(tc.call("app_action", {"action": "format_disk"}), "unknown action", "isn't one of")
+tc.close()
+shutil.rmtree(T, ignore_errors=True)
+
+
 # ---------------------------------------------------------------- custom + film: this build
 print("== custom scenes / film (this build: real engines, the film toolkit that ships in the app)")
 res = c.call("list_engines")
@@ -507,6 +660,11 @@ c = Client(F, DOTSTUDIO_MCP_TEST_FAKES=1)
 c.init()
 res = c.call("film_job_status", {"job": job})
 ok(res, "film_job_status after the server died")
+# the stand-in's H.264 encode can outlast the 3.5 s above on a busy Mac or a Debug build: give it time
+deadline = time.time() + 30
+while res["structuredContent"].get("state") == "running" and time.time() < deadline:
+    time.sleep(0.5)
+    res = c.call("film_job_status", {"job": job})
 check(res["structuredContent"]["state"] == "done" and res["structuredContent"].get("scene", "").startswith(draft), "loop finished without the server and installed a film scene")
 fscene = res["structuredContent"].get("scene", "")
 check(os.path.exists(os.path.join(F, "scenes", fscene, "clips", "night.mov")), "film package has its clips")
@@ -868,6 +1026,26 @@ ok(c.call("set_screensaver", {"style": "Via App"}), "set_screensaver via the app
 time.sleep(0.4)
 check(library(A)["activeID"] == res["structuredContent"]["id"], "lineup change survives")
 check(any("applied upsertStyle ok=true client=Claude" in l for l in applied), "the app saw the request, with the client's name")
+# the app's own settings, through the app
+res = c.call("get_settings")
+st = settings_of(res)
+check(res["structuredContent"]["appRunning"] is True and st["system.screensaverChosen"]["value"] == "on 1 of 2 displays"
+      and st["general.openAtLogin"]["value"] is False, "get_settings via the app: its live values (setup checks, login item)")
+res = c.call("update_settings", {"settings": {"music.size": "small", "general.openAtLogin": True, "weather.live": False}})
+ok(res, "update_settings via the app (open at login works there)")
+check(res["structuredContent"]["liveInApp"] is True and "live" in text(res), "  → live in the app")
+time.sleep(0.4)  # the app's own saves
+check(library(A)["music"]["cardSize"] == "small" and prefs(A).get("weatherEnabled") is False, "  → survives the app's saves")
+check(any("applied updateSettings ok=true" in l for l in applied), "  → the app applied it")
+with open(os.path.join(A, "ai-settings.json"), "w") as f:
+    json.dump({"allowPlaybackChanges": False}, f)
+err(c.call("update_settings", {"settings": {"music.show": "off"}}), "the app refuses gated settings too", "turned off")
+os.remove(os.path.join(A, "ai-settings.json"))
+res = c.call("app_action", {"action": "show_setup_guide"})
+ok(res, "app_action via the app")
+time.sleep(0.2)
+check(res["structuredContent"]["liveInApp"] is True and any("applied appAction ok=true" in l for l in applied), "  → the app did it")
+
 # A direct write behind the app's back is what the bridge prevents: prove the stand-in clobbers.
 lib = library(A)
 lib["presets"][0]["name"] = "Sneaky Direct Write"

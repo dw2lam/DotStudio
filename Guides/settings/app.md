@@ -11,7 +11,8 @@ All in `~/Library/Application Support/DotStudio/` (the tools read and write them
 - `weather.json`: the live weather reading, written by the app. Never put weather in `library.json`.
 - `media/`: the user's photos, videos and logo images.
 - `guides/*.md`: the user's own guides (brand guides). Read them with `list_guides` / `read_guide`.
-- `ai-settings.json`: what the user allows the AI to do. If playback changes are not allowed, you can still create and edit styles, but `set_screensaver` and `set_wallpaper` are refused: tell the user and stop.
+- `ai-settings.json`: what the user allows the AI to do. If playback changes are not allowed, you can still create and edit styles, but `set_screensaver`, `set_wallpaper` and the settings marked `changesWhatPlays` in `get_settings` are refused: tell the user and stop.
+- The app's preferences (menu-bar mode, live weather, updates) live in its defaults, not in a file: read and change them with `get_settings` / `update_settings`.
 
 ## Styles
 
@@ -138,6 +139,34 @@ When you design a style, leave room for the corner card (bottom left by default)
 
 - Custom scenes (`create_custom_scene`) are small shader packages in `<store>/scenes/`; styles use them as `{"kind": "custom", "scene": "<id>"}` like any scene. Engines: `metal` and `cells` (shaders) and `film` (video clips) are built in, `shadertoy` (GLSL) is pulled on demand (`list_engines`, `read_guide engines/<id>`).
 - Film scenes are photoreal video loops rendered in Blender (`read_guide film` for the toolkit, `engines/film` for playback). They are BIG: Blender itself (about 1 GB, installed by the user), the film toolkit, about a minute per approval still, hours per loop, and 150–250 MB of video per variant (0.6–1 GB for all four). Always tell the user the time and disk cost before rendering, render only the variants they want, and never start a render they haven't agreed to. Playback is cheap (hardware video decode), so a finished film scene suits the live wallpaper well.
+
+## The app's own settings
+
+Everything in DotStudio's Settings window, the Screensaver card's Playlist menu and the Inspector's Source is a tool call away. Never hand-edit the files for these.
+
+- `get_settings` (optionally `group` or `keys`): every setting with its current value, allowed values, where it is in the app, a one-line meaning, `changesWhatPlays`, and `readOnly` + `howToChange`. Values are live when the app runs.
+- `update_settings({"settings": {key: value, …}})`: one patch, checked as a whole. An unknown key (with a "did you mean"), a read-only key or a bad value refuses the whole patch and says why. With the app open the change is live (the Settings window moves, a notice offers Undo); otherwise the files are updated for the next launch.
+- `app_action({"action": …})`: the app's own buttons, app running only: `install_screensaver`, `open_screensaver_settings`, `show_setup_guide`, `guide_me` (the setup guide's Guide Me: it rings the next click in System Settings, after the user allows Accessibility once), `open_lock_screen_settings`, `open_login_items_settings`, `check_for_updates`, `open_settings`, `open_main_window`, `show_welcome`. They open windows on the user's screen: only when asked.
+
+| group | keys | notes |
+|---|---|---|
+| `general` | `menuBarMode`, `openAtLogin` | `openAtLogin` needs the app running (it registers its own login item) |
+| `screensaver` | `changeEveryMinutes` (1, 5, 15, 30, 60), `shuffle`, `crossfadeSeconds` (0-3), `quality` (`full`, `balanced`, `efficient`) | interval and shuffle change what plays; `playlist`, `night`, `perDisplay` are read-only here: use `set_screensaver` |
+| `music` | `show` (`off`, `corner`, `fullScreen`), `corner`, `size`, `layout`, `behind`, `onWallpaper`, `keepPausedSongMinutes` (1, 5, 15), `source` | `show` and `onWallpaper` change what plays |
+| `weather` | `live` | the Live weather switch for Ocean Horizon, Shallows, Meadow |
+| `wallpaper` | `on`, `sameAsScreensaver`, `style`, `frameRate` (`balanced`, `smooth`), `quality`, `onBattery` (`efficient`, `full`, `still`), `lockScreenPicture` | `on`, `sameAsScreensaver`, `style`, `lockScreenPicture` change what plays; `style` works like the Settings pop-up (picked while off: only remembered). Per display: `set_wallpaper` |
+| `source` | `kind`, `photos` (`"builtIn"` or image paths), `mediaFile` (an image or video path), `secondsEach` (6-120), `panAndZoom` (0-1), `gradientFrom`, `gradientTo`, `gradientAngle`, `gradientDrift`, `scaling` (`fill`, `fit`, `stretch`) | the one source every Look restyles; files are copied into `media/` |
+| `updates` | `checkAutomatically`, `installAutomatically` | install needs checks on |
+| `ai` | `allowPlaybackChanges`, `showNotices` | read-only: only the user changes these |
+| `system` | `screensaverInstalled`, `screensaverChosen`, `startScreenSaverAfter`, `displayOffMinutes`, `loginItemApproval`, `accessibilityForGuideMe`, `textSize` | read-only: macOS owns them. Most are read by the app (unknown while it isn't running). `howToChange` says what to do: an `app_action` that opens the right place, or the System Settings path for the user |
+
+DotStudio has no text-size, density or layout-scale setting of its own: its text and layout follow macOS's text size (System Settings > Accessibility > Display > Text Size) and the window's width. The music card's `music.size` and the two `quality` settings are the only sizes it stores.
+
+Example: the user asks for the song full screen over their screensaver, and a gentler wallpaper on battery:
+
+```json
+{"settings": {"music.show": "fullScreen", "music.behind": "screensaver", "wallpaper.onBattery": "still"}}
+```
 
 ## Sharing
 

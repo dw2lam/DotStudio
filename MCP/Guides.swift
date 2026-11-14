@@ -189,7 +189,7 @@ enum SettingsGuides {
             s += "| `\(e.id)` v\(e.version) (built in) | \(e.summary) | `engines/\(e.id)` |\n"
         }
         s += "| `shadertoy` (pulled: `pull_engine`) | Shadertoy-style GLSL (`mainImage`), translated to Metal. | `engines/shadertoy` once pulled |\n"
-        s += "\nSee also `settings/app` (styles, lineup, displays, wallpaper, music) and `style/dotstudio` (taste).\n"
+        s += "\nSee also `settings/app` (styles, lineup, displays, wallpaper, music) and `style/dotstudio` (taste). These are the settings of each style; the app's own settings (music card, live wallpaper, playlist timing, quality, weather, updates…) are read with `get_settings` and changed with `update_settings`.\n"
         return s
     }
 

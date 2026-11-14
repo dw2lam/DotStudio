@@ -81,7 +81,9 @@ server.getPrompt = { try Prompts.get($0, $1) }
 server.instructions = """
 DotStudio designs calm, living screensavers and live wallpapers for the user's Mac. Call get_started first, and \
 read_guide("style/dotstudio") before designing anything. Preview (preview_style) and benchmark (benchmark_style) before \
-presenting a style. set_screensaver and set_wallpaper change the user's Mac: only use them when the user asks.
+presenting a style. set_screensaver and set_wallpaper change the user's Mac: only use them when the user asks. \
+Every setting in the DotStudio app is readable with get_settings and changeable with update_settings (only what the \
+user asked for); app_action presses the app's setup buttons (install the screensaver, open the setup guide).
 """
 // The client's name (Claude, Cursor…) labels the app's notices.
 library.clientName = { server.clientName }

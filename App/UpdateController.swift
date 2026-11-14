@@ -40,8 +40,12 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
         (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) == "1"
     }
 
+    /// The app's one controller (a @StateObject of DotStudioApp), for the AI bridge's settings.
+    private(set) static weak var current: UpdateController?
+
     override init() {
         super.init()
+        Self.current = self
         controller = SPUStandardUpdaterController(startingUpdater: false,
                                                   updaterDelegate: self,
                                                   userDriverDelegate: nil)

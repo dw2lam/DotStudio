@@ -20,7 +20,7 @@ final class Toolbox {
         self.film = film
     }
 
-    var all: [Tool] { core + playback + custom + filmTools }
+    var all: [Tool] { core + playback + settingsTools + custom + filmTools }
 
     // MARK: - Helpers
 
@@ -101,7 +101,7 @@ final class Toolbox {
     var core: [Tool] {
         [
             Tool(name: "get_started", title: "Get started",
-                 description: "START HERE. A short orientation to designing DotStudio screensavers: how styles work, the workflow (read guides → pick scenes → create_style → preview_style → benchmark_style → set_screensaver), which guides to read first (including the user's own brand guides), and this Mac's state (is DotStudio running, may the AI change what plays, custom/film scenes availability).",
+                 description: "START HERE. A short orientation to designing DotStudio screensavers: how styles work, the workflow (read guides → pick scenes → create_style → preview_style → benchmark_style → set_screensaver), the app-settings tools (get_settings / update_settings / app_action), which guides to read first (including the user's own brand guides), and this Mac's state (is DotStudio running, may the AI change what plays, custom/film scenes availability).",
                  input: S.obj([:]), readOnly: true, idempotent: true) { [unowned self] _ in try self.getStarted() },
             Tool(name: "list_guides", title: "List guides",
                  description: "Every guide the AI should know about: DotStudio's taste (style/dotstudio), per-scene settings (settings/*, generated from this build), app settings, power, burn-in, engine guides (engines/*), and the user's own guides (user/*, e.g. brand guides — honour them). Returns id, title, source and a one-line summary.",
@@ -344,6 +344,12 @@ final class Toolbox {
         5. benchmark_style (≤ 4 ms at 5K is the aim) — read_guide("power") and ("burn-in") for clocks and static elements.
         6. Only when the user wants it: set_screensaver / set_wallpaper (these change the user's Mac).
 
+        The app's own settings are tools too: get_settings reads every option in DotStudio (General, Music, Weather, \
+        Live Wallpaper, playlist interval and shuffle, crossfade, quality, the Source that Looks restyle, Updates) with its \
+        allowed values, plus what macOS owns (screensaver installed/chosen, idle time, login item) read-only; \
+        update_settings changes them in one checked patch; app_action presses the app's own buttons for setup \
+        (install_screensaver, show_setup_guide, guide_me, open_screensaver_settings…). Only change what the user asked for.
+
         """
         t += "This Mac: DotStudio is \(running ? "running (changes appear live, with a notice)" : "not running (changes are written to its library and show when it opens)"). "
         t += "The AI \(settings.allowPlaybackChanges ? "may" : "may NOT") change what plays (Settings ▸ AI). "
@@ -355,6 +361,7 @@ final class Toolbox {
         return .ok(t, ["appRunning": running, "allowPlaybackChanges": settings.allowPlaybackChanges, "styles": l.presets.count,
                        "aiStyles": created, "nowPlaying": playing.name, "userGuides": user,
                        "readFirst": ["style/dotstudio", "settings/index", "power", "burn-in"] + user,
+                       "settingsTools": ["get_settings", "update_settings", "app_action"],
                        "customScenes": scenes.isAvailable, "film": film.isAvailable, "store": store.path])
     }
 

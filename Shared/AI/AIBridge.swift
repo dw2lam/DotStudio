@@ -26,6 +26,13 @@ struct BridgeRequest: Codable, Equatable {
         case setScreensaver
         /// `mode`: set | off | follow; `display`: one display's key (set).
         case setWallpaper
+        /// The app's settings now (AppSettings), with what only the running app knows (the
+        /// login item, the setup checks, weather, updates) — answered in `settings`.
+        case getSettings
+        /// Apply `settings` (a patch AppSettings.validate accepts) live, as the Settings window would.
+        case updateSettings
+        /// `mode`: one of AppSettings.actions (install_screensaver, show_setup_guide, …).
+        case appAction
     }
     var op: Op
     var preset: Preset?
@@ -33,6 +40,8 @@ struct BridgeRequest: Codable, Equatable {
     var name: String?
     var display: String?
     var mode: String?
+    /// updateSettings: setting key → value.
+    var settings: [String: JSONValue]?
     /// Who asks ("Claude", "Cursor"…), for the notice.
     var client: String?
 }
@@ -45,6 +54,8 @@ struct BridgeResponse: Codable, Equatable {
     var appVersion: String?
     /// What happened, in a sentence (shown to the AI).
     var message: String?
+    /// getSettings / updateSettings: setting key → value (after the change).
+    var settings: [String: JSONValue]?
 
     static func fail(_ error: String) -> BridgeResponse { BridgeResponse(ok: false, error: error) }
 }
