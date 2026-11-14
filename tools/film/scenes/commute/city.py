@@ -41,7 +41,10 @@ def build_tile(tile, lib, P, period, seed=11):
     """Builds one period of scenery into `tile`. Returns the outside's night emitters (lit windows,
     signs, street lamps, shop fronts): the materials the light layers' `city` tile switches.
     P["layers"] (the light-layer build): the day city (day facades, dry) with every night emitter
-    built at its night strength, so the layers can turn them on for `city` and off for the rest."""
+    built at its night strength, so the layers can turn them on for `city` and off for the rest. The
+    day facade scans light up with their night counterparts' Emission maps (NIGHT), so the `city`
+    tile's towers carry as many lit windows as the night variant's (most day scans have no or an
+    all-black Emission map)."""
     night = P.get("night", False)
     layered = P.get("layers", False)
     emit = night or layered              # build the night emitters
@@ -54,7 +57,8 @@ def build_tile(tile, lib, P, period, seed=11):
     # ------------------------------------------------------------------ materials
     def acg(name, size):
         n = NIGHT.get(name, name) if swap else name
-        return mt.acg_pbr(f"F_{n}_{r.random():.4f}", n, size_m=size * r.uniform(0.9, 1.1), nor_strength=0.4,
+        lit_by = NIGHT.get(name, name) if emit else n    # the night scan's lit windows (layers: on the day scan)
+        return mt.acg_pbr(f"F_{n}_{r.random():.4f}", n, size_m=size * r.uniform(0.9, 1.1), nor_strength=0.4, emission_aid=lit_by,
                           tint=r.choice([(1, 1, 1), (1.05, 1.0, 0.92), (0.88, 0.92, 0.98), (0.8, 0.8, 0.8)]),
                           emission_strength=(0.35 if emit else 0.0), rough_mul=0.5 if wet else 1.0)
     office = [acg(n, s) for n, s in OFFICE]

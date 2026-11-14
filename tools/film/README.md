@@ -142,8 +142,10 @@ python3 -I dsfilm/layerpack.py check DIR OUT/layers.mov [--frames 1,12,24]   # d
 
 - Layers render the scene's layered build (`spec.build(…, layers=True)`, `ctx.layers`): the base
   variant's geometry and materials (day: dry streets, day facades) plus every source the tiles need,
-  each switchable. Weather that changes geometry or materials (snow, wet streets, water on the
-  glass) is not in the layers — see "Choosing" below.
+  each switchable (Commute: the day facade scans emit their night counterparts' lit windows, which
+  only the `city` tile switches on — `materials.acg_pbr(…, emission_aid=…)`). Weather that changes
+  geometry or materials (snow, wet streets, water on the glass) is not in the layers — see
+  "Choosing" below.
 - Everything else is the same for every tile: camera, motion, frame numbers, motion blur. No film
   look (bloom, halation, vignette, fog) and no exposure: half-float EXR, scene-linear Rec.709.
 - Order: tile by tile (`sun` frames 1…N, then `sun_low` …), so the probes are re-baked 5 times per
