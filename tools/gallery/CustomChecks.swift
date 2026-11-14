@@ -6,6 +6,39 @@ import AppKit
 import AVFoundation
 import Metal
 
+/// GPU ms for a budget check: the MINIMUM over many timed runs, after a warm-up.
+///
+/// Other work on the GPU (a live wallpaper, the real DotStudio, a render, the WindowServer) can
+/// only ever ADD time to a run, never remove it, so the fastest run is the honest answer to "can
+/// this pass run within its budget"; a median or a single run fails whenever the Mac is busy. A
+/// real regression raises every run, the fastest too, so the budget still catches it. While even
+/// the best is over budget, more batches of `runs` are timed, a short pause apart (so the gaps in
+/// another app's frames, or between a renderer's frames, get a chance), for up to `patience`
+/// seconds before the check reports it: a pass within budget costs one batch, a regression costs
+/// the patience. `run(i)` encodes and times one run (GPU ms, per frame); nil = it couldn't run
+/// (the result is then +inf, so the check fails). Measured on an M5 Pro: with a compute load
+/// keeping the GPU ~50 % busy every check passes at about its quiet numbers; a GPU SATURATED by
+/// another process (e.g. a Blender EEVEE render) stretches every run several-fold, which no
+/// statistic can see through: such failures need a rerun on a quieter GPU.
+func gpuBudgetMs(budget: Double, warmup: Int = 2, runs: Int = 8, patience: Double = 6, _ run: (Int) -> Double?) -> Double {
+    var i = 0
+    for _ in 0..<warmup {
+        guard run(i) != nil else { return .infinity }
+        i += 1
+    }
+    var best = Double.infinity
+    let t0 = CACurrentMediaTime()
+    repeat {
+        if i > warmup { Thread.sleep(forTimeInterval: 0.25) }
+        for _ in 0..<runs {
+            guard let ms = run(i) else { return best }
+            best = min(best, ms)
+            i += 1
+        }
+    } while best > budget && CACurrentMediaTime() - t0 < patience
+    return best
+}
+
 /// Writes a scene package into `dir` (scene.json from `manifest`, plus `files`).
 func writePackage(_ dir: URL, manifest: [String: Any], files: [String: String]) {
     let fm = FileManager.default
@@ -167,17 +200,18 @@ func customSceneChecks() -> Bool {
             let img = frame(p), fb = fallback(p)
             let d = meanDiff(img, fb)
             let status = CustomSceneLink.shared(store: storeURL).status(id)
-            var ms = r.gpuMsAt5K ?? 99
-            if ms > 3.0 {           // a busy GPU: the best of two more benches
-                let prep = CustomSceneCompiler.prepare(packageAt: dir, store: storeURL)
-                if case .success(let pso) = CustomSceneCompiler.build(prep, device: dev, format: .bgra8Unorm) {
-                    let b = CustomSceneBench(device: dev, pso: pso, prepared: prep)
-                    for _ in 0..<2 { ms = min(ms, b.median5K() ?? 99) }
-                }
+            // the budget on the fastest of many 5K frames (gpuBudgetMs), not the validator's median
+            // (r.gpuMsAt5K, which a busy GPU pushes over)
+            var ms = Double.infinity
+            let prep = CustomSceneCompiler.prepare(packageAt: dir, store: storeURL)
+            if case .success(let pso) = CustomSceneCompiler.build(prep, device: dev, format: .bgra8Unorm) {
+                let b = CustomSceneBench(device: dev, pso: pso, prepared: prep)
+                // (the same frames every run: the min then measures the GPU's load, not the content)
+                ms = gpuBudgetMs(budget: 3.0) { _ in b.render(width: 5120, height: 2880, time: 2, frames: 2, readBack: false)?.ms }
             }
             check(img != nil && d > 2 && status == .ready && ms <= 3.0,
-                  String(format: "custom: example %@/%@ compiles, renders its own frame (Δ stand-in %.1f), %.2f ms at 5K (≤ 3)",
-                         e.id, dir.lastPathComponent, d, ms))
+                  String(format: "custom: example %@/%@ compiles, renders its own frame (Δ stand-in %.1f), %.2f ms at 5K (best run; validator median %.2f; ≤ 3)",
+                         e.id, dir.lastPathComponent, d, ms, r.gpuMsAt5K ?? -1))
         }
     }
     check(examples >= 6, "custom: \(examples) example packages across the built-in engines (≥ 6)")
@@ -442,9 +476,23 @@ func customSceneChecks() -> Bool {
                 // the best of 8 interleaved rounds of 6 frames each (the GPU's clocks and other work
                 // make single runs noisy; interleaving keeps the three configurations comparable)
                 // — and when another app is drawing on the GPU meanwhile (a live wallpaper, the real
-                // DotStudio), up to 3 such batches, keeping each configuration's best so far
+                // DotStudio), more such batches for up to 6 s, keeping each configuration's best so far
+                // (the min is the right statistic: see gpuBudgetMs; warmed up first, a pause between batches)
+                for b in benches { _ = b.render(width: 5120, height: 2880, time: 1, frames: 2, readBack: false) }
                 var best = [Double](repeating: .infinity, count: 3)
-                for batch in 0..<3 {
+                // Grain and halation only add work, so a configuration measuring FASTER than the plain
+                // pass (beyond noise) means the plain pass never got a clean run yet — measured under
+                // load, a difference of minima can come out negative and would pass vacuously while
+                // hiding a real cost. Within budget = both additions in [-0.1, 0.3] ms.
+                func settled() -> Bool {
+                    (1...2).allSatisfy { best[$0] - best[0] <= 0.3 && best[$0] - best[0] >= -0.1 }
+                }
+                let t0 = CACurrentMediaTime()
+                for batch in 0..<1000 {
+                    if batch > 0 {
+                        if CACurrentMediaTime() - t0 > 6 { break }
+                        Thread.sleep(forTimeInterval: 0.25)
+                    }
                     for round in 0..<8 {
                         for (i, b) in benches.enumerated() {
                             if let f = b.render(width: 5120, height: 2880, time: Float(batch * 8 + round) * 0.7 + 1, frames: 6, readBack: false) {
@@ -452,12 +500,12 @@ func customSceneChecks() -> Bool {
                             }
                         }
                     }
-                    if best[1] - best[0] <= 0.3 && best[2] - best[0] <= 0.3 { break }
+                    if settled() { break }
                 }
                 let plain = best[0], grained = best[1], full = best[2]
                 // (the pass itself — a 4K clip aspect-filled to 5K — is the floor any video pass pays)
-                check(grained - plain <= 0.3 && full - plain <= 0.3,
-                      String(format: "film: grain adds %.3f ms (with halation %.3f) at 5120×2880 over the plain clip pass (%.3f ms): ≤ 0.3",
+                check(settled(),
+                      String(format: "film: grain adds %.3f ms (with halation %.3f) at 5120×2880 over the plain clip pass (%.3f ms; best runs): -0.1…0.3",
                              grained - plain, full - plain, plain))
             }
         }
@@ -618,7 +666,8 @@ func sceneInputChecks(work: URL, dev: MTLDevice) -> Bool {
         check(dHL > 6 && dUL < 0.8, String(format: "Haze: AQI 0 vs 300 differ by %.1f (> 6); unbound = its default 0 (Δ %.2f)", dHL, dUL))
         // the input costs ~nothing: Haze pinned vs the same frame at 5K
         b.inputs = ["aqi": 150]
-        if let ms = b.median5K() { check(ms <= 3.0, String(format: "Haze at 5K with its input: %.2f ms (≤ 3)", ms)) }
+        let ms = gpuBudgetMs(budget: 3.0) { _ in b.render(width: 5120, height: 2880, time: 2, frames: 2, readBack: false)?.ms }
+        check(ms <= 3.0, String(format: "Haze at 5K with its input: %.2f ms (best run; ≤ 3)", ms))
     } else { check(false, "Haze compiles") }
 
     // 5. The live path: a style bound to a signal, through MetalRenderer → SignalLink → signal-values.json.
@@ -978,14 +1027,12 @@ func layeredFilmChecks(work: URL, dev: MTLDevice) -> Bool {
                           ("storm", .preset(.thunderstorm)), ("sleet", .preset(.sleet))] {
             let b = CustomSceneBench(device: dev, pso: pso, prepared: prep)
             b.weather = w
-            var best = Double.infinity
-            for round in 0..<6 {
-                if let f = b.render(width: 5120, height: 2880, time: Float(round) * 0.7 + 1, frames: 4, readBack: false) { best = min(best, f.ms) }
-            }
+            let best = gpuBudgetMs(budget: 4.0) { _ in b.render(width: 5120, height: 2880, time: 1, frames: 4, readBack: false)?.ms }
             worst = max(worst, best)
             rows.append(String(format: "%@ %.2f", name, best))
         }
-        check(worst <= 4, String(format: "film layers: the screen pass at 5120×2880 ≤ 4 ms in every weather (%@ ms)", rows.joined(separator: ", ")))
+        check(worst <= 4, String(format: "film layers: the screen pass at 5120×2880 ≤ 4 ms in every weather (%@ ms; best runs)",
+                                   rows.joined(separator: ", ")))
     }
     // the mix pass on the contract's default grid (3×2 tiles of 1600×1000): it runs only when the
     // video's frame (≤ 30 fps) or the light changes
@@ -994,15 +1041,18 @@ func layeredFilmChecks(work: URL, dev: MTLDevice) -> Bool {
     try? fm.createDirectory(at: big.appendingPathComponent("clips"), withIntermediateDirectories: true)
     if writeLayersClip(big.appendingPathComponent("clips/layers.mov"), values: values, maskTile: 5, tile: (1600, 1000), seconds: 0.25) {
         let bp = CustomSceneCompiler.prepare(packageAt: big, store: storeURL)
-        var best = Double.infinity
-        for i in 0..<8 {
+        let q = dev.makeCommandQueue()
+        let best = gpuBudgetMs(budget: 1.5) { _ -> Double? in
+            // a fresh FilmLayers per run: one that already mixed this frame and light keeps the last
+            // mix and encodes nothing (which would time as ~0 and hide a regression)
             let fl = FilmLayers(prepared: bp, layers: bp.manifest.layers!)
-            guard let q = dev.makeCommandQueue(), let cmd = q.makeCommandBuffer(),
-                  fl.encode(cmd, device: dev, elevation: 30, weather: .preset(.rain), time: Double(i), live: false, wait: true) != nil else { break }
+            guard let q, let cmd = q.makeCommandBuffer(),
+                  fl.encode(cmd, device: dev, elevation: 30, weather: .preset(.rain), time: 1, live: false, wait: true) != nil
+            else { return nil }
             cmd.commit(); cmd.waitUntilCompleted()
-            if i > 0 { best = min(best, (cmd.gpuEndTime - cmd.gpuStartTime) * 1000) }
+            return (cmd.gpuEndTime - cmd.gpuStartTime) * 1000
         }
-        check(best <= 1.5, String(format: "film layers: the mix pass (6 tiles of 1600×1000 → HDR + mips) takes %.2f ms: ≤ 1.5", best))
+        check(best <= 1.5, String(format: "film layers: the mix pass (6 tiles of 1600×1000 → HDR + mips) takes %.2f ms (best run): ≤ 1.5", best))
     } else { check(false, "film layers: a 4800×2000 HEVC Main10 layers clip (the default grid) writes") }
     return ok
 }
