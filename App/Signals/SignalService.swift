@@ -1,6 +1,7 @@
 //  SignalService.swift — the writer side of signal-values.json (Shared/Signals), a sibling of
 //  WeatherService: the app samples the built-in signals, fetches the user's web signals and reads
-//  their file signals — only while an enabled When rule uses them — and is the ONE evaluator of
+//  their file signals — only while an enabled When rule tests them or a style's Custom Scene input
+//  is bound to them (Library.referencedSignalKeys) — and is the ONE evaluator of
 //  the When rules (RuleEngine.decide: first match wins, hysteresis, hold). It writes the values
 //  and its decision as a lease, so the saver on every display, the wallpaper, the gallery and
 //  dotstudio-mcp all agree on what plays; a quit app's lease runs out and the lineup returns.
@@ -8,8 +9,9 @@
 //  Limits (docs/signals-design.md §2): a web signal at most every 5 minutes (default 15) ±10 %
 //  jitter, twice as long in Low Power Mode, Retry-After honoured on 429 / 503, failures back off
 //  (1, 2, 5, 10, 20 min, never past the interval), about 60 fetches an hour in all; files are
-//  stat'ed every 10 s. Nothing runs while no enabled rule exists; signal-values.json is then
-//  removed. Keys come from the Keychain (SignalKeychain) without ever prompting.
+//  stat'ed every 10 s. Nothing runs while no enabled rule and no input binding exists;
+//  signal-values.json is then removed. Keys come from the Keychain (SignalKeychain) without ever
+//  prompting. The app's own renderers read the state in memory (SignalLink.provider = snapshot).
 //
 //      SignalService.shared.attach(model:)   // App.init
 //      SignalService.shared.start()          // applicationDidFinishLaunching
@@ -37,7 +39,16 @@ final class SignalService: ObservableObject {
     }
 
     /// What's written (and what the app itself plays by): values + the rule lease.
-    @Published private(set) var state = SignalState()
+    @Published private(set) var state = SignalState() {
+        didSet { snapLock.lock(); snap = state; snapLock.unlock() }
+    }
+    private let snapLock = NSLock()
+    private var snap = SignalState()
+    /// `state`, safe to read from any thread (the renderers' SignalLink.provider).
+    func snapshot() -> SignalState? {
+        snapLock.lock(); defer { snapLock.unlock() }
+        return snap
+    }
     @Published private(set) var statuses: [UUID: Status] = [:]
 
     private weak var model: AppModel?
@@ -70,6 +81,9 @@ final class SignalService: ObservableObject {
             writtenState = s
         }
         subs = [model.$library.receive(on: DispatchQueue.main).sink { [weak self] _ in self?.libraryChanged() }]
+        // Every renderer in the app (previews, thumbnails, the wallpaper) reads the scene inputs
+        // from here rather than the file it writes.
+        SignalLink.provider = { [weak self] in self?.snapshot() }
     }
 
     func start() {
@@ -94,17 +108,20 @@ final class SignalService: ObservableObject {
 
     private var library: Library? { model?.library }
 
-    /// Enabled rules exist: the service samples, evaluates and writes.
-    var isActive: Bool { (library?.rules ?? []).contains(where: \.enabled) }
+    /// Enabled rules exist, or a style binds a scene input: the service samples, evaluates and writes.
+    var isActive: Bool {
+        guard let lib = library else { return false }
+        return (lib.rules ?? []).contains(where: \.enabled) || !lib.boundSignalKeys.isEmpty
+    }
 
-    /// User signals some enabled rule tests (fetched only these).
+    /// User signals some enabled rule tests or some input binding uses (fetched only these).
     var neededSignals: [Signal] {
         guard let lib = library else { return [] }
         let keys = lib.referencedSignalKeys
         return (lib.signals ?? []).filter { $0.enabled && keys.contains($0.key) }
     }
 
-    /// An enabled rule tests the weather (WeatherService fetches for it too).
+    /// An enabled rule tests the weather, or an input is bound to it (WeatherService fetches for it too).
     var needsWeather: Bool { (library?.referencedSignalKeys ?? []).contains { $0.hasPrefix("weather.") } }
 
     func isNeeded(_ s: Signal) -> Bool { neededSignals.contains { $0.id == s.id } }
@@ -115,6 +132,7 @@ final class SignalService: ObservableObject {
         var signals: [Signal]?
         var rules: [PlayRule]?
         var styles: [UUID]
+        var bound: Set<String>
         var lat: Double?
         var lon: Double?
     }
@@ -123,7 +141,7 @@ final class SignalService: ObservableObject {
     private func libraryChanged() {
         guard started, !demo, let lib = library else { return }
         let inputs = Inputs(signals: lib.signals, rules: lib.rules, styles: lib.presets.map(\.id),
-                            lat: lib.locationLat, lon: lib.locationLon)
+                            bound: lib.boundSignalKeys, lat: lib.locationLat, lon: lib.locationLon)
         guard inputs != lastInputs else { return }
         lastInputs = inputs
         guard isActive else { shutDown(); return }
@@ -161,7 +179,8 @@ final class SignalService: ObservableObject {
         }
     }
 
-    /// No enabled rule: nothing to watch. The file goes (a host with a stale lease plays the lineup).
+    /// No enabled rule and no binding: nothing to watch. The file goes (a host with a stale lease
+    /// plays the lineup; bound inputs fall back to their defaults).
     private func shutDown() {
         tick?.invalidate(); tick = nil
         fileTick?.invalidate(); fileTick = nil

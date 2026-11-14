@@ -499,6 +499,25 @@ do {
     check(RuleEngine.validate(PlayRule(name: "x", when: RuleCondition(all: [RuleClause(signal: "weather.condition", op: .gt, value: .number(1))]), play: [aurora]), in: lib)
             .contains { $0.contains("is a word") }, "validate: op vs type")
     check(RuleText.condition(snow.when, in: lib) == "Weather is Snow", "a rule in words")
+
+    // Scene inputs: a binding makes a signal watched (like a rule test) and holds it on delete.
+    var bl = Library()
+    var air = Signal(name: "Air")
+    air.kind = .file; air.file = "air.txt"
+    bl.signals = [air]
+    var custom = EffectInstance(.custom)
+    custom.custom = CustomSceneRef(id: "haze-3a71c0de")
+    custom.inputs = ["aqi": InputBinding(signal: air.key.lowercased()), "warm": InputBinding(signal: "weather.tempC")]
+    bl.presets = [Preset(name: "Haze", effects: [custom])]
+    check(bl.ruleSignalKeys.isEmpty && bl.referencedSignalKeys == [air.key, "weather.tempC"],
+          "bindings count as references (a UUID in any case): the app fetches them, the weather too")
+    check(bl.deleteSignal(air.id, force: false)?.contains("scene input") == true && bl.signals?.count == 1,
+          "deleting a signal a scene input is bound to: refused")
+    check(bl.deleteSignal(air.id, force: true) == nil && bl.signals == nil
+          && bl.presets[0].effects[0].inputs == ["warm": InputBinding(signal: "weather.tempC")],
+          "…force: the signal goes and the input is disconnected (the other binding stays)")
+    bl.presets[0].effects[0].enabled = false
+    check(bl.referencedSignalKeys.isEmpty, "a hidden effect's bindings aren't watched")
 }
 
 // MARK: LockScreenPicture

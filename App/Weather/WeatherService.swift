@@ -72,7 +72,8 @@ final class WeatherService: ObservableObject {
     }
 
     /// A style in the library follows the live weather — or an enabled When rule tests it
-    /// (SignalService) — and the user hasn't turned it off.
+    /// or a Custom Scene input is bound to a weather.* signal (SignalService.needsWeather) — and
+    /// the user hasn't turned it off.
     var isNeeded: Bool {
         enabled && ((model?.library.presets.contains(where: WeatherLink.followsLive) ?? false) || SignalService.shared.needsWeather)
     }

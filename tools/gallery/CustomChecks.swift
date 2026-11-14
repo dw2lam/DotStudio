@@ -144,8 +144,8 @@ func customSceneChecks() -> Bool {
     // 2. The cells engine's CellKit.h is Shared/Scenes/CellKit_funcs.h, byte for byte.
     if let root = ProcessInfo.processInfo.environment["DOTSTUDIO_REPO_ROOT"], let engines = CustomScenes.builtInEnginesDir {
         let a = try? Data(contentsOf: URL(fileURLWithPath: root).appendingPathComponent("Shared/Scenes/CellKit_funcs.h"))
-        let b = try? Data(contentsOf: engines.appendingPathComponent("cells/1/CellKit.h"))
-        check(a != nil && a == b, "custom: Engines/cells/1/CellKit.h is a copy of Shared/Scenes/CellKit_funcs.h (re-copy it when that changes)")
+        let b = try? Data(contentsOf: engines.appendingPathComponent("cells/1.1/CellKit.h"))
+        check(a != nil && a == b, "custom: Engines/cells/1.1/CellKit.h is a copy of Shared/Scenes/CellKit_funcs.h (re-copy it when that changes)")
     }
 
     // 3. Every built-in engine is found, and every example package validates, installs and renders
@@ -462,7 +462,259 @@ func customSceneChecks() -> Bool {
             }
         }
     }
+    if !sceneInputChecks(work: work, dev: dev) { ok = false }
     if !layeredFilmChecks(work: work, dev: dev) { ok = false }
+    return ok
+}
+
+// MARK: - Scene inputs (docs/signals-design.md §4, Shared/Signals/SceneInputs.swift)
+
+func sceneInputChecks(work: URL, dev: MTLDevice) -> Bool {
+    var ok = true
+    func check(_ pass: Bool, _ what: String) {
+        print("\(pass ? "PASS" : "FAIL")  inputs: \(what)")
+        if !pass { ok = false }
+    }
+    let storeURL = store.baseDir
+    func manifest(_ inputs: Any, engine: [String: Any] = ["id": "metal", "version": ">=1.1"]) -> (CustomSceneManifest?, [Diagnostic]) {
+        let o: [String: Any] = ["format": 1, "id": "inputs-0000a0a0", "name": "Inputs", "engine": engine, "entry": "scene.metal", "inputs": inputs]
+        guard let d = try? JSONSerialization.data(withJSONObject: o),
+              let m = try? JSONDecoder().decode(CustomSceneManifest.self, from: d) else { return (nil, []) }
+        return CustomScenes.sanitize(m)
+    }
+    func errors(_ r: (CustomSceneManifest?, [Diagnostic])) -> [String] { r.1.filter { $0.severity == .error }.map(\.message) }
+    func warnings(_ r: (CustomSceneManifest?, [Diagnostic])) -> [String] { r.1.filter { $0.severity == .warning }.map(\.message) }
+    let aqi: [String: Any] = ["key": "aqi", "label": "Air quality", "range": [0, 300], "default": 0, "unit": "AQI"]
+
+    // 1. The manifest: decode (tolerant) and validation.
+    do {
+        let good = manifest([aqi, ["key": "warm", "label": "Warmth", "range": ["-10", "40"], "default": "15", "suggest": "weather.tempC"]])
+        let ins = good.0?.inputSpecs ?? []
+        check(errors(good).isEmpty && warnings(good).isEmpty && ins.count == 2 && ins[0].hi == 300 && ins[1].lo == -10 && ins[1].def == 15
+              && ins[1].suggest == "weather.tempC", "two inputs read (numbers as strings too), no diagnostics: \(good.1.map(\.message))")
+        let junk = manifest("not a list")
+        check(junk.0 != nil && junk.0?.inputs == nil && errors(junk).isEmpty, "\"inputs\": junk decodes as none (the manifest still reads)")
+        let nine = manifest((0..<9).map { ["key": "k\($0)", "label": "K", "range": [0, 1], "default": 0] })
+        check(errors(nine).contains { $0.contains("at most 8") }, "9 inputs: refused (≤ 8)")
+        check(errors(manifest([["key": "AQI", "label": "A", "range": [0, 1], "default": 0]])).contains { $0.contains("lowercase") }, "a key not [a-z][A-Za-z0-9_]*: refused")
+        check(errors(manifest([aqi, aqi])).contains { $0.contains("twice") }, "duplicate keys: refused")
+        check(errors(manifest([["key": "a", "label": "A", "range": [5, 5], "default": 5]])).contains { $0.contains("lo < hi") }, "range lo ≥ hi: refused")
+        check(errors(manifest([["key": "a", "label": "A", "range": [0, 10], "default": 11]])).contains { $0.contains("outside its range") }, "default outside the range: refused")
+        check(errors(manifest([["key": "a", "label": "A", "default": 0]])).contains { $0.contains("range") }, "no range: refused")
+        check(warnings(manifest([aqi], engine: ["id": "metal", "version": ">=1"])).contains { $0.contains(">=1.1") },
+              "inputs on engine \">=1\": advice to require 1.1 (older apps refuse it cleanly)")
+        check(warnings(manifest([["key": "a", "label": "A", "range": [0, 1], "default": 0, "suggest": "weather.condition"]])).contains { $0.contains("word") },
+              "suggest a word signal: warned")
+        // round trip
+        if let m = good.0, let d = try? JSONEncoder().encode(m), let back = try? JSONDecoder().decode(CustomSceneManifest.self, from: d) {
+            check(back.inputs == m.inputs, "inputs survive encode → decode")
+        } else { check(false, "inputs survive encode → decode") }
+    }
+
+    // 2. A style's bindings: tolerant, and never costing the effect.
+    do {
+        func effect(_ inputs: Any) -> Preset? {
+            let o: [String: Any] = ["id": UUID().uuidString, "name": "X", "fps": 30, "effects": [[
+                "id": UUID().uuidString, "kind": "custom", "enabled": true, "params": [:] as [String: Any],
+                "custom": ["id": "haze-3a71c0de"], "inputs": inputs]]]
+            return (try? JSONSerialization.data(withJSONObject: o)).flatMap { try? JSONDecoder().decode(Preset.self, from: $0) }
+        }
+        let junk = effect("garbage")
+        check(junk?.effects.count == 1 && junk?.unknownEffects.isEmpty == true && junk?.effects[0].inputs == nil,
+              "a binding map this build can't read is dropped, never the effect")
+        let mixed = effect(["aqi": ["signal": "weather.tempC"], "BAD KEY": ["signal": "x"], "empty": ["signal": ""], "bare": "power.battery"])
+        check(mixed?.effects[0].inputs == ["aqi": InputBinding(signal: "weather.tempC"), "bare": InputBinding(signal: "power.battery")],
+              "bindings read; malformed keys and empty signals dropped; a bare string reads too (\(String(describing: mixed?.effects[0].inputs)))")
+        if let p = mixed, let d = try? JSONEncoder().encode(p), let back = try? JSONDecoder().decode(Preset.self, from: d) {
+            check(back.effects[0].inputs == p.effects[0].inputs, "bindings survive encode → decode")
+        }
+        var look = EffectInstance(.halftone)
+        look.inputs = ["aqi": InputBinding(signal: "weather.tempC")]
+        look.sanitizeParams()
+        check(look.inputs == nil, "sanitize drops bindings on a non-custom effect")
+    }
+
+    // 3. Packing: u.scene[9…12]; defaults while unbound; zeros for a package without inputs.
+    guard let engine = CustomScenes.resolveEngine(.init(id: "metal", version: ">=1.1"), store: storeURL),
+          engine.version == "1.1" else { check(false, "the metal engine is 1.1"); return false }
+    let hazeDir = engine.url.appendingPathComponent("examples/haze", isDirectory: true)
+    guard let hazeID = try? CustomScenes.install(packageAt: hazeDir, into: storeURL),
+          let haze = CustomScenes.manifest(id: hazeID, store: storeURL) else { check(false, "Haze installs"); return false }
+    do {
+        let dir = work.appendingPathComponent("packing")
+        writePackage(dir, manifest: ["format": 1, "id": "packing-0000a0a1", "name": "Packing", "engine": ["id": "metal", "version": ">=1.1"],
+                                     "entry": "scene.metal",
+                                     "inputs": [["key": "a", "label": "A", "range": [0, 10], "default": 5], ["key": "b", "label": "B", "range": [-1, 1], "default": -0.5]]],
+                     files: ["scene.metal": "#include <DotStudio.h>\nfloat4 dsScene(float2 uv, DSContext ctx) { return float4(ctx.input[0] / 10.0, ctx.inputLive[1], 0.5 + 0.5 * ctx.input[1], 1.0); }\n"])
+        let prep = CustomSceneCompiler.prepare(packageAt: dir, store: storeURL)
+        let inst = EffectInstance.customScene(prep.manifest)
+        var u = FXUniforms()
+        CustomSceneLink.fillStatic(&u, inst: inst, prepared: prep, wall: Date(), location: nil, weather: .clear, musicPlaying: false, musicLevel: 0)
+        check(u.scene.9.x == 5 && u.scene.9.y == -0.5 && u.scene.11.x == 0 && u.scene.11.y == 0 && u.scene.10 == .zero,
+              "unbound: each input at its default, not live (scene[9] \(u.scene.9), scene[11] \(u.scene.11))")
+        var iv = SceneInputValues()
+        iv.value[0] = 7; iv.value[5] = 3; iv.live[1] = 1; iv.live[7] = 0.25
+        CustomSceneLink.fillStatic(&u, inst: inst, prepared: prep, wall: Date(), location: nil, weather: .clear, musicPlaying: false,
+                                   musicLevel: 0, inputs: iv)
+        check(u.scene.9.x == 7 && u.scene.10.y == 3 && u.scene.11.y == 1 && u.scene.12.w == 0.25,
+              "values → scene[9…10], live → scene[11…12] (input[i] = scene[9 + i/4][i%4])")
+        let plain = work.appendingPathComponent("plain")
+        writePackage(plain, manifest: ["format": 1, "id": "plain-0000a0a2", "name": "Plain", "engine": ["id": "metal"], "entry": "scene.metal"],
+                     files: ["scene.metal": "#include <DotStudio.h>\nfloat4 dsScene(float2 uv, DSContext ctx) { return float4(uv, 0.5, 1.0); }\n"])
+        let pp = CustomSceneCompiler.prepare(packageAt: plain, store: storeURL)
+        u.scene.9 = .one
+        CustomSceneLink.fillStatic(&u, inst: EffectInstance.customScene(pp.manifest), prepared: pp, wall: Date(), location: nil,
+                                   weather: .clear, musicPlaying: false, musicLevel: 0)
+        check(u.scene.9 == .zero && u.scene.11 == .zero, "a package without inputs: zeros (and it still compiles: \(pp.source != nil))")
+        // the shader reads them where the CPU put them
+        if case .success(let pso) = CustomSceneCompiler.build(prep, device: dev, format: .bgra8Unorm) {
+            let b = CustomSceneBench(device: dev, pso: pso, prepared: prep)
+            b.inputs = ["a": 10, "b": 1]
+            func rgb(_ f: CustomSceneBench.Frame?) -> [Int] {
+                (f?.describe ?? "").replacingOccurrences(of: "rgb ", with: "").split(separator: ",")
+                    .compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+            }
+            func near(_ a: [Int], _ b: [Int]) -> Bool { a.count == 3 && zip(a, b).allSatisfy { abs($0 - $1) <= 2 } }
+            let f = b.render(width: 64, height: 40, time: 1)
+            check(near(rgb(f), [255, 255, 255]), "ctx.input / ctx.inputLive in the shader (pinned a = 10, b = 1 → white): \(f?.describe ?? "nil")")
+            b.inputs = [:]
+            let g = b.render(width: 64, height: 40, time: 1)
+            check(near(rgb(g), [128, 0, 64]), "…unpinned: defaults (a = 5 → 0.5, live 0, b = −0.5 → 0.25): \(g?.describe ?? "nil")")
+        } else { check(false, "the packing package compiles") }
+    }
+
+    // 4. Haze at its input's low and high ends: the picture follows the input; unbound = the default.
+    func meanDiff(_ a: CGImage?, _ b: CGImage?) -> Double {
+        guard let a, let b, a.width == b.width, a.height == b.height,
+              let da = a.dataProvider?.data, let db = b.dataProvider?.data else { return .infinity }
+        let n = min(CFDataGetLength(da), CFDataGetLength(db)), pa = CFDataGetBytePtr(da)!, pb = CFDataGetBytePtr(db)!
+        var s = 0
+        for i in 0..<n where i % 4 != 3 { s += abs(Int(pa[i]) - Int(pb[i])) }
+        return Double(s) / Double(n / 4 * 3)
+    }
+    let hazePrep = CustomSceneCompiler.prepare(packageAt: CustomScenes.packageDir(id: hazeID, store: storeURL), store: storeURL)
+    if case .success(let pso) = CustomSceneCompiler.build(hazePrep, device: dev, format: .bgra8Unorm) {
+        let b = CustomSceneBench(device: dev, pso: pso, prepared: hazePrep)
+        b.inputs = ["aqi": 0]
+        let lo = b.render(width: 320, height: 200, time: 3)?.image
+        b.inputs = ["aqi": 300]
+        let hi = b.render(width: 320, height: 200, time: 3)?.image
+        b.inputs = [:]
+        let unbound = b.render(width: 320, height: 200, time: 3)?.image
+        let dHL = meanDiff(lo, hi), dUL = meanDiff(unbound, lo)
+        // DOTSTUDIO_INPUT_SHOTS=<dir>: keep the two ends (and a moderate 100) to look at
+        if let out = ProcessInfo.processInfo.environment["DOTSTUDIO_INPUT_SHOTS"] {
+            b.inputs = ["aqi": 100]
+            let mid = b.render(width: 1280, height: 800, time: 3)?.image
+            b.inputs = ["aqi": 0]
+            let big0 = b.render(width: 1280, height: 800, time: 3)?.image
+            b.inputs = ["aqi": 300]
+            let big300 = b.render(width: 1280, height: 800, time: 3)?.image
+            for (name, img) in [("haze-aqi0", big0), ("haze-aqi100", mid), ("haze-aqi300", big300)] {
+                guard let img, let d = NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:]) else { continue }
+                try? d.write(to: URL(fileURLWithPath: out).appendingPathComponent(name + ".png"))
+            }
+        }
+        check(dHL > 6 && dUL < 0.8, String(format: "Haze: AQI 0 vs 300 differ by %.1f (> 6); unbound = its default 0 (Δ %.2f)", dHL, dUL))
+        // the input costs ~nothing: Haze pinned vs the same frame at 5K
+        b.inputs = ["aqi": 150]
+        if let ms = b.median5K() { check(ms <= 3.0, String(format: "Haze at 5K with its input: %.2f ms (≤ 3)", ms)) }
+    } else { check(false, "Haze compiles") }
+
+    // 5. The live path: a style bound to a signal, through MetalRenderer → SignalLink → signal-values.json.
+    let sig = UUID()
+    let valuesURL = storeURL.appendingPathComponent(SignalState.fileName)
+    func writeValues(_ v: Double, age: Double, stale: Double = 2700) {
+        var st = SignalState()
+        let t = Date().timeIntervalSince1970
+        st.writtenAt = t
+        st.values[sig.uuidString] = SignalValue(v: v, at: t - age, stale: stale)
+        st.values["power.battery"] = SignalValue(v: 40, at: t, stale: 1800)
+        try? JSONEncoder().encode(st).write(to: valuesURL, options: .atomic)
+    }
+    func frame(_ p: Preset) -> CGImage? {
+        guard let r = MetalRenderer(pixelFormat: .bgra8Unorm, store: store, pipelines: .blocking) else { return nil }
+        r.waitsForScenePipelines = true
+        r.apply(p, source: SourceSpec())
+        r.setInstanceTime(3)
+        return r.renderFrame(width: 320, height: 200, settled: true)
+    }
+    var unbound = Preset.customScene(haze)
+    unbound.effects[0].params["drift"] = 0          // (motion out of the comparison)
+    var bound = unbound
+    bound.effects[0].inputs = ["aqi": InputBinding(signal: sig.uuidString)]
+    writeValues(300, age: 60)
+    let fUnbound = frame(unbound), fBound = frame(bound)
+    SignalLink.forced = ["aqi": 300]
+    let fForced = frame(unbound)
+    SignalLink.forced = nil
+    writeValues(300, age: 10 * 3600)                // stale for hours: back at the default
+    let fStale = frame(bound)
+    let a = meanDiff(fBound, fUnbound), bF = meanDiff(fBound, fForced), c = meanDiff(fStale, fUnbound)
+    check(a > 6 && bF < 1.5 && c < 1.5,
+          String(format: "a bound style follows its signal (Δ unbound %.1f), as if pinned to the value (Δ %.2f); stale → its default (Δ %.2f)", a, bF, c))
+    try? FileManager.default.removeItem(at: valuesURL)
+    check(meanDiff(frame(bound), fUnbound) < 1.5, "no signal-values.json (the app isn't running): the default")
+
+    // 6. Easing and freshness (SignalLink on its own clock).
+    do {
+        let link = SignalLink(baseDir: storeURL)
+        let specs = haze.inputSpecs
+        var inst = EffectInstance.customScene(haze)
+        inst.inputs = ["aqi": InputBinding(signal: sig.uuidString)]
+        writeValues(300, age: 0)
+        let t0: CFTimeInterval = 1000
+        let v0 = link.values(for: inst, inputs: specs, oneOff: false, now: t0)
+        writeValues(0, age: 0)
+        _ = link.values(for: inst, inputs: specs, oneOff: false, now: t0 + 1)            // (polls at most every 5 s)
+        let v6 = link.values(for: inst, inputs: specs, oneOff: false, now: t0 + 6)
+        let v26 = link.values(for: inst, inputs: specs, oneOff: false, now: t0 + 26)
+        let one = link.values(for: inst, inputs: specs, oneOff: true, now: t0 + 27)
+        check(v0.value[0] == 300 && v0.live[0] == 1, "the first frame shows the value at once (\(v0.value[0]))")
+        check(v6.value[0] > 100 && v6.value[0] < 200 && v26.value[0] < 15 && one.value[0] == 0,
+              "a new reading eases in over ~20 s (6 s: \(v6.value[0]), 26 s: \(v26.value[0])); one-off renders show it as is")
+        writeValues(200, age: 2700 + 15 * 60)          // stale after 45 min, half-way through its 30-min fade
+        let half = link.values(for: inst, inputs: specs, oneOff: true, now: t0 + 40)
+        check(half.live[0] > 0.3 && half.live[0] < 0.7 && abs(half.value[0] - 200 * half.live[0]) < 1,
+              "going stale: inputLive \(half.live[0]) and the value eases toward the default with it (\(half.value[0]))")
+        // the clock and words: time.hour without any file; weather.condition as its index
+        try? FileManager.default.removeItem(at: valuesURL)
+        let r = SignalLink.reading("time.hour", state: nil, wall: Date())
+        check(r != nil && r!.freshness == 1, "time.hour reads without the app")
+        var st = SignalState()
+        st.values["weather.condition"] = SignalValue(s: "snow", at: Date().timeIntervalSince1970)
+        check(SignalLink.reading("weather.condition", state: st, wall: Date())?.value == Double(WeatherCondition.snow.index),
+              "weather.condition reads as its index")
+    }
+
+    // 7. Library: what the app watches.
+    do {
+        var lib = Library()
+        var p = Preset.customScene(haze)
+        p.effects[0].inputs = ["aqi": InputBinding(signal: sig.uuidString.lowercased())]
+        lib.presets = [p]
+        check(lib.boundSignalKeys == [sig.uuidString] && lib.referencedSignalKeys.contains(sig.uuidString)
+              && lib.inputBindings(using: sig.uuidString).map(\.input) == ["aqi"], "a binding makes the app watch the signal")
+        lib.presets[0].effects[0].enabled = false
+        check(lib.boundSignalKeys.isEmpty, "…not when the effect is off")
+        lib.presets[0].effects[0].enabled = true
+        check(lib.unbindSignal(sig.uuidString) && lib.presets[0].effects[0].inputs == nil, "unbindSignal disconnects it")
+    }
+
+    // 8. validate's advice: declared but unread; a readout drawn from an input (burn-in).
+    do {
+        let dir = work.appendingPathComponent("advice")
+        writePackage(dir, manifest: ["format": 1, "id": "advice-0000a0a3", "name": "Advice", "engine": ["id": "metal", "version": ">=1.1"],
+                                     "entry": "scene.metal", "inputs": [aqi]],
+                     files: ["scene.metal": "#include <DotStudio.h>\nfloat4 dsScene(float2 uv, DSContext ctx) { return float4(uv, 0.5, 1.0); }\n"])
+        let r1 = CustomScenes.validate(packageAt: dir, device: dev, store: storeURL)
+        writePackage(dir, manifest: ["format": 1, "id": "advice-0000a0a3", "name": "Advice", "engine": ["id": "metal", "version": ">=1.1"],
+                                     "entry": "scene.metal", "inputs": [aqi]],
+                     files: ["scene.metal": "#include <DotStudio.h>\nstatic float digit(float2 p, int n) { return step(length(p), 0.1 * float(n)); }\nfloat4 dsScene(float2 uv, DSContext ctx) { return float4(float3(digit(uv - 0.5, int(ctx.input[0]) % 10)), 1.0); }\n"])
+        let r2 = CustomScenes.validate(packageAt: dir, device: dev, store: storeURL)
+        check(r1.ok && r1.warnings.contains { $0.contains("never reads ctx.input") }, "declared but never read: a warning")
+        check(r2.ok && r2.warnings.contains { $0.contains("burn-in") }, "an input drawn as digits: burn-in advice")
+    }
     return ok
 }
 

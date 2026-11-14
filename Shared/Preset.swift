@@ -85,6 +85,10 @@ struct EffectInstance: Codable, Identifiable, Equatable, Hashable {
     // params live in `params` under the package manifest's keys, its colours in colorA / colorB.
     /// The package: <store>/scenes/<id>/.
     var custom: CustomSceneRef?
+    /// Custom Scene inputs (docs/signals-design.md §4): the package manifest's input key → the
+    /// signal that drives it (Shared/Signals/SceneInputs.swift). nil / a missing key = not
+    /// connected: the scene reads the input's default. Optional and add-only like `custom`.
+    var inputs: [String: InputBinding]?
 
     init(_ kind: EffectKind) {
         self.kind = kind
@@ -98,6 +102,30 @@ struct EffectInstance: Codable, Identifiable, Equatable, Hashable {
 /// (`[a-z0-9-]{1,48}-<8 hex>`; CustomScenes.isValidID). Anything else renders the calm stand-in.
 struct CustomSceneRef: Codable, Hashable {
     var id: String
+}
+
+extension EffectInstance {
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, enabled, params, colorA, colorB, logoKind, logoText, logoFile, custom, inputs
+    }
+
+    /// As the synthesized decoder did (an unknown kind or a malformed field still throws: the
+    /// preset keeps the effect verbatim as an UnknownEffect), except `inputs`, which is tolerant:
+    /// a binding map this build can't read is dropped, never the whole effect.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        kind = try c.decode(EffectKind.self, forKey: .kind)
+        enabled = try c.decode(Bool.self, forKey: .enabled)
+        params = try c.decode([String: Double].self, forKey: .params)
+        colorA = try c.decodeIfPresent(RGBA.self, forKey: .colorA)
+        colorB = try c.decodeIfPresent(RGBA.self, forKey: .colorB)
+        logoKind = try c.decodeIfPresent(BounceLogoKind.self, forKey: .logoKind)
+        logoText = try c.decodeIfPresent(String.self, forKey: .logoText)
+        logoFile = try c.decodeIfPresent(String.self, forKey: .logoFile)
+        custom = try c.decodeIfPresent(CustomSceneRef.self, forKey: .custom)
+        inputs = InputBinding.decodeMap(c, .inputs)
+    }
 }
 
 /// A named effect style. The source it renders is global (see Library.source).

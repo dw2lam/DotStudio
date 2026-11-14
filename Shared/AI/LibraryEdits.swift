@@ -156,15 +156,25 @@ extension Library {
         return nil
     }
 
-    /// Remove a signal. While a rule tests it: refused, unless `force`, which also removes those
-    /// tests (and a rule left with none). nil = done.
+    /// Remove a signal. While a rule tests it or a style's scene input is bound to it: refused,
+    /// unless `force`, which also removes those tests (and a rule left with none) and those
+    /// bindings (the inputs fall back to their defaults). nil = done.
     mutating func deleteSignal(_ id: UUID, force: Bool) -> String? {
         guard let s = signal(id) else { return "No such signal." }
         let users = rules(using: s.key)
-        if !users.isEmpty, !force {
-            return "“\(s.name)” is used by \(users.count == 1 ? "the rule" : "the rules") " + users.map { "“\($0.name)”" }.joined(separator: ", ")
-                + ". Delete or change \(users.count == 1 ? "it" : "them") first, or pass force: true to remove the signal and the tests that use it."
+        let bound = inputBindings(using: s.key)
+        if !(users.isEmpty && bound.isEmpty), !force {
+            var parts: [String] = []
+            if !users.isEmpty {
+                parts.append((users.count == 1 ? "the rule " : "the rules ") + users.map { "“\($0.name)”" }.joined(separator: ", "))
+            }
+            if !bound.isEmpty {
+                parts.append((bound.count == 1 ? "the scene input " : "the scene inputs ") + bound.map { "“\($0.style.name)” \($0.input)" }.joined(separator: ", "))
+            }
+            return "“\(s.name)” is used by " + parts.joined(separator: " and ")
+                + ". Delete or change \(users.count + bound.count == 1 ? "it" : "them") first, or pass force: true to remove the signal and what uses it (rule tests go, inputs fall back to their defaults)."
         }
+        if force { unbindSignal(s.key) }
         if force, var list = rules {
             for i in list.indices {
                 list[i].when.all = list[i].when.all?.filter { $0.signal != s.key }

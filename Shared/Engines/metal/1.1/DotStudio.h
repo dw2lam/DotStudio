@@ -1,4 +1,4 @@
-//  DotStudio.h — the `metal` engine, version 1: everything a scene package can use.
+//  DotStudio.h — the `metal` engine, version 1.1: everything a scene package can use.
 //
 //  A scene is one function:
 //
@@ -75,6 +75,12 @@ struct DSContext {
     float3    colorA;       // the style's two colours (manifest "colors" a / b), display sRGB
     float3    colorB;
     float     seed;         // 0…1, fixed per style: vary layouts between copies of a scene
+    // Live inputs (engine 1.1 / DotStudio 1.6): the manifest's "inputs" in order. A style
+    // connects each to a signal (air quality, temperature, battery…). In the input's declared
+    // units, clamped to its range, eased over ~20 s; its default while not connected or stale.
+    // Use them to MODULATE colour, density or motion — never draw them as numbers (burn-in).
+    float     input[8];
+    float     inputLive[8]; // 0…1: how live input[i] is (0 = not connected / stale: at its default)
     // Assets (manifest "assets"; transparent black when there's no such asset). Sample with
     // `ctx.asset0.sample(ctx.smp, uv)` — uv 0…1, y up, colours display sRGB.
     texture2d<float> asset0;
