@@ -16,8 +16,7 @@ type Tile = {
   aspect: string;
 };
 
-// The owner's favourites, one appearance each across the page. Clocks, the other
-// water scenes and the classic genres live in Packs.
+// The owner's favourites, one appearance each across the page.
 const TILES: Tile[] = [
   {
     name: "Liquid Chrome",
@@ -63,7 +62,7 @@ const TILES: Tile[] = [
 
 export function Showcase() {
   return (
-    <section id="scenes" className="relative bg-black px-4 py-20 sm:py-28 md:py-32">
+    <section id="scenes" className="relative bg-black section-pad">
       <div className="mx-auto max-w-7xl">
         <SectionHeader eyebrow="Scenes" title="Screensavers that paint themselves.">
           <p className="mt-6 max-w-2xl text-xs leading-relaxed text-primary/70 sm:text-sm md:text-base">

@@ -11,7 +11,7 @@ type SectionHeaderProps = {
 };
 
 /** The eyebrow + pulled-up two-tone headline every section below the hero opens with. */
-export function SectionHeader({ eyebrow, title, aside, children, className = "mb-8 sm:mb-12" }: SectionHeaderProps) {
+export function SectionHeader({ eyebrow, title, aside, children, className = "mb-[var(--head-gap)]" }: SectionHeaderProps) {
   return (
     <header className={className}>
       <span className="text-[10px] uppercase tracking-[0.25em] text-primary sm:text-xs">{eyebrow}</span>

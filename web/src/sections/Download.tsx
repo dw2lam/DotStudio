@@ -42,7 +42,7 @@ function useLatestRelease() {
 export function Download() {
   const release = useLatestRelease();
   return (
-    <section id="download" className="relative bg-black px-4 py-20 sm:py-28 md:py-32">
+    <section id="download" className="relative bg-black section-pad">
       <Reveal className="mx-auto max-w-3xl">
         <div className="relative overflow-hidden rounded-[2rem] bg-[#101010] px-6 py-16 text-center sm:px-12 sm:py-20">
           <div className="bg-noise pointer-events-none absolute inset-0 opacity-[0.1]" aria-hidden="true" />

@@ -31,7 +31,7 @@ export function Looks() {
   };
 
   return (
-    <section id="looks" className="relative bg-black px-4 py-20 sm:py-28 md:py-32">
+    <section id="looks" className="relative bg-black section-pad">
       <div className="mx-auto max-w-7xl">
         <SectionHeader eyebrow="Looks" title="Restyle your own photos" aside="and video." />
 

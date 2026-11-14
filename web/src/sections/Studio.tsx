@@ -26,7 +26,7 @@ function Shot({ src, alt, width, height }: { src: string; alt: string; width: nu
 
 export function Studio() {
   return (
-    <section id="studio" className="relative overflow-hidden bg-black px-4 py-20 sm:py-28 md:py-32">
+    <section id="studio" className="relative overflow-hidden bg-black section-pad">
       <div className="bg-noise pointer-events-none absolute inset-0 opacity-[0.12]" aria-hidden="true" />
 
       <div className="relative mx-auto max-w-7xl">
@@ -61,7 +61,7 @@ export function Studio() {
           ))}
         </div>
 
-        <Reveal y={10} scaleFrom={1} className="mx-auto mb-20 max-w-5xl sm:mb-28">
+        <Reveal y={10} scaleFrom={1} className="mx-auto mb-[var(--section-y)] max-w-5xl">
           <ul className="grid grid-cols-2 gap-x-6 gap-y-4 rounded-2xl bg-white/[0.03] p-5 text-xs sm:p-6 md:grid-cols-3 sm:text-[13px]">
             {DETAILS.map((d) => (
               <li key={d.name}>

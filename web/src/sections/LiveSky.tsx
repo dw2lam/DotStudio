@@ -109,7 +109,7 @@ export function LiveSky() {
   const w = WEATHERS.find((x) => x.id === weather)!;
 
   return (
-    <section id="sky" className="relative bg-black px-4 py-20 sm:py-28 md:py-32">
+    <section id="sky" className="relative bg-black section-pad">
       <div className="mx-auto max-w-7xl">
         <SectionHeader eyebrow="Live Sky" title="Your sky, live.">
           <p className="mt-6 max-w-2xl text-xs leading-relaxed text-primary/70 sm:text-sm md:text-base">

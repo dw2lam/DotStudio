@@ -20,6 +20,38 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Spacing scale: one vertical rhythm for every section.
+   --gutter     side padding; the same inset as the hero's rounded panel (16 → 24 px)
+   --section-y  top and bottom padding of a section, so 2× between two sections (72 → 112 px)
+   --head-gap   section heading → its content (32 → 48 px) */
+:root {
+  --gutter: 1rem;
+  --section-y: clamp(4.5rem, 3rem + 5vw, 7rem);
+  --head-gap: clamp(2rem, 1.5rem + 1.5vw, 3rem);
+}
+@media (min-width: 768px) {
+  :root {
+    --gutter: 1.5rem;
+  }
+}
+.section-pad {
+  padding: var(--section-y) var(--gutter);
+}
+/* The MCP section follows the hero's panel (whose own inset is one gutter), and from tablets up
+   it fits one screen: tight padding inside, the margins making up the usual gap outside. */
+.mcp-fit {
+  margin-top: calc(var(--section-y) - var(--gutter));
+}
+@media (min-width: 768px) {
+  .mcp-fit {
+    --fit-y: clamp(1.25rem, 4.5svh, 3.5rem);
+    padding-top: var(--fit-y);
+    padding-bottom: var(--fit-y);
+    margin-top: calc(2 * var(--section-y) - var(--gutter) - var(--fit-y));
+    margin-bottom: calc(var(--section-y) - var(--fit-y));
+  }
+}
+
 /* Fractal-noise film grain over the hero video / effect. */
 .noise-overlay {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
@@ -66,5 +98,57 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .np-drift-on {
     animation: none;
+  }
+}
+
+/* AI hero: the typing caret, and film grain that moves (DotStudio adds it live at playback). */
+.caret-blink {
+  animation: caret-blink 1s steps(1) infinite;
+}
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+.grain-live {
+  animation: grain-shift 0.6s steps(1) infinite;
+}
+@keyframes grain-shift {
+  0% {
+    background-position: 0 0;
+  }
+  20% {
+    background-position: -71px 43px;
+  }
+  40% {
+    background-position: 53px -97px;
+  }
+  60% {
+    background-position: -128px -29px;
+  }
+  80% {
+    background-position: 89px 117px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .caret-blink,
+  .grain-live {
+    animation: none;
+  }
+}
+
+/* MCP demo: from tablets up the stage is given the height left in the window (MCPDemo.tsx,
+   useFitStage) and the display is as large as fits in it, centred. Its frame is 1000 wide by
+   632 tall (CROP 0.8 of 790). */
+.fit-display {
+  width: 100%;
+  margin-inline: auto;
+}
+@media (min-width: 768px) {
+  .fit-stage {
+    container-type: size;
+  }
+  .fit-display {
+    width: min(100cqw, calc(100cqh * 1000 / 632));
   }
 }

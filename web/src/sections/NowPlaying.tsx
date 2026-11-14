@@ -230,7 +230,7 @@ export function NowPlaying() {
   const label = LAYOUTS.find((l) => l.id === active)!.alt;
 
   return (
-    <section id="music" className="relative bg-black px-4 py-20 sm:py-28 md:py-32">
+    <section id="music" className="relative bg-black section-pad">
       <div className="mx-auto max-w-7xl">
         <SectionHeader eyebrow="Music" title="What's playing," aside="over any screensaver.">
           <p className="mt-6 max-w-2xl text-xs leading-relaxed text-primary/70 sm:text-sm md:text-base">

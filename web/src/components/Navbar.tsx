@@ -1,13 +1,15 @@
 const LINK_COLOR = "rgba(225, 224, 204, 0.8)";
 const LINK_HOVER = "#E1E0CC";
 
-const ITEMS: { label: string; href: string; external?: boolean }[] = [
+/** In page order. `wide`: hidden on phones, where the pill would overflow (Source is also in the footer). */
+const ITEMS: { label: string; href: string; external?: boolean; wide?: boolean }[] = [
+  { label: "MCP", href: "#mcp" },
   { label: "Scenes", href: "#scenes" },
   { label: "Live Sky", href: "#sky" },
   { label: "Music", href: "#music" },
   { label: "App", href: "#studio" },
   { label: "Looks", href: "#looks" },
-  { label: "Source", href: "https://github.com/dw2lam/dotstudio", external: true },
+  { label: "Source", href: "https://github.com/dw2lam/dotstudio", external: true, wide: true },
   { label: "Download", href: "#download" },
 ];
 
@@ -17,7 +19,7 @@ export function Navbar() {
     <nav className="absolute left-1/2 top-0 z-20 -translate-x-1/2">
       <ul className="flex items-center gap-3 rounded-b-2xl bg-black px-4 py-2 sm:gap-6 md:gap-12 md:rounded-b-3xl md:px-8 lg:gap-14">
         {ITEMS.map((item) => (
-          <li key={item.label}>
+          <li key={item.label} className={item.wide ? "hidden sm:list-item" : undefined}>
             <a
               href={item.href}
               {...(item.external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
