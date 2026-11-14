@@ -51,7 +51,7 @@ struct AISettingsSection: View {
                     .help("Markdown files here (a brand guide, colours you like) steer what the AI designs")
             }
         } header: {
-            SettingsHeader("AI")
+            HStack(spacing: Space.xs) { SettingsHeader("AI"); BetaTag() }
         } footer: {
             VStack(alignment: .leading, spacing: Space.xs) {
                 SettingsNote(ai.settings.allowPlaybackChanges

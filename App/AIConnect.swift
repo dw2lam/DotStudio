@@ -100,8 +100,8 @@ struct MCPToolbarButton: View {
         Button { open.toggle() } label: {
             Label("MCP", systemImage: "point.3.connected.trianglepath.dotted")
         }
-        .help("MCP: let Claude or any MCP app build screensavers in DotStudio")
-        .accessibilityLabel("MCP")
+        .help("MCP (beta): let Claude or any MCP app build screensavers in DotStudio")
+        .accessibilityLabel("MCP, beta")
         .accessibilityHint("Connect Claude or another MCP app to DotStudio")
         .popover(isPresented: $open, arrowEdge: .bottom) {
             MCPPopover(close: { open = false })
@@ -124,8 +124,12 @@ struct MCPPopover: View {
         let range = layout.popoverWidth
         VStack(alignment: .leading, spacing: layout.itemGap) {
             VStack(alignment: .leading, spacing: layout.labelGap) {
-                Text("MCP").textRole(.headline).wrapping()
-                    .accessibilityAddTraits(.isHeader)
+                HStack(spacing: Space.xs) {
+                    Text("MCP").textRole(.headline).wrapping()
+                    BetaTag()
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isHeader)
                 Text("Let Claude or any MCP app build screensavers in DotStudio.")
                     .textRole(.caption).foregroundStyle(.secondary).wrapping()
             }
@@ -187,5 +191,19 @@ struct MCPPopover: View {
         }
         .textRole(.caption)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// The small "Beta" capsule on the AI features (Settings ▸ AI, the MCP popover) for 1.5.
+struct BetaTag: View {
+    var body: some View {
+        Text("Beta")
+            .textRole(.badge)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .overlay(Capsule().strokeBorder(Color.secondary.opacity(0.5), lineWidth: 1))
+            .fixedSize()
+            .accessibilityLabel("Beta")
     }
 }
