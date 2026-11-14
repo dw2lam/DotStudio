@@ -428,6 +428,7 @@ extension CustomScenes {
             report.diagnostics += f.diagnostics
             report.warnings += f.warnings
         }
+        report.warnings += inputAdvice(p)
         guard !p.hasErrors, p.source != nil, !report.diagnostics.contains(where: { $0.severity == .error }) else { return report }
         let t0 = CFAbsoluteTimeGetCurrent()
         switch CustomSceneCompiler.build(p, device: device, format: .bgra8Unorm) {
@@ -464,6 +465,34 @@ extension CustomScenes {
     }
 }
 
+extension CustomScenes {
+    /// Advice about a package's inputs (warnings, never errors): declared but never read, read
+    /// but never declared, or an input that seems to drive a static readout (burn-in).
+    static func inputAdvice(_ p: PreparedScene) -> [String] {
+        guard p.kind == "metal-source" || p.kind == "cells" || p.kind == "glsl-source",
+              let entry = p.manifest.entry,
+              let src = try? String(contentsOf: p.packageDir.appendingPathComponent(entry), encoding: .utf8) else { return [] }
+        let code = src.components(separatedBy: "\n").map { l in l.range(of: "//").map { String(l[..<$0.lowerBound]) } ?? l }.joined(separator: "\n")
+        let reads = code.contains("input[") || code.contains("inputLive[")
+        let declared = p.manifest.inputSpecs
+        var w: [String] = []
+        if !declared.isEmpty && !reads {
+            w.append("the manifest declares \(declared.count) input(s) (\(declared.map(\.key).joined(separator: ", "))) but the source never reads ctx.input[…]")
+        }
+        if declared.isEmpty && reads {
+            w.append("the source reads ctx.input[…] but the manifest declares no \"inputs\": they'll all be 0")
+        }
+        if reads {
+            let lower = code.lowercased()
+            let readout = ["digit", "numeral", "segment", "readout", "sevenseg", "drawnumber", "printnumber"]
+            if let hit = readout.first(where: { lower.contains($0) }) {
+                w.append("burn-in: the source reads ctx.input and seems to draw a \(hit) — inputs should modulate colour, density or motion, never draw the value as a number or a fixed readout (a static readout burns in; read_guide burn-in)")
+            }
+        }
+        return w
+    }
+}
+
 /// Renders a compiled custom pipeline offscreen with GPU timestamps (validate; tools/gallery).
 final class CustomSceneBench {
     let device: MTLDevice
@@ -472,6 +501,9 @@ final class CustomSceneBench {
     private let queue: MTLCommandQueue?
     private(set) var lastError: String?
     var params: [String: Double] = [:]
+    /// Scene inputs by key (the rest at their defaults, as an unconnected style draws them).
+    var inputs: [String: Double] = [:]
+    private let instanceID = UUID()
     /// Textures for slots 9…12 in place of the package's assets (tools: a film's clip frames).
     var textures: [MTLTexture]?
     /// A layered film's light (its first frame is mixed for the sun and weather here).
@@ -493,14 +525,17 @@ final class CustomSceneBench {
         td.usage = [.renderTarget, .shaderRead]
         td.storageMode = readBack ? .shared : .private
         guard let target = device.makeTexture(descriptor: td) else { return nil }
-        let inst = EffectInstance.customScene(prepared.manifest)
+        var inst = EffectInstance.customScene(prepared.manifest)
+        inst.id = instanceID                     // (one ctx.seed for every frame of this bench)
         var u = FXUniforms()
         inst.pack(into: &u)
         var vals = inst.params
         vals.merge(params) { _, b in b }
         var instP = inst; instP.params = vals
         CustomSceneLink.fillStatic(&u, inst: instP, prepared: prepared, wall: Date(), location: nil,
-                                   weather: weather, musicPlaying: false, musicLevel: 0)
+                                   weather: weather, musicPlaying: false, musicLevel: 0,
+                                   inputs: SignalLink.target(prepared.manifest.inputSpecs, bindings: nil, state: nil, wall: Date(),
+                                                             forced: inputs.isEmpty ? nil : inputs))
         u.resolution = simd_float2(Float(width), Float(height))
         var assets = textures.map { $0 + CustomSceneAssets.textures(for: prepared, device: device) }
             ?? CustomSceneAssets.textures(for: prepared, device: device)

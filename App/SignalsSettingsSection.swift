@@ -19,7 +19,7 @@ struct SignalsSettingsSection: View {
             Text("Built in: weather, sun, time, battery, music")
                 .textRole(.caption).foregroundStyle(.secondary).wrapping()
             if signals.isEmpty {
-                Text("Add a value from the web or a file, then use it in a When rule on the Screensaver card.")
+                Text("Add a value from the web or a file, then use it in a When rule on the Screensaver card, or connect it to a custom scene's input in the editor.")
                     .textRole(.body).foregroundStyle(.secondary).wrapping()
             }
             ForEach(signals) { s in
@@ -36,7 +36,7 @@ struct SignalsSettingsSection: View {
         } header: {
             SettingsHeader("Signals")
         } footer: {
-            SettingsNote("DotStudio fetches a signal only while a When rule uses it, at most every 5 minutes, and sends nothing but the address you give (with your location rounded to about 10 km only if it asks for {lat} and {lon}). API keys are kept in your Keychain.")
+            SettingsNote("DotStudio fetches a signal only while a When rule or a scene input uses it, at most every 5 minutes, and sends nothing but the address you give (with your location rounded to about 10 km only if it asks for {lat} and {lon}). API keys are kept in your Keychain.")
         }
         .sheet(item: $editing) { s in
             SignalEditorSheet(original: s, isNew: !(model.library.signals ?? []).contains { $0.id == s.id })
@@ -127,7 +127,7 @@ struct SignalRow: View {
                          : RelativeDateTimeFormatter().localizedString(for: Date(timeIntervalSince1970: at), relativeTo: now))
         }
         if let p = problem { parts.append(p) }
-        else if !used { parts.append("Not used by a When rule") }
+        else if !used { parts.append("Not used yet") }
         else if value?.hasValue != true { parts.append("Waiting for the first value") }
         return parts.joined(separator: " · ")
     }

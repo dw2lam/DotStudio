@@ -4,7 +4,7 @@
 //    • finds the package (re-checking its files at most once a second, so an edit — a reinstall
 //      from the MCP server — shows up live) and its prepared source (CustomSceneCompiler);
 //    • fills the uniforms the engine's DSContext reads (params in manifest order, colours, sun,
-//      weather, seed, stepped time; the renderer adds music) — layout in Engines/metal/1/Runtime.h;
+//      weather, seed, stepped time, inputs; the renderer adds music) — layout in Engines/metal/1.1/Runtime.h;
 //    • binds the package's own pipeline over the pass's stand-in (fx_scene_90, a calm gradient of
 //      colour A) once it's built; until then, or if it can't be, the stand-in draws and the scene
 //      is flagged (CustomSceneLink.status).
@@ -156,15 +156,19 @@ final class CustomSceneLink {
     /// renderer can watch the command buffer for a GPU fault.
     /// - live: a host drawing continuously (a film plays its clips); false = a one-off render
     ///   (thumbnails: a film shows its clips' poster frames).
+    /// - signals: the renderer's SignalLink (the scene's inputs); nil = every input at its default.
     func fill(_ u: inout FXUniforms, inst: EffectInstance, wall: Date, location: (lat: Double, lon: Double)?,
-              weather: WeatherMix, musicPlaying: Bool, musicLevel: Double,
+              weather: WeatherMix, musicPlaying: Bool, musicLevel: Double, signals: SignalLink? = nil,
               encoder: MTLRenderCommandEncoder, format: MTLPixelFormat, wait: Bool, live: Bool = true,
               now: CFTimeInterval = CACurrentMediaTime()) -> String? {
         u.effect = CustomScenes.fallbackShaderID
         guard let id = inst.custom?.id, let p = prepared(id, now: now) else { return nil }
         let weather = p.isFilm ? CustomFilm.weather(inst, live: weather) : weather
+        let specs = p.manifest.inputSpecs
+        let inputs = specs.isEmpty ? nil
+            : (signals?.values(for: inst, inputs: specs, oneOff: !live, now: now, wall: wall) ?? SceneInputValues.defaults(specs))
         CustomSceneLink.fillStatic(&u, inst: inst, prepared: p, wall: wall, location: location, weather: weather,
-                                   musicPlaying: musicPlaying, musicLevel: musicLevel, cache: self)
+                                   musicPlaying: musicPlaying, musicLevel: musicLevel, inputs: inputs, cache: self)
         var tex: [MTLTexture]
         if p.manifest.isLayeredFilm {
             lock.lock(); let out = entries[id]?.layered[live]; lock.unlock()
@@ -246,10 +250,11 @@ final class CustomSceneLink {
         return (v, e)
     }
 
-    /// The uniforms DSContext is built from (Engines/metal/1/Runtime.h).
+    /// The uniforms DSContext is built from (Engines/metal/1.1/Runtime.h).
+    /// - inputs: the scene's inputs (SignalLink); nil = each at its manifest default, not live.
     static func fillStatic(_ u: inout FXUniforms, inst: EffectInstance, prepared p: PreparedScene, wall: Date,
                            location: (lat: Double, lon: Double)?, weather: WeatherMix, musicPlaying: Bool,
-                           musicLevel: Double, cache: CustomSceneLink? = nil) {
+                           musicLevel: Double, inputs: SceneInputValues? = nil, cache: CustomSceneLink? = nil) {
         let m = p.manifest
         u.effect = CustomScenes.fallbackShaderID
         u.colorA = (inst.colorA ?? m.defaultColorA).simd
@@ -269,6 +274,12 @@ final class CustomSceneLink {
         u.scene.7 = simd_float4(musicPlaying ? 1 : 0, Float(min(max(musicLevel, 0), 1)),
                                 Float(min(max(weather.gust / 30, 0), 1)), Float(weather.condition.index))
         u.scene.8 = packed.e
+        // ctx.input[0…7] / ctx.inputLive[0…7] (engine 1.1; zero for a package without inputs)
+        let iv = inputs ?? (m.inputs == nil ? SceneInputValues() : SceneInputValues.defaults(m.inputSpecs))
+        u.scene.9 = simd_float4(iv.value[0], iv.value[1], iv.value[2], iv.value[3])
+        u.scene.10 = simd_float4(iv.value[4], iv.value[5], iv.value[6], iv.value[7])
+        u.scene.11 = simd_float4(iv.live[0], iv.live[1], iv.live[2], iv.live[3])
+        u.scene.12 = simd_float4(iv.live[4], iv.live[5], iv.live[6], iv.live[7])
     }
 
     /// 0…1, fixed per style instance.

@@ -315,8 +315,14 @@ extension Library {
         return styles.isEmpty ? nil : (r, styles)
     }
 
-    /// Signals any enabled rule tests (by values-map key).
+    /// Signals any enabled rule tests, or any style's Custom Scene input is bound to (by
+    /// values-map key): what the app samples and fetches.
     var referencedSignalKeys: Set<String> {
+        ruleSignalKeys.union(boundSignalKeys)
+    }
+
+    /// Signals any enabled rule tests.
+    var ruleSignalKeys: Set<String> {
         Set((rules ?? []).filter(\.enabled).flatMap { $0.when.clauses.map(\.signal) })
     }
 

@@ -4,6 +4,8 @@
 //    u.scene[5]    weather (cloud, rain, snow, fog)
 //    u.scene[6]    (wind 0…1, seed 0…1, step fps (0 = smooth), storm 0…1)
 //    u.scene[7]    music (playing, level), then weather (gust 0…1, condition index)       u.scene[8]  the engine's own params
+//    u.scene[9…10] input[0…7] (engine 1.1: declared units, eased, clamped; defaults when unbound)
+//    u.scene[11…12] inputLive[0…7] (0…1)                                                   u.scene[13…15] free
 //    u.musicPal0…2 the album art's palette (.a = 1 when present)
 
 #ifndef DOTSTUDIO_RUNTIME_H
@@ -38,6 +40,10 @@ static inline DSContext ds_context(constant FXUniforms& u, texture2d<float> a0, 
     for (int i = 0; i < 16; i++) c.p[i] = u.scene[i / 4][i % 4];
     c.colorA = saturate(u.colorA.rgb); c.colorB = saturate(u.colorB.rgb);
     c.seed = u.scene[6].y;
+    for (int i = 0; i < 8; i++) {
+        c.input[i] = u.scene[9 + i / 4][i % 4];
+        c.inputLive[i] = saturate(u.scene[11 + i / 4][i % 4]);
+    }
     c.asset0 = a0; c.asset1 = a1; c.asset2 = a2; c.asset3 = a3; c.smp = smp;
     return c;
 }
