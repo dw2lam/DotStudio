@@ -18,6 +18,9 @@ import Foundation
 enum WeatherCondition: String, Codable, CaseIterable, Equatable {
     case clear, partlyCloudy, cloudy, fog, drizzle, rain, heavyRain, thunderstorm, snow, sleet
 
+    /// Its place in declaration order (DSWeather.condition: 0 clear … 9 sleet).
+    var index: Int { WeatherCondition.allCases.firstIndex(of: self) ?? 0 }
+
     init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
         self = WeatherCondition(rawValue: raw) ?? .clear

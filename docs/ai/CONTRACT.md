@@ -112,7 +112,7 @@ manifest key, colours colorA/colorB); before `EffectKind.custom` exists it round
 ## 8. Engine side as built (added by the Engine agent — additive; branch ai-engines)
 Everything in §1–§4 is implemented as written (Shared/CustomScenes.swift, CustomSceneCompiler.swift,
 CustomSceneLink.swift, GLSLTranslator.swift, CustomFilm.swift). Additions, none of which change a §1–§4 shape:
-- **Film engine is built in** (`Resources/Engines/film/1/`, kind `film`), not pulled: the clip player is the app's
+- **Film engine is built in** (`Resources/Engines/film/1.1/`, kind `film`), not pulled: the clip player is the app's
   own video path (VideoSource / AVPlayerLooper), and the engine is just its aspect-fill + crossfade shader. A §6
   package (`"engine": {"id": "film"}`, `clips: [{variant, file, loop?, codec?}]`) installs and plays as is.
   Variants: `day` (sun > 8°), `golden` (−4°…8°), `night` (< −4°), `rain` (while it rains), `any` (fallback);

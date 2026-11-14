@@ -46,13 +46,17 @@ final class VideoSource: MediaSource {
     private var cache: CVMetalTextureCache?
     private let device: MTLDevice
     private(set) var size: CGSize = CGSize(width: 1920, height: 1080)
-    private static let attrs: [String: Any] = [
-        kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-        kCVPixelBufferMetalCompatibilityKey as String: true
-    ]
+    private let attrs: [String: Any]
+    /// Counts the decoded frames handed out (a new one: the frame changed).
+    private(set) var frameSerial = 0
 
-    init?(url: URL, device: MTLDevice) {
+    /// - pixelFormat: what the decoder hands over — 32BGRA (8-bit, colour-converted: the clips
+    ///   and the source pass), or a 10-bit bi-planar YCbCr format for `currentPlanes()` (the
+    ///   decoder's own output: no conversion, no precision lost).
+    init?(url: URL, device: MTLDevice, pixelFormat: OSType = kCVPixelFormatType_32BGRA) {
         self.device = device
+        attrs = [kCVPixelBufferPixelFormatTypeKey as String: pixelFormat,
+                 kCVPixelBufferMetalCompatibilityKey as String: true]
         let asset = AVURLAsset(url: url)
         let template = AVPlayerItem(asset: asset)
         player = AVQueuePlayer()
@@ -75,7 +79,7 @@ final class VideoSource: MediaSource {
     /// The output on `item` (each looping copy has its own; one is added if a copy shows up late).
     private func output(for item: AVPlayerItem) -> AVPlayerItemVideoOutput {
         if let o = outputs[ObjectIdentifier(item)] { return o }
-        let o = AVPlayerItemVideoOutput(pixelBufferAttributes: Self.attrs)
+        let o = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
         item.add(o)
         outputs[ObjectIdentifier(item)] = o
         return o
@@ -106,6 +110,99 @@ final class VideoSource: MediaSource {
 
     private var lastTexture: MTLTexture?
     private var lastCVTexture: CVMetalTexture?
+
+    /// The newest frame as its YCbCr planes (a VideoSource made with a bi-planar pixel format),
+    /// or the last one while no new frame is due.
+    func currentPlanes() -> YCbCrFrame? {
+        guard let cache = cache, let item = player.currentItem else { return lastPlanes }
+        let output = output(for: item)
+        let time = output.itemTime(forHostTime: CACurrentMediaTime())
+        guard output.hasNewPixelBuffer(forItemTime: time),
+              let pb = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) else { return lastPlanes }
+        frameSerial += 1
+        if let f = YCbCrFrame(pb, cache: cache, serial: frameSerial) { lastPlanes = f }
+        CVMetalTextureCacheFlush(cache, 0)
+        return lastPlanes
+    }
+    private var lastPlanes: YCbCrFrame?
+}
+
+/// One decoded frame of a 10-bit bi-planar YCbCr video as Metal textures, zero-copy: luma
+/// (r16Unorm) and the half-size chroma plane (rg16Unorm), with the conversion to R'G'B' its
+/// tags call for (`rows`: rgb[i] = dot(rows[i].xyz, (y, cb, cr)) + rows[i].w on the raw samples).
+/// Keeps its pixel buffer alive while the GPU may read it.
+struct YCbCrFrame {
+    let luma: MTLTexture
+    let chroma: MTLTexture
+    let rows: (simd_float4, simd_float4, simd_float4)
+    let serial: Int
+    private let keep: [AnyObject]
+
+    static let videoRange = kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+    static let fullRange = kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
+
+    init?(_ pb: CVPixelBuffer, cache: CVMetalTextureCache, serial: Int) {
+        let fmt = CVPixelBufferGetPixelFormatType(pb)
+        guard fmt == Self.videoRange || fmt == Self.fullRange, CVPixelBufferGetPlaneCount(pb) == 2 else { return nil }
+        var y: CVMetalTexture?, c: CVMetalTexture?
+        let w0 = CVPixelBufferGetWidthOfPlane(pb, 0), h0 = CVPixelBufferGetHeightOfPlane(pb, 0)
+        let w1 = CVPixelBufferGetWidthOfPlane(pb, 1), h1 = CVPixelBufferGetHeightOfPlane(pb, 1)
+        guard CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, cache, pb, nil, .r16Unorm, w0, h0, 0, &y) == kCVReturnSuccess,
+              CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, cache, pb, nil, .rg16Unorm, w1, h1, 1, &c) == kCVReturnSuccess,
+              let y, let c, let ty = CVMetalTextureGetTexture(y), let tc = CVMetalTextureGetTexture(c) else { return nil }
+        luma = ty; chroma = tc
+        self.serial = serial
+        let matrix = CVBufferCopyAttachment(pb, kCVImageBufferYCbCrMatrixKey, nil) as? String
+        rows = YCbCrFrame.rows(matrix: matrix, fullRange: fmt == Self.fullRange)
+        keep = [pb, y, c]
+    }
+
+    /// The pixel format to decode a video to (its own range; video range when untagged).
+    static func pixelFormat(for track: AVAssetTrack?) -> OSType {
+        guard let fd = track?.formatDescriptions.first else { return videoRange }
+        let full = CMFormatDescriptionGetExtension(fd as! CMFormatDescription,
+                                                   extensionKey: kCMFormatDescriptionExtension_FullRangeVideo) as? Bool
+        return full == true ? fullRange : videoRange
+    }
+
+    /// Y'CbCr (10 bits in the top of 16, read as unorm) → R'G'B' for the tagged matrix (BT.709
+    /// when untagged: the film toolkit tags its layers BT.709).
+    static func rows(matrix: String?, fullRange: Bool) -> (simd_float4, simd_float4, simd_float4) {
+        let kr: Float, kb: Float
+        if matrix == kCVImageBufferYCbCrMatrix_ITU_R_601_4 as String { kr = 0.299; kb = 0.114 }
+        else if matrix == kCVImageBufferYCbCrMatrix_ITU_R_2020 as String { kr = 0.2627; kb = 0.0593 }
+        else { kr = 0.2126; kb = 0.0722 }
+        let kg = 1 - kr - kb
+        let code: Float = 65535.0 / 64.0                  // unorm16 → the 10-bit code value
+        // y' = ys·s_y + yo ; cb' = cs·s_cb + co (cr alike)
+        let ys = fullRange ? code / 1023 : code / 876, yo: Float = fullRange ? 0 : -64.0 / 876
+        let cs = fullRange ? code / 1023 : code / 896, co: Float = fullRange ? -512.0 / 1023 : -512.0 / 896
+        let crR = 2 * (1 - kr), cbB = 2 * (1 - kb)
+        let cbG = -2 * kb * (1 - kb) / kg, crG = -2 * kr * (1 - kr) / kg
+        func row(_ a: Float, _ b: Float) -> simd_float4 {   // y' + a·cb' + b·cr'
+            simd_float4(ys, a * cs, b * cs, yo + (a + b) * co)
+        }
+        return (row(0, crR), row(cbG, crG), row(cbB, 0))
+    }
+
+    /// The first frame of `url` (posters: one-off renders), decoded like the live video.
+    static func firstFrame(_ url: URL, cache: CVMetalTextureCache) -> YCbCrFrame? {
+        let asset = AVURLAsset(url: url)
+        guard let track = asset.tracks(withMediaType: .video).first, let reader = try? AVAssetReader(asset: asset) else { return nil }
+        let out = AVAssetReaderTrackOutput(track: track, outputSettings: [
+            kCVPixelBufferPixelFormatTypeKey as String: pixelFormat(for: track),
+            kCVPixelBufferMetalCompatibilityKey as String: true,
+            kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any]()])
+        out.alwaysCopiesSampleData = false
+        guard reader.canAdd(out) else { return nil }
+        reader.add(out)
+        guard reader.startReading(), let sb = out.copyNextSampleBuffer(), let pb = CMSampleBufferGetImageBuffer(sb) else {
+            reader.cancelReading(); return nil
+        }
+        let f = YCbCrFrame(pb, cache: cache, serial: 0)
+        reader.cancelReading()
+        return f
+    }
 }
 
 // MARK: - Collection (photo slideshow)
