@@ -95,6 +95,12 @@ enum SignalPolicy {
     /// Hosts an AI-made signal may not reach (nil = public).
     static func privateHost(_ host: String) -> String? {
         let h = host.hasSuffix(".") ? String(host.dropLast()) : host
+        var probe4 = in_addr()
+        // Numbers in an unusual form ("2130706433", "0x7f.1") are IP literals in disguise.
+        if inet_pton(AF_INET, h, &probe4) != 1, h.first?.isNumber == true,
+           h.allSatisfy({ $0.isHexDigit || $0 == "." || $0 == "x" }) {
+            return "Use a host name or a dotted address, not \(h)."
+        }
         if h == "localhost" || h.hasSuffix(".localhost") || h.hasSuffix(".local") || h.hasSuffix(".internal")
             || h.hasSuffix(".lan") || h.hasSuffix(".home.arpa") || !h.contains(".") && !h.contains(":") {
             return "Signals an assistant makes can't reach this Mac or the local network (\(h)). The user can add a signal for a local service themselves in DotStudio ▸ Settings ▸ Signals, or feed a file in signal-files."
@@ -116,10 +122,6 @@ enum SignalPolicy {
             let mapped = b[0..<10].allSatisfy { $0 == 0 } && b[10] == 0xff && b[11] == 0xff
             if mapped { return privateHost("\(b[12]).\(b[13]).\(b[14]).\(b[15])") }
             return loop || linkLocal || ula || b[0] == 0xff ? "Signals an assistant makes can't reach private, loopback or link-local addresses (\(h))." : nil
-        }
-        // Numbers in an unusual form ("2130706433", "0x7f.1") are IP literals in disguise.
-        if h.allSatisfy({ $0.isHexDigit || $0 == "." || $0 == "x" }) && h.first?.isNumber == true {
-            return "Use a host name or a dotted address, not \(h)."
         }
         return nil
     }
