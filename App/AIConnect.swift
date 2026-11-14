@@ -120,6 +120,11 @@ final class AIConnect: ObservableObject {
         Binding(get: { self.settings.allowPlaybackChanges }, set: { self.setAllowPlaybackChanges($0, store: store) })
     }
 
+    /// "Let AI add live data signals" (Signals; the AI never sees their keys either way).
+    func allowSignalsBinding(store: URL) -> Binding<Bool> {
+        Binding(get: { self.settings.allowSignals }, set: { self.settings.allowSignals = $0; self.settings.save(store: store) })
+    }
+
     func addToDesktop() {
         switch ClaudeDesktopConfig.install(command: Self.helperPath) {
         case .success(.unchanged):
@@ -253,6 +258,18 @@ struct MCPPopover: View {
                     .accessibilityLabel("Let AI change what plays")
             }
             .help("Off: assistants can still create and edit styles, but never change your screensaver or live wallpaper.")
+            HStack(alignment: .center, spacing: layout.controlGap) {
+                Text("Let AI add live data signals").textRole(.body).wrapping()
+                    .accessibilityHidden(true)
+                Spacer(minLength: 0)
+                Toggle("Let AI add live data signals", isOn: ai.allowSignalsBinding(store: store))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .tint(.accentColor)
+                    .adaptiveControlSize(.small)
+                    .accessibilityLabel("Let AI add live data signals")
+            }
+            .help("Off: assistants can't add, change or delete signals. They never see a signal's key either way.")
             Divider()
             Button(scaled: "What can it do? More in Settings…") {
                 close()

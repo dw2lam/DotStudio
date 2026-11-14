@@ -314,7 +314,8 @@ final class SignalService: ObservableObject {
             let mix = WeatherMix(r, at: now)
             let stale = WeatherState.staleAfter
             func put(_ id: String, _ x: Double?) { if let x { v[id] = SignalValue(v: (x * 1000).rounded() / 1000, at: at, stale: stale) } }
-            v["weather.condition"] = SignalValue(s: (r.condition ?? .clear).rawValue, at: at, stale: stale)
+            // The same classification Custom Scenes read (DSWeather.condition): WeatherMix.condition.
+            v["weather.condition"] = SignalValue(s: mix.condition.rawValue, at: at, stale: stale)
             put("weather.precip", mix.precip); put("weather.snow", mix.snow); put("weather.cloud", mix.cover)
             put("weather.fog", mix.fog); put("weather.storm", mix.storm); put("weather.wind", r.windSpeed)
             put("weather.tempC", r.temperature)

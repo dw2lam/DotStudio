@@ -45,6 +45,7 @@ struct SettingsView: View {
             GeneralSettingsSection()
             MusicSettingsSlot()        // the Music section (MusicSlots.swift)
             WeatherSettingsSection()   // live weather for the sea scenes (WeatherSettingsSection.swift)
+            SignalsSettingsSection()   // live values When rules react to (SignalsSettingsSection.swift)
             setupSection
             WallpaperSettingsSection()
             AISettingsSection()        // assistants via dotstudio-mcp (AISettingsSection.swift)

@@ -611,6 +611,35 @@ enum UIShots {
             WallpaperController.shared.update { $0.enabled = true; $0.followsScreensaver = true }
         }, view: { _ in AnyView(SettingsSectionPreview { WallpaperSettingsSection() }) }))
 
+        // Settings › Signals: none of the user's yet; then four (an AI one, a file, a key that
+        // needs re-entry, a failing one) and the editor sheet with a test's outline
+        s.append(Screen(name: "settings-signals-empty", frame: .fit(width: 460, minHeight: 160),
+                        prepare: { st in SignalsDemo.apply(st.model, signals: false, hero: st.hero, other: st.night) },
+                        view: { _ in AnyView(SettingsSectionPreview { SignalsSettingsSection() }) }))
+        s.append(Screen(name: "settings-signals", frame: .fit(width: 460, minHeight: 300),
+                        prepare: { st in SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.night) },
+                        view: { _ in AnyView(SettingsSectionPreview { SignalsSettingsSection() }) }))
+        s.append(Screen(name: "settings-signals-editor", frame: .fixed(CGSize(width: 520, height: 760)),
+                        prepare: { st in
+                            SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.night)
+                            SignalEditorSheet.demoResult = SignalsDemo.testResult
+                        },
+                        view: { st in AnyView(SignalEditorSheet(original: st.model.library.signals![0], isNew: false)) }))
+        s.append(Screen(name: "settings-signals-editor-key", frame: .fixed(CGSize(width: 520, height: 760)),
+                        prepare: { st in SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.night) },
+                        view: { st in AnyView(SignalEditorSheet(original: st.model.library.signals![2], isNew: false)) }))
+        // The Screensaver card with When rules, one playing ("When: Snow day"), and the rules popover
+        s.append(Screen(name: "dest-when", frame: .window,
+                        prepare: { st in SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.night, active: true) },
+                        view: main))
+        s.append(Screen(name: "dest-when-editor", frame: .fixed(CGSize(width: 440, height: 420)),
+                        prepare: { st in SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.night, active: true) },
+                        view: { _ in AnyView(WhenRulesEditor().background(Color(nsColor: .windowBackgroundColor))) }))   // (a popover brings its own)
+        s.append(Screen(name: "dest-when-sentence", frame: .fit(width: 440, minHeight: 120),
+                        prepare: { st in SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.night, active: true) },
+                        view: { st in AnyView(RuleSentenceEditor(draft: .constant(RuleDraft(st.model.library.rules![1], in: st.model.library)),
+                                                                 onDone: {}).padding(16).background(Color(nsColor: .windowBackgroundColor))) }))
+
         // The DotStudio menu-bar menu, laid out as a plain column (menus can't render offscreen):
         // wallpaper off, playing, paused, a rotating screensaver playlist, and not set up
         s.append(Screen(name: "menu-off", frame: .fit(width: 320), view: { _ in AnyView(MenuPreview { DotStudioMenu() }) }))
@@ -730,6 +759,7 @@ enum UIShots {
             AppPresence.shared.menuBarMode = true   // the default (prefs are in-memory here)
             LoginItem.demoStatus = .off             // never SMAppService here (SetupGuide.swift)
             LoginNudge.shared.setDemo(nil)
+            SignalService.shared.setDemo(values: [:], rule: nil, statuses: [:])   // no When rule playing
             lineup([hero])
         }
 
@@ -1108,6 +1138,63 @@ private struct SettingsSectionPreview<Content: View>: View {
             .textRole(.body)
             .formControlSize()
             .scrollDisabled(true)
+    }
+}
+
+/// Signals and When rules for the UI shots: definitions in the library, values and statuses in
+/// SignalService's demo state (it never fetches here).
+enum SignalsDemo {
+    static let air = UUID(uuidString: "5A1E0000-0000-4000-8000-000000000001")!
+    static let office = UUID(uuidString: "5A1E0000-0000-4000-8000-000000000002")!
+    static let pollen = UUID(uuidString: "5A1E0000-0000-4000-8000-000000000003")!
+    static let tide = UUID(uuidString: "5A1E0000-0000-4000-8000-000000000004")!
+    static let snowRule = UUID(uuidString: "5A1E0000-0000-4000-8000-0000000000A1")!
+
+    static var testResult: SignalFetchResult {
+        SignalFetchResult(value: SignalValue(v: 42, at: Date().timeIntervalSince1970), status: 200, ms: 184, bytes: 3_412,
+                          outline: [SignalOutlineItem(pointer: "/data/aqi", value: .number(42)),
+                                    SignalOutlineItem(pointer: "/data/city/name", value: .string("Toronto")),
+                                    SignalOutlineItem(pointer: "/data/iaqi/pm25/v", value: .number(11.5)),
+                                    SignalOutlineItem(pointer: "/status", value: .string("ok"))])
+    }
+
+    static func apply(_ model: AppModel, signals: Bool, hero: UUID, other: UUID, active: Bool = false) {
+        SignalEditorSheet.demoResult = nil
+        let t = Date().timeIntervalSince1970
+        guard signals else {
+            model.library.signals = nil
+            model.library.rules = nil
+            SignalService.shared.setDemo(values: [:], rule: nil, statuses: [:])
+            return
+        }
+        var a = Signal(id: air, name: "Air quality")
+        a.url = "https://api.waqi.info/feed/here/"; a.pointer = "/data/aqi"; a.unit = "AQI"; a.range = [0, 300]; a.createdBy = "ai"
+        var o = Signal(id: office, name: "Office temperature", kind: .file)
+        o.file = "office.json"; o.pointer = "/temp"; o.unit = "°C"
+        var p = Signal(id: pollen, name: "Pollen")
+        p.url = "https://api.pollen.example/v2/now"; p.pointer = "/index"; p.auth = SignalAuth(placement: .header, name: "X-API-Key")
+        var d = Signal(id: tide, name: "Tide height")
+        d.url = "https://tides.example.org/station/9414290.json"; d.pointer = "/height"; d.unit = "m"
+        model.library.signals = [a, o, p, d]
+        let rules = [
+            PlayRule(id: snowRule, name: "Snow day", when: RuleCondition(all: [RuleClause(signal: "weather.condition", op: .in, values: [.string("snow"), .string("sleet")])]), play: [other]),
+            PlayRule(name: "Bad air", when: RuleCondition(all: [RuleClause(signal: air.uuidString, op: .gt, value: .number(150))], timeOfDay: "night"), play: [hero]),
+            PlayRule(name: "Low battery", enabled: false, when: RuleCondition(all: [RuleClause(signal: "power.battery", op: .lt, value: .number(20))]), play: [hero]),
+            PlayRule(name: "High tide", when: RuleCondition(all: [RuleClause(signal: tide.uuidString, op: .gt, value: .number(2))]), play: [other]),
+            PlayRule(name: "Pollen", when: RuleCondition(all: [RuleClause(signal: pollen.uuidString, op: .gt, value: .number(6))]), play: [other]),
+        ]
+        model.library.rules = rules
+        let values: [String: SignalValue] = [
+            air.uuidString: SignalValue(v: 42, at: t - 180, stale: 2700),
+            office.uuidString: SignalValue(v: 23.5, at: t - 600, stale: 10 * 365 * 86400),
+            tide.uuidString: SignalValue(v: 1.4, at: t - 3 * 3600, error: "HTTP 503", stale: 2700),
+            "weather.condition": SignalValue(s: "snow", at: t - 300, stale: 10800),
+        ]
+        var st: [UUID: SignalService.Status] = [:]
+        st[pollen] = SignalService.Status(lastAttempt: Date(), error: "Key needs re-entry", key: .needsReentry)
+        st[tide] = SignalService.Status(lastAttempt: Date(), error: "HTTP 503")
+        SignalService.shared.setDemo(values: values, rule: active ? snowRule : nil, statuses: st)
+        model.objectWillChange.send()
     }
 }
 

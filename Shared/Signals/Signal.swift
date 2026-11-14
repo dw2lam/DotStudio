@@ -216,11 +216,13 @@ struct SignalValue: Codable, Equatable {
         }
     }
 
+    /// 42, 23.5, 1.4, 0.25 — at most two decimals, no trailing zeros.
     static func format(_ v: Double) -> String {
         if v == v.rounded(), abs(v) < 1e9 { return String(Int(v)) }
-        if abs(v) >= 100 { return String(format: "%.0f", v) }
-        if abs(v) >= 10 { return String(format: "%.1f", v) }
-        return String(format: "%.2f", v)
+        var s = abs(v) >= 100 ? String(format: "%.0f", v) : abs(v) >= 10 ? String(format: "%.1f", v) : String(format: "%.2f", v)
+        while s.contains("."), s.hasSuffix("0") { s.removeLast() }
+        if s.hasSuffix(".") { s.removeLast() }
+        return s
     }
 }
 
