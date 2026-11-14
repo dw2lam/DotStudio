@@ -178,13 +178,21 @@ enum FilmPackage {
             clips.append(clip)
         }
         guard !clips.isEmpty else { throw ToolError("The loop render left no clips (.mov) to package.") }
-        let fps = ((spec["loop"] as? JSONObject)?["fps"] as? NSNumber)?.intValue ?? 24
+        // The clips' real frame rate wins over the spec's (render_film_loop can override it).
+        let specFps = ((spec["loop"] as? JSONObject)?["fps"] as? NSNumber)?.intValue ?? 24
+        let fps = files.lazy.compactMap(Self.frameRate).first ?? specFps
         var m: JSONObject = ["format": 1, "id": sceneID, "name": spec["name"] as? String ?? "Film",
                              "engine": ["id": "film", "version": ">=1"], "fps": fps, "clips": clips,
                              "uses": ["sun", "weather"], "look": FilmLook.scalars(spec["look"]),
                              "description": spec["description"] as? String ?? "A film scene rendered in Blender by DotStudio's film toolkit."]
         if let a = spec["author"] as? String { m["author"] = a }
         try JSON.data(m, pretty: true).write(to: package.appendingPathComponent("scene.json"))
+    }
+
+    /// A clip's frame rate, rounded (nil when it can't be read).
+    static func frameRate(_ url: URL) -> Int? {
+        guard let t = AVURLAsset(url: url).tracks(withMediaType: .video).first, t.nominalFrameRate > 0 else { return nil }
+        return Int(t.nominalFrameRate.rounded())
     }
 
     /// "hevc" / "h264" (or the FourCC) of a clip's video track.

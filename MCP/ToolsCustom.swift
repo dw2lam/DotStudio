@@ -153,7 +153,7 @@ extension Toolbox {
             default:
                 let n = (p["options"] as? [Any])?.count ?? 0
                 if n < 2 { problems.append("params[\(i)]: a menu needs 2+ options") }
-                if def < 0 || Int(def) >= max(n, 1) || def != def.rounded() { problems.append("params[\(i)]: a menu's default is an option index 0…\(max(n - 1, 0))") }
+                if def < 0 || def >= Double(max(n, 1)) || def != def.rounded() { problems.append("params[\(i)]: a menu's default is an option index 0…\(max(n - 1, 0))") }
             }
         }
         let keys = (m["params"] as? [JSONObject] ?? []).compactMap { $0["key"] as? String }
@@ -324,12 +324,12 @@ extension Toolbox {
                 return try self.saveFilmDraft(spec, id: draft)
             },
             Tool(name: "render_film_stills", title: "Render film stills",
-                 description: "Ray-traced (Cycles) stills of a film draft, one per variant, so the user can approve the base scene BEFORE the long loop render. Runs as a background job; waits up to `wait_seconds` (default 60) and returns the images if done, else the job id for film_job_status.",
+                 description: "Ray-traced (Cycles) stills of a film draft, one per variant, so the user can approve the base scene BEFORE the long loop render. Runs as a background job; waits up to `wait_seconds` (default 20) and returns the images if done, else the job id for film_job_status.",
                  input: S.obj(["draft": S.str("Draft id from create_film_scene.", pattern: "^film-[0-9a-f]{8}$"), "variants": variants,
                                "width": S.num("Default 1280.", min: 320, max: 3840, integer: true),
                                "height": S.num("Default 800 (16:10, like Mac displays).", min: 180, max: 2160, integer: true),
                                "samples": S.num("Cycles samples (default 64).", min: 1, max: 4096, integer: true),
-                               "wait_seconds": S.num("How long to wait for the result (0–120, default 60).", min: 0, max: 120)],
+                               "wait_seconds": S.num("How long to wait for the result (0–45, default 20).", min: 0, max: 45)],
                               required: ["draft"]), openWorld: false) { [unowned self] a in
                 guard self.film.isAvailable else { throw ToolError(UnavailableFilmToolkit.message) }
                 let draft = a["draft"] as! String
@@ -340,7 +340,7 @@ extension Toolbox {
                                                 width: a["width"] as? Int ?? 1280, height: a["height"] as? Int ?? 800,
                                                 samples: a["samples"] as? Int ?? 64)
                 }
-                let wait = (a["wait_seconds"] as? NSNumber)?.doubleValue ?? 60
+                let wait = min(max((a["wait_seconds"] as? NSNumber)?.doubleValue ?? 20, 0), 45)
                 let deadline = Date().addingTimeInterval(wait)
                 while FilmJobs.state(self.store, job).0 == .running && Date() < deadline { Thread.sleep(forTimeInterval: 0.5) }
                 return try self.jobStatus(job.id)
@@ -349,7 +349,7 @@ extension Toolbox {
                  description: "Start the long render: a seamless video loop per variant (Blender headless, nice'd, in the background — it keeps going if this chat ends). Returns a job id at once; poll film_job_status (progress, ETA, log tail). When it finishes, the clips are packaged as a film scene and installed; its id goes into create_style {\"kind\": \"custom\", \"scene\": id}. Confirm with the user first: it can take hours and hundreds of MB.",
                  input: S.obj(["draft": S.str("Draft id.", pattern: "^film-[0-9a-f]{8}$"), "variants": variants,
                                "seconds": S.num("Loop length (default: the draft's loop.seconds).", min: 4, max: 120),
-                               "fps": ["type": "integer", "enum": [24, 30], "description": "Default 24."],
+                               "fps": ["type": "integer", "enum": [24, 30], "description": "Default: the draft's loop.fps (24 if unset)."],
                                "width": S.num("Default 1920 (16:10; DotStudio scales it to the display).", min: 640, max: 7680, integer: true),
                                "height": S.num("Default 1200.", min: 360, max: 4320, integer: true),
                                "quality": S.str("draft, standard (default) or final", enum: ["draft", "standard", "final"])],
@@ -360,7 +360,7 @@ extension Toolbox {
                 let vs = a["variants"] as? [String] ?? self.draftVariants(spec)
                 let job = try FilmJobs.start(store: self.store, kind: "loop", draft: draft, variants: vs) { out in
                     try self.film.loopCommand(spec: spec, outDir: out, variants: vs,
-                                              seconds: (a["seconds"] as? NSNumber)?.doubleValue ?? self.draftLoopSeconds(spec), fps: a["fps"] as? Int ?? 24,
+                                              seconds: (a["seconds"] as? NSNumber)?.doubleValue ?? self.draftLoopSeconds(spec), fps: a["fps"] as? Int ?? self.draftLoopFps(spec),
                                               width: a["width"] as? Int ?? 1920, height: a["height"] as? Int ?? 1200,
                                               quality: a["quality"] as? String ?? "standard")
                 }
@@ -420,6 +420,10 @@ extension Toolbox {
 
     func draftSpec(_ url: URL) -> JSONObject { (try? Data(contentsOf: url)).flatMap { JSON.parse($0) as? JSONObject } ?? [:] }
     func draftVariants(_ url: URL) -> [String] { draftSpec(url)["variants"] as? [String] ?? ["day", "golden", "night", "rain"] }
+    func draftLoopFps(_ url: URL) -> Int {
+        let f = ((draftSpec(url)["loop"] as? JSONObject)?["fps"] as? NSNumber)?.intValue
+        return f == 30 ? 30 : 24
+    }
     func draftLoopSeconds(_ url: URL) -> Double { ((draftSpec(url)["loop"] as? JSONObject)?["seconds"] as? NSNumber)?.doubleValue ?? 48 }
 
     static func deepMerge(_ base: JSONObject, _ patch: JSONObject) -> JSONObject {
@@ -463,8 +467,8 @@ extension Toolbox {
                     let spec = JSON.parse(try Data(contentsOf: try draftSpecURL(job.draft))) as? JSONObject ?? [:]
                     let pkg = store.appendingPathComponent(".staging/\(UUID().uuidString)")
                     let hex = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8)).lowercased()
-                    try film.package(loopOutput: jd.appendingPathComponent("out"), spec: spec, sceneID: "\(job.draft)-\(hex)", into: pkg)
                     defer { try? FileManager.default.removeItem(at: pkg) }
+                    try film.package(loopOutput: jd.appendingPathComponent("out"), spec: spec, sceneID: "\(job.draft)-\(hex)", into: pkg)
                     job.installedScene = try scenes.install(packageAt: pkg)
                 } catch let e as ToolError { job.packageError = e.message } catch { job.packageError = "\(error)" }
                 FilmJobs.save(store, job)

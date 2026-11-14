@@ -145,6 +145,7 @@ enum LibraryExecutor {
             return BridgeResponse(ok: true, appVersion: "offline")
         case .upsertStyle:
             guard var p = req.preset else { return .fail("no style given") }
+            if let n = lib.newerBuildStyle(p.id) { return .fail(Library.newerBuildMessage(n.name)) }
             if let i = lib.presets.firstIndex(where: { $0.id == p.id }) {
                 lib.presets[i] = p
                 return BridgeResponse(ok: true, id: p.id, name: p.name, message: "Updated “\(p.name)”.")
@@ -153,6 +154,7 @@ enum LibraryExecutor {
             lib.presets.append(p)
             return BridgeResponse(ok: true, id: p.id, name: p.name, message: "Added “\(p.name)” to the library.")
         case .deleteStyle:
+            if let id = req.id, let n = lib.newerBuildStyle(id) { return .fail(Library.newerBuildMessage(n.name)) }
             guard let id = req.id, let p = lib.presets.first(where: { $0.id == id }) else { return .fail("no such style") }
             guard lib.presets.count > 1 else { return .fail("“\(p.name)” is the only style; the library can't be empty.") }
             lib.removePreset(id)
@@ -164,6 +166,7 @@ enum LibraryExecutor {
             }
             return BridgeResponse(ok: true, id: id, name: p.name, message: "Deleted “\(p.name)”.")
         case .duplicateStyle:
+            if let id = req.id, let n = lib.newerBuildStyle(id) { return .fail(Library.newerBuildMessage(n.name)) }
             guard let id = req.id, let copy = lib.duplicatePreset(id, name: req.name) else { return .fail("no such style") }
             return BridgeResponse(ok: true, id: copy.id, name: copy.name, message: "Duplicated as “\(copy.name)”.")
         case .setScreensaver:

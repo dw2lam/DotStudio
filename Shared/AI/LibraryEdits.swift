@@ -19,6 +19,14 @@ struct ScreensaverLineup: Equatable {
 }
 
 extension Library {
+    /// A style a newer DotStudio wrote (kept in unknownPresets): this build lists it but must
+    /// never edit, copy or delete it — that would duplicate its id or lose what it can't read.
+    func newerBuildStyle(_ id: UUID) -> Preset? { unknownPresets.first { $0.preset.id == id }?.preset }
+
+    static func newerBuildMessage(_ name: String) -> String {
+        "“\(name)” was made with a newer version of DotStudio, so this version can't change, copy or delete it. Ask the user to update DotStudio."
+    }
+
     /// The screensaver's lineup, derived from the stored fields exactly as the saver reads them.
     var screensaverLineup: ScreensaverLineup {
         let day = Playback.pool(in: self, night: false).map(\.id)

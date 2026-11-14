@@ -30,7 +30,7 @@ struct AISettingsSection: View {
             LabeledContent("Claude Desktop") {
                 FlowLayout(spacing: layout.controlGap, lineSpacing: layout.controlGap, alignment: .trailing) {
                     Button(scaled: ai.installedInDesktop ? "Added" : "Add to Claude Desktop") { ai.addToDesktop() }
-                        .disabled(ai.installedInDesktop)
+                        .disabled(ai.installedInDesktop || !ai.helperFound)
                     if ai.desktopFailed {
                         Button(scaled: "Copy Config") { ai.copy(AIConnect.configJSON, "config") }
                         Button(scaled: "Reveal Config") { ai.revealDesktopConfig() }
