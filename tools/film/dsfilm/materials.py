@@ -129,8 +129,10 @@ def ph_pbr(name, aid, size_m=1.0, res="2k", **kw):
                size_m=size_m, **kw)
 
 
-def acg_pbr(name, aid, size_m=1.0, res="2K", **kw):
-    em = assets.acg(aid, "Emission", res)
+def acg_pbr(name, aid, size_m=1.0, res="2K", emission_aid=None, **kw):
+    """ambientCG PBR. `emission_aid`: another asset whose Emission map lights this one (e.g. a day
+    facade scan lit by its night counterpart's windows); default `aid`'s own, if it has one."""
+    em = assets.acg(emission_aid or aid, "Emission", res)
     return pbr(name, assets.acg(aid, "Color", res), assets.acg(aid, "NormalGL", res), assets.acg(aid, "Roughness", res),
                size_m=size_m, emission_map=em if os.path.exists(em) else None, **kw)
 

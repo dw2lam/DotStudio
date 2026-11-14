@@ -20,7 +20,7 @@ To make your own version, copy `commute.json`, change the values below, and run 
 | `params.cabin` | 1.0 | Brightness of the cabin lamps |
 | `params.sun_side_height` | 0.55 | How tall the scenery on the sun side is. It is only ever seen in shadows and reflections. Lower values let more low sun in. |
 | `params.lighting.<variant>` | — | Any lighting-preset key: `sun_elev`, `sun_az`, `sun_strength`, `sun_color`, `hdri`, `hdri_rot`, `hdri_strength`, `sky_tint`, `exposure`. For example, `{"day": {"sun_elev": 25}}`. In the light layers, `day` sets the `sun` tile and the sky, `golden`'s sun angles and strength set the `sun_low` tile (its colour becomes the manifest's tint) |
-| `layers.tile` | `[1600, 1000]` | The light layers' tile size (run.py `--layers-…`; see the toolkit README "Light layers"). Commute declares all six tiles: `sun`, `sun_low`, `sky`, `cabin` (lamps, diffusers, door screens, eye glints), `city` (lit windows, signs, street lamps, shop fronts on the day facades), `mask` (`WindowGlass`) |
+| `layers.tile` | `[1600, 1000]` | The light layers' tile size (run.py `--layers-…`; see the toolkit README "Light layers"). Commute declares all six tiles: `sun`, `sun_low`, `sky`, `cabin` (lamps, diffusers, door screens, eye glints), `city` (lit windows, signs, street lamps, shop fronts; the day facade scans carry their night counterparts' lit windows, so the towers light up as in the night variant), `mask` (`WindowGlass`) |
 | `params.seed` | 7 | Random seed for the city layout |
 | `look` | bloom + halation + vignette + preview grain | The film look (`dsfilm.post`). Omit the block, or pass `--no-post`, for the raw render. |
 | `render` | Cycles, 1600×1000, 384 samples | Engine, resolution and samples |
