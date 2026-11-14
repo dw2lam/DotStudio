@@ -5,7 +5,7 @@ import Foundation
 extension Toolbox {
     static let manifestSchema: JSONObject = [
         "type": "object",
-        "description": "scene.json (contract §2). id is generated from name when omitted. Params map to ctx.p[0…15] in order; colours to ctx.colorA / colorB.",
+        "description": "scene.json (contract §2). id is generated from name when omitted. Params map to ctx.p[0…15] in order; colours to ctx.colorA / colorB; inputs to ctx.input[0…7].",
         "properties": [
             "id": S.str("Optional: [a-z0-9-]{1,48}-<8 hex>. Omit to generate.", pattern: "^[a-z0-9-]{1,48}-[0-9a-f]{8}$"),
             "name": S.str("Display name.", max: 60),
@@ -22,6 +22,14 @@ extension Toolbox {
             "colors": S.obj(["a": S.obj(["label": S.str("Label", max: 24), "default": S.arr(S.num("0…1", min: 0, max: 1), "[r,g,b,a]", min: 3, max: 4)], required: ["label", "default"]),
                              "b": S.obj(["label": S.str("Label", max: 24), "default": S.arr(S.num("0…1", min: 0, max: 1), "[r,g,b,a]", min: 3, max: 4)], required: ["label", "default"])]),
             "uses": S.arr(S.str("what it reads", enum: ["sun", "weather", "music", "clock"]), "What the scene reacts to."),
+            "inputs": S.arr(S.obj(["key": S.str("Input key (what bind_signal takes).", pattern: "^[a-z][A-Za-z0-9_]{0,31}$"),
+                                   "label": S.str("UI label, e.g. \"Air quality\".", max: 40),
+                                   "range": S.arr(S.num("bound"), "[low, high] in the input's units; ctx.input[i] is clamped to it.", min: 2, max: 2),
+                                   "default": S.num("The value while the style hasn't connected it, or its signal is stale (inside range)."),
+                                   "unit": S.str("Shown after the value (\"AQI\", \"°C\").", max: 12),
+                                   "suggest": S.str("A built-in signal that fits, e.g. \"weather.tempC\" (the Inspector lists it first).", max: 40)],
+                                  required: ["key", "label", "range", "default"], extra: false),
+                            "Live inputs (engine >= 1.1 — set engine.version \">=1.1\"): ctx.input[0…7] in declared units (eased ~20 s, clamped; the default until a style connects a signal with bind_signal), ctx.inputLive[i] 0…1. Modulate colour, density or motion with them — never draw the value as a number (burn-in).", max: 8),
             "description": S.str("One or two sentences.", max: 400),
             "guides": S.arr(S.str("guide id"), "Guides it follows, e.g. [\"style/dotstudio\"]."),
         ],
@@ -122,6 +130,14 @@ extension Toolbox {
         ]
     }
 
+    /// One declared input, for tool output.
+    static func inputJSON(_ inp: CustomSceneManifest.Input, index: Int) -> JSONObject {
+        var o: JSONObject = ["key": inp.key, "label": inp.label, "range": [inp.lo, inp.hi], "default": inp.def, "index": index]
+        if let u = inp.unit { o["unit"] = u }
+        if let s = inp.suggest { o["suggest"] = s }
+        return o
+    }
+
     func entrySource(_ dir: URL) -> String {
         let m = (try? Data(contentsOf: dir.appendingPathComponent("scene.json"))).flatMap { JSON.parse($0) as? JSONObject } ?? [:]
         let entry = m["entry"] as? String ?? "scene.metal"
@@ -205,9 +221,18 @@ extension Toolbox {
             }
         }
         for w in r.warnings { text += "\nwarning: \(w)" }
+        if !r.inputs.isEmpty {
+            text += "\nInputs (connect them with bind_signal; unconnected = default):"
+            for (i, inp) in r.inputs.enumerated() {
+                text += "\n  ctx.input[\(i)] \(inp.key) — \(inp.label), \(SignalValue.format(inp.lo))…\(SignalValue.format(inp.hi))\(RuleText.unitSuffix(inp.unit)), default \(SignalValue.format(inp.def))"
+                    + (inp.suggest.map { ", suggests \($0)" } ?? "")
+            }
+            text += "\nInputs should move colour, density or motion — never draw the value as a number (burn-in)."
+        }
         if let ms = r.gpuMsAt5K { text += String(format: "\nGPU ≈ %.2f ms per frame at 5K.", ms) }
         if let installed { text += "\nInstalled as \(installed). Use it: create_style(effects: [{\"kind\": \"custom\", \"scene\": \"\(installed)\"}])." }
-        var o: JSONObject = ["ok": r.ok, "diagnostics": r.diagnostics.map(\.json), "warnings": r.warnings]
+        var o: JSONObject = ["ok": r.ok, "diagnostics": r.diagnostics.map(\.json), "warnings": r.warnings,
+                             "inputs": r.inputs.enumerated().map { Self.inputJSON($1, index: $0) }]
         if let ms = r.gpuMsAt5K { o["gpuMsAt5K"] = ms }
         if let installed { o["id"] = installed }
         var res = ToolResult.ok(text, o)

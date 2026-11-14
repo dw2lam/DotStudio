@@ -8,6 +8,7 @@
 //         dotstudio-mcp --print-config          the JSON snippet / Claude Code command for this binary
 //         dotstudio-mcp --install-claude-desktop [--config <path>]   merge into Claude Desktop's config
 //         dotstudio-mcp --write-settings-guides <dir>                 the generated settings/*.md
+//         dotstudio-mcp --set-signal <name>=<value>                   a file signal's value (signal-files/<name>.txt)
 //  test-only: --fake-app (a stand-in app that owns the library in memory and serves the AI
 //  bridge, for tools/mcp-selftest), --test-film-worker (the fake film render).
 //  Store: DOTSTUDIO_STORE_DIR, else ~/Library/Application Support/DotStudio.
@@ -56,6 +57,33 @@ case "--write-settings-guides":
         print("wrote \(files.count) guides to \(argv[1])")
         exit(0)
     } catch { print("failed: \(error)"); exit(1) }
+case "--set-signal":
+    // A file signal's value from a shell, a Shortcut or cron: <store>/signal-files/<name>.txt,
+    // written atomically (a reader never sees half a file). Plain text, one number or word.
+    guard argv.count > 1, let eq = argv[1].firstIndex(of: "=") else {
+        print("usage: dotstudio-mcp --set-signal <name>=<value>   (writes signal-files/<name>.txt)"); exit(2)
+    }
+    var name = String(argv[1][..<eq])
+    let value = String(argv[1][argv[1].index(after: eq)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    if !name.hasSuffix(".txt"), !name.hasSuffix(".json") { name += ".txt" }
+    guard name.range(of: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", options: .regularExpression) != nil, !name.contains("..") else {
+        FileHandle.standardError.write(Data("set-signal: the name must be a plain file name (letters, digits, . _ -)\n".utf8)); exit(2)
+    }
+    guard !value.isEmpty, value.utf8.count <= 1024, !value.contains("\n") else {
+        FileHandle.standardError.write(Data("set-signal: the value must be one line, 1 KB at most\n".utf8)); exit(2)
+    }
+    if name.hasSuffix(".json"), JSON.parse(Data(value.utf8)) == nil {
+        FileHandle.standardError.write(Data("set-signal: \(name) needs a JSON value\n".utf8)); exit(2)
+    }
+    let dir = SignalPolicy.filesDir(SharedStore.appBaseDir)
+    do {
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data((value + "\n").utf8).write(to: dir.appendingPathComponent(name), options: .atomic)
+        print("wrote \(value) to \(dir.appendingPathComponent(name).path) — a file signal with file \"\(name)\" reads it (DotStudio ▸ Settings ▸ Signals)")
+        exit(0)
+    } catch {
+        FileHandle.standardError.write(Data("set-signal: couldn't write \(name): \(error.localizedDescription)\n".utf8)); exit(1)
+    }
 case "--fake-app":
     FakeApp.run(Array(argv.dropFirst()))
 case "--test-film-worker":
