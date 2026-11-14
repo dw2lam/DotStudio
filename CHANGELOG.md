@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.6.1 — Fixes
+
+### Improved
+- **The Library follows a When rule.** While a rule is playing, the style it plays says "When"
+  in the gallery, and the playlist's own badges wait until the rule ends.
+- **Find your city with the keyboard.** In Settings ▸ Weather ▸ Location, the arrow keys move
+  through the results, Return picks one and Escape closes.
+- **The place you picked, by name.** The weather status line now names the place you set
+  yourself, instead of the nearest area macOS finds.
+- **Commute at night.** The city's lights now show in full in the live-lit version of the
+  film, like the night render.
+- **Less weather fetching.** A style pinned to one weather condition no longer makes DotStudio
+  fetch the live weather.
+
+### Fixed
+- **Open at login** in Settings now shows the real state, including after an assistant or
+  System Settings changes it.
+- **Assistants follow the same rules everywhere.** Whether DotStudio is open or closed, an
+  assistant's changes go through the same checks and give the same answers. Some edge cases used
+  to differ: unpinning a display that isn't connected, the name of a duplicated style, deleting
+  the wallpaper's own style while it follows the screensaver.
+- **Signals are safer.** An assistant can no longer make DotStudio fetch from your home network
+  by using a web address that leads there, and it can't point a signal that holds your API key
+  at a different server — only you can, in Settings ▸ Signals.
+
 ## 1.6.0 — Live light, every kind of weather, and your own signals
 
 ### New

@@ -117,7 +117,8 @@ final class AIBridgeHost {
         // Scene inputs bound to signals (delete_signal with force unbinds them), by style and effect.
         var bindings: [UUID: [UUID: [String: InputBinding]?]] = [:]
         for p in lib.presets where p.effects.contains(where: { $0.inputs != nil }) {
-            bindings[p.id] = Dictionary(uniqueKeysWithValues: p.effects.map { ($0.id, $0.inputs) })
+            // (uniquing: a hand-edited library can repeat an effect id — never trap on Undo's snapshot)
+            bindings[p.id] = Dictionary(p.effects.map { ($0.id, $0.inputs) }, uniquingKeysWith: { first, _ in first })
         }
         return { [weak model] in
             guard let model else { return }

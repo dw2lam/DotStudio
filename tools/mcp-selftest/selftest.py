@@ -1290,6 +1290,20 @@ check(len(library(G)["signals"]) == 3, "fillers deleted")
 ok(c.call("update_signal", {"signal": "Air quality", "pollMinutes": 30, "unit": "AQI"}), "update_signal")
 check(next(s for s in library(G)["signals"] if s["id"] == aqi)["pollMinutes"] == 30, "  → pollMinutes stored")
 err(c.call("update_signal", {"signal": "weather.tempC", "name": "x"}), "built-ins can't be changed", "built in")
+# A key is tied to its signal, not a host: an assistant can't point a keyed signal elsewhere.
+keyed = next(s for s in library(G)["signals"] if s["name"] == "Keyed")
+err(c.call("update_signal", {"signal": "Keyed", "url": "https://collector.example/aqi"}),
+    "a keyed signal can't be pointed at another host by the AI", "only the user")
+check(next(s for s in library(G)["signals"] if s["name"] == "Keyed")["url"] == keyed["url"], "  → its address is unchanged")
+same_host = keyed["url"].rstrip("/") + "/v2"
+ok(c.call("update_signal", {"signal": "Keyed", "url": same_host}), "the same host, another path: allowed")
+# An address an assistant chooses is fetched under the AI rules from then on (DNS and peer checks).
+L = library(G); [s.update({"createdBy": None}) for s in L["signals"] if s["id"] == aqi]
+json.dump(L, open(os.path.join(G, "library.json"), "w"))
+check(next(s for s in library(G)["signals"] if s["id"] == aqi).get("createdBy") is None, "  (Air quality made the user's own for the next check)")
+ok(c.call("update_signal", {"signal": "Air quality", "url": FX + "/aqi2.json"}), "the AI changes a user signal's address")
+check(next(s for s in library(G)["signals"] if s["id"] == aqi).get("createdBy") == "ai", "  → it's fetched under the AI rules from then on")
+ok(c.call("update_signal", {"signal": "Air quality", "url": FX + "/aqi.json"}), "  (address put back)")
 res = c.call("list_signals")
 mine = {s["name"]: s for s in res["structuredContent"]["signals"]}
 check(mine["Air quality"]["host"] == "127.0.0.1" and mine["Keyed"]["hasKey"] is True and "k-123" not in json.dumps(res),
