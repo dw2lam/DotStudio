@@ -17,6 +17,11 @@
   screensaver or live wallpaper. Every change it makes shows a small notice with Undo. Set it up
   in Settings ▸ AI (one click for Claude Desktop); a switch there keeps the AI from changing
   what plays at all.
+- **Settings over AI (beta).** The assistant can also read and change DotStudio's own settings when
+  you ask — the music card, the live wallpaper's quality and battery behaviour, how often the
+  playlist changes, the crossfade, live weather, updates — and press the setup buttons for you
+  (install the screensaver, open the setup guide and Guide Me). The things macOS owns, like which
+  screensaver is chosen, stay yours to click; it takes you to the right place.
 - **Custom Scenes (beta).** An assistant can also write a brand-new scene for you: DotStudio compiles
   it on your Mac and plays it in the screensaver, the live wallpaper and the gallery like any
   other style, with its own settings in the Inspector. Scenes can be smooth shader art, an LED

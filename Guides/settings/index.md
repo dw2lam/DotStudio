@@ -90,4 +90,4 @@ Kind `custom` with `scene`: an installed scene package (`list_custom_scenes`; ma
 | `metal` v1 (built in) | Write a scene as one Metal function, float4 dsScene(float2 uv, DSContext ctx), with DotStudio's clock, sun, weather, music, params and helpers. | `engines/metal` |
 | `shadertoy` (pulled: `pull_engine`) | Shadertoy-style GLSL (`mainImage`), translated to Metal. | `engines/shadertoy` once pulled |
 
-See also `settings/app` (styles, lineup, displays, wallpaper, music) and `style/dotstudio` (taste).
+See also `settings/app` (styles, lineup, displays, wallpaper, music) and `style/dotstudio` (taste). These are the settings of each style; the app's own settings (music card, live wallpaper, playlist timing, quality, weather, updates…) are read with `get_settings` and changed with `update_settings`.
