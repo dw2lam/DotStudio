@@ -41,10 +41,53 @@ final class AIConnect: ObservableObject {
     static let libraryHint = "New styles appear in your Library, ready to play. When the AI changes your screensaver or wallpaper, a small notice shows what it did, with Undo."
     static var configJSON: String { ClaudeDesktopConfig.snippet(command: helperPath) }
 
+    // Blender: optional, recommended. With it the AI can make photoreal film scenes like Commute
+    // (dotstudio-mcp's film tools, FilmPaths in MCP/Film.swift); DotStudio never installs it.
+    static let blenderMinimum = "5.1"
+    static let blenderDownload = URL(string: "https://www.blender.org/download/")!
+    static let blenderHint = "Free, about 1 GB. With Blender, the AI can also make photoreal film scenes like Commute, rendered on your Mac. Everything else works without it."
+
+    /// Blender's version if installed (Applications or ~/Applications), from its Info.plist —
+    /// never launches it. Same places dotstudio-mcp looks (FilmPaths.blenderApps).
+    @Published private(set) var blenderVersion: String?
+    @Published private(set) var blenderFound = false
+
+    var blenderReady: Bool { blenderFound && Self.versionAtLeast(blenderVersion, Self.blenderMinimum) }
+
+    var blenderStatus: String {
+        if !blenderFound { return "Blender not installed" }
+        if !blenderReady { return "Blender \(blenderVersion ?? "") found; film scenes need \(Self.blenderMinimum) or newer" }
+        return "Blender \(blenderVersion ?? "") ready for film scenes"
+    }
+
+    func refreshBlender() {
+        let apps = ["/Applications/Blender.app", SharedStore.realHome.path + "/Applications/Blender.app"]
+        for app in apps where FileManager.default.isExecutableFile(atPath: app + "/Contents/MacOS/Blender") {
+            blenderFound = true
+            blenderVersion = NSDictionary(contentsOfFile: app + "/Contents/Info.plist")?["CFBundleShortVersionString"] as? String
+            return
+        }
+        blenderFound = false
+        blenderVersion = nil
+    }
+
+    func getBlender() { NSWorkspace.shared.open(Self.blenderDownload) }
+
+    static func versionAtLeast(_ v: String?, _ min: String) -> Bool {
+        guard let v else { return false }
+        let a = v.split(separator: ".").compactMap { Int($0) }, b = min.split(separator: ".").compactMap { Int($0) }
+        for i in 0..<max(a.count, b.count) {
+            let x = i < a.count ? a[i] : 0, y = i < b.count ? b[i] : 0
+            if x != y { return x > y }
+        }
+        return true
+    }
+
     /// Re-read the settings and whether Claude Desktop lists this helper (on appear).
     func refresh(store: URL) {
         settings = AISettings.load(store: store)
         installedInDesktop = ClaudeDesktopConfig.installedCommand() == Self.helperPath
+        refreshBlender()
     }
 
     func setAllowPlaybackChanges(_ on: Bool, store: URL) {
@@ -173,6 +216,14 @@ struct MCPPopover: View {
             step(4, "Find it in your Library") {
                 Text(AIConnect.libraryHint).textRole(.caption).foregroundStyle(.secondary).wrapping()
             }
+            step(nil, "Recommended: Blender") {
+                status(ai.blenderReady, ai.blenderStatus)
+                Text(AIConnect.blenderHint).textRole(.caption).foregroundStyle(.secondary).wrapping()
+                if !ai.blenderReady {
+                    Button(scaled: "Get Blender…") { ai.getBlender() }
+                        .help(AIConnect.blenderDownload.absoluteString)
+                }
+            }
             // The standard macOS switch, small and accent-tinted (as in the setup guide), its
             // label on the left and the switch at the trailing edge, like a Settings row.
             HStack(alignment: .center, spacing: layout.controlGap) {
@@ -199,10 +250,13 @@ struct MCPPopover: View {
         .onAppear { ai.refresh(store: store) }
     }
 
-    /// One numbered how-to step: an accent number, the title, then its controls or note.
-    private func step<Content: View>(_ n: Int, _ title: String, @ViewBuilder _ content: () -> Content) -> some View {
+    /// One how-to step: an accent number (or, for an optional extra, a star), the title, then its
+    /// controls or note.
+    private func step<Content: View>(_ n: Int?, _ title: String, @ViewBuilder _ content: () -> Content) -> some View {
         HStack(alignment: .top, spacing: layout.controlGap) {
-            Text("\(n)")
+            Group {
+                if let n { Text("\(n)") } else { Image(systemName: "star.fill").imageScale(.small) }
+            }
                 .textRole(.badge)
                 .foregroundStyle(.white)
                 .frame(width: layout.scaled(18), height: layout.scaled(18))
@@ -210,7 +264,7 @@ struct MCPPopover: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: layout.labelGap) {
                 Text(title).textRole(.body).fontWeight(.semibold).wrapping()
-                    .accessibilityLabel("Step \(n): \(title)")
+                    .accessibilityLabel(n.map { "Step \($0): \(title)" } ?? title)
                 content()
             }
         }
