@@ -105,6 +105,10 @@ extension AIBridgeHost {
             model.library.music = state.library.music
             model.library.source = state.library.source
             model.save()
+            // The location through the app's own call: it also stops or restarts the IP lookup.
+            if let loc = libraryChanges.first(where: { $0.def.key == "weather.location" }) {
+                model.setLocation(AppSettings.place(loc.value))
+            }
         }
 
         let w = WallpaperController.shared
@@ -161,6 +165,9 @@ extension AIBridgeHost {
             model.library.music = lib.music
             model.library.source = lib.source
             model.save()
+            if lib.usesManualLocation != model.library.usesManualLocation || lib.manualPlace != model.library.manualPlace {
+                model.setLocation(lib.usesManualLocation ? lib.manualPlace : nil)
+            }
             let w = WallpaperController.shared
             if !wall.enabled, w.settings.enabled { w.stop() }
             w.update { var s = wall; s.enabled = $0.enabled; s.savedDesktopPictures = $0.savedDesktopPictures; $0 = s }

@@ -610,6 +610,30 @@ enum UIShots {
         s.append(Screen(name: "settings-wallpaper-match", frame: .fit(width: 460, minHeight: 300), prepare: { _ in
             WallpaperController.shared.update { $0.enabled = true; $0.followsScreensaver = true }
         }, view: { _ in AnyView(SettingsSectionPreview { WallpaperSettingsSection() }) }))
+        // Settings › Weather › Location: automatic (the IP lookup's city), set by the user, and
+        // with Live weather off (the row stays: the sun and Universe use it); then the Change…
+        // popover with search results (a fixture: nothing is fetched), before typing, and none found
+        s.append(Screen(name: "settings-weather-location-auto", frame: .fit(width: 460, minHeight: 200), prepare: { st in
+            st.model.library.setAutomaticLocation()
+            st.model.library.autoPlace = NamedPlace(name: "San Francisco, California", lat: 37.77, lon: -122.42)
+            st.model.library.locationLat = 37.77; st.model.library.locationLon = -122.42
+        }, view: { _ in AnyView(SettingsSectionPreview { WeatherSettingsSection() }) }))
+        s.append(Screen(name: "settings-weather-location-manual", frame: .fit(width: 460, minHeight: 200), prepare: { st in
+            st.model.library.setManualLocation(LocationDemo.toronto.place)
+        }, view: { _ in AnyView(SettingsSectionPreview { WeatherSettingsSection() }) }))
+        s.append(Screen(name: "settings-weather-location-off", frame: .fit(width: 460, minHeight: 160), prepare: { st in
+            WeatherService.shared.enabled = false
+            st.model.library.setManualLocation(LocationDemo.toronto.place)
+        }, view: { _ in AnyView(SettingsSectionPreview { WeatherSettingsSection() }) }))
+        s.append(Screen(name: "settings-location-search", frame: .fit(width: 560, minHeight: 200), view: { _ in
+            AnyView(LocationDemo.picker(query: "Toronto", state: .results(LocationDemo.results), current: LocationDemo.toronto.place))
+        }))
+        s.append(Screen(name: "settings-location-search-empty", frame: .fit(width: 560, minHeight: 160), view: { _ in
+            AnyView(LocationDemo.picker(query: "", state: .idle, current: nil))
+        }))
+        s.append(Screen(name: "settings-location-search-nomatch", frame: .fit(width: 560, minHeight: 160), view: { _ in
+            AnyView(LocationDemo.picker(query: "Zxqvbn", state: .noMatch, current: LocationDemo.toronto.place))
+        }))
 
         // Settings › Signals: none of the user's yet; then four (an AI one, a file, a key that
         // needs re-entry, a failing one) and the editor sheet with a test's outline
@@ -765,6 +789,7 @@ enum UIShots {
             MusicDemo.apply(.idle)   // watching, nothing playing (music screens set their own)
             if WallpaperController.shared.userPaused { WallpaperController.shared.togglePause() }
             AppPresence.shared.menuBarMode = true   // the default (prefs are in-memory here)
+            if !WeatherService.shared.enabled { WeatherService.shared.enabled = true }
             LoginItem.demoStatus = .off             // never SMAppService here (SetupGuide.swift)
             LoginNudge.shared.setDemo(nil)
             SignalService.shared.setDemo(values: [:], rule: nil, statuses: [:])   // no When rule playing
@@ -1146,6 +1171,28 @@ private struct SettingsSectionPreview<Content: View>: View {
             .textRole(.body)
             .formControlSize()
             .scrollDisabled(true)
+    }
+}
+
+/// The location picker for the UI shots: Open-Meteo-shaped results, never fetched.
+enum LocationDemo {
+    static let results: [PlaceResult] = [
+        PlaceResult(id: "6167865", name: "Toronto", admin1: "Ontario", country: "Canada", lat: 43.70011, lon: -79.4163),
+        PlaceResult(id: "4672059", name: "Toronto", admin1: "Ohio", country: "United States", lat: 40.46423, lon: -80.60091),
+        PlaceResult(id: "4413258", name: "Toronto", admin1: "Kansas", country: "United States", lat: 37.79892, lon: -95.94861),
+        PlaceResult(id: "5175081", name: "Toronto", admin1: "South Dakota", country: "United States", lat: 44.57191, lon: -96.64199),
+        PlaceResult(id: "2146268", name: "Toronto", admin1: "New South Wales", country: "Australia", lat: -33.01427, lon: 151.59336),
+    ]
+    static var toronto: PlaceResult { results[0] }
+
+    static func picker(query: String, state: PlaceSearchModel.State, current: NamedPlace?) -> some View {
+        LocationPicker(current: current, search: PlaceSearchModel(demoQuery: query, state: state),
+                       pick: { _ in }, automatic: {})
+            .background(Color(nsColor: .windowBackgroundColor))   // (a popover brings its own)
+            .overlay(Rectangle().stroke(Color.secondary.opacity(0.4)))   // its edge, to judge its width
+            .padding(Space.m)
+            .frame(maxWidth: .infinity)
+            .background(Color(nsColor: .underPageBackgroundColor))
     }
 }
 

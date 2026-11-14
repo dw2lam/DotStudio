@@ -33,6 +33,8 @@ enum SettingType: Equatable {
     case photos
     /// source.mediaFile: an absolute path of an image or a video to copy into the library.
     case mediaFile
+    /// weather.location: "auto", or {"name"?, "lat", "lon"} (the user's own place).
+    case location
     /// Shown, never set (macOS owns it, or only the user may change it).
     case readOnly
 }
@@ -79,6 +81,7 @@ struct SettingDef {
         case .style: return .string("a style id or exact name (list_styles)")
         case .photos: return .string("\"builtIn\", or an array of absolute paths to image files (copied into the library)")
         case .mediaFile: return .string("an absolute path to an image or video file (copied into the library)")
+        case .location: return .string("\"auto\", or {\"name\"?: text, \"lat\": -90…90, \"lon\": -180…180}")
         case .readOnly: return .null
         }
     }
@@ -158,8 +161,11 @@ enum AppSettings {
 
         // Weather
         SettingDef(key: "weather.live", label: "Live weather", place: "Settings ▸ Weather",
-                   meaning: "Ocean Horizon, Shallows and Meadow styles with Weather set to Live show the real sky outside (Open-Meteo, approximate location, every 20 minutes). Off: they stay clear.",
+                   meaning: "Ocean Horizon, Shallows and Meadow styles with Weather set to Live show the real sky outside (Open-Meteo, at weather.location, every 20 minutes). Off: they stay clear.",
                    type: .bool, store: .prefs, prefKey: "weatherEnabled"),
+        SettingDef(key: "weather.location", label: "Location", place: "Settings ▸ Weather ▸ Location",
+                   meaning: "Where DotStudio places this Mac: the live weather, the real sun, moon and stars (Follow the Sun), the night style's sunset, Universe's marker and signals that ask for {lat}/{lon}. \"auto\" = approximate, from the internet connection (IP; a VPN can put it in the wrong city); or the user's own place {name?, lat, lon} — then nothing is looked up. Read back as {mode, name, lat, lon}, coordinates rounded to 0.1° (about 10 km). It's the user's location: set it only when they asked.",
+                   type: .location, store: .library),
 
         // Live wallpaper
         SettingDef(key: "wallpaper.on", label: "Use a style as your desktop wallpaper", place: "Settings ▸ Live Wallpaper (and the Wallpaper card)",
@@ -313,6 +319,8 @@ enum AppSettings {
         o["music.keepPausedSongMinutes"] = .number(m.linger)
         o["music.source"] = .string(m.sourcePreference.rawValue)
 
+        o["weather.location"] = location(lib)
+
         let w = s.wallpaper
         let enabled = w["enabled"]?.boolValue ?? false
         let follows = w["followsScreensaver"]?.boolValue ?? false
@@ -361,6 +369,20 @@ enum AppSettings {
     }
 
     static func scalingName(_ fill: Int) -> String { fill == 0 ? "fit" : fill == 2 ? "stretch" : "fill" }
+
+    /// ~0.1° (about 10 km) — what WeatherService sends Open-Meteo, and all an assistant is told.
+    static func roundedCoordinate(_ d: Double) -> Double { (d * 10).rounded() / 10 }
+
+    /// weather.location as read: {mode, name, lat, lon}, coordinates rounded (null while unknown).
+    static func location(_ lib: Library) -> JSONValue {
+        func num(_ d: Double?) -> JSONValue { d.map { .number(roundedCoordinate($0)) } ?? .null }
+        return .object(["mode": .string(lib.usesManualLocation ? "manual" : "auto"),
+                        "name": lib.locationPlaceName.map { .string($0) } ?? .null,
+                        "lat": num(lib.locationLat), "lon": num(lib.locationLon)])
+    }
+
+    /// The longest place name kept.
+    static let maxPlaceName = 80
 
     static func color(_ c: RGBA) -> JSONValue {
         .object(["r": .number(c.r), "g": .number(c.g), "b": .number(c.b), "a": .number(c.a)])
@@ -498,6 +520,25 @@ enum AppSettings {
             guard FileManager.default.isReadableFile(atPath: p) else { return .failure(SettingsError("can't read \(p)")) }
             guard mediaKind(p) != nil else { return .failure(SettingsError("\(p) isn't an image or a video file")) }
             return .success(.string(p))
+        case .location:
+            let usage = "expected \"auto\" or {\"name\": \"Toronto, Ontario\" (optional), \"lat\": -90…90, \"lon\": -180…180}"
+            if v.stringValue == "auto" { return .success(.string("auto")) }
+            guard case .object(let o) = v, let lat = o["lat"]?.doubleValue, let lon = o["lon"]?.doubleValue else {
+                return .failure(SettingsError(usage))
+            }
+            let extra = o.keys.filter { !["name", "lat", "lon"].contains($0) }.sorted()
+            guard extra.isEmpty else { return .failure(SettingsError("unknown field(s) \(extra.joined(separator: ", ")) — \(usage)")) }
+            guard lat.isFinite, lon.isFinite else { return .failure(SettingsError("lat and lon must be finite numbers")) }
+            guard abs(lat) <= 90 else { return .failure(SettingsError("lat \(fmt(lat)) is outside -90…90")) }
+            guard abs(lon) <= 180 else { return .failure(SettingsError("lon \(fmt(lon)) is outside -180…180")) }
+            var name = ""
+            if let n = o["name"], n != .null {
+                guard let s = n.stringValue else { return .failure(SettingsError("name must be text")) }
+                name = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard name.count <= maxPlaceName else { return .failure(SettingsError("name is longer than \(maxPlaceName) characters")) }
+            }
+            if name.isEmpty { name = NamedPlace.coordinateName(lat, lon) }
+            return .success(.object(["name": .string(name), "lat": .number(lat), "lon": .number(lon)]))
         case .readOnly:
             return .failure(SettingsError("read-only"))
         }
@@ -526,6 +567,7 @@ enum AppSettings {
             v = "“\(library.presets.first { $0.id == id }?.name ?? id.uuidString)”"
         }
         if c.def.type == .photos, case .array(let a) = c.value { v = "\(a.count) photo\(a.count == 1 ? "" : "s")" }
+        if c.def.type == .location { v = place(c.value).map(\.name) ?? "automatic (from the internet connection)" }
         return "\(shortGroup[c.def.group] ?? c.def.group) ▸ \(c.def.label): \(v)"
     }
 
@@ -561,6 +603,9 @@ enum AppSettings {
         case "music.onWallpaper": music { $0.cardOnWallpaper = v.boolValue }
         case "music.keepPausedSongMinutes": music { $0.lingerMinutes = v.doubleValue }
         case "music.source": music { $0.source = MusicSpec.SourcePreference(rawValue: v.stringValue ?? "") }
+        case "weather.location":
+            // The app also restarts (or stops) its IP lookup (AppModel.setLocation).
+            if let p = place(v) { lib.setManualLocation(p) } else { lib.setAutomaticLocation() }
         case "wallpaper.on":
             if v.boolValue == true {
                 s.wallpaper["enabled"] = .bool(true)
@@ -615,6 +660,12 @@ enum AppSettings {
         default:
             throw SettingsError("\(c.def.key) can only be changed while DotStudio is running — ask the user to open DotStudio, then try again.")
         }
+    }
+
+    /// A validated weather.location value → the user's place (nil = "auto").
+    static func place(_ v: JSONValue) -> NamedPlace? {
+        guard case .object(let o) = v, let lat = o["lat"]?.doubleValue, let lon = o["lon"]?.doubleValue else { return nil }
+        return NamedPlace(name: o["name"]?.stringValue ?? NamedPlace.coordinateName(lat, lon), lat: lat, lon: lon)
     }
 
     static func existing(_ id: String?, _ lib: Library) -> UUID? {

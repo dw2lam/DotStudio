@@ -131,9 +131,10 @@ When you design a style, leave room for the corner card (bottom left by default)
 
 ## Live weather and the sun
 
-- **Follow the Sun** (`live` = 1 on Ocean Horizon / Golden Hour, Meadow, Shallows, Pleats, Dichroic, Sand Garden; `follow` on Window Light): the real sun, moon and stars at the library's location (`locationLat` / `locationLon`). Off: a fixed time (`sun` height on Ocean Horizon, `hour` on Meadow). `lapse` (Time Lapse, minutes per simulated day; 0 = real time) runs either clock forward.
+- **Follow the Sun** (`live` = 1 on Ocean Horizon / Golden Hour, Meadow, Shallows, Pleats, Dichroic, Sand Garden; `follow` on Window Light): the real sun, moon and stars at the library's location (`locationLat` / `locationLon`; see Location below). Off: a fixed time (`sun` height on Ocean Horizon, `hour` on Meadow). `lapse` (Time Lapse, minutes per simulated day; 0 = real time) runs either clock forward.
 - **Weather** (`weather` menu on Ocean Horizon, Shallows, Meadow): 0 = Live, then Clear, Partly Cloudy, Overcast, Fog, Rain, Storm, Snow, Drizzle, Heavy Rain, Sleet (every condition the live weather reports). Live needs Settings > Weather > Live weather on in the app; the app fetches Open-Meteo every 20 minutes for the approximate location (about 10 km) and stale readings fade back to clear. Weather costs 60-75 % more GPU on Meadow.
 - Clocks follow the local time; StandBy's Night Mode and the night style follow the real sunset.
+- **Location** (`weather.location`, Settings > Weather > Location): automatic by default, the approximate place from the internet connection's IP address (ipapi.co, then ipwho.is), refreshed about daily. On a VPN it can be in the wrong city. The user can set their own place instead (a search in the app, or `update_settings({"settings": {"weather.location": {"name": "Toronto, Ontario", "lat": 43.65, "lon": -79.38}}})`); then nothing is looked up, and `"auto"` goes back. It's the user's location: change it only when they ask (e.g. "the weather shows the wrong city"), and never put coordinates in `library.json` by hand.
 
 ## Custom and film scenes
 
@@ -153,7 +154,7 @@ Everything in DotStudio's Settings window, the Screensaver card's Playlist menu 
 | `general` | `menuBarMode`, `openAtLogin` | `openAtLogin` needs the app running (it registers its own login item) |
 | `screensaver` | `changeEveryMinutes` (1, 5, 15, 30, 60), `shuffle`, `crossfadeSeconds` (0-3), `quality` (`full`, `balanced`, `efficient`) | interval and shuffle change what plays; `playlist`, `night`, `perDisplay` are read-only here: use `set_screensaver` |
 | `music` | `show` (`off`, `corner`, `fullScreen`), `corner`, `size`, `layout`, `behind`, `onWallpaper`, `keepPausedSongMinutes` (1, 5, 15), `source` | `show` and `onWallpaper` change what plays |
-| `weather` | `live` | the Live weather switch for Ocean Horizon, Shallows, Meadow |
+| `weather` | `live`, `location` (`"auto"` or `{"name"?, "lat", "lon"}`) | `live` is the Live weather switch for Ocean Horizon, Shallows, Meadow. `location` is where DotStudio places the Mac (weather, sun, Universe); it reads back as `{mode, name, lat, lon}` rounded to 0.1°. Neither changes what plays |
 | `wallpaper` | `on`, `sameAsScreensaver`, `style`, `frameRate` (`balanced`, `smooth`), `quality`, `onBattery` (`efficient`, `full`, `still`), `lockScreenPicture` | `on`, `sameAsScreensaver`, `style`, `lockScreenPicture` change what plays; `style` works like the Settings pop-up (picked while off: only remembered). Per display: `set_wallpaper` |
 | `source` | `kind`, `photos` (`"builtIn"` or image paths), `mediaFile` (an image or video path), `secondsEach` (6-120), `panAndZoom` (0-1), `gradientFrom`, `gradientTo`, `gradientAngle`, `gradientDrift`, `scaling` (`fill`, `fit`, `stretch`) | the one source every Look restyles; files are copied into `media/` |
 | `updates` | `checkAutomatically`, `installAutomatically` | install needs checks on |

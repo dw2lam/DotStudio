@@ -84,6 +84,13 @@ final class WeatherService: ObservableObject {
         schedule(after: 0)
     }
 
+    /// The location was set or switched back to automatic (AppModel.setLocation): a backoff
+    /// from an earlier failure doesn't hold the new place's weather back — reevaluate (on the
+    /// library change) fetches it now.
+    func locationChanged() {
+        failures = 0
+    }
+
     private func reevaluate() {
         guard started, DemoHooks.isActive == false else { return }
         guard isNeeded else {
@@ -166,6 +173,10 @@ final class WeatherService: ObservableObject {
                                          place: self.cachedPlace(lat, lon), at: Date())
                 self.write(state)
                 self.resolvePlace(lat, lon)
+                // The location moved to another cell while this was out: fetch the new one now.
+                if let loc = self.model?.locationTuple, Self.cell(loc.lat, loc.lon) != Self.cell(lat, lon) {
+                    self.schedule(after: 0)
+                }
             }
         }.resume()
     }

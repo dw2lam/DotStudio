@@ -72,12 +72,18 @@ enum Schema {
 
     private static func check(_ v: Any?, _ s: JSONObject, _ path: String, _ errors: inout [String]) {
         if let any = s["anyOf"] as? [JSONObject] ?? s["oneOf"] as? [JSONObject] {
+            // The closest shape's errors: one of the value's own type first ("lat: 91 is above the
+            // maximum 90", not "expected string" for an object), then the fewest problems.
             var best: [String]?
+            var bestTyped = false
             for sub in any {
                 var e: [String] = []
                 check(v, sub, path, &e)
                 if e.isEmpty { return }
-                if best == nil || e.count < best!.count { best = e }
+                let typed = (sub["type"] as? String).map { matches(v, type: $0) } ?? false
+                if best == nil || (typed && !bestTyped) || (typed == bestTyped && e.count < best!.count) {
+                    best = e; bestTyped = typed
+                }
             }
             errors.append(contentsOf: best ?? ["\(path): matches none of the allowed shapes"])
             return
