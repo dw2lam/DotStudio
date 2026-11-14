@@ -319,7 +319,16 @@ func liveChecks() -> Bool {
         r.apply(look, source: .builtInPhotos)
         return r
     }
-    let wallFrames = (0..<4).map { _ in slideRenderer(.wallClock).renderFrame(width: w, height: h) }
+    // Each renderer reads the wall clock at the same instant (timeBaseSkew): building one takes the
+    // harness a varying few ms (more on a busy Mac), and the slideshow's pan moves with the clock,
+    // which made this check flaky (Δ 0.2…1.5 against the 1.5 limit). Renderers that ignored the wall
+    // clock would still differ by tens (the per-instance spread below).
+    let wallInstant = Date().timeIntervalSince1970
+    let wallFrames = (0..<4).map { _ -> CGImage? in
+        let r = slideRenderer(.wallClock)
+        r.timeBaseSkew = wallInstant - Date().timeIntervalSince1970
+        return r.renderFrame(width: w, height: h)
+    }
     let worst = (1..<wallFrames.count).map { meanDiff(wallFrames[0], wallFrames[$0]) }.max() ?? .infinity
     check(worst < 1.5, String(format: "4 wall-clock slideshow renderers agree (worst mean |Δ| %.2f)", worst))
     let instance = (0..<4).map { _ in slideRenderer(.instance).renderFrame(width: w, height: h) }
