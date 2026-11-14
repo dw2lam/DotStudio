@@ -29,6 +29,11 @@ final class DotSaverView: ScreenSaverView {
     private var libraryCache: (stamp: FileStamp, load: SharedStore.LibraryLoad)?
     private lazy var libraryPath = store.libraryURL.path
     private var lastReload: CFTimeInterval = 0
+    /// signal-values.json (Shared/Signals): the app's When-rule lease, re-read (one stat) each
+    /// reload. The saver never fetches or decides — it plays what the lease says until it runs out.
+    private lazy var signalFeed = SignalFeed(baseDir: store.baseDir)
+    /// The When rule reload() last played by (nil = the lineup): a change crossfades.
+    private var shownRuleID: UUID?
     private var renderScale: CGFloat = 1   // Library.renderScale (1 = full Retina)
     private var presetFPS = 30             // active preset's fps, before power clamps
     private var stepFPS: Double?           // the rate it steps its own time at (FramePacing.steppedFPS)
@@ -293,13 +298,20 @@ final class DotSaverView: ScreenSaverView {
         // Match Screensaver: the same wall-clock time base as a wallpaper that follows us.
         renderer?.timeBase = lib.rendererTimeBase
         let moved = resolveDisplay()
-        let target = Playback.effectivePreset(in: lib, now: Date(), display: displayKey)
+        signalFeed.poll()
+        let now = Date()
+        let live = signalFeed.state
+        let target = Playback.effectivePreset(in: lib, now: now, display: displayKey, live: live)
+        let ruleID = lib.pinnedPreset(display: displayKey) == nil ? lib.activeRule(live: live, now: now)?.rule.id : nil
+        let ruleMoved = ruleID != shownRuleID
+        shownRuleID = ruleID
         // A different display (its own style, or back to the shared one) cuts; same style, nothing.
         let changed = force || target.id != activeID || mod != lastModified
         if force { store.debug("reload active=\(target.name) effects=\(target.effects.count) sourceKind=\(lib.source.kind.rawValue)") }
         if changed {
             // Crossfade on rotation/schedule switches; hard cut on first load and edits.
-            let automatic = (lib.rotation?.enabled ?? false) || (lib.schedule?.enabled ?? false)
+            // (A When rule starting or ending is automatic too.)
+            let automatic = (lib.rotation?.enabled ?? false) || (lib.schedule?.enabled ?? false) || ruleMoved || ruleID != nil
             let fade = !force && !moved && target.id != activeID && automatic
             if target.id != activeID {
                 store.debug("[\(logID)] showing \(target.name) on display \(displayKey ?? "-")\(fade ? " (fade)" : "")")
@@ -328,8 +340,8 @@ final class DotSaverView: ScreenSaverView {
 
     /// Which preset belongs on screen right now (see Shared/Playback.swift, which the
     /// app also uses so the gallery always shows what the saver will play).
-    static func effectivePreset(in lib: Library, now: Date) -> Preset {
-        Playback.effectivePreset(in: lib, now: now)
+    static func effectivePreset(in lib: Library, now: Date, live: SignalState?) -> Preset {
+        Playback.effectivePreset(in: lib, now: now, live: live)
     }
 
     // MARK: Music

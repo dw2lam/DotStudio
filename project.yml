@@ -33,7 +33,8 @@ targets:
       - Saver
       - path: Shared
         # Shared/AI: the AI bridge and edits — app and dotstudio-mcp only.
-        excludes: ["Photos/**", "Engines/**", "AI/**", "Films/**"]
+        # Shared/Signals/Fetch: the network side of Signals — the saver never fetches.
+        excludes: ["Photos/**", "Engines/**", "AI/**", "Films/**", "Signals/Fetch/**"]
       # Built-in film scenes (packages of looping clips rendered in Blender, CustomScenes
       # builtInPackagesDirs) ship ONCE too, inside the saver (Resources/Films).
       - path: Shared/Films

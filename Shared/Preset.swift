@@ -173,6 +173,12 @@ struct Library: Codable, Equatable {
     /// nil/missing = every display plays the lineup (activeID / rotation / schedule). Additive:
     /// a build without it ignores the field.
     var displayStyles: [String: DisplayPin]?
+    /// Live values DotStudio watches (Shared/Signals/Signal.swift): definitions only — their
+    /// values live in signal-values.json, never here. nil/missing = none. Additive.
+    var signals: [Signal]?
+    /// When rules (Shared/Signals/PlayRule.swift): an overlay on the lineup — display pin > active
+    /// rule > night > rotation (Playback). nil/missing = none. Additive.
+    var rules: [PlayRule]?
 
     /// Top-level fields this build doesn't know (a library written by a newer DotStudio), kept
     /// verbatim and written back on save, so a newer build's settings survive a round trip here.
@@ -247,7 +253,7 @@ extension Preset {
 extension Library {
     private enum CodingKeys: String, CodingKey {
         case presets, source, activeID, version, locationLat, locationLon, renderScale, rotation,
-             schedule, music, seenBuiltIns, syncTimeBase, displayStyles
+             schedule, music, seenBuiltIns, syncTimeBase, displayStyles, signals, rules
     }
 
     init(from decoder: Decoder) throws {
@@ -274,6 +280,16 @@ extension Library {
         syncTimeBase = try c.decodeIfPresent(Bool.self, forKey: .syncTimeBase)
         // Tolerant: a malformed map never costs the user the whole library.
         displayStyles = (try? c.decodeIfPresent([String: DisplayPin].self, forKey: .displayStyles)) ?? nil
+        // Signals and rules: tolerant like the pins — and one this build can't read (a newer
+        // build's op or kind) keeps the whole list verbatim for that build instead of dropping it.
+        if c.contains(.signals) {
+            if let v = try? c.decodeIfPresent([Signal].self, forKey: .signals) { signals = v }
+            else if let raw = try? c.decode(JSONValue.self, forKey: .signals) { unknownFields["signals"] = raw }
+        }
+        if c.contains(.rules) {
+            if let v = try? c.decodeIfPresent([PlayRule].self, forKey: .rules) { rules = v }
+            else if let raw = try? c.decode(JSONValue.self, forKey: .rules) { unknownFields["rules"] = raw }
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -293,9 +309,15 @@ extension Library {
         try c.encodeIfPresent(seenBuiltIns, forKey: .seenBuiltIns)
         try c.encodeIfPresent(syncTimeBase, forKey: .syncTimeBase)
         if let pins = displayStyles, !pins.isEmpty { try c.encode(pins, forKey: .displayStyles) }
+        if let s = signals, !s.isEmpty { try c.encode(s, forKey: .signals) }
+        if let r = rules, !r.isEmpty { try c.encode(r, forKey: .rules) }
         if !unknownFields.isEmpty {
             var extra = encoder.container(keyedBy: JSONValue.AnyKey.self)
-            for (k, v) in unknownFields { try extra.encode(v, forKey: JSONValue.AnyKey(k)) }
+            for (k, v) in unknownFields {
+                // A list this build couldn't read is kept only until this build writes its own.
+                if (k == "signals" && !(signals ?? []).isEmpty) || (k == "rules" && !(rules ?? []).isEmpty) { continue }
+                try extra.encode(v, forKey: JSONValue.AnyKey(k))
+            }
         }
     }
 

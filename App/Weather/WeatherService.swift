@@ -71,9 +71,10 @@ final class WeatherService: ObservableObject {
         reevaluate()
     }
 
-    /// A style in the library follows the live weather, and the user hasn't turned it off.
+    /// A style in the library follows the live weather — or an enabled When rule tests it
+    /// (SignalService) — and the user hasn't turned it off.
     var isNeeded: Bool {
-        enabled && (model?.library.presets.contains(where: WeatherLink.followsLive) ?? false)
+        enabled && ((model?.library.presets.contains(where: WeatherLink.followsLive) ?? false) || SignalService.shared.needsWeather)
     }
 
     /// Settings' Retry: fetch now, whatever the schedule says.
@@ -134,7 +135,7 @@ final class WeatherService: ObservableObject {
         c.queryItems = [
             URLQueryItem(name: "latitude", value: String(format: "%.1f", lat)),
             URLQueryItem(name: "longitude", value: String(format: "%.1f", lon)),
-            URLQueryItem(name: "current", value: "weather_code,cloud_cover,cloud_cover_low,precipitation,rain,showers,snowfall,wind_speed_10m,wind_gusts_10m,visibility,is_day"),
+            URLQueryItem(name: "current", value: "weather_code,cloud_cover,cloud_cover_low,precipitation,rain,showers,snowfall,wind_speed_10m,wind_gusts_10m,visibility,is_day,temperature_2m"),
             URLQueryItem(name: "wind_speed_unit", value: "ms"),
             URLQueryItem(name: "timezone", value: "auto"),
         ]

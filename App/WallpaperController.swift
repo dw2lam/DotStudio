@@ -50,13 +50,13 @@ final class WallpaperController: ObservableObject {
     /// slot, night style).
     var currentPreset: Preset? {
         guard let lib = model?.library else { return nil }
-        return WallpaperPick.shared(settings, lib)
+        return WallpaperPick.shared(settings, lib, live: SignalService.shared.live)
     }
 
     /// The style one display shows (its own, or the shared one).
     private func preset(for h: WallpaperHost, now: Date = Date()) -> Preset? {
         guard let lib = model?.library else { return nil }
-        return WallpaperPick.preset(display: h.key, settings, lib, now: now)
+        return WallpaperPick.preset(display: h.key, settings, lib, now: now, live: SignalService.shared.live)
     }
 
     // Music: the shared feed (MusicFeedHub), followed only while something on the desktop
@@ -231,7 +231,7 @@ final class WallpaperController: ObservableObject {
         let fallback = model?.library.activeID ?? pin?.presetID
         if let pin, settings.followsScreensaver, let lib = model?.library {
             // Leaving sync this way changes nothing else on screen (WallpaperPick.leavingSync).
-            let next = WallpaperPick.leavingSync(settings, lib, pin: pin, display: key)
+            let next = WallpaperPick.leavingSync(settings, lib, live: SignalService.shared.live, pin: pin, display: key)
             update { $0 = next; $0.enabled = true }
             userPaused = false
             start()
@@ -525,6 +525,14 @@ final class WallpaperController: ObservableObject {
 
     // MARK: Style
 
+    /// The When rule on screen changed (SignalService): a wallpaper matching the screensaver
+    /// follows it, with the rotation's crossfade.
+    func signalsChanged() {
+        guard settings.enabled, running, settings.followsScreensaver else { return }
+        applyStyle(fade: true)
+        scheduleSlotTimer()
+    }
+
     private func libraryChanged() {
         guard settings.enabled, running else { return }
         guard currentPreset != nil else {
@@ -610,7 +618,7 @@ final class WallpaperController: ObservableObject {
         slotTimer?.invalidate()
         slotTimer = nil
         guard settings.enabled, settings.followsScreensaver, !hosts.isEmpty, let lib = model?.library else { return }
-        let rotating = Playback.secondsUntilNextSlot(in: lib, now: Date())
+        let rotating = Playback.secondsUntilNextSlot(in: lib, now: Date(), live: SignalService.shared.live)
         let scheduled = lib.schedule?.enabled ?? false
         guard rotating != nil || scheduled else { return }
         let delay = min(rotating ?? 60, scheduled ? 60 : .infinity) + 0.02
@@ -844,7 +852,8 @@ final class WallpaperController: ObservableObject {
         }
         // Each screen's still is of its own display's style.
         let library = model.library, store = model.store, settingsNow = settings
-        let styleOf: (String) -> Preset = { key in WallpaperPick.preset(display: key, settingsNow, library) ?? preset }
+        let live = SignalService.shared.live
+        let styleOf: (String) -> Preset = { key in WallpaperPick.preset(display: key, settingsNow, library, live: live) ?? preset }
         scheduleLockTimer(pic.desktop.screens().map { styleOf($0.key) } + [preset])
         let s = power.state
         if running, s.displayAsleep || s.systemAsleep { log("lock picture: skipped (\(reason)) — display asleep"); return }

@@ -188,9 +188,12 @@ enum LibraryExecutor {
             return wallpaper(req, &lib, &wall, displays)
         case .getSettings, .updateSettings, .appAction:
             return .fail("settings requests go through SettingsExecutor")
+        case .upsertSignal, .deleteSignal, .testSignal, .upsertRule, .deleteRule:
+            return SignalEdits.run(req, library: &lib, settings: settings)
         }
     }
 
+    static var signalsOff: String { SignalEdits.signalsOff }
     static let playbackOff = "The user has turned off “Let AI change what plays” in DotStudio ▸ Settings ▸ AI. Styles can still be created; ask the user to set it themselves, or to turn that setting on."
 
     private static func screensaver(_ req: BridgeRequest, _ lib: inout Library, _ displays: [DisplayEntry]) -> BridgeResponse {
