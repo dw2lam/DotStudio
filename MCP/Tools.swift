@@ -25,12 +25,15 @@ final class Toolbox {
     // MARK: - Helpers
 
     func styleJSON(_ p: Preset, _ l: Library, created: AICreatedStyles, full: Bool = false) -> JSONObject {
-        let lineup = l.screensaverLineup
+        styleJSON(p, l, created: created, lineup: l.screensaverLineup, wall: LibraryAccess.loadWallpaper(store), full: full)
+    }
+
+    /// As above with the lineup and wallpaper.json passed in (list_styles reads them once).
+    func styleJSON(_ p: Preset, _ l: Library, created: AICreatedStyles, lineup: ScreensaverLineup, wall: JSONObject, full: Bool = false) -> JSONObject {
         var roles: [String] = []
         if lineup.playlist.contains(p.id) { roles.append(lineup.rotates ? "screensaver rotation" : "screensaver") }
         if lineup.night == p.id { roles.append("screensaver at night") }
         for (key, pin) in l.displayStyles ?? [:] where pin.presetID == p.id { roles.append("screensaver on \(pin.name ?? key)") }
-        let wall = LibraryAccess.loadWallpaper(store)
         if (wall["enabled"] as? Bool) == true {
             if (wall["followsScreensaver"] as? Bool) != true, (wall["presetID"] as? String).flatMap(UUID.init) == p.id { roles.append("live wallpaper") }
             for (_, v) in wall["displayStyles"] as? JSONObject ?? [:] {
@@ -144,7 +147,8 @@ final class Toolbox {
                  readOnly: true, idempotent: true) { [unowned self] a in
                 let l = try self.lib.library()
                 let created = AICreatedStyles.load(store: self.store)
-                var items = (l.presets + l.unknownPresets.map(\.preset)).map { self.styleJSON($0, l, created: created) }
+                let lineup = l.screensaverLineup, wall = LibraryAccess.loadWallpaper(self.store)
+                var items = (l.presets + l.unknownPresets.map(\.preset)).map { self.styleJSON($0, l, created: created, lineup: lineup, wall: wall) }
                 switch a["filter"] as? String ?? "all" {
                 case "scenes": items = items.filter { $0["type"] as? String == "scene" }
                 case "looks": items = items.filter { $0["type"] as? String == "look" }
@@ -259,7 +263,7 @@ final class Toolbox {
                                "music_card": S.bool("Show the corner music card with a sample song (default false)."),
                                "frames": S.num("Contact sheet: this many frames (2–12) instead of one still.", min: 1, max: 12, integer: true),
                                "span": S.num("Contact sheet: seconds covered (default 120).", min: 1, max: 86_400),
-                               "save_path": S.str("Also write the PNG to this absolute path (.png).", pattern: "^/.*\\.png$")]),
+                               "save_path": S.str("Also write the PNG to this absolute path (.png); it must not exist yet.", pattern: "^/.*\\.png$")]),
                  readOnly: true, idempotent: true) { [unowned self] a in try self.previewTool(a) },
             Tool(name: "benchmark_style", title: "Benchmark a style",
                  description: "GPU milliseconds per frame (min and median of 20 live frames, GPU timestamps) at 5K (5120×2880) by default, on this Mac's GPU, with a verdict against DotStudio's budget (aim ≤ 4 ms, ceiling 6 ms at 5K for a screensaver; see read_guide power).",
@@ -398,7 +402,11 @@ final class Toolbox {
         else if st.mean > 0.6 { note += ". Note: very bright overall; DotStudio styles are dark-first (style/dotstudio)." }
         let png = PreviewRenderer.png(cg)
         if let path = a["save_path"] as? String {
-            do { try png.write(to: URL(fileURLWithPath: path), options: .atomic); meta["savedTo"] = path; note += ". Saved to \(path)" }
+            // preview_style is read-only: it adds a file, never replaces one.
+            guard !FileManager.default.fileExists(atPath: path) else {
+                throw ToolError("Rendered, but \(path) already exists and preview_style never overwrites files. Pick a new file name.")
+            }
+            do { try png.write(to: URL(fileURLWithPath: path), options: .withoutOverwriting); meta["savedTo"] = path; note += ". Saved to \(path)" }
             catch { throw ToolError("Rendered, but couldn't write \(path): \(error.localizedDescription)") }
         }
         if !p.unknownEffects.isEmpty { note += ". \(p.unknownEffects.count) effect(s) from a newer DotStudio aren't drawn." }

@@ -18,5 +18,6 @@ APP="${1:-$ROOT/build/Build/Products/Release/DotStudio.app}"
 BIN="$APP/Contents/MacOS/dotstudio-mcp"
 [[ -x "$BIN" ]] || { echo "no $BIN — build first: xcodebuild -scheme DotStudio -configuration Release -derivedDataPath build"; exit 2; }
 OUT="${MCP_SELFTEST_OUT:-${TMPDIR:-/tmp}/ai-mcp/selftest}"
-mkdir -p "$OUT"
+# Fresh every run: preview_style never overwrites a file, so last run's PNGs would block it.
+rm -rf "$OUT"; mkdir -p "$OUT"
 exec python3 -I "$ROOT/tools/mcp-selftest/selftest.py" "$BIN" "$ROOT" "$OUT"

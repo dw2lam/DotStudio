@@ -38,7 +38,7 @@ final class AIConnect: ObservableObject {
     // The how-to, shared by the MCP popover and Settings ▸ AI.
     static let restartHint = "Quit and reopen Claude Desktop. Claude Code picks DotStudio up in a new session. In Cursor, VS Code and other apps, paste the JSON into their MCP settings."
     static let examplePrompt = "Make me a calm ocean screensaver with a clock, and show me a preview."
-    static let libraryHint = "New styles appear in your Library, ready to play. Whenever the AI changes something, a small notice shows what it did, with Undo."
+    static let libraryHint = "New styles appear in your Library, ready to play. When the AI changes your screensaver or wallpaper, a small notice shows what it did, with Undo."
     static var configJSON: String { ClaudeDesktopConfig.snippet(command: helperPath) }
 
     /// Re-read the settings and whether Claude Desktop lists this helper (on appear).

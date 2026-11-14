@@ -207,7 +207,7 @@ enum StyleBuilder {
                 if let i = opts.firstIndex(where: { $0.compare(s, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }) { return Double(i) }
                 throw ToolError("\(path): \"\(s)\" isn't an option. Options: \(opts.enumerated().map { "\($0.offset)=\($0.element)" }.joined(separator: ", ")).")
             }
-            guard JSON.isNumber(v), let n = (v as? NSNumber)?.doubleValue, n == n.rounded(), n >= 0, Int(n) < opts.count else {
+            guard JSON.isNumber(v), let n = (v as? NSNumber)?.doubleValue, n == n.rounded(), n >= 0, n < Double(opts.count) else {
                 throw ToolError("\(path): a menu takes an option index 0…\(opts.count - 1) or an option name (\(opts.joined(separator: ", "))).")
             }
             return n

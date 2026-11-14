@@ -139,6 +139,12 @@ final class MCPServer {
                 buffer.removeSubrange(buffer.startIndex...nl)
                 guard !line.allSatisfy({ $0 == 32 || $0 == 13 || $0 == 9 }) else { continue }
                 let data = Data(line)
+                // ping skips the queue: a client's keep-alive must not wait behind a slow
+                // render or preview, or it may decide the server hung.
+                if let o = JSON.parse(data) as? JSONObject, o["method"] as? String == "ping", let id = o["id"] {
+                    send(["jsonrpc": "2.0", "id": id, "result": [String: Any]()])
+                    continue
+                }
                 work.async { self.handle(data) }
             }
         }

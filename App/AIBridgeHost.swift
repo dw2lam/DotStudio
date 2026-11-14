@@ -43,6 +43,7 @@ final class AIBridgeHost {
             return BridgeResponse(ok: true, appVersion: appVersion)
         case .upsertStyle:
             guard var p = req.preset else { return .fail("no style given") }
+            if let n = model.library.newerBuildStyle(p.id) { return .fail(Library.newerBuildMessage(n.name)) }
             if let i = model.library.presets.firstIndex(where: { $0.id == p.id }) {
                 model.library.presets[i] = p
                 model.save()
@@ -53,6 +54,7 @@ final class AIBridgeHost {
             model.save()
             return BridgeResponse(ok: true, id: p.id, name: p.name, appVersion: appVersion, message: "Added “\(p.name)” to the library.")
         case .duplicateStyle:
+            if let id = req.id, let n = model.library.newerBuildStyle(id) { return .fail(Library.newerBuildMessage(n.name)) }
             guard let id = req.id, model.preset(id) != nil, let copy = model.duplicate(id) else { return .fail("no such style") }
             if let n = req.name, let i = model.library.presets.firstIndex(where: { $0.id == copy }) {
                 model.library.presets[i].name = model.library.uniqueName(n)
@@ -60,6 +62,7 @@ final class AIBridgeHost {
             }
             return BridgeResponse(ok: true, id: copy, name: name(copy), appVersion: appVersion, message: "Duplicated as “\(name(copy))”.")
         case .deleteStyle:
+            if let id = req.id, let n = model.library.newerBuildStyle(id) { return .fail(Library.newerBuildMessage(n.name)) }
             guard let id = req.id, let p = model.preset(id) else { return .fail("no such style") }
             guard model.library.presets.count > 1 else { return .fail("“\(p.name)” is the only style; the library can't be empty.") }
             model.delete(id)

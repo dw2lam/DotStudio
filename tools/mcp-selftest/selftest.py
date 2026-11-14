@@ -305,6 +305,8 @@ b = image(res)
 good, size = png_ok(b) if b else (False, None)
 check(good and size == (640, 400), f"preview is a valid 640×400 PNG ({size})")
 check(os.path.exists(os.path.join(OUT, "harbour.png")), "save_path written")
+again = c.call("preview_style", {"style": dusk_id, "width": 320, "height": 200, "save_path": os.path.join(OUT, "harbour.png")})
+check(again.get("isError") is True and "never overwrites" in text(again), "save_path never overwrites an existing file")
 check(res["structuredContent"]["meanLuminance"] > 0.02, "preview isn't black")
 res = c.call("preview_style", {"style": dusk_id, "width": 900, "height": 600, "frames": 4, "span": 60})
 ok(res, "contact sheet")
@@ -732,7 +734,7 @@ res = c.call("create_film_scene", {"template": "commute", "name": "Commute Test"
                                    "params": {"sway": 0.5}, "look": {"halation": 0.3, "grain": 0.3}})
 ok(res, "create_film_scene from the real Commute template")
 rdraft = res["structuredContent"]["draft"]
-res = c.call("render_film_stills", {"draft": rdraft, "width": 320, "height": 200, "samples": 8, "wait_seconds": 60})
+res = c.call("render_film_stills", {"draft": rdraft, "width": 320, "height": 200, "samples": 8, "wait_seconds": 45})
 ok(res, "render_film_stills through job.py")
 sjob = res["structuredContent"]["job"]
 imgs = [image for image in res["content"] if image["type"] == "image"]
@@ -914,6 +916,14 @@ ts = [threading.Thread(target=burst, args=(t,)) for t in ("Alpha", "Beta", "Gamm
 n = names(P)
 check(all(f"{t} {i}" in n for t in ("Alpha", "Beta", "Gamma") for i in range(8)), "3 servers × 8 creates: none lost")
 check(len(json.load(open(os.path.join(P, "ai-created.json")))["ids"]) == 24, "all 24 recorded as the AI's")
+
+# huge numbers where an option index goes: a tool error, never a crash
+c = Client(R)
+c.init()
+res = c.call("create_style", {"name": "Huge", "effects": [{"kind": "oceanHorizon", "params": {"weather": 1e19}}]})
+check(res.get("isError") is True, "a menu index of 1e19 is a tool error")
+check(c.call("list_styles", {})["structuredContent"] is not None, "…and the server is still alive")
+c.close()
 
 # ---------------------------------------------------------------- Claude Desktop config (temp file only)
 print("== Claude Desktop config merge")
