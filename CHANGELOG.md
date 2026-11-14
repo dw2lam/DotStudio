@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.6.0 — Live light, every kind of weather, and your own signals (unreleased)
+
+### New
+- **Commute, relit live.** Film scenes can now be rendered once per light source — the sun,
+  a low sunset sun, the sky, the cabin lamps, the city's lights — and DotStudio mixes them live
+  from your real sun and weather. Every time of day blends smoothly into the next, with no
+  cuts between clips.
+- **Every kind of weather.** Drizzle, rain, heavy rain, thunderstorms with gentle lightning,
+  snow settling on the glass, sleet, fog with condensation, partly cloudy light that comes and
+  goes. Scenes with a Weather menu now offer every condition (Drizzle, Heavy Rain and Sleet are
+  new), and film styles get one too.
+- **Signals and When rules (beta).** Settings ▸ Signals lists live values DotStudio can watch:
+  the weather, the sun, the time, your battery, music — and your own, from a web address that
+  returns JSON (like an air-quality service) or a file your own scripts write. On the Screensaver
+  card, a When rule plays a style while a condition holds: "When it's snowing, play Snowfall."
+  API keys stay in your Keychain.
+- **Live inputs for Custom Scenes (beta).** A scene can declare inputs like "Air quality", and
+  you connect each to a signal in the Inspector — it then changes with the real value.
+- **Settings over AI (beta).** The assistant can also read and change DotStudio's own settings when
+  you ask — the music card, the live wallpaper's quality and battery behaviour, how often the
+  playlist changes, the crossfade, live weather, updates — and press the setup buttons for you
+  (install the screensaver, open the setup guide and Guide Me). The things macOS owns, like which
+  screensaver is chosen, stay yours to click; it takes you to the right place.
+- **Set your own location.** Settings ▸ Weather ▸ Location shows where DotStudio thinks you are
+  — for the live weather, the real sun and stars, and Universe's marker — and Change… finds
+  your city (or takes coordinates). Handy on a VPN, which can put you in the wrong city; once
+  set, DotStudio stops looking your location up. If the usual lookup is down, a second one
+  is tried before giving up.
+
+- **Clearer AI setup.** The MCP button and Settings ▸ AI start with what's recommended — an AI
+  app, Blender for film scenes, live weather — each with a tick when it's done, then what an
+  assistant can do and how long each kind of request takes, with example prompts to copy.
+
 ## 1.5.0 — Commute, and make your own with AI (beta)
 
 ### New
@@ -17,11 +50,6 @@
   screensaver or live wallpaper. Every change it makes shows a small notice with Undo. Set it up
   in Settings ▸ AI (one click for Claude Desktop); a switch there keeps the AI from changing
   what plays at all.
-- **Settings over AI (beta).** The assistant can also read and change DotStudio's own settings when
-  you ask — the music card, the live wallpaper's quality and battery behaviour, how often the
-  playlist changes, the crossfade, live weather, updates — and press the setup buttons for you
-  (install the screensaver, open the setup guide and Guide Me). The things macOS owns, like which
-  screensaver is chosen, stay yours to click; it takes you to the right place.
 - **Custom Scenes (beta).** An assistant can also write a brand-new scene for you: DotStudio compiles
   it on your Mac and plays it in the screensaver, the live wallpaper and the gallery like any
   other style, with its own settings in the Inspector. Scenes can be smooth shader art, an LED
@@ -30,11 +58,6 @@
   calm gradient and the Inspector says why.
 - **Films over AI (beta).** With Blender installed, an assistant can render film scenes like Commute
   for you — stills to try ideas, then a looping film for your screensaver or wallpaper.
-- **Set your own location.** Settings ▸ Weather ▸ Location shows where DotStudio thinks you are
-  — for the live weather, the real sun and stars, and Universe's marker — and Change… finds
-  your city (or takes coordinates). Handy on a VPN, which can put you in the wrong city; once
-  set, DotStudio stops looking your location up. If the usual lookup is down, a second one
-  is tried before giving up.
 
 ### Fixed
 - Clock styles in the gallery, and a live wallpaper holding a still frame (On Battery: Still,
