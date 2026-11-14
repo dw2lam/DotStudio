@@ -76,6 +76,9 @@ struct AISettingsSection: View {
             Toggle("Let AI change what plays", isOn: ai.allowPlaybackBinding(store: store))
                 .formSwitchSize()
                 .help("Off: assistants can still create and edit styles, but never change your screensaver or live wallpaper.")
+            Toggle("Let AI add live data signals", isOn: ai.allowSignalsBinding(store: store))
+                .formSwitchSize()
+                .help("Off: assistants can't add, change or delete signals (Settings ▸ Signals). They never see a signal's key either way.")
             LabeledContent("Claude Desktop") {
                 FlowLayout(spacing: layout.controlGap, lineSpacing: layout.controlGap, alignment: .trailing) {
                     Button(scaled: ai.installedInDesktop ? "Added" : "Add to Claude Desktop") { ai.addToDesktop() }
