@@ -16,7 +16,13 @@
 //                  and the clock as they do in a real window). Then scripted events — a thumbnail landing, a song
 //                  starting, pausing, changing, starting and stopping, a selection, an edit —
 //                  each reported as the SwiftUI bodies it re-evaluated.
-//          scroll  the gallery scrolled top → bottom → top in that window, a frame at a time
+//          scroll  the gallery scrolled top → bottom → top in that window, a frame at a time:
+//                  the window's first frame (cold stills), then each pass's main-thread ms
+//                  per step, the bodies it re-evaluated and the document height after it (a
+//                  lazy stack estimates rows it hasn't built), then selections. Also:
+//                    DOTSTUDIO_PERF_STYLES=<n>   pad the library to n styles (copies)
+//                    DOTSTUDIO_PERF_SIZE=880x600 the window's size (default 1440x900)
+//                    DOTSTUDIO_PERF_STEP=<pt>    points per step (default 12)
 //          backdrop  renders GalleryBackdrop for a look check (see runBackdrop)
 //        DOTSTUDIO_PERF_SECONDS=<n>   length of each measured quiet phase (default 30)
 //        DOTSTUDIO_PERF_BURST=<n>     (window) also n track changes and n selections 0.25 s
@@ -126,7 +132,6 @@ enum PerfProbe {
             case "window": runWindow()
             case "scroll": runScroll()
             case "backdrop": runBackdrop()
-            case "onscreen": ScrollBench.run()
             default: runIdle()
             }
         }
@@ -138,7 +143,7 @@ enum PerfProbe {
 
     /// What the app sets up at launch (DotStudioApp.init + applicationDidFinishLaunching),
     /// minus anything that shows: no wallpaper is restored, no window opens.
-    @MainActor static func bootServices() -> (AppModel, UpdateController) {
+    @MainActor private static func bootServices() -> (AppModel, UpdateController) {
         let model = AppModel()
         model.storeAlert = nil
         // Music on (Show music: Corner) so the monitor watches, as for most users.
@@ -184,12 +189,12 @@ enum PerfProbe {
     private static let wakes = Perf.RunLoopWakes()
     private static var subs = Set<AnyCancellable>()
 
-    static func spin(_ s: Double) {
+    private static func spin(_ s: Double) {
         let end = Date().addingTimeInterval(s)
         while Date() < end { RunLoop.main.run(until: end) }   // one wake-up at the end, none of its own in between
     }
 
-    static func say(_ s: String) { FileHandle.standardOutput.write(Data((s + "\n").utf8)) }
+    private static func say(_ s: String) { FileHandle.standardOutput.write(Data((s + "\n").utf8)) }
 
     /// Measures `body` (which may spin the run loop) and prints one phase line + its counters.
     private static func phase(_ name: String, minutes: Bool = true, _ body: () -> Double) {
@@ -291,6 +296,8 @@ enum PerfProbe {
             return Date().timeIntervalSince(t0)
         }
         report("main-thread", times)
+        // (A lazy stack estimates the rows it hasn't built: the document can change as it scrolls.)
+        say(String(format: "    document now %.0f pt", scroll.documentView?.frame.height ?? 0))
     }
 
     private static func report(_ what: String, _ times: [Double]) {
@@ -303,31 +310,59 @@ enum PerfProbe {
     }
 
 
+    /// "1440x900".
+    private static func parseSize(_ s: String?) -> CGSize? {
+        guard let p = s?.split(separator: "x"), p.count == 2, let w = Double(p[0]), let h = Double(p[1]) else { return nil }
+        return CGSize(width: w, height: h)
+    }
+
     @MainActor private static func runScroll() {
         let (model, updates) = bootServices()
         DemoHooks.stillPreviews = env["DOTSTUDIO_PERF_LIVE"] == nil
-        let size = CGSize(width: 1440, height: 900)
-        let host = NSHostingView(rootView: ContentView()
-            .frame(width: size.width, height: size.height)
-            .environmentObject(model)
-            .environmentObject(updates))
-        let win = NSWindow(contentRect: CGRect(origin: CGPoint(x: -30000, y: -30000), size: size),
-                           styleMask: [.borderless], backing: .buffered, defer: false)
-        win.isReleasedWhenClosed = false
-        win.contentView = host
-        host.frame = CGRect(origin: .zero, size: size)
+        // DOTSTUDIO_PERF_STYLES=<n>: a bigger library — copies of the styles, round-robin, up to n.
+        if let n = env["DOTSTUDIO_PERF_STYLES"].flatMap(Int.init), n > model.library.presets.count {
+            let originals = model.library.presets.map(\.id)
+            var i = 0
+            while model.library.presets.count < n {
+                model.duplicate(originals[i % originals.count]); i += 1
+            }
+            model.selectedID = nil
+        }
+        let size = parseSize(env["DOTSTUDIO_PERF_SIZE"]) ?? CGSize(width: 1440, height: 900)
         Thumbnailer.assumesWindowOnScreen = true
-        host.layoutSubtreeIfNeeded()
-        spin(2)
+        // The window's first frame: everything the gallery builds before it can show.
+        var first: [Double] = []
+        var made: (NSView, NSWindow)?
+        phase("first-render", minutes: false) {
+            let s = CACurrentMediaTime()
+            let host = NSHostingView(rootView: ContentView()
+                .frame(width: size.width, height: size.height)
+                .environmentObject(model)
+                .environmentObject(updates))
+            let win = NSWindow(contentRect: CGRect(origin: CGPoint(x: -30000, y: -30000), size: size),
+                               styleMask: [.borderless], backing: .buffered, defer: false)
+            win.isReleasedWhenClosed = false
+            win.contentView = host
+            host.frame = CGRect(origin: .zero, size: size)
+            host.layoutSubtreeIfNeeded()
+            host.displayIfNeeded()
+            CATransaction.flush()
+            first.append((CACurrentMediaTime() - s) * 1000)
+            made = (host, win)
+            return 0
+        }
+        report("main-thread", first)
+        guard let (host, win) = made else { return }
+        phase("settle", minutes: false) { spin(3); return 3 }
         guard let scroll = scrollView(in: host), let doc = scroll.documentView else {
             say("perf probe: no scroll view found"); return
         }
         let maxY = max(0, doc.frame.height - scroll.contentView.bounds.height)
-        say(String(format: "perf probe: scroll — gallery 1440x900, %d styles, document %.0f pt, scrolling %.0f pt",
-                   model.library.presets.count, doc.frame.height, maxY))
+        say(String(format: "perf probe: scroll — gallery %.0fx%.0f, %d styles, document %.0f pt, scrolling %.0f pt",
+                   size.width, size.height, model.library.presets.count, doc.frame.height, maxY))
         let step = CGFloat(env["DOTSTUDIO_PERF_STEP"].flatMap(Double.init) ?? 12)
         scrollPass("scroll-down cold", host: host, scroll: scroll, from: 0, to: maxY, step: step)
-        spin(2)   // background thumbnail work lands
+        phase("settle", minutes: false) { spin(3); return 3 }   // background thumbnail work lands
         scrollPass("scroll-up warm", host: host, scroll: scroll, from: maxY, to: 0, step: step)
         scrollPass("scroll-down warm", host: host, scroll: scroll, from: 0, to: maxY, step: step)
         for _ in 0..<(env["DOTSTUDIO_PERF_REPEAT"].flatMap(Int.init) ?? 0) {   // long runs for a sampler
@@ -351,6 +386,26 @@ enum PerfProbe {
             }
             return 0
         }
+        // Selecting styles at the top of the page (what a click re-renders).
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
+        spin(0.5)
+        let ids = model.library.presets.map(\.id)
+        var picks: [Double] = []
+        phase("select x10", minutes: false) {
+            for i in 0..<10 {
+                let s = CACurrentMediaTime()
+                model.selectedID = ids[(i * 3) % ids.count]
+                RunLoop.main.run(until: Date())
+                host.layoutSubtreeIfNeeded()
+                host.displayIfNeeded()
+                CATransaction.flush()
+                picks.append((CACurrentMediaTime() - s) * 1000)
+                spin(0.3)
+            }
+            return 0
+        }
+        report("main-thread", picks)
         win.contentView = nil
         win.close()
     }
