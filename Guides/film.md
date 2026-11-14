@@ -23,13 +23,13 @@ Light adds up. Instead of one clip per variant, the toolkit can render a scene *
 |---|---|---|
 | Something stylised, graphic or abstract — anything a shader can draw | **No render**: a shader scene on the `metal` engine (see `engines/metal`) | seconds; follows the sun and weather by construction |
 | A photoreal place that can hold still (a room, a view out of a window), relit live by time of day and weather | **Layer stills**: `render_film_loop` with `variants: ["layers"]` and `still_frame: N` (one frame; a relightable still package) | ~1.5 min |
-| A photoreal set with motion (passing scenery, a dozing character), every time of day and weather | **A layered loop**: `variants: ["layers"]` | overnight: ~12 h for Commute's 24 s loop at 1600×1000 tiles (77 s per frame for all six tiles) |
+| A photoreal set with motion (passing scenery, a dozing character), every time of day and weather | **A layered loop**: `variants: ["layers"]` | overnight: ~12 h for Commute's 24 s loop at 1600×1000 tiles (72–77 s per frame for all six tiles) |
 | Weather that changes the set itself: snow cover, wet reflective streets, water running down the glass in the render, thick fog, a different sky that must be seen sharply | **Variant loops** (`day`, `golden`, `night`, `rain`), alone or next to `layers` | ~3.5–4 h per variant |
 
 - A layered loop costs about as much as three variant loops and replaces all four (and every condition between them). Prefer it for any photoreal scene that should follow the day.
 - Layers come from the scene's *base* build (day geometry and materials: dry streets, clean glass). If the user's idea depends on the set looking different in some weather, that weather needs its own variant loop.
-- Before a layered loop: render stills of the base scene and get a yes, then tell the user the time (~12 h for 24 s at 1600×1000) and disk use while it renders (~15 GB of temporary EXR tiles, deleted when it's packed). It renders one tile at a time; progress reads `layers: tile sky frame 12/576`.
-- Layers carry no film look: bloom, halation, grain and the glass effects are added live by DotStudio, so the `look` block still applies.
+- Before a layered loop: render stills of the base scene and get a yes, then tell the user the time (~12 h for 24 s at 1600×1000) and disk use (~14 GB of temporary EXR tiles while it renders, deleted when it's packed; the finished `layers.mov` is a few hundred MB). It renders one tile at a time; progress reads `layers: tile sky frame 12/576`.
+- Layers carry no film look: for a layered package DotStudio applies the whole `look` live (bloom, halation, vignette, grain) along with the glass effects, so the `look` block still applies — and can be changed later without re-rendering.
 
 ## The look
 
@@ -37,8 +37,8 @@ Light adds up. Instead of one clip per variant, the toolkit can render a scene *
 
 | Key | Range | Default | What it does | Applied |
 |---|---|---|---|---|
-| `bloom` | 0–1 | 0.25 | Soft glow around bright lights (lamps, sun on glass). Above 0.5 reads as cheap "dreamy". | at render |
-| `halation` | 0–1 | 0.15 | The warm red-orange glow film stock gives bright edges against dark. Lovely at night and golden; keep ≤ 0.2 by day. | at render |
+| `bloom` | 0–1 | 0.25 | Soft glow around bright lights (lamps, sun on glass). Above 0.5 reads as cheap "dreamy". | at render for variant clips; live at playback for layered packages |
+| `halation` | 0–1 | 0.15 | The warm red-orange glow film stock gives bright edges against dark. Lovely at night and golden; keep ≤ 0.2 by day. | at render for variant clips; live at playback for layered packages |
 | `grain` | 0–1 | 0.2 | Live film grain added by DotStudio while it plays — never baked into the clips, so it never repeats with the loop. The package carries it as the default; the style's `ds.grain` param (the film engine's Grain) overrides it. 0.1–0.3 is natural; 0 looks like CG. | at playback |
 
 ## Budgets (Apple Silicon, M5 Pro 16-core GPU, 24 GB — scale up for smaller GPUs)
@@ -51,7 +51,7 @@ Light adds up. Instead of one clip per variant, the toolkit can render a scene *
 | Cycles still 1600×1000, 384 samples (approval) | 50–70 s each |
 | EEVEE ray-traced loop frame 2560×1600 | measure on 24 frames first; expect tens of seconds per frame |
 | A 48 s loop at 24 fps | 1,152 frames per variant: hours in EEVEE, a day or more in Cycles |
-| Light layers, one frame, six tiles at 1600×1000 (EEVEE) | ~77 s (sun 12, low sun 12, sky 23, cabin 22, city 7, mask 1–2) + ~13 s build + 5 × 2.5 s probe bakes |
+| Light layers, one frame, six tiles at 1600×1000 (EEVEE) | 72–77 s (sun 12, low sun 12, sky 21–23, cabin 21–22, city 6–7, mask < 1) + ~15 s build + 5 × 2.5 s probe bakes: ~100 s end to end |
 | Light-layer loop, 24 s (576 frames) at 1600×1000 tiles | ~12 h; EEVEE's cost is per sample, not per pixel, so smaller tiles barely help |
 | Clip size | HEVC 10-bit 2560×1600, 25–40 Mb/s: 150–250 MB per variant per 48 s; four variants ≈ 0.6–1 GB |
 

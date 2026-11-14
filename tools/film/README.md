@@ -135,8 +135,8 @@ Blender -b --factory-startup --python run.py -- SPEC.json --layers-still PREFIX 
 Blender -b --factory-startup --python run.py -- SPEC.json --layers-anim DIR [--frames A-B]
     # tile by tile -> DIR/<tile>/####.exr (resumable: existing frames are skipped) + DIR/layers-render.json
     [--tiles sun,sky,…] [--tile-samples sky=64,city=16] [--res WxH (default 1600x1000)] [--samples N]
-python3 -I dsfilm/layerpack.py pack DIR OUT [--quality 70] [--encoder auto|videotoolbox|x265]
-    # -> OUT/layers.mov (3x2 grid, HEVC Main10 hvc1) + OUT/layers.json (the manifest's "layers" block)
+python3 -I dsfilm/layerpack.py pack DIR OUT [--quality 80] [--encoder auto|videotoolbox|x265]
+    # -> OUT/layers.mov (3x2 grid, 8 px gutters, HEVC Main10 hvc1) + OUT/layers.json (the manifest's "layers" block)
 python3 -I dsfilm/layerpack.py check DIR OUT/layers.mov [--frames 1,12,24]   # decode + compare with the EXRs
 ```
 
@@ -150,8 +150,15 @@ python3 -I dsfilm/layerpack.py check DIR OUT/layers.mov [--frames 1,12,24]   # d
   loop (~2.5 s each), not per frame.
 - Packing: per light tile `scale` = the 99.95th percentile of the per-pixel max channel, pooled over
   the loop (an even sample of up to 96 frames), rounded up to 3 digits; `v = clamp(lin/scale, 0, 1)^(1/4)`;
-  the mask as is. The atlas becomes Y'CbCr **BT.709, video range, 4:2:0 (2x2-averaged chroma)**,
-  tagged BT.709 — a reader must undo exactly that and apply no colour management.
+  the mask as is. Tiles sit 8 px apart (manifest `"gutter": 8`; tile i at x = (i%3)·(w+8),
+  y = (i//3)·(h+8); video 3w+16 × 2h+8, e.g. 4816×2008 for 1600×1000 tiles), each gutter
+  edge-replicated half from each neighbour so 4:2:0 chroma never bleeds between tiles. The atlas
+  becomes Y'CbCr **BT.709, video range, 4:2:0 (2x2-averaged chroma)** in numpy (exact), tagged
+  BT.709 (matrix, primaries, transfer, `tv` range) — a reader must undo exactly that and apply no
+  colour management. (Don't let ffmpeg's swscale convert RGB→YUV untagged: it defaults to BT.601.)
+- The manifest needs `"engine": {"id": "film", "version": ">=1.1"}`; FilmPackage (MCP/Film.swift)
+  writes it, copies `clips/layers.mov` and puts `layers.json` in as `layers`. For layered packages
+  the app applies the whole look live (bloom, halation, vignette, grain) from `look`.
 - Reading EXRs outside Blender: ffmpeg's decoder clamps to 0…1 whenever it converts float formats,
   so `layerpack.read_exr` asks for the file's native `gbrpf16le`; it can't read one-channel EXRs, so
   the mask is written RGB.
@@ -183,28 +190,38 @@ build at their night strength (Commute's city builds them whenever `P["layers"]`
 
 | Tile | samples | s / frame, 1600×1000 | s / frame, 960×600 |
 |---|---|---|---|
-| `sun` | 32 (½) | 12.4 | LAYER_ANIM_SUN |
-| `sun_low` | 32 (½) | ~12.4 | LAYER_ANIM_SUNLOW |
-| `sky` | 64 | 22.6 | LAYER_ANIM_SKY |
-| `cabin` | 64 | 22.2 | LAYER_ANIM_CABIN |
-| `city` | 16 (¼) | 6.5 | LAYER_ANIM_CITY |
-| `mask` | 8 (flat emission, no RT/GI/shadows) | 1–2 | LAYER_ANIM_MASK |
-| **all six** | | **~77** (117 with every tile at 64) | LAYER_ANIM_ALL |
+| `sun` | 32 (½) | 12.4 | 11.9 |
+| `sun_low` | 32 (½) | ~12.4 | 11.6 |
+| `sky` | 64 | 22.6 | 19.1 |
+| `cabin` | 64 | 22.2 | 18.9 |
+| `city` | 16 (¼) | 6.5 | 5.3 |
+| `mask` | 8 (flat emission, no RT/GI/shadows) | ~1 | 0.3 |
+| **all six** | | **72–77** (117 with every tile at 64) | **~67** |
 
 - EEVEE's cost here is in the samples, not the pixels: a 960×600 tile costs the same as 1600×1000.
   Lower resolution for "soft" tiles saves nothing; fewer samples do (time is linear in samples,
-  ~0.34 s per sample per tile + ~1 s).
+  ~0.34 s per sample per tile + ~1 s). The 960×600 column is the median over a 24-frame animation
+  (frames 1–24, `job.py loop --variants layers --res 960x600 --frames 1-24`); the 1600×1000 one is frame 1.
 - Why those samples: the error a tile adds to the mixed picture, in 8-bit display levels (mean / 99th
   percentile) vs every tile at 64 — noise floor: the sky at 64 vs 128 differs by 0.27 / 2.3 by day.
   `sun` at 32: 0.09 / 0.9 (at 16: 0.19 / 2.1). `city` at 16: 0.06 / 1.3 at night (32: 0.03 / 0.6).
   `sky` at 32: 0.43 / 3.7 by day — visible, so 64. `cabin` at 32: 0.57 / 4.1 at night, 0.91 / 6.3
   on a rainy night (it's the main light then) — so 64. `mask` at 4 vs 32: 0.0015 mean.
-- Probe re-bake: ~2.5 s per tile (~4 s the first). Build ~13 s. Packing: LAYER_PACK.
-- **Full Commute loop (576 frames) at 1600×1000 tiles: ~77 s × 576 ≈ 12.3 h** (18.7 h with every
+- Probe re-bake: ~2.5 s per tile (~4 s the first). Build ~13–15 s. Packing (numpy + VideoToolbox): 11 s for 24 frames
+  of 960×600 tiles, so roughly 10–15 min for a 576-frame loop at 1600×1000.
+- **Full Commute loop (576 frames) at 1600×1000 tiles: 72–77 s × 576 ≈ 11.5–12.3 h** (18.7 h with every
   tile at 64), versus ~3.5–4 h per variant clip — i.e. one layered loop costs about as much as three
   variant loops and replaces all four (and every weather in between).
-- Disk: half-float EXR (ZIP) per frame at 1600×1000 ≈ 5 MB per light tile, 1.5 MB mask: ~15 GB for a
-  576-frame loop (deleted after packing unless `--keep-frames`). The video: LAYER_MOV_SIZE.
+- Disk: half-float EXR (ZIP) per frame at 1600×1000 ≈ 4–5.5 MB per light tile (the mask compresses to
+  almost nothing): ~14 GB for a 576-frame loop (9 MB per frame at 960×600), deleted after packing
+  unless `--keep-frames`.
+- The video, `--quality 80` (VideoToolbox HEVC Main10, the default): 6.2 MB per second at 960×600
+  tiles (2896×1208), so ~150 MB for 24 s; at 1600×1000 tiles (4816×2008) expect ~300–400 MB (not
+  measured). Round trip (decode -> pow4 -> linear vs the EXRs, frames 1/12/24 of the test): mean
+  error 1.1–2.2 % of each tile's mean (city up to 2.6 %), the tile's outer 2 px no worse than the
+  inside (the gutter works), mask 0.0002; pow4 10-bit quantisation alone is 0.16 %, 4:2:0 chroma
+  alone 0.5–1.1 %. In the mixed picture (8-bit display levels, mean / p99, frame 12): q70 0.73 / 3.5
+  (2.9 MB/s), **q80 0.46 / 2.0** (about the render's own noise floor), q90 0.21 / 0.8 (17 MB/s).
 - Additivity (frame 1, 1600×1000): sun + sky + cabin + city vs an all-lights render of the same
   frame: mean absolute error **4.05 %** of the mean (3.97 % off the glass, 4.19 % on it), signed −2.5 %
   (the sum is a little darker: EEVEE's GI denoise/clamps aren't exactly linear); in display terms
@@ -215,7 +232,7 @@ build at their night strength (Commute's city builds them whenever `P["layers"]`
 | What the user wants | Make | Cost |
 |---|---|---|
 | Stylised, graphic, abstract, or anything a shader can draw | **no render**: a shader scene (the `metal` engine) | seconds; lives with the sun and weather by construction |
-| A photoreal set that may sit still (a room, a view), relit live by time and weather | **layer stills**: `--variants layers --still-frame N` (a one-frame `layers.mov`) | ~1.5 min at 1600×1000 (77 s of tiles + build + bakes) |
+| A photoreal set that may sit still (a room, a view), relit live by time and weather | **layer stills**: `--variants layers --still-frame N` (a one-frame `layers.mov`) | 98 s end to end at 1600×1000 (72 s of tiles + build + bakes + packing), measured |
 | A photoreal set with motion, every time of day and weather | **a layered loop** (`--variants layers`) | overnight: ~12 h for 24 s at 1600×1000 tiles |
 | Weather that changes geometry or materials: snow cover, wet reflective streets, water running on the glass, fog volumes, a different sky that must be seen sharply | **variant loops** (`--variants day,rain,…`), possibly together with layers | ~3.5–4 h per variant at 1920×1200 |
 

@@ -202,7 +202,14 @@ enum FilmPackage {
                              "uses": ["sun", "weather"], "look": FilmLook.scalars(spec["look"]),
                              "description": spec["description"] as? String ?? "A film scene rendered in Blender by DotStudio's film toolkit."]
         if !clips.isEmpty { m["clips"] = clips }
-        if let layers { m["layers"] = layers }
+        if let layers {
+            m["layers"] = layers
+            // layered packages get the whole look live (bloom, halation, vignette, grain): keep the vignette
+            if let v = ((spec["look"] as? JSONObject)?["vignette"] as? NSNumber)?.doubleValue, var look = m["look"] as? JSONObject {
+                look["vignette"] = min(max(v, 0), 1)
+                m["look"] = look
+            }
+        }
         if let a = spec["author"] as? String { m["author"] = a }
         try JSON.data(m, pretty: true).write(to: package.appendingPathComponent("scene.json"))
     }
@@ -397,7 +404,7 @@ struct FakeFilmToolkit: FilmToolkitAPI {
                 print("[fake dsfilm] couldn't write \(v).mov")
                 exit(1)
             } else if v == "layers" {     // a light-layer loop also leaves its manifest block (job.py)
-                let block: JSONObject = ["file": "clips/layers.mov", "grid": [3, 2], "encoding": "pow4",
+                let block: JSONObject = ["file": "clips/layers.mov", "grid": [3, 2], "gutter": 8, "encoding": "pow4",
                                          "tiles": ["sun", "sun_low", "sky", "cabin", "city", "mask"],
                                          "scale": ["sun": 1.19, "sun_low": 1.1, "sky": 0.45, "cabin": 0.9, "city": 0.45],
                                          "exposure": ["day": 1.5, "night": 3.2], "tint": ["sun_low": [1.0, 0.52, 0.22]]]
