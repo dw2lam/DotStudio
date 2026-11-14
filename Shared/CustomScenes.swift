@@ -204,9 +204,12 @@ struct CustomSceneManifest: Codable, Equatable {
         var scale: [String: Double]?
         var exposure: Exposure?
         var tint: [String: [Double]]?
+        /// Pixels between neighbouring tiles (edge-replicated by the toolkit, so 4:2:0 chroma
+        /// never bleeds across); 0 when absent.
+        var gutter: Int?
         var unknownFields: [String: JSONValue] = [:]
 
-        private enum CodingKeys: String, CodingKey { case file, grid, tiles, encoding, scale, exposure, tint }
+        private enum CodingKeys: String, CodingKey { case file, grid, tiles, encoding, scale, exposure, tint, gutter }
 
         init(file: String, grid: [Int]? = nil, tiles: [String], encoding: String? = "pow4", scale: [String: Double]? = nil,
              exposure: Exposure? = nil, tint: [String: [Double]]? = nil) {
@@ -227,6 +230,7 @@ struct CustomSceneManifest: Codable, Equatable {
             scale = try? c.decode([String: Double].self, forKey: .scale)
             exposure = try? c.decode(Exposure.self, forKey: .exposure)
             tint = try? c.decode([String: [Double]].self, forKey: .tint)
+            gutter = try? c.decode(Int.self, forKey: .gutter)
         }
 
         func encode(to encoder: Encoder) throws {
@@ -238,6 +242,7 @@ struct CustomSceneManifest: Codable, Equatable {
             try c.encodeIfPresent(scale, forKey: .scale)
             try c.encodeIfPresent(exposure, forKey: .exposure)
             try c.encodeIfPresent(tint, forKey: .tint)
+            try c.encodeIfPresent(gutter, forKey: .gutter)
             if !unknownFields.isEmpty {
                 var extra = encoder.container(keyedBy: JSONValue.AnyKey.self)
                 for (k, v) in unknownFields { try extra.encode(v, forKey: JSONValue.AnyKey(k)) }
@@ -247,6 +252,13 @@ struct CustomSceneManifest: Codable, Equatable {
         /// Columns × rows (3×2 when absent or malformed).
         var columns: Int { (grid?.count == 2 && grid![0] > 0) ? grid![0] : 3 }
         var rows: Int { (grid?.count == 2 && grid![1] > 0) ? grid![1] : 2 }
+        /// The gap between tiles in pixels (0…64; 0 when absent or out of range).
+        var gutterPixels: Int { min(max(gutter ?? 0, 0), 64) }
+        /// One tile's size inside a `videoWidth`×`videoHeight` grid video, gutters excluded.
+        func tileSize(videoWidth vw: Int, videoHeight vh: Int) -> (w: Int, h: Int) {
+            let g = gutterPixels
+            return (max((vw - (columns - 1) * g) / columns, 1), max((vh - (rows - 1) * g) / rows, 1))
+        }
         /// The tile's index in the grid (left→right, top→bottom), nil when the video lacks it.
         func index(of tile: String) -> Int? { tiles.firstIndex(of: tile) }
     }

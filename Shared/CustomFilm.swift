@@ -398,8 +398,15 @@ final class FilmLayers {
 
     /// The frame to mix: the playing video's newest (live; its first frame until it decodes one),
     /// else the first frame.
+    /// A layers video under 0.4 s (render_film_loop still_frame: one frame) is a relightable
+    /// STILL: its frame is decoded once (the poster path) and no player loops it.
+    private lazy var isStill: Bool = {
+        let d = CMTimeGetSeconds(AVURLAsset(url: url).duration)
+        return d.isFinite && d < 0.4
+    }()
+
     private func source(_ device: MTLDevice, live: Bool) -> YCbCrFrame? {
-        if live {
+        if live && !isStill {
             lock.lock()
             if video == nil {
                 let fmt = YCbCrFrame.pixelFormat(for: AVURLAsset(url: url).tracks(withMediaType: .video).first)
@@ -431,7 +438,7 @@ final class FilmLayers {
               let frame = source(device, live: live) else { return nil }
         let cols = layers.columns, rows = layers.rows
         let vw = frame.luma.width, vh = frame.luma.height
-        let tw = max(vw / cols, 1), th = max(vh / rows, 1)
+        let (tw, th) = layers.tileSize(videoWidth: vw, videoHeight: vh)   // (gutters excluded)
         let m = FilmLayers.mix(elevation: elevation, weather: weather, time: time,
                                day: layers.exposure?.day ?? 1.5, night: layers.exposure?.night ?? 3.2)
         let exposure = Float(pow(2.0, Double(m.ev)))
@@ -537,12 +544,17 @@ final class FilmLayers {
             err("\(l.file) isn't a playable video", l.file); return (d, w)
         }
         let dur = CMTimeGetSeconds(asset.duration)
-        if !(dur > 0.4) { err(String(format: "%@ is %.2f s: too short to loop", l.file, dur), l.file) }
+        if !(dur > 0) { err("\(l.file) has no frames", l.file) }
+        else if dur < 0.4 { w.append(String(format: "layers: %@ is %.2f s — played as a still (its first frame, relit live)", l.file, dur)) }
         let s = track.naturalSize.applying(track.preferredTransform)
         let vw = Int(abs(s.width)), vh = Int(abs(s.height))
         if vw > 8192 || vh > 8192 { err("\(l.file) is \(vw)×\(vh): at most 8192 px a side (hardware decode)", l.file) }
-        if vw % cols != 0 || vh % rows != 0 { w.append("layers: \(vw)×\(vh) doesn't split evenly into \(cols)×\(rows) tiles") }
-        let tw = vw / max(cols, 1)
+        let g = l.gutterPixels
+        if let gg = l.gutter, gg < 0 || gg > 64 { err("\"gutter\" is \(gg): expected 0…64 pixels between tiles") }
+        if (vw - (cols - 1) * g) % cols != 0 || (vh - (rows - 1) * g) % rows != 0 {
+            w.append("layers: \(vw)×\(vh) doesn't split evenly into \(cols)×\(rows) tiles with a \(g) px gutter")
+        }
+        let tw = l.tileSize(videoWidth: vw, videoHeight: vh).w
         if tw < 640 { w.append("layers: tiles are \(tw) px wide: soft full-screen (1600×1000 is the default)") }
         if let fd = track.formatDescriptions.first {
             let f = fd as! CMFormatDescription

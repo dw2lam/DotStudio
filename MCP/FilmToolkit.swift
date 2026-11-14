@@ -258,7 +258,7 @@ struct DSFilmToolkit: FilmToolkitAPI {
     }
 
     func loopCommand(spec: URL, outDir: URL, variants: [String], seconds: Double, fps: Int, width: Int, height: Int,
-                     quality: String) throws -> FilmCommand {
+                     quality: String, stillFrame: Int?) throws -> FilmCommand {
         guard ["draft", "standard", "final"].contains(quality) else { throw ToolError("quality: draft, standard or final") }
         let frames = seconds * Double(fps)
         guard abs(frames - frames.rounded()) < 1e-6 else {
@@ -269,7 +269,8 @@ struct DSFilmToolkit: FilmToolkitAPI {
             "-I", r.kit.root.appendingPathComponent("job.py").path, "loop",
             "--blender", r.blender, "--spec", spec.path, "--out", outDir.path, "--work", work(outDir),
             "--variants", variants.joined(separator: ","), "--seconds", Schema.fmt(seconds), "--fps", "\(fps)",
-            "--res", "\(width)x\(height)", "--quality", quality, "--lock", lockPath], environment: r.env)
+            "--res", "\(width)x\(height)", "--quality", quality, "--lock", lockPath]
+            + (stillFrame.map { ["--still-frame", "\($0)"] } ?? []), environment: r.env)
     }
 
     func package(loopOutput: URL, spec: JSONObject, sceneID: String, into package: URL) throws {
