@@ -133,10 +133,15 @@ enum LoginItem {
         }
     }
 
+    /// Posted (on the main queue) after `set`, from wherever it was changed — Settings, the
+    /// guide, the nudge, an assistant over MCP — so every reader re-reads the status.
+    static let didChange = Notification.Name("com.davidlam.DotStudio.LoginItem.didChange")
+
     /// Registers or unregisters, and remembers a "no". Returns an error message on failure.
     @discardableResult
     static func set(_ on: Bool) -> String? {
         AppPrefs.shared.set(!on, declinedKey)
+        defer { DispatchQueue.main.async { NotificationCenter.default.post(name: didChange, object: nil) } }
         guard !isRenderingShots, demoStatus == nil else { return nil }
         do {
             if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }

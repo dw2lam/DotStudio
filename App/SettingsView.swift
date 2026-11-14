@@ -298,8 +298,16 @@ struct GeneralSettingsSection: View {
             }
         }
         .onAppear { loginStatus = LoginItem.status() }
-        // The nudge's Turn On, or the guide, may have changed it.
+        // The real status, not a copy from when Settings opened: the nudge's Turn On, the guide
+        // or an assistant (MCP, general.openAtLogin) may have changed it; System Settings ›
+        // Login Items too (approved, or switched off), seen when DotStudio is active again.
         .onChange(of: nudge.pending) { loginStatus = LoginItem.status() }
+        .onReceive(NotificationCenter.default.publisher(for: LoginItem.didChange)) { _ in
+            loginStatus = LoginItem.status()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            loginStatus = LoginItem.status()
+        }
     }
 
     private func setOpenAtLogin(_ on: Bool) {
