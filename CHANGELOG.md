@@ -1,8 +1,12 @@
 # Changelog
 
-## Unreleased
+## 1.5.0-beta.1 — Make your own with AI (beta)
 
 ### New
+- **Commute.** A short film: a penguin in a suit dozes on the train home while the city slides
+  by. Ray traced in Blender and looping seamlessly, it follows the real sun — bright day,
+  golden hour, the city lit up at night — and switches to rain on the windows when it's
+  raining where you are.
 - **Penguin.** A little penguin on a glowing LED panel: it waddles, waves, belly-slides, dances
   and dozes off by its igloo, under snow, stars and a rippling aurora at night or a bright sun by
   day. Every part of the scene can be switched off, and you can swap in your own character image.
@@ -19,6 +23,8 @@
   panel of dots or pixels like Bloom and Penguin, or a port of a Shadertoy you wrote (that
   engine downloads the first time it's needed). If a scene can't be drawn, its style shows a
   calm gradient and the Inspector says why.
+- **Films over AI.** With Blender installed, an assistant can render film scenes like Commute
+  for you — stills to try ideas, then a looping film for your screensaver or wallpaper.
 
 ### Fixed
 - Clock styles in the gallery, and a live wallpaper holding a still frame (On Battery: Still,
