@@ -7,14 +7,18 @@
 //  Rules every fetch keeps: https only, GET only, no body, an ephemeral session (no cookies, no
 //  cache), UA "DotStudio/<version>", 10 s timeout, 256 KB cap, at most 3 redirects each re-checked
 //  against the same policy (and the key header dropped when the host changes). Signals an AI makes
-//  can't reach localhost, *.local, or loopback / private / link-local / ULA addresses. A URL whose
+//  can't reach localhost, *.local, or loopback / private / link-local / ULA addresses — written as
+//  an address, or behind a name that resolves to one (checked before each fetch and redirect, and
+//  the connection's peer after it: "Where a name points" below). A URL whose
 //  query carries a key-like parameter is refused: keys go in `auth`, whose value only the Keychain
 //  holds. Errors are short words ("HTTP 503", "Timed out") — never a URL, a header or a body.
 //
 //  Test hook (DEBUG builds only — compiled out of Release): DOTSTUDIO_SIGNAL_ALLOW_LOCAL=1 also
 //  allows http:// and https:// to 127.0.0.1 / localhost, so tools/mcp-selftest can serve a local
 //  fixture. Every other refusal (http elsewhere, private and link-local addresses, key-like query
-//  parameters) still holds with it on.
+//  parameters) still holds with it on. DOTSTUDIO_SIGNAL_FAKE_DNS (DEBUG only too) replaces the
+//  lookups AI-made fetches make with a fixed table, so the self-test checks the DNS refusals
+//  without a real lookup.
 
 import Foundation
 
@@ -105,23 +109,148 @@ enum SignalPolicy {
             || h.hasSuffix(".lan") || h.hasSuffix(".home.arpa") || !h.contains(".") && !h.contains(":") {
             return "Signals an assistant makes can't reach this Mac or the local network (\(h)). The user can add a signal for a local service themselves in DotStudio ▸ Settings ▸ Signals, or feed a file in signal-files."
         }
+        if isPrivateAddress(h) == true {
+            return "Signals an assistant makes can't reach private, loopback or link-local addresses (\(h))."
+        }
+        return nil
+    }
+
+    /// Whether an IP address (a literal: "10.0.0.1", "fe80::1%en0") is one an AI-made signal may
+    /// not reach: unspecified, loopback, private (10/8, 172.16/12, 192.168/16), CGNAT (100.64/10),
+    /// link-local (169.254/16, fe80::/10), site-local (fec0::/10), ULA (fc00::/7), multicast and
+    /// reserved (224/4 and up, ff00::/8) — and the IPv6 forms that carry an IPv4 address inside
+    /// (::ffff:a.b.c.d, ::a.b.c.d, 64:ff9b::/96 NAT64, 2002::/16 6to4), judged by that address.
+    /// nil = not an IP literal.
+    static func isPrivateAddress(_ literal: String) -> Bool? {
+        let s = literal.split(separator: "%", maxSplits: 1).first.map(String.init) ?? literal   // a zone index
         var v4 = in_addr()
-        if inet_pton(AF_INET, h, &v4) == 1 {
-            let b = withUnsafeBytes(of: v4.s_addr) { Array($0) }   // network order
-            let priv = b[0] == 0 || b[0] == 10 || b[0] == 127 || (b[0] == 169 && b[1] == 254)
-                || (b[0] == 172 && (16...31).contains(b[1])) || (b[0] == 192 && b[1] == 168)
-                || (b[0] == 100 && (64...127).contains(b[1])) || b[0] >= 224
-            return priv ? "Signals an assistant makes can't reach private, loopback or link-local addresses (\(h))." : nil
+        if inet_pton(AF_INET, s, &v4) == 1 {
+            return isPrivateV4(withUnsafeBytes(of: v4.s_addr) { Array($0) })   // network order
         }
         var v6 = in6_addr()
-        if inet_pton(AF_INET6, h, &v6) == 1 {
-            let b = withUnsafeBytes(of: v6) { Array($0) }
-            let loop = b[0..<15].allSatisfy { $0 == 0 } && (b[15] == 1 || b[15] == 0)
-            let linkLocal = b[0] == 0xfe && (b[1] & 0xc0) == 0x80
-            let ula = (b[0] & 0xfe) == 0xfc
-            let mapped = b[0..<10].allSatisfy { $0 == 0 } && b[10] == 0xff && b[11] == 0xff
-            if mapped { return privateHost("\(b[12]).\(b[13]).\(b[14]).\(b[15])") }
-            return loop || linkLocal || ula || b[0] == 0xff ? "Signals an assistant makes can't reach private, loopback or link-local addresses (\(h))." : nil
+        if inet_pton(AF_INET6, s, &v6) == 1 {
+            return isPrivateV6(withUnsafeBytes(of: v6) { Array($0) })
+        }
+        return nil
+    }
+
+    static func isPrivateV4(_ b: [UInt8]) -> Bool {
+        guard b.count == 4 else { return true }
+        return b[0] == 0 || b[0] == 10 || b[0] == 127 || (b[0] == 169 && b[1] == 254)
+            || (b[0] == 172 && (16...31).contains(b[1])) || (b[0] == 192 && b[1] == 168)
+            || (b[0] == 100 && (64...127).contains(b[1])) || b[0] >= 224
+    }
+
+    static func isPrivateV6(_ b: [UInt8]) -> Bool {
+        guard b.count == 16 else { return true }
+        let zeros10 = b[0..<10].allSatisfy { $0 == 0 }
+        if zeros10, b[10] == 0xff, b[11] == 0xff { return isPrivateV4(Array(b[12..<16])) }     // ::ffff:a.b.c.d
+        if zeros10, b[10] == 0, b[11] == 0 {
+            // :: (unspecified) and ::1 (loopback); else the deprecated IPv4-compatible ::a.b.c.d
+            if b[12..<15].allSatisfy({ $0 == 0 }), b[15] <= 1 { return true }
+            return isPrivateV4(Array(b[12..<16]))
+        }
+        if b[0] == 0x00, b[1] == 0x64, b[2] == 0xff, b[3] == 0x9b, b[4..<12].allSatisfy({ $0 == 0 }) {
+            return isPrivateV4(Array(b[12..<16]))                                                // 64:ff9b::/96 (NAT64)
+        }
+        if b[0] == 0x20, b[1] == 0x02 { return isPrivateV4(Array(b[2..<6])) }                    // 2002::/16 (6to4)
+        let linkOrSiteLocal = b[0] == 0xfe && (b[1] & 0x80) == 0x80                              // fe80::/10, fec0::/10
+        let ula = (b[0] & 0xfe) == 0xfc                                                          // fc00::/7
+        return linkOrSiteLocal || ula || b[0] == 0xff                                            // ff00::/8 multicast
+    }
+
+    // MARK: Where a name points (AI-made signals)
+    //
+    // A public NAME can still point at this Mac or the LAN (a DNS record for 10.0.0.5, or one
+    // that changes between two lookups: DNS rebinding), so for an AI-made signal every fetch —
+    // and every redirect — first resolves the host and refuses if ANY address is one of the
+    // above. URLSession then resolves the name again itself; a record that changes in between
+    // (the residual time-of-check gap) is caught after the fact: the address the connection
+    // actually reached (URLSessionTaskMetrics.remoteAddress) is checked too, and a private one
+    // discards the response. What that can't undo is the request itself having reached the LAN
+    // host — a GET without a body, cookies or credentials (only a signal's own key, for a host
+    // that kept its public name long enough to pass the first check). Through an HTTP proxy the
+    // proxy resolves the name, and the peer is the proxy: only the first check applies there.
+
+    /// The addresses a host name resolves to (numeric strings), nil = it doesn't resolve.
+    /// Blocking: never on the main thread. Replaceable for tests; DEBUG builds also honour
+    /// DOTSTUDIO_SIGNAL_FAKE_DNS="host=addr,addr;host2=addr" — a fixed table, no real lookups.
+    static var resolve: (String) -> [String]? = { host in
+        if let table = fakeDNS { return table[host.lowercased()] }
+        return systemResolve(host)
+    }
+
+    /// The DEBUG-only fake resolver's table (see `resolve`). Never honoured in Release.
+    static var fakeDNS: [String: [String]]? {
+        #if DEBUG
+        guard let raw = ProcessInfo.processInfo.environment["DOTSTUDIO_SIGNAL_FAKE_DNS"] else { return nil }
+        var t: [String: [String]] = [:]
+        for entry in raw.split(separator: ";") {
+            let kv = entry.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard kv.count == 2 else { continue }
+            t[kv[0].lowercased()] = kv[1].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        }
+        return t
+        #else
+        return nil
+        #endif
+    }
+
+    static func systemResolve(_ host: String) -> [String]? {
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+        hints.ai_socktype = SOCK_STREAM
+        var res: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, "443", &hints, &res) == 0, let first = res else { return nil }
+        defer { freeaddrinfo(first) }
+        var out: [String] = []
+        var p: UnsafeMutablePointer<addrinfo>? = first
+        while let ai = p {
+            if let sa = ai.pointee.ai_addr, let s = numericAddress(sa, Int(ai.pointee.ai_addrlen)) { out.append(s) }
+            p = ai.pointee.ai_next
+        }
+        return out
+    }
+
+    /// A sockaddr (IPv4 or IPv6) as a numeric string; nil for anything else.
+    static func numericAddress(_ sa: UnsafePointer<sockaddr>, _ len: Int) -> String? {
+        var buf = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN) + 1)
+        switch Int32(sa.pointee.sa_family) {
+        case AF_INET where len >= MemoryLayout<sockaddr_in>.size:
+            var a = sa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr }
+            guard inet_ntop(AF_INET, &a, &buf, socklen_t(buf.count)) != nil else { return nil }
+        case AF_INET6 where len >= MemoryLayout<sockaddr_in6>.size:
+            var a = sa.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { $0.pointee.sin6_addr }
+            guard inet_ntop(AF_INET6, &a, &buf, socklen_t(buf.count)) != nil else { return nil }
+        default:
+            return nil
+        }
+        return String(cString: buf)
+    }
+
+    /// The self-test's local fixture (127.0.0.1 / localhost, DEBUG hook on) — the one loopback
+    /// host the AI policy lets through, and only in a DEBUG build.
+    static func isLocalFixture(_ url: URL?) -> Bool {
+        guard allowLocal, let h = url?.host?.lowercased() else { return false }
+        return h == "127.0.0.1" || h == "localhost"
+    }
+
+    /// The host whose addresses an AI-made fetch of `url` must check first: nil for an IP
+    /// literal (`refusal` judged it already) and for the self-test's local fixture.
+    static func hostToResolve(_ url: URL?) -> String? {
+        guard let raw = url?.host?.lowercased(), !raw.isEmpty else { return nil }
+        let host = raw.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        if isLocalFixture(url) { return nil }
+        if isPrivateAddress(host) != nil { return nil }
+        return host.hasSuffix(".") ? String(host.dropLast()) : host
+    }
+
+    /// Why an AI-made signal may not reach `host` once it's resolved (nil = every address is
+    /// public). Blocking (a DNS lookup): never on the main thread.
+    static func resolvedRefusal(_ host: String, resolve: (String) -> [String]? = SignalPolicy.resolve) -> String? {
+        guard let addrs = resolve(host), !addrs.isEmpty else { return "Host not found" }
+        for a in addrs where isPrivateAddress(a) != false {
+            return "Signals an assistant makes can't reach this Mac or the local network: \(host) points to a private, loopback or link-local address (\(a))."
         }
         return nil
     }
@@ -347,11 +476,24 @@ enum SignalFetcher {
         cfg.timeoutIntervalForRequest = SignalPolicy.timeout
         cfg.timeoutIntervalForResource = SignalPolicy.timeout + 5
         cfg.httpMaximumConnectionsPerHost = 1
-        let delegate = FetchDelegate(signal: s, forAI: forAI, authHeader: s.auth?.placement == .header ? s.auth?.name : nil,
-                                     originalHost: base.host?.lowercased(), started: Date(), completion: completion)
-        let session = URLSession(configuration: cfg, delegate: delegate, delegateQueue: nil)
-        session.dataTask(with: req).resume()
-        session.finishTasksAndInvalidate()
+        let started = Date()
+        let go = { [req] in
+            let delegate = FetchDelegate(signal: s, forAI: forAI, authHeader: s.auth?.placement == .header ? s.auth?.name : nil,
+                                         originalHost: base.host?.lowercased(), started: started, completion: completion)
+            let session = URLSession(configuration: cfg, delegate: delegate, delegateQueue: nil)
+            delegate.queue = session.delegateQueue
+            session.dataTask(with: req).resume()
+            session.finishTasksAndInvalidate()
+        }
+        // An AI-made signal's host name: where it points, first (see "Where a name points").
+        guard forAI, let host = SignalPolicy.hostToResolve(base) else { go(); return }
+        DispatchQueue.global(qos: .utility).async {
+            if let why = SignalPolicy.resolvedRefusal(host) {
+                completion(SignalFetchResult(ms: Int(Date().timeIntervalSince(started) * 1000), error: why))
+                return
+            }
+            go()
+        }
     }
 
     /// Fetch and wait (dotstudio-mcp's test_signal; never on the main thread).
@@ -376,6 +518,13 @@ enum SignalFetcher {
         var tooBig = false
         var status: Int?
         var retryAfter: Double?
+        /// The session's (serial) delegate queue, for work that comes back from elsewhere.
+        var queue: OperationQueue?
+        /// AI-made: the connection's peer was checked (metrics arrived) — and refused, if so.
+        var metricsSeen = false
+        var peerRefused: String?
+        /// The result, held until the peer is checked.
+        var pending: SignalFetchResult?
 
         init(signal: Signal, forAI: Bool, authHeader: String?, originalHost: String?, started: Date,
              completion: @escaping (SignalFetchResult) -> Void) {
@@ -391,7 +540,33 @@ enum SignalFetcher {
             var next = request
             // The key never follows a redirect to another host.
             if let h = authHeader, request.url?.host?.lowercased() != originalHost { next.setValue(nil, forHTTPHeaderField: h) }
-            completionHandler(next)
+            // An AI-made signal: where the new name points, too (off this queue: it's a lookup).
+            guard forAI, let host = SignalPolicy.hostToResolve(request.url) else { completionHandler(next); return }
+            DispatchQueue.global(qos: .utility).async { [self, queue] in
+                let why = SignalPolicy.resolvedRefusal(host)
+                let finish = {
+                    if let why { self.refused = "Redirected somewhere not allowed: " + why; completionHandler(nil) }
+                    else { completionHandler(next) }
+                }
+                if let queue { queue.addOperation(finish) } else { finish() }
+            }
+        }
+
+        /// The address each connection actually reached (see "Where a name points"): a private
+        /// one discards the response. Delivered before didCompleteWithError.
+        func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+            metricsSeen = true
+            guard forAI, peerRefused == nil else { finishIfWaiting(); return }
+            for t in metrics.transactionMetrics where t.resourceFetchType == .networkLoad && !t.isProxyConnection {
+                // The self-test's local fixture (DEBUG hook) is the one loopback peer allowed.
+                if SignalPolicy.isLocalFixture(t.request.url) { continue }
+                guard let addr = t.remoteAddress, !addr.isEmpty else { continue }
+                if SignalPolicy.isPrivateAddress(addr) != false {
+                    peerRefused = "Signals an assistant makes can't reach this Mac or the local network: the server's address turned out to be private, loopback or link-local (\(addr))."
+                    break
+                }
+            }
+            finishIfWaiting()
         }
 
         func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
@@ -412,25 +587,62 @@ enum SignalFetcher {
         }
 
         func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+            guard completion != nil, pending == nil else { return }
+            let r = result(error)
+            // An AI-made fetch answers only once the peer's address is checked (metrics come
+            // first; should they not, it answers after a moment without the body).
+            if forAI, !metricsSeen {
+                pending = r
+                // (Holds the delegate: the session lets go of it once the task is done.)
+                DispatchQueue.global().asyncAfter(deadline: .now() + 2) { [self, queue] in
+                    let late = { self.finish(peerUnknown: true) }
+                    if let queue { queue.addOperation(late) } else { late() }
+                }
+                return
+            }
+            deliver(r)
+        }
+
+        /// Metrics arrived after the task completed.
+        func finishIfWaiting() {
+            if pending != nil { finish(peerUnknown: false) }
+        }
+
+        private func finish(peerUnknown: Bool) {
+            guard var r = pending else { return }
+            pending = nil
+            if peerUnknown, peerRefused == nil, r.error == nil {
+                r = SignalFetchResult(status: r.status, ms: r.ms, error: "Couldn't check the server's address")
+            }
+            deliver(r)
+        }
+
+        private func deliver(_ r: SignalFetchResult) {
             guard let completion else { return }
             self.completion = nil
+            if let peerRefused {
+                // Nothing of what a private address sent goes anywhere.
+                completion(SignalFetchResult(status: r.status, ms: r.ms, error: peerRefused))
+                return
+            }
+            completion(r)
+        }
+
+        private func result(_ error: Error?) -> SignalFetchResult {
             let ms = Int(Date().timeIntervalSince(started) * 1000)
             var r = SignalFetchResult(status: status, ms: ms, bytes: data.count, retryAfter: retryAfter)
-            if tooBig { r.error = "Larger than 256 KB"; completion(r); return }
-            if let refused { r.error = refused; completion(r); return }
+            if tooBig { r.error = "Larger than 256 KB"; return r }
+            if let refused { r.error = refused; return r }
             if let e = error as? URLError {
                 r.error = Self.words(e)
-                completion(r)
-                return
+                return r
             } else if error != nil {
                 r.error = "Couldn't connect"
-                completion(r)
-                return
+                return r
             }
             guard let code = status, (200..<300).contains(code) else {
                 r.error = status.map { "HTTP \($0)" } ?? "No answer"
-                completion(r)
-                return
+                return r
             }
             let parsed = SignalExtract.parse(data, preferJSON: !(signal.pointer ?? "").isEmpty)
             if let j = parsed.json { r.outline = JSONPointer.outline(j) }
@@ -442,7 +654,7 @@ enum SignalFetcher {
             case .problem(let why):
                 r.error = why
             }
-            completion(r)
+            return r
         }
 
         /// A URLError in a few words (its own description can carry the URL — and so a key).

@@ -1,11 +1,14 @@
 //  AIBridgeHost.swift — the app's end of the AI bridge (Shared/AI/AIBridge.swift).
 //
-//  dotstudio-mcp sends each library change here while the app runs; it's applied on the main
-//  thread through AppModel / WallpaperSlot — exactly the paths the gallery's own buttons take —
-//  so the UI, the saver's library.json and the live wallpaper all follow at once. Changes to
-//  what plays honour Settings ▸ AI ("Let AI change what plays") and show a small notice with
-//  Undo (AINoticePanel). The app's own settings (get/update_settings, app_action) are in
-//  AIBridgeSettings.swift.
+//  dotstudio-mcp sends each library change here while the app runs. What a request does — its
+//  validation, the Settings ▸ AI gates ("Let AI change what plays", "Let AI add live data
+//  signals"), its refusals and the edit itself — is LibraryOps.apply (Shared/AI/LibraryOps.swift),
+//  the same function dotstudio-mcp runs on the files when the app isn't running. Here, on the main
+//  thread, it runs on copies of the in-memory library and the wallpaper's settings, and the app
+//  adopts the result: AppModel saves it (the UI and the saver's library.json follow), the live
+//  wallpaper takes its new choice, the When rules re-decide, and changes to what plays show a
+//  small notice with Undo (AINoticePanel). The app's own settings (get/update_settings,
+//  app_action) are in AIBridgeSettings.swift.
 
 import AppKit
 import Combine
@@ -42,87 +45,47 @@ final class AIBridgeHost {
     private func handle(_ req: BridgeRequest) -> BridgeResponse {
         guard let model else { return .fail("DotStudio isn't ready yet") }
         let who = req.client ?? "AI"
-        func name(_ id: UUID?) -> String { id.flatMap { model.preset($0)?.name } ?? "—" }
         Breadcrumbs.note("AI bridge: \(req.op.rawValue) from \(who)")
         switch req.op {
         case .ping:
             return BridgeResponse(ok: true, appVersion: appVersion)
-        case .upsertStyle:
-            guard var p = req.preset else { return .fail("no style given") }
-            if let n = model.library.newerBuildStyle(p.id) { return .fail(Library.newerBuildMessage(n.name)) }
-            if let i = model.library.presets.firstIndex(where: { $0.id == p.id }) {
-                model.library.presets[i] = p
-                model.save()
-                return BridgeResponse(ok: true, id: p.id, name: p.name, appVersion: appVersion, message: "Updated “\(p.name)”.")
-            }
-            p.name = model.library.uniqueName(p.name)
-            model.library.presets.append(p)
-            model.save()
-            return BridgeResponse(ok: true, id: p.id, name: p.name, appVersion: appVersion, message: "Added “\(p.name)” to the library.")
-        case .duplicateStyle:
-            if let id = req.id, let n = model.library.newerBuildStyle(id) { return .fail(Library.newerBuildMessage(n.name)) }
-            guard let id = req.id, model.preset(id) != nil, let copy = model.duplicate(id) else { return .fail("no such style") }
-            if let n = req.name, let i = model.library.presets.firstIndex(where: { $0.id == copy }) {
-                model.library.presets[i].name = model.library.uniqueName(n)
-                model.save()
-            }
-            return BridgeResponse(ok: true, id: copy, name: name(copy), appVersion: appVersion, message: "Duplicated as “\(name(copy))”.")
-        case .deleteStyle:
-            if let id = req.id, let n = model.library.newerBuildStyle(id) { return .fail(Library.newerBuildMessage(n.name)) }
-            guard let id = req.id, let p = model.preset(id) else { return .fail("no such style") }
-            guard model.library.presets.count > 1 else { return .fail("“\(p.name)” is the only style; the library can't be empty.") }
-            model.delete(id)
-            return BridgeResponse(ok: true, id: id, name: p.name, appVersion: appVersion, message: "Deleted “\(p.name)”.")
-        case .setScreensaver, .setWallpaper:
-            let settings = AISettings.load(store: model.store.baseDir)
-            guard settings.allowPlaybackChanges else { return .fail(Self.playbackOff) }
-            let undo = snapshot(model)
-            let r = req.op == .setScreensaver ? screensaver(req, model) : wallpaper(req, model)
-            if r.ok, settings.showNotices, let msg = r.message {
-                AINoticePanel.shared.show("\(who): \(msg)", undo: undo)
-            }
-            return r
         case .getSettings:
             return BridgeResponse(ok: true, appVersion: appVersion, settings: settingsNow(model))
         case .updateSettings:
             return updateSettings(req, model, who: who)
         case .appAction:
             return appAction(req.mode ?? "", model)
-        case .upsertSignal, .deleteSignal:
-            let settings = AISettings.load(store: model.store.baseDir)
-            guard settings.allowSignals else { return .fail(SignalEdits.signalsOff) }
-            let undo = snapshot(model)
-            let r = signalEdit(req, model)
-            if r.ok, settings.showNotices, let msg = r.message { AINoticePanel.shared.show("\(who): \(msg)", undo: undo) }
-            return r
-        case .upsertRule, .deleteRule:
-            let settings = AISettings.load(store: model.store.baseDir)
-            guard settings.allowPlaybackChanges else { return .fail(Self.playbackOff) }
-            let undo = snapshot(model)
-            // The same pure edit as dotstudio-mcp's offline path, on the app's library.
-            var lib = model.library
-            var r = SignalEdits.run(req, library: &lib, settings: settings)
-            if r.ok {
-                model.library = lib
-                model.save()
-                SignalService.shared.evaluate()     // decide at once, not at the next minute
-                r.appVersion = appVersion
-                if settings.showNotices, let msg = r.message { AINoticePanel.shared.show("\(who): \(msg)", undo: undo) }
-            }
-            return r
+        case .upsertStyle, .deleteStyle, .duplicateStyle, .setScreensaver, .setWallpaper,
+             .upsertSignal, .deleteSignal, .upsertRule, .deleteRule:
+            return libraryEdit(req, model, who: who)
         case .testSignal:
             return .fail("testSignal is answered asynchronously")
         }
     }
 
-    /// Add / change / delete a signal (AI-made: marked createdBy "ai"; a key is never part of it).
-    private func signalEdit(_ req: BridgeRequest, _ model: AppModel) -> BridgeResponse {
+    /// A library change: LibraryOps decides and edits (as dotstudio-mcp does on the files); the
+    /// app adopts the result.
+    private func libraryEdit(_ req: BridgeRequest, _ model: AppModel, who: String) -> BridgeResponse {
+        let settings = AISettings.load(store: model.store.baseDir)
+        let w = WallpaperController.shared
+        let ctx = LibraryOps.Context(displays: DisplayRoster.shared.displays.map { DisplayEntry(key: $0.key, name: $0.name, builtIn: $0.isBuiltIn) },
+                                     settings: settings, live: SignalService.shared.live)
         var lib = model.library
-        var r = SignalEdits.run(req, library: &lib, settings: AISettings.load(store: model.store.baseDir))
+        var wall = w.settings.choice
+        let wallBefore = wall
+        let undo = LibraryOps.isNoticed(req.op) ? snapshot(model) : nil
+        var r = LibraryOps.apply(req, library: &lib, wallpaper: &wall, ctx)
         guard r.ok else { return r }
-        model.library = lib
-        model.save()
+        model.adoptAIEdit(lib, deleted: req.op == .deleteStyle ? req.id : nil,
+                          duplicate: req.op == .duplicateStyle ? r.id : nil)    // saves
+        if wall != wallBefore { w.adopt(wall) }
+        switch req.op {
+        case .upsertSignal, .deleteSignal, .upsertRule, .deleteRule:
+            SignalService.shared.evaluate()     // decide at once, not at the next minute
+        default: break
+        }
         r.appVersion = appVersion
+        if let undo, settings.showNotices, let msg = r.message { AINoticePanel.shared.show("\(who): \(msg)", undo: undo) }
         return r
     }
 
@@ -145,12 +108,17 @@ final class AIBridgeHost {
         }
     }
 
-    static let playbackOff = "The user has turned off “Let AI change what plays” in DotStudio ▸ Settings ▸ AI. Styles can still be created; ask the user to set it themselves, or to turn that setting on."
+    static var playbackOff: String { LibraryOps.playbackOff }
 
     /// What plays now, to put back on Undo.
     private func snapshot(_ model: AppModel) -> () -> Void {
         let lib = model.library
-        let wall = WallpaperController.shared.settings
+        let wall = WallpaperController.shared.settings.choice
+        // Scene inputs bound to signals (delete_signal with force unbinds them), by style and effect.
+        var bindings: [UUID: [UUID: [String: InputBinding]?]] = [:]
+        for p in lib.presets where p.effects.contains(where: { $0.inputs != nil }) {
+            bindings[p.id] = Dictionary(uniqueKeysWithValues: p.effects.map { ($0.id, $0.inputs) })
+        }
         return { [weak model] in
             guard let model else { return }
             model.library.activeID = lib.activeID
@@ -159,89 +127,15 @@ final class AIBridgeHost {
             model.library.displayStyles = lib.displayStyles
             model.library.rules = lib.rules          // When rules and signals are part of what plays
             model.library.signals = lib.signals
+            for i in model.library.presets.indices {
+                guard let was = bindings[model.library.presets[i].id] else { continue }
+                for j in model.library.presets[i].effects.indices {
+                    if let inputs = was[model.library.presets[i].effects[j].id] { model.library.presets[i].effects[j].inputs = inputs }
+                }
+            }
             model.save()
-            let w = WallpaperController.shared
-            if !wall.enabled {
-                if w.settings.enabled { w.stop() }
-            } else if wall.followsScreensaver {
-                w.update { $0.displayStyles = wall.displayStyles }
-                w.setFollowsScreensaver(true)
-            } else if let id = wall.presetID {
-                w.update { $0.displayStyles = wall.displayStyles }
-                w.use(id)
-            }
-        }
-    }
-
-    private func display(_ key: String?) -> DisplayInfo? {
-        guard let key else { return nil }
-        return DisplayRoster.shared.display(key)
-    }
-
-    private func screensaver(_ req: BridgeRequest, _ model: AppModel) -> BridgeResponse {
-        let mode = req.mode ?? "only"
-        func name(_ id: UUID?) -> String { id.flatMap { model.preset($0)?.name } ?? "—" }
-        if mode == "unpin" {
-            guard let d = display(req.display) else { return .fail("No connected display has that key. Call list_displays.") }
-            model.setScreensaverStyle(nil, on: d)
-            return BridgeResponse(ok: true, appVersion: appVersion, message: "\(d.name) plays the screensaver lineup again.")
-        }
-        if mode == "dayOnly" {
-            model.setNight(nil)
-            return BridgeResponse(ok: true, appVersion: appVersion, message: "No separate night screensaver any more.")
-        }
-        guard let id = req.id, model.preset(id) != nil else { return .fail("no such style") }
-        switch mode {
-        case "only":
-            if req.display != nil {
-                guard let d = display(req.display) else { return .fail("No connected display has that key. Call list_displays.") }
-                model.setScreensaverStyle(id, on: d)
-                return BridgeResponse(ok: true, id: id, name: name(id), appVersion: appVersion, message: "Set “\(name(id))” as the screensaver on \(d.name).")
-            }
-            model.playAsScreensaverEverywhere(id)
-            return BridgeResponse(ok: true, id: id, name: name(id), appVersion: appVersion, message: "Set “\(name(id))” as your screensaver.")
-        case "add":
-            model.addToPlaylist(id)
-            return BridgeResponse(ok: true, id: id, name: name(id), appVersion: appVersion, message: "Added “\(name(id))” to the screensaver rotation.")
-        case "remove":
-            guard model.screensaverLineup.playlist.count > 1, model.isInPlaylist(id) else {
-                return .fail("“\(name(id))” isn't in the rotation, or it's the only style playing (something always plays).")
-            }
-            model.removeFromPlaylist(id)
-            return BridgeResponse(ok: true, id: id, name: name(id), appVersion: appVersion, message: "Took “\(name(id))” out of the screensaver rotation.")
-        case "night":
-            model.setNight(id)
-            return BridgeResponse(ok: true, id: id, name: name(id), appVersion: appVersion, message: "Set “\(name(id))” as the screensaver after sunset.")
-        default:
-            return .fail("unknown screensaver mode \(mode)")
-        }
-    }
-
-    private func wallpaper(_ req: BridgeRequest, _ model: AppModel) -> BridgeResponse {
-        let slot = WallpaperSlot.shared
-        func name(_ id: UUID?) -> String { id.flatMap { model.preset($0)?.name } ?? "—" }
-        switch req.mode ?? "set" {
-        case "off":
-            slot.stop()
-            return BridgeResponse(ok: true, appVersion: appVersion, message: "Turned the live wallpaper off.")
-        case "follow":
-            WallpaperController.shared.setFollowsScreensaver(true)
-            return BridgeResponse(ok: true, appVersion: appVersion, message: "The live wallpaper now matches the screensaver.")
-        case "unpin":
-            guard let d = display(req.display) else { return .fail("No connected display has that key. Call list_displays.") }
-            slot.set(nil, on: d)
-            return BridgeResponse(ok: true, appVersion: appVersion, message: "\(d.name) shows the shared wallpaper again.")
-        case "set":
-            guard let id = req.id, model.preset(id) != nil else { return .fail("no such style") }
-            if req.display != nil {
-                guard let d = display(req.display) else { return .fail("No connected display has that key. Call list_displays.") }
-                slot.set(id, on: d)
-                return BridgeResponse(ok: true, id: id, name: name(id), appVersion: appVersion, message: "Set “\(name(id))” as the live wallpaper on \(d.name).")
-            }
-            slot.setEverywhere(id)
-            return BridgeResponse(ok: true, id: id, name: name(id), appVersion: appVersion, message: "Set “\(name(id))” as your live wallpaper.")
-        default:
-            return .fail("unknown wallpaper mode")
+            WallpaperController.shared.adopt(wall)
+            SignalService.shared.evaluate()
         }
     }
 }

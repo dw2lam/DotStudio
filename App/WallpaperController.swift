@@ -251,6 +251,22 @@ final class WallpaperController: ObservableObject {
         }
     }
 
+    /// Take a choice decided elsewhere — LibraryOps (an assistant's set_wallpaper, delete_style)
+    /// or a deleted style (WallpaperChoice.styleDeleted) — as use / stop / setFollowsScreensaver
+    /// / setDisplayStyle would leave it: off tears down; anything picked un-pauses and starts;
+    /// only taking display pins away changes the settings alone.
+    func adopt(_ c: WallpaperChoice) {
+        let old = settings.choice
+        guard c != old else { return }
+        update { $0.choice = c }
+        if !c.enabled {
+            if old.enabled { stop() }
+        } else if !c.onlyUnpins(from: old) {
+            userPaused = false
+            start()
+        }
+    }
+
     /// Every display plays the shared pick again.
     func clearDisplayStyles() {
         update { $0.displayStyles = [:] }

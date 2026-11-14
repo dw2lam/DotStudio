@@ -1169,16 +1169,27 @@ extension Preset {
     var customSceneIDs: [String] { effects.compactMap { $0.enabled && $0.kind == .custom ? $0.custom?.id : nil } }
 
     /// Whether a Custom Scene in this style reads `feature` ("sun", "weather", "music"), from the
-    /// manifests read so far (CustomScenes.knownManifest).
+    /// manifests read so far (CustomScenes.knownManifest). "weather" means the LIVE weather (the
+    /// app fetches it only for a style that reads it): a film whose Weather menu is pinned to a
+    /// condition (ds.weather ≠ Live, CustomFilm.pinnedCondition) never reads it, whatever its
+    /// manifest declares.
     func customUses(_ feature: String) -> Bool {
-        customSceneIDs.contains {
-            guard let m = CustomScenes.knownManifest(id: $0) else { return false }
-            if m.usesSet.contains(feature) { return true }
-            // a film follows the sun, and the weather when it has a rain clip
+        effects.contains { inst in
+            guard inst.enabled, inst.kind == .custom, let id = inst.custom?.id,
+                  let m = CustomScenes.knownManifest(id: id) else { return false }
             if m.engine.id == "film" {
-                return feature == "sun" || (feature == "weather" && (m.layers != nil || (m.clips ?? []).contains { $0.variant.lowercased() == "rain" }))
+                // a film follows the sun, and the live weather when it has a rain clip or light
+                // layers — unless the style pins its weather
+                switch feature {
+                case "sun": return true
+                case "weather":
+                    guard CustomFilm.pinnedCondition(inst) == nil else { return false }
+                    return m.usesSet.contains(feature) || m.layers != nil
+                        || (m.clips ?? []).contains { $0.variant.lowercased() == "rain" }
+                default: break
+                }
             }
-            return false
+            return m.usesSet.contains(feature)
         }
     }
 

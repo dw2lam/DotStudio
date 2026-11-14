@@ -682,6 +682,128 @@ do {
           "only files in our folder count as ours")
 }
 
+// MARK: Signals: where an AI-made signal's host points (Shared/Signals/Fetch/SignalFetch.swift)
+// A fake resolver only: no real DNS lookup.
+
+print("signals: DNS policy")
+do {
+    for a in ["10.1.2.3", "127.0.0.1", "0.0.0.0", "169.254.169.254", "172.20.0.1", "192.168.1.5", "100.100.100.100",
+              "224.0.0.251", "255.255.255.255", "::", "::1", "fe80::1", "fe80::1%en0", "fec0::1", "fd12:3456::1", "fc00::1",
+              "ff02::1", "::ffff:192.168.1.1", "::10.0.0.1", "64:ff9b::a00:1", "2002:c0a8:0101::1"] {
+        check(SignalPolicy.isPrivateAddress(a) == true, "private / local: \(a)")
+    }
+    for a in ["93.184.216.34", "1.1.1.1", "172.32.0.1", "100.128.0.1", "2606:4700::1111", "::ffff:8.8.8.8", "64:ff9b::808:808", "2002:0808:0808::1"] {
+        check(SignalPolicy.isPrivateAddress(a) == false, "public: \(a)")
+    }
+    check(SignalPolicy.isPrivateAddress("example.com") == nil, "a name isn't an address")
+    let table: [String: [String]] = ["public.example": ["93.184.216.34", "2606:2800:220:1::1"],
+                                     "rebind.example": ["10.0.0.5"],
+                                     "mixed.example": ["93.184.216.34", "192.168.0.10"],
+                                     "v6local.example": ["fd00::7"],
+                                     "mapped.example": ["::ffff:127.0.0.1"],
+                                     "junk.example": ["not-an-address"]]
+    var asked: [String] = []
+    let fake: (String) -> [String]? = { asked.append($0); return table[$0] }
+    check(SignalPolicy.resolvedRefusal("public.example", resolve: fake) == nil, "a name with only public addresses: allowed")
+    for h in ["rebind.example", "mixed.example", "v6local.example", "mapped.example", "junk.example"] {
+        check(SignalPolicy.resolvedRefusal(h, resolve: fake)?.contains("local network") == true, "\(h): refused (ANY private address)")
+    }
+    check(SignalPolicy.resolvedRefusal("nowhere.example", resolve: fake) == "Host not found", "a name that doesn't resolve: Host not found")
+    check(asked.count == 7, "every check asked the (fake) resolver")
+    check(SignalPolicy.hostToResolve(URL(string: "https://api.example.com/x")) == "api.example.com"
+          && SignalPolicy.hostToResolve(URL(string: "https://API.Example.com./x")) == "api.example.com",
+          "names are resolved (lowercased, trailing dot dropped)")
+    check(SignalPolicy.hostToResolve(URL(string: "https://93.184.216.34/x")) == nil
+          && SignalPolicy.hostToResolve(URL(string: "https://[2606:4700::1111]/x")) == nil,
+          "IP literals aren't looked up (refusal() judges them as written)")
+}
+
+// MARK: Live weather: only what actually reads it (Shared/Weather/WeatherFeed.swift)
+
+print("weather: who needs the live feed")
+do {
+    let store = SharedStore(role: .app).baseDir    // DOTSTUDIO_STORE_DIR: run.sh's temp dir
+    var lib = DefaultPresets.makeLibrary()
+    func ocean(_ weather: Double, enabled: Bool = true) -> Preset {
+        var e = EffectInstance(.oceanHorizon)
+        e.params["weather"] = weather
+        e.enabled = enabled
+        return Preset(name: "Ocean \(weather)", effects: [e])
+    }
+    check(WeatherLink.followsLive(ocean(0)), "Ocean Horizon, Weather Live: follows the live weather")
+    check(!WeatherLink.followsLive(ocean(2)) && !WeatherLink.followsLive(ocean(10)), "…pinned to a condition: doesn't")
+    check(!WeatherLink.followsLive(ocean(0, enabled: false)), "…a disabled scene doesn't")
+    lib.presets = [ocean(2)]
+    lib.rules = nil
+    check(!WeatherLink.needed(by: lib, store: store), "a library of pinned weather: no fetch")
+    lib.presets.append(ocean(0))
+    check(WeatherLink.needed(by: lib, store: store), "…one Live style: fetch")
+    lib.presets = [ocean(3)]
+    lib.rules = [PlayRule(name: "Rainy", when: RuleCondition(all: [RuleClause(signal: "weather.condition", op: .eq, value: .string("rain"))]),
+                          play: [lib.presets[0].id])]
+    check(WeatherLink.needed(by: lib, store: store), "…a When rule on weather.*: fetch")
+    lib.rules![0].enabled = false
+    check(!WeatherLink.needed(by: lib, store: store), "…the rule disabled: no fetch")
+    lib.rules = nil
+
+    // A film that follows the weather (Commute: a rain clip, uses weather) — unless the style pins it.
+    if let m = CustomScenes.manifest(id: "commute-5e7a1c0d", store: store) {
+        var film = Preset.customScene(m)
+        lib.presets = [film]
+        check(WeatherLink.followsLive(film) && WeatherLink.needed(by: lib, store: store), "a film on Live weather: follows it, fetch")
+        film.effects[0].params["ds.weather"] = 7      // Rain, pinned
+        lib.presets = [film]
+        check(!WeatherLink.followsLive(film) && !film.customUses("weather") && !WeatherLink.needed(by: lib, store: store),
+              "the same film pinned to Rain: no live weather (although its manifest uses it)")
+        check(film.customUses("sun"), "…it still follows the sun")
+    } else {
+        check(false, "the built-in Commute film package is readable")
+    }
+}
+
+// MARK: AI library edits: WallpaperChoice (Shared/AI/LibraryOps.swift)
+
+print("AI edits: the wallpaper choice")
+do {
+    let lib = DefaultPresets.makeLibrary()
+    let a = lib.presets[0].id, b = lib.presets[1].id
+    let json: [String: Any] = ["enabled": true, "presetID": a.uuidString, "frameRate": 120, "futureField": "kept",
+                               "displayStyles": ["LG": ["presetID": b.uuidString, "name": "LG"]]]
+    var c = WallpaperChoice(json: json)
+    check(c.enabled && c.presetID == a && !c.followsScreensaver && c.displayStyles["LG"]?.presetID == b, "reads wallpaper.json's fields")
+    c.displayStyles = [:]
+    c.presetID = nil
+    let back = c.merged(into: json)
+    check(back["futureField"] as? String == "kept" && back["frameRate"] as? Int == 120 && back["displayStyles"] == nil
+          && back["presetID"] == nil && back["enabled"] as? Bool == true, "writes its fields back over the rest (unknown ones kept)")
+
+    // A deleted shared pick: a connected display's own style keeps it going, else it stops.
+    var after = lib
+    after.removePreset(a)
+    var d = WallpaperChoice(enabled: true, presetID: a, displayStyles: ["LG": DisplayPin(presetID: b, name: "LG")])
+    d.styleDeleted(a, in: after, connected: ["LG"])
+    check(d.enabled && d.presetID != a && d.presetID != nil, "deleted shared pick, LG keeps its own: the others move on")
+    var e = WallpaperChoice(enabled: true, presetID: a)
+    e.styleDeleted(a, in: after, connected: ["LG"])
+    check(!e.enabled, "deleted shared pick, nothing else: the wallpaper stops")
+    var f = WallpaperChoice(enabled: true, presetID: a, followsScreensaver: true, displayStyles: ["LG": DisplayPin(presetID: a, name: "LG")])
+    f.styleDeleted(a, in: after, connected: ["LG"])
+    check(f.enabled && f.followsScreensaver && f.displayStyles.isEmpty, "following the screensaver: stays on; the dead pin goes")
+
+    // A refusal leaves nothing half done.
+    var l2 = lib
+    var w2 = WallpaperChoice()
+    var settings = AISettings()
+    settings.allowPlaybackChanges = false
+    let ctx = LibraryOps.Context(displays: [DisplayEntry(key: "LG", name: "LG", builtIn: false)], settings: settings, live: nil)
+    let r = LibraryOps.apply(BridgeRequest(op: .setWallpaper, id: a, mode: "set"), library: &l2, wallpaper: &w2, ctx)
+    check(!r.ok && r.error == LibraryOps.playbackOff && l2 == lib && w2 == WallpaperChoice(), "gated: refused, nothing changed")
+    settings.allowPlaybackChanges = true
+    let ok2 = LibraryOps.Context(displays: ctx.displays, settings: settings, live: nil)
+    let u = LibraryOps.apply(BridgeRequest(op: .setScreensaver, display: "NOPE", mode: "unpin"), library: &l2, wallpaper: &w2, ok2)
+    check(!u.ok && u.error?.contains("NOPE") == true, "unpin an unknown display: refused")
+}
+
 // MARK: A real still (offscreen render + HEIC write; nothing is set anywhere)
 
 print("real still")
