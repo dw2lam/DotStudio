@@ -560,8 +560,13 @@ def same_guide(gid, path):
     return text(c.call("read_guide", {"id": gid})).strip() == open(path).read().strip()
 
 
+def engine_dir(eid):    # the built-in engine's (newest) version folder: film is 1.1
+    vs = [v for v in os.listdir(os.path.join(ROOT, "Shared", "Engines", eid)) if not v.startswith(".")]
+    return os.path.join(ROOT, "Shared", "Engines", eid, max(vs, key=lambda v: [int(x) for x in v.split(".")]))
+
+
 for eid in ("metal", "cells", "film"):
-    check(same_guide(f"engines/{eid}", os.path.join(ROOT, "Shared", "Engines", eid, "1", "guide.md")),
+    check(same_guide(f"engines/{eid}", os.path.join(engine_dir(eid), "guide.md")),
           f"read_guide engines/{eid} is the engine's own guide.md (one source)")
 check(same_guide("engines/shadertoy", os.path.join(ROOT, "tools", "engines", "shadertoy", "1", "guide.md")),
       "read_guide engines/shadertoy is the pulled engine's guide")

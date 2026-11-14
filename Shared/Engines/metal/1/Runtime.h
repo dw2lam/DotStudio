@@ -2,8 +2,8 @@
 //  DSContext from the renderer's uniforms. Layout (CustomSceneLink.fill, CustomScenes.swift):
 //    u.scene[0…3]  p[0…15]                 u.scene[4]  sun (elevation°, azimuth°, isDay, live)
 //    u.scene[5]    weather (cloud, rain, snow, fog)
-//    u.scene[6]    (wind 0…1, seed 0…1, step fps (0 = smooth), 0)
-//    u.scene[7]    music (playing, level, 0, 0)       u.scene[8]  the engine's own params
+//    u.scene[6]    (wind 0…1, seed 0…1, step fps (0 = smooth), storm 0…1)
+//    u.scene[7]    music (playing, level), then weather (gust 0…1, condition index)       u.scene[8]  the engine's own params
 //    u.musicPal0…2 the album art's palette (.a = 1 when present)
 
 #ifndef DOTSTUDIO_RUNTIME_H
@@ -28,6 +28,8 @@ static inline DSContext ds_context(constant FXUniforms& u, texture2d<float> a0, 
     c.weather.cloud = saturate(u.scene[5].x); c.weather.rain = saturate(u.scene[5].y);
     c.weather.snow = saturate(u.scene[5].z); c.weather.fog = saturate(u.scene[5].w);
     c.weather.wind = saturate(u.scene[6].x);
+    c.weather.storm = saturate(u.scene[6].w); c.weather.gust = saturate(u.scene[7].z);
+    c.weather.condition = clamp(u.scene[7].w, 0.0, 9.0);
     c.music.playing = u.scene[7].x > 0.5; c.music.level = saturate(u.scene[7].y);
     float3 grey = float3(0.5);
     c.music.a = u.musicPal0.a > 0.5 ? u.musicPal0.rgb : grey;
