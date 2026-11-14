@@ -50,10 +50,8 @@ struct StyleTile: View, Equatable {
     let location: GeoPoint?
 
     @State private var hovering: Bool
-    /// The pointer is over the tile (hover effects wait while the gallery scrolls). A box, not
-    /// a state value: tiles sliding under the pointer during a scroll flip it, and nothing on
-    /// screen depends on it until the scroll ends — so it never re-renders the tile.
-    @State private var pointer = PointerBox()
+    /// The pointer is over the tile (hover effects wait while the gallery scrolls).
+    @State private var pointerInside = false
     @State private var live = false
     @State private var confirmDelete = false
     /// The selection as of the last render (a ring appearing now was just selected: it
@@ -101,15 +99,15 @@ struct StyleTile: View, Equatable {
             .background {   // DEV harness only (ClickProbe)
                 if TileProbe.enabled {
                     TileProbeReporter(id: preset.id, select: select, open: open,
-                                      hover: { h in pointer.inside = h; setHover(h) })
+                                      hover: { h in pointerInside = h; setHover(h) })
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: Self.radius, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: Self.radius, style: .continuous)
                 .strokeBorder(.white.opacity(0.10), lineWidth: 1))
             .overlay { selectionRing }
-            .shadow(color: .black.opacity(Exp.has("noshadow") ? 0 : hovering ? 0.28 : 0.14),
-                    radius: Exp.has("noshadow") ? 0 : hovering ? 18 : 6, y: hovering ? 10 : 3)
+            .shadow(color: .black.opacity(hovering ? 0.28 : 0.14),
+                    radius: hovering ? 18 : 6, y: hovering ? 10 : 3)
             .scaleEffect(hovering && !reduceMotion ? 1.025 : 1)
             .offset(y: hovering && !reduceMotion ? -2 : 0)
 
@@ -122,7 +120,7 @@ struct StyleTile: View, Equatable {
             wasSelected = now
         }
         .onHover { h in
-            pointer.inside = h
+            pointerInside = h
             // While the gallery scrolls, tiles slide under a still pointer: no lift, no action
             // bar, no live preview spinning up per tile — they catch up when the scroll ends.
             if ScrollActivity.isScrolling && h { return }
@@ -131,14 +129,14 @@ struct StyleTile: View, Equatable {
         .onReceive(ScrollActivity.changes) { scrolling in
             if scrolling {
                 if hovering && DemoHooks.hoverName != preset.name { setHover(false) }
-            } else if pointer.inside != hovering {
-                setHover(pointer.inside)
+            } else if pointerInside != hovering {
+                setHover(pointerInside)
             }
         }
         .onTapGesture(count: 2) { open() }
         .onTapGesture { select() }
         .contextMenu { TileMenu(model: model, preset: preset, lineup: lineup, confirmDelete: $confirmDelete) }
-        .help(Exp.has("nohelp") ? "" : "\(preset.name) — double-click to edit")
+        .help("\(preset.name) — double-click to edit")
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(Text("\(preset.name), \(summary ?? (preset.isScene ? "Scene" : "Look"))"))
@@ -217,11 +215,6 @@ struct StyleTile: View, Equatable {
         if preset.isScene { return names.count > 1 ? names.dropFirst().joined(separator: " · ") : nil }
         return names.isEmpty ? "Source only" : names.joined(separator: " · ")
     }
-}
-
-/// Where the pointer is, kept without invalidating the view that owns it.
-final class PointerBox {
-    var inside = false
 }
 
 // MARK: - Selection ring

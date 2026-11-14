@@ -42,7 +42,6 @@ struct ContentView: View {
         .stillContext(model)   // what every StyleThumb needs, so none of them observes the model
         .background {
             GalleryBackdrop(presetID: editing?.id ?? model.nowPlayingID)
-                .opacity(Exp.has("nobackdrop") ? 0 : 1)
                 .ignoresSafeArea()
         }
         .environment(\.heroNamespace, reduceMotion ? nil : hero)

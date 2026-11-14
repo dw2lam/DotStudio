@@ -21,7 +21,7 @@ extension View {
         // Offscreen UI shots (Shots.swift): Liquid Glass draws nothing in a never-ordered-in
         // window, so cards and capsules vanished from the renders and their edges couldn't be
         // judged. There the material fallback stands in, so the shapes are visible.
-        if #available(macOS 26, *), !OffscreenCapture.isActive, !Exp.has("noglass") {
+        if #available(macOS 26, *), !OffscreenCapture.isActive {
             self.glassEffect(makeGlass(style, tint: tint, interactive: interactive), in: shape)
         } else {
             self.background {
@@ -131,7 +131,7 @@ extension View {
     /// Softens where scrolling content meets the toolbar (macOS 26).
     @ViewBuilder
     func softScrollEdges() -> some View {
-        if #available(macOS 26, *), !Exp.has("noedge") { self.scrollEdgeEffectStyle(.soft, for: .top) } else { self }
+        if #available(macOS 26, *) { self.scrollEdgeEffectStyle(.soft, for: .top) } else { self }
     }
 
     /// No edge effects on a scroll view nested in another (a sideways strip of chips): it
