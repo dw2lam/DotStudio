@@ -157,7 +157,7 @@ Everything in DotStudio's Settings window, the Screensaver card's Playlist menu 
 | `wallpaper` | `on`, `sameAsScreensaver`, `style`, `frameRate` (`balanced`, `smooth`), `quality`, `onBattery` (`efficient`, `full`, `still`), `lockScreenPicture` | `on`, `sameAsScreensaver`, `style`, `lockScreenPicture` change what plays; `style` works like the Settings pop-up (picked while off: only remembered). Per display: `set_wallpaper` |
 | `source` | `kind`, `photos` (`"builtIn"` or image paths), `mediaFile` (an image or video path), `secondsEach` (6-120), `panAndZoom` (0-1), `gradientFrom`, `gradientTo`, `gradientAngle`, `gradientDrift`, `scaling` (`fill`, `fit`, `stretch`) | the one source every Look restyles; files are copied into `media/` |
 | `updates` | `checkAutomatically`, `installAutomatically` | install needs checks on |
-| `ai` | `allowPlaybackChanges`, `showNotices` | read-only: only the user changes these |
+| `ai` | `allowPlaybackChanges`, `allowSignals`, `showNotices` | read-only: only the user changes these |
 | `system` | `screensaverInstalled`, `screensaverChosen`, `startScreenSaverAfter`, `displayOffMinutes`, `loginItemApproval`, `accessibilityForGuideMe`, `textSize` | read-only: macOS owns them. Most are read by the app (unknown while it isn't running). `howToChange` says what to do: an `app_action` that opens the right place, or the System Settings path for the user |
 
 DotStudio has no text-size, density or layout-scale setting of its own: its text and layout follow macOS's text size (System Settings > Accessibility > Display > Text Size) and the window's width. The music card's `music.size` and the two `quality` settings are the only sizes it stores.

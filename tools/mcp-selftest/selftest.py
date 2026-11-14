@@ -188,6 +188,7 @@ tnames = [t["name"] for t in tools]
 expected = ["get_started", "list_guides", "read_guide", "list_scenes", "describe_scene", "list_styles", "get_style",
             "create_style", "update_style", "duplicate_style", "delete_style", "preview_style", "benchmark_style",
             "export_style", "import_style", "list_displays", "set_screensaver", "set_wallpaper",
+            "list_signals", "test_signal", "create_signal", "update_signal", "delete_signal", "list_rules", "set_rule", "delete_rule",
             "get_settings", "update_settings", "app_action", "list_engines",
             "pull_engine", "list_custom_scenes", "validate_custom_scene", "create_custom_scene", "update_custom_scene",
             "film_status", "list_film_templates", "create_film_scene", "get_film_scene", "update_film_scene", "render_film_stills", "render_film_loop", "film_job_status", "cancel_film_job"]
@@ -195,6 +196,11 @@ check(sorted(tnames) == sorted(expected), f"tools/list has the {len(expected)} t
 check(all(t["inputSchema"]["type"] == "object" and t["inputSchema"].get("additionalProperties") is False
           and len(t["description"]) > 40 and "annotations" in t for t in tools), "every tool: strict object schema, description, annotations")
 check(next(t for t in tools if t["name"] == "set_screensaver")["description"].startswith("CHANGES THE USER'S MAC"), "set_screensaver says it changes the Mac")
+check(all(next(t for t in tools if t["name"] == n)["description"].startswith("CHANGES WHAT PLAYS") for n in ("set_rule", "delete_rule")),
+      "set_rule / delete_rule say they change what plays")
+check(next(t for t in tools if t["name"] == "test_signal")["annotations"]["openWorldHint"] is True, "test_signal is openWorld (it fetches)")
+check(not any("secret" in json.dumps(t["inputSchema"]).lower() or '"value": {"type": "string"' in json.dumps(t["inputSchema"])
+              for t in tools if "signal" in t["name"]), "no signal tool takes a key's value")
 err(c.call("read_guide", {"id": "style/dotstudio", "bogus": 1}), "extra argument → invalid_arguments", "unknown property")
 err(c.call("read_guide", {}), "missing required argument", "missing required")
 
@@ -1005,6 +1011,261 @@ check(dry.returncode == 0 and len(lines) == 2 and all("/Applications/Blender.app
                                                       and "--frames 1-576 --res 3840x2160 --samples 128 --engine cycles" in l for l in lines),
       "dry run: the real Blender command per variant (final = Cycles, 128 samples)")
 shutil.rmtree(R, ignore_errors=True)
+
+# ---------------------------------------------------------------- signals and When rules
+# A local fixture over plain HTTP on 127.0.0.1 — reachable only through the DEBUG-only test hook
+# DOTSTUDIO_SIGNAL_ALLOW_LOCAL=1 (Shared/Signals/Fetch/SignalFetch.swift); no third-party network.
+print("== signals and When rules (offline; a local fixture)")
+import http.server
+
+
+class _Fixture(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def _send(self, code, body, ctype="application/json", headers=None):
+        b = body if isinstance(body, bytes) else body.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(b)))
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(b)
+
+    def do_GET(self):
+        FIXTURE_HITS.append((self.path, dict(self.headers)))
+        p = self.path.split("?")[0]
+        if p == "/aqi.json":
+            self._send(200, json.dumps({"status": "ok", "data": {"aqi": 42, "city": {"name": "Toronto"}, "iaqi": {"pm25": {"v": 11.5}},
+                                                                "secret_debug_body_marker": "x" * 80}}))
+        elif p == "/keyed.json":
+            ok_key = self.headers.get("X-API-Key") == "k-123"
+            self._send(200 if ok_key else 401, json.dumps({"v": 7}) if ok_key else "{}")
+        elif p == "/text":
+            self._send(200, "17.5\n", "text/plain")
+        elif p == "/big":
+            self._send(200, json.dumps({"pad": "x" * 300_000}))
+        elif p == "/busy":
+            self._send(429, "{}", headers={"Retry-After": "120"})
+        elif p == "/redir-private":
+            self._send(302, "", headers={"Location": "https://10.0.0.1/x"})
+        else:
+            self._send(404, "{}")
+
+
+FIXTURE_HITS = []
+fx = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Fixture)
+threading.Thread(target=fx.serve_forever, daemon=True).start()
+FX = f"http://127.0.0.1:{fx.server_address[1]}"
+
+G = new_store()
+c = Client(G, DOTSTUDIO_SIGNAL_ALLOW_LOCAL=1)
+c.init()
+res = c.call("list_signals")
+ok(res, "list_signals")
+sc = res["structuredContent"]
+check(len(sc["builtIn"]) == 15 and {"weather.condition", "weather.tempC", "power.battery", "music.playing", "time.hour"} <= {b["id"] for b in sc["builtIn"]}
+      and sc["signals"] == [], "15 built-ins (weather, sun, time, power, music), none of the user's yet")
+check(next(b for b in sc["builtIn"] if b["id"] == "weather.condition")["options"][0] == "clear", "weather.condition lists its words")
+check("signals" in c.call("get_started")["structuredContent"]["readFirst"], "get_started: read the signals guide first")
+res = c.call("read_guide", {"id": "signals"})
+check(not res.get("isError") and "Keychain" in text(res) and "never" in text(res).lower(), "Guides/signals.md: keys, privacy, recipes")
+
+# test_signal: an outline, never the body
+res = c.call("test_signal", {"draft": {"url": FX + "/aqi.json", "pointer": "/data/aqi"}})
+ok(res, "test_signal a draft against the local fixture")
+st = res["structuredContent"]
+check(st["value"] == 42 and st["status"] == 200 and st["viaApp"] is False and st["bytes"] > 0, "  → reads 42, HTTP 200, offline")
+ptrs = {o["pointer"]: o["value"] for o in st["outline"]}
+check(ptrs.get("/data/aqi") == 42 and ptrs.get("/data/city/name") == "Toronto" and ptrs.get("/data/iaqi/pm25/v") == 11.5,
+      "  → an outline of pointers to leaves")
+check(len(ptrs["/data/secret_debug_body_marker"]) <= 40 and "x" * 80 not in json.dumps(res), "  → long strings cut to 40, the raw body never returned")
+check(any(h.get("User-Agent", "").startswith("DotStudio/") and "Cookie" not in h for p, h in FIXTURE_HITS), "  → GET with DotStudio's UA, no cookies")
+res = c.call("test_signal", {"draft": {"url": FX + "/aqi.json", "pointer": "/data/nope"}})
+check(res["structuredContent"]["ok"] is False and "Nothing at" in res["structuredContent"]["error"], "test_signal: a missing pointer says so")
+res = c.call("test_signal", {"draft": {"url": FX + "/text"}})
+check(res["structuredContent"]["value"] == 17.5, "test_signal: a plain-text number")
+res = c.call("test_signal", {"draft": {"url": FX + "/big"}})
+check(res["structuredContent"]["ok"] is False and "256 KB" in res["structuredContent"]["error"], "test_signal: over 256 KB is cut off")
+res = c.call("test_signal", {"draft": {"url": FX + "/busy"}})
+check(res["structuredContent"]["error"] == "HTTP 429", "test_signal: HTTP 429 reported")
+res = c.call("test_signal", {"draft": {"url": FX + "/redir-private"}})
+check(res["structuredContent"]["ok"] is False and "Redirected" in res["structuredContent"]["error"], "a redirect to a private address is re-checked and refused")
+
+# refusals: http, private and local hosts, keys in the URL, files outside signal-files
+for url, needle, what in [("http://example.com/aqi", "Only https", "http refused"),
+                          ("https://192.168.1.20/state", "private", "a private IP refused (AI)"),
+                          ("https://10.0.0.1/x", "private", "10/8 refused"),
+                          ("https://[fe80::1]/x", "link-local", "IPv6 link-local refused"),
+                          ("https://[fd00::5]/x", "private", "IPv6 ULA refused"),
+                          ("https://169.254.1.1/x", "link-local", "169.254/16 refused"),
+                          ("https://homeassistant.local/api", "local network", "*.local refused"),
+                          ("https://2130706433/x", "dotted", "a disguised IP refused"),
+                          ("https://api.example.com/v1?city=x&apikey=abc", "Never put a key in the URL", "?apikey= refused"),
+                          ("https://api.example.com/v1?TOKEN=abc", "auth", "?token= refused (any case)"),
+                          ("https://user:pw@api.example.com/v1", "password", "user:pass@ refused")]:
+    err(c.call("create_signal", {"name": "Bad", "url": url}), "create_signal: " + what, needle)
+    err(c.call("test_signal", {"draft": {"url": url}}), "test_signal: " + what, needle)
+c2 = Client(G)   # no test hook: even 127.0.0.1 over http is refused
+c2.init()
+err(c2.call("test_signal", {"draft": {"url": FX + "/aqi.json"}}), "without the test hook, http://127.0.0.1 is refused", "Only https")
+err(c2.call("create_signal", {"name": "Loop", "url": "https://127.0.0.1:8443/x"}), "…and https to loopback is refused for the AI", "private")
+c2.close()
+err(c.call("create_signal", {"name": "Bad", "kind": "file", "file": "../library.json"}), "file outside signal-files refused", "plain file name")
+err(c.call("create_signal", {"name": "X", "url": FX + "/aqi.json", "pollMinutes": 1}), "poll under 5 minutes refused by the schema", "minimum")
+err(c.call("create_signal", {"name": "X", "url": FX + "/aqi.json", "auth": {"in": "header", "name": "X-API-Key", "value": "k-123"}}),
+    "a key's value can never be passed", "unknown property")
+check(not os.path.exists(os.path.join(G, "library.json")) or not library(G).get("signals"), "nothing saved by the refusals")
+
+# create, key, cap
+res = c.call("create_signal", {"name": "Air quality", "url": FX + "/aqi.json", "pointer": "/data/aqi", "unit": "AQI", "range": [0, 300]})
+ok(res, "create_signal")
+aqi = res["structuredContent"]["id"]
+sg = library(G)["signals"][0]
+check(sg["id"] == aqi and sg["createdBy"] == "ai" and sg["pointer"] == "/data/aqi" and sg["range"] == [0, 300], "  → library.json: the definition, marked AI")
+check(not os.path.exists(os.path.join(G, "signal-values.json")), "  → no values in library.json, no fetch without a rule")
+err(c.call("create_signal", {"name": "air QUALITY", "url": FX + "/aqi.json"}), "duplicate signal names refused", "already named")
+res = c.call("create_signal", {"name": "Keyed", "url": FX + "/keyed.json", "pointer": "/v", "auth": {"in": "header", "name": "X-API-Key"}})
+ok(res, "create_signal with a key")
+keyed = res["structuredContent"]["id"]
+check(res["structuredContent"]["needsSecret"] is True and "Settings ▸ Signals ▸ Keyed" in text(res) and "never in this chat" in text(res),
+      "  → needsSecret: ask the user to paste it in Settings, never in chat")
+ks = next(s for s in library(G)["signals"] if s["id"] == keyed)
+check(ks["auth"] == {"in": "header", "name": "X-API-Key"}, "  → only where the key goes is stored")
+err(c.call("test_signal", {"signal": "Keyed"}), "a keyed signal can't be tested offline (the app holds the key)", "only the running DotStudio")
+os.makedirs(os.path.join(G, "signal-files"), exist_ok=True)
+with open(os.path.join(G, "signal-files", "office.txt"), "w") as f:
+    f.write("23.5\n")
+res = c.call("create_signal", {"name": "Office temp", "kind": "file", "file": "office.txt", "unit": "°C"})
+ok(res, "create_signal kind file")
+res = c.call("test_signal", {"signal": "Office temp"})
+check(res["structuredContent"]["value"] == 23.5, "test_signal reads the file")
+os.symlink("/etc/hosts", os.path.join(G, "signal-files", "sneaky.json"))
+ok(c.call("create_signal", {"name": "Sneaky", "kind": "file", "file": "sneaky.json"}), "a file signal named for a symlink")
+res = c.call("test_signal", {"signal": "Sneaky"})
+check(res["structuredContent"]["ok"] is False and "Outside signal-files" in res["structuredContent"]["error"], "  → a symlink out of signal-files is never read")
+ok(c.call("delete_signal", {"signal": "Sneaky"}), "delete_signal")
+fillers = [c.call("create_signal", {"name": f"Filler {i}", "url": FX + "/aqi.json"}) for i in range(13)]
+check(all(not r.get("isError") for r in fillers) and len(library(G)["signals"]) == 16, "16 signals")
+err(c.call("create_signal", {"name": "One too many", "url": FX + "/aqi.json"}), "the 17th is refused (cap)", "at most 16")
+for i in range(13):
+    c.call("delete_signal", {"signal": f"Filler {i}"})
+check(len(library(G)["signals"]) == 3, "fillers deleted")
+ok(c.call("update_signal", {"signal": "Air quality", "pollMinutes": 30, "unit": "AQI"}), "update_signal")
+check(next(s for s in library(G)["signals"] if s["id"] == aqi)["pollMinutes"] == 30, "  → pollMinutes stored")
+err(c.call("update_signal", {"signal": "weather.tempC", "name": "x"}), "built-ins can't be changed", "built in")
+res = c.call("list_signals")
+mine = {s["name"]: s for s in res["structuredContent"]["signals"]}
+check(mine["Air quality"]["host"] == "127.0.0.1" and mine["Keyed"]["hasKey"] is True and "k-123" not in json.dumps(res),
+      "list_signals: host, hasKey — never a key")
+
+# When rules
+lib = library(G)
+golden = next(p["id"] for p in lib["presets"] if p["name"] == "Golden Hour")
+night_sky = next(p["id"] for p in lib["presets"] if p["name"] == "Night Sky")
+res = c.call("set_rule", {"name": "Snow day", "when": {"all": [{"signal": "weather.condition", "op": "in", "values": ["snow", "sleet"]}]}, "play": ["Golden Hour"]})
+ok(res, "set_rule (weather.condition in snow, sleet)")
+snow_rule = res["structuredContent"]["id"]
+r0 = library(G)["rules"][0]
+check(r0["play"] == [golden] and r0["when"]["all"][0]["op"] == "in" and r0["createdBy"] == "ai", "  → library.json rules")
+err(c.call("set_rule", {"when": {"all": [{"signal": "weather.condition", "op": "gt", "value": 3}]}, "play": ["Golden Hour"]}),
+    "op vs type: gt on a word refused", "is a word")
+err(c.call("set_rule", {"when": {"all": [{"signal": "weather.condition", "op": "eq", "value": "blizzard"}]}, "play": ["Golden Hour"]}),
+    "an unknown weather word refused", "never")
+err(c.call("set_rule", {"when": {"all": [{"signal": "weather.nope", "op": "eq", "value": 1}]}, "play": ["Golden Hour"]}), "unknown signal refused", "No signal")
+err(c.call("set_rule", {"when": {"all": [{"signal": "power.battery", "op": "lt", "value": 20}]}, "play": ["No Such Style"]}), "unknown style refused", "No style")
+err(c.call("set_rule", {"when": {"all": []}, "play": ["Golden Hour"]}), "a rule with no test refused", "at least one test")
+res = c.call("set_rule", {"name": "Bad air", "when": {"all": [{"signal": "Air quality", "op": "gt", "value": 150}], "timeOfDay": "night"}, "play": ["Night Sky", "Golden Hour"]})
+ok(res, "set_rule on the user's signal by name, at night, two styles")
+bad_air = res["structuredContent"]["id"]
+check(library(G)["rules"][1]["when"]["all"][0]["signal"] == aqi, "  → the test stores the signal's id")
+res = c.call("list_rules")
+ok(res, "list_rules")
+rl = res["structuredContent"]["rules"]
+check([r["name"] for r in rl] == ["Snow day", "Bad air"] and all(r["activeNow"] is False for r in rl)
+      and "Weather is Snow or Sleet" in rl[0]["summary"], "  → in order, a sentence each, none active (no app)")
+err(c.call("delete_signal", {"signal": "Air quality"}), "delete_signal refused while a rule tests it", "used by")
+# what the app's lease says plays — list_rules / list_displays / list_styles read it
+t = time.time()
+with open(os.path.join(G, "signal-values.json"), "w") as f:
+    json.dump({"version": 1, "writtenAt": t, "values": {"weather.condition": {"s": "snow", "at": t, "stale": 10800}},
+               "rule": {"id": snow_rule, "since": t - 60, "validUntil": t + 1800}}, f)
+res = c.call("list_rules")
+check(res["structuredContent"]["activeNow"] == snow_rule and res["structuredContent"]["rules"][0]["activeNow"] is True, "list_rules: activeNow from the app's lease")
+d = c.call("list_displays")["structuredContent"]["displays"][0]
+check(d["screensaver"] == "Golden Hour" and "Snow" in d.get("screensaverWhen", ""), "list_displays: the rule's style plays, and says when")
+res = c.call("list_signals")
+check(next(b for b in res["structuredContent"]["builtIn"] if b["id"] == "weather.condition")["value"] == "snow", "list_signals: the live value")
+check("screensaver when Weather is Snow or Sleet" in next(s for s in c.call("list_styles")["structuredContent"]["styles"] if s["id"] == golden)["playing"],
+      "list_styles: “screensaver when …” role")
+with open(os.path.join(G, "signal-values.json"), "w") as f:
+    json.dump({"version": 1, "writtenAt": t - 7200, "values": {}, "rule": {"id": snow_rule, "since": t - 7200, "validUntil": t - 1}}, f)
+check(c.call("list_rules")["structuredContent"]["activeNow"] is None, "an expired lease: no rule (the app quit)")
+ok(c.call("delete_signal", {"signal": "Air quality", "force": True}), "delete_signal force")
+check([r["name"] for r in library(G).get("rules", [])] == ["Snow day"], "  → the rule that only tested it went too")
+# pruning: deleting a style takes it out of rules
+res = c.call("duplicate_style", {"style": "Golden Hour", "name": "Snowfall"})
+snowfall = res["structuredContent"]["id"]
+ok(c.call("set_rule", {"rule": "Snow day", "play": ["Snowfall"]}), "set_rule: change an existing rule's style")
+ok(c.call("delete_style", {"style": "Snowfall"}), "delete the rule's only style")
+check(not library(G).get("rules"), "  → the rule left with no style is pruned")
+# the gates
+ok(c.call("set_rule", {"name": "Low battery", "when": {"all": [{"signal": "power.battery", "op": "lt", "value": 20}]}, "play": ["Golden Hour"]}), "set_rule (battery < 20)")
+with open(os.path.join(G, "ai-settings.json"), "w") as f:
+    json.dump({"allowPlaybackChanges": False}, f)
+err(c.call("set_rule", {"name": "Nope", "when": {"all": [{"signal": "power.onAC", "op": "eq", "value": True}]}, "play": ["Golden Hour"]}),
+    "set_rule refused with playback changes off (offline)", "turned off")
+err(c.call("delete_rule", {"rule": "Low battery"}), "delete_rule refused too", "turned off")
+ok(c.call("create_signal", {"name": "Still fine", "url": FX + "/aqi.json"}), "signals don't need playback changes")
+with open(os.path.join(G, "ai-settings.json"), "w") as f:
+    json.dump({"allowSignals": False}, f)
+err(c.call("create_signal", {"name": "Nope", "url": FX + "/aqi.json"}), "create_signal refused with signals off", "live data signals")
+err(c.call("delete_signal", {"signal": "Still fine"}), "delete_signal refused with signals off", "live data signals")
+st = settings_of(c.call("get_settings", {"group": "ai"}))
+check(st["ai.allowSignals"]["value"] is False and st["ai.allowSignals"]["readOnly"] is True, "get_settings: ai.allowSignals, read-only")
+err(c.call("update_settings", {"settings": {"ai.allowSignals": True}}), "the AI can't grant itself signals", "only the user")
+os.remove(os.path.join(G, "ai-settings.json"))
+ok(c.call("delete_rule", {"rule": "Low battery"}), "delete_rule")
+check(not library(G).get("rules"), "  → gone")
+c.close()
+
+# through the stand-in app (the same executors, the app's in-memory library; it has no Keychain)
+print("== signals and When rules (through a stand-in app)")
+H = new_store()
+happ = subprocess.Popen([BIN, "--fake-app", "--clobber-ms", "150"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL, env=env_for(H, DOTSTUDIO_SIGNAL_ALLOW_LOCAL=1))
+check(happ.stdout.readline().strip() == b"ready", "stand-in app ready")
+happlied = []
+threading.Thread(target=lambda: [happlied.append(l.decode().strip()) for l in happ.stdout], daemon=True).start()
+c = Client(H, DOTSTUDIO_SIGNAL_ALLOW_LOCAL=1)
+c.init()
+res = c.call("create_signal", {"name": "Air quality", "url": FX + "/aqi.json", "pointer": "/data/aqi"})
+ok(res, "create_signal via the app")
+check(res["structuredContent"]["liveInApp"] is True, "  → routed through the app")
+time.sleep(0.5)
+check([s["name"] for s in library(H).get("signals", [])] == ["Air quality"], "  → survives the app's own saves")
+res = c.call("test_signal", {"signal": "Air quality"})
+check(res["structuredContent"].get("viaApp") is True and res["structuredContent"].get("value") == 42, "test_signal via the app (it holds the keys)")
+res = c.call("set_rule", {"name": "Bad air", "when": {"all": [{"signal": "Air quality", "op": "gte", "value": 100}]}, "play": ["Golden Hour"]})
+ok(res, "set_rule via the app")
+time.sleep(0.4)
+check([r["name"] for r in library(H).get("rules", [])] == ["Bad air"] and any("applied upsertRule ok=true" in l for l in happlied), "  → the app applied it")
+with open(os.path.join(H, "ai-settings.json"), "w") as f:
+    json.dump({"allowPlaybackChanges": False}, f)
+err(c.call("set_rule", {"rule": "Bad air", "enabled": False}), "set_rule refused through the app with playback off", "turned off")
+err(c.call("delete_rule", {"rule": "Bad air"}), "delete_rule refused through the app", "turned off")
+os.remove(os.path.join(H, "ai-settings.json"))
+t = time.time()
+with open(os.path.join(H, "signal-values.json"), "w") as f:
+    json.dump({"version": 1, "writtenAt": t, "values": {}, "rule": {"id": res["structuredContent"]["id"], "since": t, "validUntil": t + 600}}, f)
+check(c.call("list_rules")["structuredContent"]["rules"][0]["activeNow"] is True, "list_rules activeNow with the app running")
+c.close()
+happ.stdin.close()
+happ.wait(5)
+fx.shutdown()
+for d in (G, H):
+    shutil.rmtree(d, ignore_errors=True)
 
 # ---------------------------------------------------------------- the running app
 print("== routing through a running app (stand-in that clobbers direct writes)")
