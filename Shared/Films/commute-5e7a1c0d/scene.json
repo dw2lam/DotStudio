@@ -6,7 +6,7 @@
   "licence": "DotStudio built-in. Rendered with Blender from CC0 assets (tools/film/scenes/commute).",
   "engine": {
     "id": "film",
-    "version": ">=1"
+    "version": ">=1.1"
   },
   "fps": 24,
   "description": "A penguin dozes on the train home. Photoreal, ray traced in Blender; the light follows the real sun and the weather.",
@@ -14,35 +14,45 @@
     "sun",
     "weather"
   ],
-  "clips": [
-    {
-      "variant": "day",
-      "file": "clips/day.mov",
-      "loop": true,
-      "codec": "hevc"
+  "layers": {
+    "file": "clips/layers.mov",
+    "grid": [
+      3,
+      2
+    ],
+    "gutter": 8,
+    "tiles": [
+      "sun",
+      "sun_low",
+      "sky",
+      "cabin",
+      "city",
+      "mask"
+    ],
+    "encoding": "pow4",
+    "scale": {
+      "sun": 1.24,
+      "sun_low": 1.04,
+      "sky": 0.441,
+      "cabin": 0.9,
+      "city": 0.462
     },
-    {
-      "variant": "golden",
-      "file": "clips/golden.mov",
-      "loop": true,
-      "codec": "hevc"
+    "exposure": {
+      "day": 1.5,
+      "night": 3.2
     },
-    {
-      "variant": "night",
-      "file": "clips/night.mov",
-      "loop": true,
-      "codec": "hevc"
-    },
-    {
-      "variant": "rain",
-      "file": "clips/rain.mov",
-      "loop": true,
-      "codec": "hevc"
+    "tint": {
+      "sun_low": [
+        1.0,
+        0.52,
+        0.22
+      ]
     }
-  ],
+  },
   "look": {
     "bloom": 0.25,
     "halation": 0.15,
-    "grain": 0.25
+    "grain": 0.25,
+    "vignette": 0.22
   }
 }

@@ -746,7 +746,7 @@ do {
     check(!WeatherLink.needed(by: lib, store: store), "…the rule disabled: no fetch")
     lib.rules = nil
 
-    // A film that follows the weather (Commute: a rain clip, uses weather) — unless the style pins it.
+    // A film that follows the weather (Commute: light layers, uses weather) — unless the style pins it.
     if let m = CustomScenes.manifest(id: "commute-5e7a1c0d", store: store) {
         var film = Preset.customScene(m)
         lib.presets = [film]
