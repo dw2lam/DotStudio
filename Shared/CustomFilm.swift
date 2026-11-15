@@ -18,13 +18,14 @@
 //      "layers": { "file": "clips/layers.mov", "grid": [3, 2],
 //                  "tiles": ["sun", "sun_low", "sky", "cabin", "city", "mask"], "encoding": "pow4",
 //                  "scale": {…}, "exposure": { "day": 1.5, "night": 3.2 }, "tint": {…} }
-//  One HEVC Main10 video whose frames are a grid of light layers. Every frame the engine mixes
-//  them with weights from the real sun's elevation and the weather (ds_film_mix: a pass at the
-//  tiles' resolution, run only when the video frame or the light changed), then the screen pass
-//  draws the glass weather through the mask, bloom / halation, vignette, AgX and grain. Any time
-//  of day and every weather condition from one render, changing smoothly. The video decodes to
-//  its own 10-bit Y'CbCr planes (zero-copy, converted in the shader): 8 bits would band the pow4
-//  encoding's shadows.
+//  One HEVC Main10 video whose frames are a grid of light layers. The engine mixes them with
+//  weights from the real sun's elevation and the weather (ds_film_mix and its blurs: passes at
+//  the tiles' resolution, run only for a new video frame or light), then the screen pass draws
+//  the glass weather through the mask, bloom / halation, vignette, AgX and grain. Any time of day
+//  and every weather condition from one render, changing smoothly. The video decodes to its own
+//  10-bit Y'CbCr planes (zero-copy, converted in the shader): 8 bits would band the pow4
+//  encoding's shadows. A film with an "fps" is drawn at that rate where the display allows
+//  (CustomSceneManifest.steppedFPS): its pictures only change that often.
 //
 //  A style can pin the weather (the engine's "Weather" menu, ds.weather: Live or a condition).
 //  Power: the hosts' media pause (MetalRenderer.setMediaPaused: the wallpaper's held stills —
@@ -239,11 +240,34 @@ final class CustomFilm {
 // MARK: - Light layers
 
 /// A layered film package's player: the layers video (live) or its first frame (stills), the
-/// mix pass into an HDR texture (+ highlights), and the screen pass's uniforms.
+/// passes that run per video frame (mix → mips → look, mist) and per grain frame (the lattice),
+/// and the screen pass's uniforms. film.metal's header has the passes.
+///
+/// Cost (Apple M5 Pro, 5120×2880, the 1600×1000-tile Commute loop, GPU at benchmark_style's
+/// idle clocks): the screen pass is what every displayed frame pays — 3.3 ms dry (clear, partly
+/// cloudy), 3.6 damp (overcast, fog), 4.9–6.0 with rain or snow on the glass (the drops and
+/// flakes, per glass pixel); the per-video-frame passes 0.85–1.05 ms, at most the clip's frame
+/// rate: a new video frame, or the light changing — light-only changes are rate-limited to the
+/// frame rate while live (the cloud shadows' drift, lightning, the weather easing and the sun
+/// move it nearly every frame).
 final class FilmLayers {
     static let mixFunction = "ds_film_mix"
+    static let lookFunction = "ds_film_look"
+    static let mistFunction = "ds_film_mist"
+    static let grainFunction = "ds_film_grain"
+    /// The screen pass's lean variants (the same pixels when they're picked): dry glass (no rain,
+    /// snow, lightning or mist), damp glass (mist and fog, no rain, snow or lightning).
+    static let dryFunction = "ds_film_dry"
+    static let dampFunction = "ds_film_damp"
     static let hdrFormat: MTLPixelFormat = .rgba16Float
     static let glowFormat: MTLPixelFormat = .rg16Float
+    static let lookFormat: MTLPixelFormat = .rgba16Float
+    static let grainFormat: MTLPixelFormat = .r32Float
+
+    /// The extra pipelines a layered film needs beside its screen pass: (fragment, format, more formats).
+    static let passes: [(String, MTLPixelFormat, [MTLPixelFormat])] = [
+        (mixFunction, hdrFormat, [glowFormat]), (lookFunction, lookFormat, []), (grainFunction, grainFormat, []),
+        (mistFunction, lookFormat, [])]
 
     let prepared: PreparedScene
     let layers: CustomSceneManifest.Layers
@@ -255,15 +279,40 @@ final class FilmLayers {
     private var cache: CVMetalTextureCache?
     private var cacheDevice: UInt64 = 0
 
-    /// What the mix pass made, per kind of render (live / one-off), so a thumbnail drawn by a
+    /// When the per-video-frame passes run (benchmarks measure the two costs apart).
+    enum MixMode { case auto, hold, always }
+
+    /// What the screen pass binds, and how.
+    struct Output {
+        let hdr: MTLTexture
+        /// The look pass's halation + bloom light, and its mist (rgb) + mist edge (a).
+        let light: MTLTexture
+        let mist: MTLTexture
+        /// The grain lattice for this frame and screen (nil: the shader hashes the grain).
+        let grain: MTLTexture?
+        /// u.scene[0…3].
+        let screen: [simd_float4]
+        /// The screen pass's lean variant for this weather (dryFunction, dampFunction; nil: the
+        /// full ds_fragment) — the same pixels, cheaper.
+        let variant: String?
+        /// Whether this call encoded anything on the command buffer.
+        let encoded: Bool
+    }
+
+    /// What the passes made, per kind of render (live / one-off), so a thumbnail drawn by a
     /// live renderer never overwrites the texture its in-flight frames read.
     final class Target {
         var hdr: MTLTexture?
         var glow: MTLTexture?
+        var light: MTLTexture?
+        var mist: MTLTexture?
         var key: [Float] = []
+        var lookKey: [Float] = []
         var frameObject: ObjectIdentifier?
-        /// The screen pass's uniforms for what's in `hdr` (u.scene[0…3]).
-        var screen: [simd_float4] = []
+        var serial = -1
+        var mixedAt: CFTimeInterval = -.infinity
+        var grain: MTLTexture?
+        var grainKey: SIMD3<Float> = SIMD3(repeating: -1)
     }
     private var targets: [Bool: Target] = [:]
 
@@ -420,22 +469,34 @@ final class FilmLayers {
         return poster(device)
     }
 
-    private func texture(_ device: MTLDevice, _ fmt: MTLPixelFormat, _ w: Int, _ h: Int, _ old: MTLTexture?) -> MTLTexture? {
+    private func texture(_ device: MTLDevice, _ fmt: MTLPixelFormat, _ w: Int, _ h: Int, _ old: MTLTexture?,
+                         mipmapped: Bool = true) -> MTLTexture? {
         if let old, old.width == w, old.height == h, old.pixelFormat == fmt { return old }
-        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: fmt, width: w, height: h, mipmapped: true)
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: fmt, width: w, height: h, mipmapped: mipmapped)
         d.usage = [.renderTarget, .shaderRead]
         d.storageMode = .private
         return device.makeTexture(descriptor: d)
     }
 
-    /// Encodes the mix pass on `cmd` when the frame or the light changed (else keeps the last
-    /// one), and returns what the screen pass binds: (HDR, highlights) and its u.scene[0…3].
-    /// nil while the mix pipeline compiles (`wait`: compile now) or before a frame decodes.
+    /// The grain's cell in screen pixels for a screen `height` px tall (film.metal: film_finish).
+    static func grainCell(height: Int) -> Float { max(Float(height) / 1100 * 1.4, 1) }
+
+    /// Encodes on `cmd` what changed since the last call: the mix + mips + look passes for a new
+    /// video frame or light (else keeps the last ones), and the grain lattice for a new grain frame
+    /// or screen size. Returns what the screen pass binds. nil while the pipelines compile
+    /// (`wait`: compile now) or before a frame decodes.
+    /// - halation: the style's Halation (ds.halation, u.scene[8].y of the screen pass).
+    /// - screen: the screen pass's size (nil: no grain lattice; the screen pass hashes the grain).
+    /// - live: a host drawing continuously: the playing video, and light-only changes (the sun,
+    ///   the weather easing, cloud shadows, lightning) re-mix at most at the clip's frame rate.
     func encode(_ cmd: MTLCommandBuffer, device: MTLDevice, elevation: Double, weather: WeatherMix, time: Double,
-                live: Bool, wait: Bool) -> (hdr: MTLTexture, glow: MTLTexture, screen: [simd_float4])? {
-        guard let pso = CustomScenePipelines.pipeline(prepared, device: device, format: FilmLayers.hdrFormat, wait: wait,
-                                                      fragment: FilmLayers.mixFunction, extraFormats: [FilmLayers.glowFormat]),
-              let frame = source(device, live: live) else { return nil }
+                halation: Float = 0.15, screen size: (width: Int, height: Int)? = nil, live: Bool, wait: Bool,
+                mode: MixMode = .auto) -> Output? {
+        func pso(_ i: Int) -> MTLRenderPipelineState? {
+            let p = FilmLayers.passes[i]
+            return CustomScenePipelines.pipeline(prepared, device: device, format: p.1, wait: wait, fragment: p.0, extraFormats: p.2)
+        }
+        guard let mixPSO = pso(0), let lookPSO = pso(1), let frame = source(device, live: live) else { return nil }
         let cols = layers.columns, rows = layers.rows
         let vw = frame.luma.width, vh = frame.luma.height
         let (tw, th) = layers.tileSize(videoWidth: vw, videoHeight: vh)   // (gutters excluded)
@@ -444,7 +505,9 @@ final class FilmLayers {
         let exposure = Float(pow(2.0, Double(m.ev)))
         var w = weights(m)
         // the cloud shadows' drift (slow, faster in wind)
-        w[5].w = m.shadow > 0.01 ? Float((time * 0.012 * weather.driftRate).truncatingRemainder(dividingBy: 1000)) : 0
+        // (none at night: no sun to shade, and a still phase keeps the mix from re-running)
+        let sunLit = w[0].w >= 0 && w[0].x + w[0].y + w[0].z > 0 || w[1].w >= 0 && w[1].x + w[1].y + w[1].z > 0
+        w[5].w = m.shadow > 0.01 && sunLit ? Float((time * 0.012 * weather.driftRate).truncatingRemainder(dividingBy: 1000)) : 0
         let head: [simd_float4] = [simd_float4(Float(vw), Float(vh), Float(tw), Float(th)),
                                    simd_float4(Float(cols), Float(rows), 2 * exposure, 3 * exposure),
                                    frame.rows.0, frame.rows.1, frame.rows.2]
@@ -454,43 +517,140 @@ final class FilmLayers {
         targets[live] = target
         lock.unlock()
         let key = [Float(frame.serial)] + all.flatMap { [$0.x, $0.y, $0.z, $0.w] }
-        let screen = screenUniforms(m, weather: weather, tileWidth: tw, tileHeight: th)
+        var screen = screenUniforms(m, weather: weather, tileWidth: tw, tileHeight: th)
         let object = ObjectIdentifier(frame.luma)
-        if key == target.key, object == target.frameObject, let h = target.hdr, let g = target.glow { return (h, g, screen) }
+        let now = CACurrentMediaTime()
+        let sameFrame = object == target.frameObject && frame.serial == target.serial
+        var remix: Bool
+        switch mode {
+        case .always: remix = true
+        case .hold: remix = target.hdr == nil
+        case .auto:
+            remix = key != target.key || !sameFrame
+            // live, the light alone moves nearly every frame (cloud shadows, lightning, the weather
+            // easing, the sun): picked up with the next video frame, or after a frame's time
+            if remix, live, sameFrame, now - target.mixedAt < 1 / Double(fps) { remix = false }
+        }
+        if target.hdr == nil || target.light == nil { remix = true }
 
-        guard let hdr = texture(device, FilmLayers.hdrFormat, tw, th, target.hdr),
-              let glow = texture(device, FilmLayers.glowFormat, tw, th, target.glow) else { return nil }
-        let rpd = MTLRenderPassDescriptor()
-        rpd.colorAttachments[0].texture = hdr
-        rpd.colorAttachments[1].texture = glow
-        for i in 0..<2 { rpd.colorAttachments[i].loadAction = .dontCare; rpd.colorAttachments[i].storeAction = .store }
-        guard let enc = cmd.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
-        var u = FXUniforms()
-        u.resolution = simd_float2(Float(tw), Float(th))
-        u.time = Float(time.truncatingRemainder(dividingBy: 3600))
-        withUnsafeMutableBytes(of: &u.scene) { raw in
-            let s = raw.bindMemory(to: simd_float4.self)
-            for (i, v) in all.enumerated() where i < 16 { s[i] = v }
+        // the look pass's inputs: the style's halation, the package's bloom, the blur sizes, the mist
+        let mist = Float(max(Double(screen[2].z), 0.5 * Double(screen[2].x), 0.45 * Double(screen[2].y))) > 0.02
+        let hal = min(max(halation, 0), 1)
+        let lookKey: [Float] = [hal, screen[1].w, screen[3].y, screen[3].z, mist ? 1 : 0]
+        let relook = remix || lookKey != target.lookKey
+
+        if remix {
+            guard let hdr = texture(device, FilmLayers.hdrFormat, tw, th, target.hdr),
+                  let glow = texture(device, FilmLayers.glowFormat, tw, th, target.glow) else { return nil }
+            let rpd = MTLRenderPassDescriptor()
+            rpd.colorAttachments[0].texture = hdr
+            rpd.colorAttachments[1].texture = glow
+            for i in 0..<2 { rpd.colorAttachments[i].loadAction = .dontCare; rpd.colorAttachments[i].storeAction = .store }
+            guard let enc = cmd.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
+            var u = FXUniforms()
+            u.resolution = simd_float2(Float(tw), Float(th))
+            u.time = Float(time.truncatingRemainder(dividingBy: 3600))
+            withUnsafeMutableBytes(of: &u.scene) { raw in
+                let s = raw.bindMemory(to: simd_float4.self)
+                for (i, v) in all.enumerated() where i < 16 { s[i] = v }
+            }
+            enc.setRenderPipelineState(mixPSO)
+            enc.setFragmentBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
+            let ph = CustomSceneAssets.placeholder(device)
+            enc.setFragmentTexture(frame.luma, index: 9)
+            enc.setFragmentTexture(frame.chroma, index: 10)
+            enc.setFragmentTexture(ph, index: 11)
+            enc.setFragmentTexture(ph, index: 12)
+            enc.setFragmentSamplerState(CustomSceneAssets.sampler(device), index: 0)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+            enc.endEncoding()
+            if let blit = cmd.makeBlitCommandEncoder() {                 // (the blurs are mip taps)
+                blit.generateMipmaps(for: hdr)
+                blit.generateMipmaps(for: glow)
+                blit.endEncoding()
+            }
+            // the frame's buffers stay alive until the GPU is done with them
+            cmd.addCompletedHandler { _ in withExtendedLifetime(frame) {} }
+            target.hdr = hdr; target.glow = glow; target.key = key; target.frameObject = object
+            target.serial = frame.serial; target.mixedAt = now
         }
-        enc.setRenderPipelineState(pso)
-        enc.setFragmentBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
-        let ph = CustomSceneAssets.placeholder(device)
-        enc.setFragmentTexture(frame.luma, index: 9)
-        enc.setFragmentTexture(frame.chroma, index: 10)
-        enc.setFragmentTexture(ph, index: 11)
-        enc.setFragmentTexture(ph, index: 12)
-        enc.setFragmentSamplerState(CustomSceneAssets.sampler(device), index: 0)
-        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-        enc.endEncoding()
-        if let blit = cmd.makeBlitCommandEncoder() {
-            blit.generateMipmaps(for: hdr)
-            blit.generateMipmaps(for: glow)
-            blit.endEncoding()
+        guard let hdr = target.hdr, let glow = target.glow else { return nil }
+
+        // the look: halation + bloom (and the mist), from the mips
+        if relook {
+            func pass(_ pso: MTLRenderPipelineState, into t: MTLTexture) -> Bool {
+                let rpd = MTLRenderPassDescriptor()
+                rpd.colorAttachments[0].texture = t
+                rpd.colorAttachments[0].loadAction = .dontCare
+                rpd.colorAttachments[0].storeAction = .store
+                guard let enc = cmd.makeRenderCommandEncoder(descriptor: rpd) else { return false }
+                var u = FXUniforms()
+                u.resolution = simd_float2(Float(t.width), Float(t.height))
+                u.scene.0 = simd_float4(lookKey[0], lookKey[1], lookKey[2], lookKey[3])
+                enc.setRenderPipelineState(pso)
+                enc.setFragmentBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
+                let ph = CustomSceneAssets.placeholder(device)
+                enc.setFragmentTexture(hdr, index: 9)
+                enc.setFragmentTexture(glow, index: 10)
+                enc.setFragmentTexture(ph, index: 11)
+                enc.setFragmentTexture(ph, index: 12)
+                enc.setFragmentSamplerState(CustomSceneAssets.sampler(device), index: 0)
+                enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+                enc.endEncoding()
+                return true
+            }
+            // the light at half the tiles' size (blurs of tens of pixels); the mist (an AgX of a
+            // blur, sharper where it's bright) at their own
+            guard let light = texture(device, FilmLayers.lookFormat, max((tw + 1) / 2, 1), max((th + 1) / 2, 1),
+                                      target.light, mipmapped: false),
+                  pass(lookPSO, into: light) else { return nil }
+            target.light = light
+            if mist {
+                guard let mistPSO = pso(3),
+                      let mt = texture(device, FilmLayers.lookFormat, tw, th, target.mist, mipmapped: false),
+                      pass(mistPSO, into: mt) else { return nil }
+                target.mist = mt
+            }
+            target.lookKey = lookKey
         }
-        // the frame's buffers stay alive until the GPU is done with them
-        cmd.addCompletedHandler { _ in withExtendedLifetime(frame) {} }
-        target.hdr = hdr; target.glow = glow; target.key = key; target.screen = screen; target.frameObject = object
-        return (hdr, glow, screen)
+        guard let light = target.light else { return nil }
+        let mistT = (mist ? target.mist : nil) ?? CustomSceneAssets.placeholder(device)
+
+        // the grain lattice: once per grain frame (film_finish_layers' frame: ⌊t · fps⌋) and screen
+        var grain: MTLTexture?
+        var grainEncoded = false
+        if let size, size.width > 0, size.height > 0, let grainPSO = pso(2) {
+            let gframe = max((Float(time) * fps).rounded(.down), 0)
+            let cell = FilmLayers.grainCell(height: size.height)
+            let gw = Int((Float(size.width) - 0.5) / cell) + 2, gh = Int((Float(size.height) - 0.5) / cell) + 2
+            let gkey = SIMD3<Float>(gframe, Float(size.width), Float(size.height))
+            if gkey == target.grainKey, mode != .always, let g = target.grain {
+                grain = g
+            } else if let g = texture(device, FilmLayers.grainFormat, gw, gh, target.grain, mipmapped: false) {
+                let rpd = MTLRenderPassDescriptor()
+                rpd.colorAttachments[0].texture = g
+                rpd.colorAttachments[0].loadAction = .dontCare
+                rpd.colorAttachments[0].storeAction = .store
+                if let enc = cmd.makeRenderCommandEncoder(descriptor: rpd) {
+                    var u = FXUniforms()
+                    u.resolution = simd_float2(Float(gw), Float(gh))
+                    u.scene.0 = simd_float4(gframe, 0, 0, 0)
+                    enc.setRenderPipelineState(grainPSO)
+                    enc.setFragmentBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
+                    enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+                    enc.endEncoding()
+                    target.grain = g; target.grainKey = gkey
+                    grain = g; grainEncoded = true
+                }
+            }
+            if grain != nil { screen[0].z = gframe; screen[0].w = Float(size.height) }
+        }
+        let s2 = screen[2]
+        // no rain, snow or lightning: damp (or dry, without the mist and fog film_layered skips ≤ 0.02)
+        let still = s2.x <= 0 && s2.y <= 0 && s2.w <= 0
+        let variant = !still ? nil : s2.z <= 0.02 ? FilmLayers.dryFunction : FilmLayers.dampFunction
+        return Output(hdr: hdr, light: light, mist: mistT, grain: grain, screen: screen, variant: variant,
+                      encoded: remix || relook || grainEncoded)
     }
 
     /// The screen pass's u.scene[0…3] (film.metal's header).
@@ -501,7 +661,7 @@ final class FilmLayers {
         let wd = Double(tileWidth)
         let halLod = Float(log2(max(0.02 * wd, 1))), bloomLod = Float(log2(max(0.05 * wd, 1)))
         let rain = weather.precip * (1 - weather.snow), snow = weather.precip * weather.snow
-        return [simd_float4(Float(tileWidth), Float(tileHeight), 0, 0),
+        return [simd_float4(Float(tileWidth), Float(tileHeight), -1, 0),
                 simd_float4(0, fps, 1, bloom),
                 simd_float4(Float(rain), Float(snow), Float(weather.fog), m.flash),
                 simd_float4(vignette, halLod, bloomLod, Float(min(max(weather.wind / 20, 0), 1)))]
