@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.2 (unreleased)
+
+### Improved
+- **Live-lit films use less power.** They're drawn at their own 24 fps where the display allows,
+  relight only when the picture or the light changes, and draw each frame with less work —
+  about a third less GPU time in clear weather, a little less in rain and snow, the same picture.
+- **Faster film renders.** Film scenes render several times faster in Blender (a shadow the
+  scenes never used was being redrawn for every sample), with the same picture.
+
 ## 1.6.1 — Fixes
 
 ### Improved
@@ -11,9 +20,6 @@
   yourself, instead of the nearest area macOS finds.
 - **Commute at night.** The city's lights now show in full in the live-lit version of the
   film, like the night render.
-- **Live-lit films use less power.** They're drawn at their own 24 fps where the display allows,
-  relight only when the picture or the light changes, and draw each frame with less work —
-  about a third less GPU time in clear weather, a little less in rain and snow, the same picture.
 - **Less weather fetching.** A style pinned to one weather condition no longer makes DotStudio
   fetch the live weather.
 
