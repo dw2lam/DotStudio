@@ -83,19 +83,29 @@ frame (CustomSceneLink.prepass): `ds_film_mix` (tiles → HDR + highlights, at t
 → mipmaps of both → `ds_film_look` (halation + bloom from the mips, at half the tiles' size)
 → `ds_film_mist` (only while there's mist: the misted view, AgX of mip 3). Per **grain frame**:
 `ds_film_grain`, the grain's lattice for the screen size (so the screen pass gathers four
-corners instead of hashing them). Per **displayed frame**: the screen pass only — `ds_film_dry`
-(no rain, snow, lightning or mist), `ds_film_damp` (mist and fog only) or `ds_fragment`
-(everything); the lean ones are the full pass with code compiled out that the weather skips,
-so the same pixels.
+corners instead of hashing them); in the same texture, redrawn only when the screen, rain, snow
+or wind change, the glass's cell tables (each rain-bead / runnel / settled-flake cell's hashes,
+gathered instead of hashed per pixel) and the glass map (per 8-pixel block, which bead, runnel
+and flake layers can reach it: the others are skipped). Per **displayed frame**: the screen
+pass only — `ds_film_dry` (no rain, snow, lightning or mist), `ds_film_damp` (mist and fog
+only), `ds_film_rain` (no snow), `ds_film_snow` (no rain) or `ds_fragment` (everything: sleet);
+the lean ones are the full pass with code compiled out that the weather skips, so the same
+pixels.
 
 While live, light-only changes (the sun, the weather easing, cloud shadows drifting, lightning)
 re-mix at most at the clip's frame rate; with the video playing they ride on its frames. A film
 with an `fps` is drawn at that rate where the display allows (FramePacing: 24 on 120 Hz, 30 on
 60 Hz), since nothing in it changes faster.
 
+Rain and snow (the tables, map, early-outs and rain / snow variants, 1.6.2): the screen pass
+measured 12–19 % less in every wet weather, best runs on a busy GPU at high clocks (drizzle
+1.02 → 0.90 ms, rain 1.11 → 0.93, heavy rain 1.18 → 0.95, storm 1.16 → 0.95, snow 1.14 → 0.98, sleet 1.24 → 1.06;
+clear 0.69, overcast 0.76 for scale) — about 4.4–5.1 ms at idle clocks, still over the 4 ms aim:
+the drops, flakes and falling snow are drawn per glass pixel.
+
 Measured on an M5 Pro at 5120×2880 with the full Commute loop (1600×1000 tiles), benchmark_style
 (GPU at idle clocks, as a 30 fps wallpaper runs it): screen pass 3.3 ms dry, 3.6 damp, 4.9–6.0
-with rain or snow (the drops and flakes, per glass pixel); the per-video-frame passes 0.85 ms
+with rain or snow before the tables and map (≈ 4.4–5.1 after); the per-video-frame passes 0.85 ms
 (1.05 with mist), at most 24 a second. benchmark_style reports a film as a frame that shows a
 new video frame (screen + passes) and gives both parts. Before (1.6.0): 5.1 ms dry to 7.8 sleet
 per frame for the screen pass alone, with the mix re-run on every frame whenever the light moved.
