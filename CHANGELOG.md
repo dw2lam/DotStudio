@@ -1,8 +1,11 @@
 # Changelog
 
-## 1.6.2 (unreleased)
+## 1.6.2 — Commute, lit live
 
 ### Improved
+- **Commute, sharper and lit live.** The train film is re-rendered at 2560×1600 — finer detail
+  everywhere — as light layers, so the sun, sky, cabin lights and city glow are mixed live: any
+  time of day and every weather instead of four fixed clips.
 - **Live-lit films use less power.** They're drawn at their own 24 fps where the display allows,
   relight only when the picture or the light changes, and draw each frame with less work —
   about a third less GPU time in clear weather, a little less in rain and snow, the same picture.
