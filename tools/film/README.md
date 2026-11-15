@@ -149,7 +149,7 @@ python3 -I dsfilm/layerpack.py check DIR OUT/layers.mov [--frames 1,12,24]   # d
 - Everything else is the same for every tile: camera, motion, frame numbers, motion blur. No film
   look (bloom, halation, vignette, fog) and no exposure: half-float EXR, scene-linear Rec.709.
 - Order: tile by tile (`sun` frames 1…N, then `sun_low` …), so the probes are re-baked 5 times per
-  loop (~2.5 s each), not per frame.
+  loop (~2 s each), not per frame.
 - Packing: per light tile `scale` = the 99.95th percentile of the per-pixel max channel, pooled over
   the loop (an even sample of up to 96 frames), rounded up to 3 digits; `v = clamp(lin/scale, 0, 1)^(1/4)`;
   the mask as is. Tiles sit 8 px apart (manifest `"gutter": 8`; tile i at x = (i%3)·(w+8),
@@ -188,32 +188,58 @@ its Background strength. `lighting.add_sun(coll, name, preset, color=(1, 1, 1))`
 sun; give it the same periodic wobble as the first. Night-only emitters must exist in the layered
 build at their night strength (Commute's city builds them whenever `P["layers"]` is set).
 
-### Cost (M5 Pro, measured on Commute, EEVEE, 64 base samples)
+### Cost (M5 Pro, measured on Commute, EEVEE, 64 base samples, 1600×1000 tiles)
 
-| Tile | samples | s / frame, 1600×1000 | s / frame, 960×600 |
+| Tile | samples | s / frame (toolkit 0.2.2) | before 0.2.2: frame 1 / mean of 10 frames over the loop |
 |---|---|---|---|
-| `sun` | 32 (½) | 12.4 | 11.9 |
-| `sun_low` | 32 (½) | ~12.4 | 11.6 |
-| `sky` | 64 | 22.6 | 19.1 |
-| `cabin` | 64 | 22.2 | 18.9 |
-| `city` | 16 (¼) | 6.5 | 5.3 |
-| `mask` | 8 (flat emission, no RT/GI/shadows) | ~1 | 0.3 |
-| **all six** | | **72–77** (117 with every tile at 64) | **~67** |
+| `sun` | 32 (½) | 2.1 | 11.3 / 8.0 |
+| `sun_low` | 32 (½) | 2.8 | ~12 / ~8.5 |
+| `sky` | 64 | 2.2 | 22.2 / 13.4 |
+| `cabin` | 64 | 2.4 | 22.1 / 13.6 |
+| `city` | 16 (¼) | 1.1 | 6.5 / ~4.4 |
+| `mask` | 8 (flat emission, no RT/GI/shadows) | 0.3 | ~1 / 0.4 |
+| **all six** | | **10.9** | **72–77 / ~48** |
 
-- EEVEE's cost here is in the samples, not the pixels: a 960×600 tile costs the same as 1600×1000.
-  Lower resolution for "soft" tiles saves nothing; fewer samples do (time is linear in samples,
-  ~0.34 s per sample per tile + ~1 s). The 960×600 column is the median over a 24-frame animation
-  (frames 1–24, `job.py loop --variants layers --res 960x600 --frames 1-24`); the 1600×1000 one is frame 1.
+The 0.2.2 column is `job.py loop --variants layers --frames 1-24` (each tile's mean over frames 1–24;
+the time doesn't depend on the frame any more: 2.1–2.5 s for `sky` anywhere in the loop).
+
+- **Full Commute loop (576 frames): 10.9 s × 576 ≈ 1 h 45 min of tiles + ~30 s build and bakes +
+  packing (10–15 min) ≈ 2 h** (before 0.2.2: ~7.7 h by the loop's mean, ~12 h projected from frame 1),
+  versus ~50 min per variant clip — a layered loop costs about as much as two or three variant
+  loops and replaces all four (and every weather in between).
+- **Where the time went** (0.2.1 and earlier): ~85 % of every EEVEE frame was the *world's* sun shadow.
+  `lighting.world` sets `sun_threshold = 1e4` so EEVEE extracts no sun from the HDRI, but EEVEE still
+  kept a shadow map for that (empty) world sun and re-rendered it every sample — geometry-bound, so
+  the cost didn't shrink with the tile size, and it varied with the frame (whatever city geometry
+  fell into the clipmap: 3 s or 22 s for the same `sky` tile). Every tile paid it, even `sky` and
+  `city`, which have no lamps. `world.use_sun_shadow = False` (now set next to the threshold) makes
+  the images identical — 0.01 / 0.15 levels in the mixed picture, the same as two runs of the same
+  render — and a 64-sample tile costs ~0.5 s fixed + 0.025 s per sample (`sun`/`sun_low`: 0.05–0.06,
+  their shadow maps are real). It speeds up variant loops the same way (a day frame at 1920×1200:
+  22.4 → 4.6 s).
+- What's left: ~0.5 s per render that doesn't depend on samples (render start-up, scene sync, the EXR
+  write ~0.07 s), i.e. ~3 s of a frame's 11; `frame_set` is 5 ms; probe re-bakes ~2 s per tile, 5 per
+  loop. Motion blur, fast GI and screen-space ray tracing cost little at these samples; the pixel count
+  matters a little (800×500 vs 1600×1000: 0.65 vs 0.87 s at 16 samples).
 - Why those samples: the error a tile adds to the mixed picture, in 8-bit display levels (mean / 99th
   percentile) vs every tile at 64 — noise floor: the sky at 64 vs 128 differs by 0.27 / 2.3 by day.
   `sun` at 32: 0.09 / 0.9 (at 16: 0.19 / 2.1). `city` at 16: 0.06 / 1.3 at night (32: 0.03 / 0.6).
   `sky` at 32: 0.43 / 3.7 by day — visible, so 64. `cabin` at 32: 0.57 / 4.1 at night, 0.91 / 6.3
   on a rainy night (it's the main light then) — so 64. `mask` at 4 vs 32: 0.0015 mean.
-- Probe re-bake: ~2.5 s per tile (~4 s the first). Build ~13–15 s. Packing (numpy + VideoToolbox): 11 s for 24 frames
+- **Denoising doesn't help (measured, 0.2.2)**: fewer samples + OpenImageDenoise (the compositor's
+  Denoise node on the GPU, guided by EEVEE's Diffuse Color + Normal passes, prefilter Accurate,
+  quality High; ~0.35–0.45 s per tile) changes almost nothing, because EEVEE's low-sample error is
+  not per-pixel noise: 50–77 % of it survives a 17-px blur (blotchy GI / shadow convergence) and it is
+  biased (`sky`, `cabin`, `sun_low` 2–4 % darker at 8 samples). Mixed picture (the engine's weights:
+  day, golden, night, rain) vs a 256-sample truth, frames 1/200/400: the
+  current samples 0.55–0.68 / 4.1–5.7 (rainy night 1.1 / 8); every light tile at 16 + denoise 1.8–2.2
+  / 14–19 (rainy night 3.2 / 23), at 8 + denoise 3.2–3.9 / 27–33 — the same as without the denoiser
+  (raw 16: 1.7–2.2 / 14–19). Albedo = diffuse + glossy colour, no guides, or prefilter Fast: the same
+  within 0.05. Frame-to-frame difference in a static region (frames 101–106, 33-px low-pass) rises
+  too, e.g. rainy night 0.145 → 0.198 (16 + denoise) → 0.251 (8 + denoise). So the light tiles stay
+  undenoised at the samples above.
+- Probe re-bake: ~2 s per tile (~3.5 s the first). Build ~11–13 s. Packing (numpy + VideoToolbox): 11 s for 24 frames
   of 960×600 tiles, so roughly 10–15 min for a 576-frame loop at 1600×1000.
-- **Full Commute loop (576 frames) at 1600×1000 tiles: 72–77 s × 576 ≈ 11.5–12.3 h** (18.7 h with every
-  tile at 64), versus ~3.5–4 h per variant clip — i.e. one layered loop costs about as much as three
-  variant loops and replaces all four (and every weather in between).
 - Disk: half-float EXR (ZIP) per frame at 1600×1000 ≈ 4–5.5 MB per light tile (the mask compresses to
   almost nothing): ~14 GB for a 576-frame loop (9 MB per frame at 960×600), deleted after packing
   unless `--keep-frames`.
@@ -227,19 +253,20 @@ build at their night strength (Commute's city builds them whenever `P["layers"]`
 - Additivity (frame 1, 1600×1000): sun + sky + cabin + city vs an all-lights render of the same
   frame: mean absolute error **4.05 %** of the mean (3.97 % off the glass, 4.19 % on it), signed −2.5 %
   (the sum is a little darker: EEVEE's GI denoise/clamps aren't exactly linear); in display terms
-  0.0066 of full range.
+  0.0066 of full range. Toolkit 0.2.2: 3.87 % (frame 1) / 3.78 % (frame 200), signed −2.4 / −2.1 %;
+  at 256 samples 3.78 / 3.36 % — it's EEVEE's nonlinearity, not noise.
 
 ### Choosing: no render, layer stills, a layered loop, or variant loops
 
 | What the user wants | Make | Cost |
 |---|---|---|
 | Stylised, graphic, abstract, or anything a shader can draw | **no render**: a shader scene (the `metal` engine) | seconds; lives with the sun and weather by construction |
-| A photoreal set that may sit still (a room, a view), relit live by time and weather | **layer stills**: `--variants layers --still-frame N` (a one-frame `layers.mov`) | 98 s end to end at 1600×1000 (72 s of tiles + build + bakes + packing), measured |
-| A photoreal set with motion, every time of day and weather | **a layered loop** (`--variants layers`) | overnight: ~12 h for 24 s at 1600×1000 tiles |
-| Weather that changes geometry or materials: snow cover, wet reflective streets, water running on the glass, fog volumes, a different sky that must be seen sharply | **variant loops** (`--variants day,rain,…`), possibly together with layers | ~3.5–4 h per variant at 1920×1200 |
+| A photoreal set that may sit still (a room, a view), relit live by time and weather | **layer stills**: `--variants layers --still-frame N` (a one-frame `layers.mov`) | 38 s end to end at 1600×1000 (11 s of tiles + build + bakes + packing), measured |
+| A photoreal set with motion, every time of day and weather | **a layered loop** (`--variants layers`) | ~2 h for 24 s at 1600×1000 tiles |
+| Weather that changes geometry or materials: snow cover, wet reflective streets, water running on the glass, fog volumes, a different sky that must be seen sharply | **variant loops** (`--variants day,rain,…`), possibly together with layers | ~50 min per variant at 1920×1200 (EEVEE) |
 
 Always render the layer stills of a scene before its layered loop (show the mixes), and time 24
-frames (`--frames 1-24`) before committing to the night.
+frames (`--frames 1-24`) before committing to the full loop.
 
 ## Packaging (the "film" engine pack)
 
@@ -343,10 +370,9 @@ light the interior: that flattens the sun patches.
 | Cycles still, 1600×1000, 384 samples (adaptive + OIDN, 1024-px tiles) | 75–105 s per frame |
 | Cycles still, 800×500, 64–128 samples (iteration) | ~7–10 s |
 | Cycles animation frame, 2560×1600, 128 samples | ~76 s per frame (measured over 10 frames) |
-| EEVEE animation frame (ray traced, probes baked), 2560×1600, 64 samples | ~20–30 s per frame (measured over 24 frames) |
-| EEVEE animation frame, 1920×1200, 64 samples | ~26 s per frame: the cost is in the samples, not the resolution |
+| EEVEE animation frame, 1920×1200, 64 samples (day, ray traced, probes baked) | ~5 s per frame (4.6 s frame 1, 5.1 s frame 200); toolkit ≤ 0.2.1: ~20–30 s (the world sun's shadow map, see "Light layers" → "Where the time went") |
 | EEVEE probe bake (volume + sphere) | ~8 s per process |
-| Commute loop | 24 s × 24 fps = 576 frames: ~4 h with EEVEE at 64 samples, ~12 h with Cycles at 128 |
+| Commute loop | 24 s × 24 fps = 576 frames: ~50 min with EEVEE at 64 samples (not yet timed over a whole loop), ~12 h with Cycles at 128 |
 | Web encode (1280×800, two-pass VP9 + H.264) | about a minute for 24 s |
 
 Always time 24 frames before a full loop. EEVEE needs the scene's baked volume probe to match

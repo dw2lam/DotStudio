@@ -229,12 +229,14 @@ def layers_mode(sp, scene, ctx, out, cam, outputs, timings):
     n_samples = info["samples"]
 
     def eta():
-        # tiles not rendered yet: EEVEE's time is ~linear in samples (README "Light layers")
-        per_sample = [v / n_samples[k] for k, v in s_per.items() if k != "mask"]
+        # tiles not rendered yet: EEVEE's time is a fixed ~0.5 s per render plus a part linear in
+        # samples (README "Light layers")
+        fixed = 0.5
+        per_sample = [max(v - fixed, 0) / n_samples[k] for k, v in s_per.items() if k not in ("mask", "full")]
         if not per_sample:
             return None
         c = sum(per_sample) / len(per_sample)
-        return sum(len(todo[t]) * s_per.get(t, 1.5 if t == "mask" else c * n_samples[t]) for t in tiles)
+        return sum(len(todo[t]) * s_per.get(t, 0.4 if t == "mask" else fixed + c * n_samples[t]) for t in tiles)
 
     for t in tiles:
         if not todo[t]:
