@@ -99,3 +99,6 @@ with rain or snow (the drops and flakes, per glass pixel); the per-video-frame p
 (1.05 with mist), at most 24 a second. benchmark_style reports a film as a frame that shows a
 new video frame (screen + passes) and gives both parts. Before (1.6.0): 5.1 ms dry to 7.8 sleet
 per frame for the screen pass alone, with the mix re-run on every frame whenever the light moved.
+With 2560×1600 tiles (video 7696×3208) the screen pass is unchanged (it's per screen pixel) and
+the per-video-frame passes scale with the tiles' pixels: ~2.5× (best runs 0.25 → 0.63 ms, 0.31
+→ 0.72 with mist, on a busy GPU at high clocks), so ≈ 2.1–2.6 ms at idle clocks, ≤ 24 a second.
