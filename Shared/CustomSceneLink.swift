@@ -130,7 +130,7 @@ final class CustomSceneLink {
                case .building = CustomScenePipelines.state(p, device: device, format: format) { ready = false }
             guard p.manifest.isLayeredFilm else { continue }
             // its other passes too: mix, look, grain, the lean screen passes
-            for (fragment, f, more) in FilmLayers.passes + [(FilmLayers.dryFunction, format, []), (FilmLayers.dampFunction, format, [])] {
+            for (fragment, f, more) in FilmLayers.passes + FilmLayers.screenVariants.map({ ($0, format, [MTLPixelFormat]()) }) {
                 if CustomScenePipelines.pipeline(p, device: device, format: f, wait: false, fragment: fragment, extraFormats: more) == nil,
                    case .building = CustomScenePipelines.state(p, device: device, format: f, fragment: fragment) { ready = false }
             }

@@ -114,7 +114,7 @@ weather, eased over 90 s):
 The layers are mixed at the tiles' size with their blurs (≈ 0.85–1.05 ms for 1600×1000 tiles,
 only for a new video frame or light: at most the clip's frame rate), then one screen pass draws
 the glass, glow, tone map and grain on every displayed frame: ≈ 3.3 ms at 5120×2880 in clear or
-partly cloudy weather, 3.6 overcast or foggy, 5–6 with rain or snow on the glass (Apple M5 Pro,
+partly cloudy weather, 3.6 overcast or foggy, ≈ 4.4–5.1 with rain or snow on the glass (Apple M5 Pro,
 benchmark_style, which reports both parts). A film with an `fps` is drawn at that rate where the
 display allows (24 on 120 Hz, 30 on 60 Hz). The video decodes in hardware straight to 10-bit
 textures (no conversion pass).
