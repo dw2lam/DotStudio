@@ -1033,6 +1033,32 @@ func layeredFilmChecks(work: URL, dev: MTLDevice) -> Bool {
         }
         check(worst <= 4, String(format: "film layers: the screen pass at 5120×2880 ≤ 4 ms in every weather (%@ ms; best runs)",
                                    rows.joined(separator: ", ")))
+
+        // the lean screen passes (dry, damp) and the grain lattice draw the full pass's pixels
+        func maxDiff(_ a: CGImage?, _ b: CGImage?) -> Int {
+            guard let a, let b, let da = a.dataProvider?.data, let db = b.dataProvider?.data else { return 255 }
+            let n = min(CFDataGetLength(da), CFDataGetLength(db)), pa = CFDataGetBytePtr(da)!, pb = CFDataGetBytePtr(db)!
+            var m = 0
+            for i in 0..<n where i % 4 != 3 { m = max(m, abs(Int(pa[i]) - Int(pb[i]))) }
+            return m
+        }
+        var same: [String] = []
+        var allSame = true
+        for (name, w, lean) in [("clear", WeatherMix.clear, FilmLayers.dryFunction), ("partly cloudy", .preset(.partlyCloudy), FilmLayers.dryFunction),
+                                ("overcast", .preset(.cloudy), FilmLayers.dampFunction), ("fog", .preset(.fog), FilmLayers.dampFunction),
+                                ("rain", .preset(.rain), CustomSceneCompiler.fragmentFunction)] {
+            guard case .success(let lp) = CustomSceneCompiler.build(prep, device: dev, format: .bgra8Unorm, fragment: lean) else {
+                allSame = false; same.append("\(name): no \(lean)"); continue
+            }
+            let full = CustomSceneBench(device: dev, pso: pso, prepared: prep)
+            full.weather = w; full.grainLattice = false; full.params["ds.grain"] = 0.6
+            let fast = CustomSceneBench(device: dev, pso: lp, prepared: prep)
+            fast.weather = w; fast.params["ds.grain"] = 0.6
+            let d = maxDiff(full.render(width: 640, height: 400, time: 2.3)?.image, fast.render(width: 640, height: 400, time: 2.3)?.image)
+            allSame = allSame && d <= 1
+            same.append("\(name) \(lean) Δmax \(d)")
+        }
+        check(allSame, "film layers: the lean screen passes and the grain lattice draw the full pass's pixels (\(same.joined(separator: ", ")))")
     }
     // the mix pass on the contract's default grid (3×2 tiles of 1600×1000): it runs only when the
     // video's frame (≤ 30 fps) or the light changes

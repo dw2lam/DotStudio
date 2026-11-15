@@ -509,6 +509,8 @@ final class CustomSceneBench {
     /// A layered film's light (its first frame is mixed for the sun and weather here).
     var sunElevation: Double = 30
     var weather: WeatherMix = .clear
+    /// A layered film's grain from the grain pass's lattice (false: hashed in the screen pass).
+    var grainLattice = true
     private lazy var layers: FilmLayers? = prepared.manifest.layers.map { FilmLayers(prepared: prepared, layers: $0) }
 
     init(device: MTLDevice, pso: MTLRenderPipelineState, prepared: PreparedScene) {
@@ -541,11 +543,15 @@ final class CustomSceneBench {
             ?? CustomSceneAssets.textures(for: prepared, device: device)
         if let layers {
             // (the mix pass runs once per command buffer, as live: only a new frame re-mixes)
+            // (the grain lattice is the first frame's: the others hash their grain, as they would)
             guard let out = layers.encode(cmd, device: device, elevation: sunElevation, weather: weather, time: Double(time),
-                                          live: false, wait: true) else { lastError = "the layers video has no frame"; return nil }
+                                          halation: u.scene.8.y, screen: grainLattice ? (width, height) : nil,
+                                          live: false, wait: true)
+            else { lastError = "the layers video has no frame"; return nil }
             u.scene.0 = out.screen[0]; u.scene.1 = out.screen[1]; u.scene.2 = out.screen[2]; u.scene.3 = out.screen[3]
             u.scene.4.x = Float(sunElevation)
-            assets[0] = out.hdr; assets[1] = out.glow
+            assets[0] = out.hdr; assets[1] = out.light; assets[2] = out.mist
+            assets[3] = out.grain ?? CustomSceneAssets.placeholder(device)
         }
         for f in 0..<frames {
             u.time = time + Float(f) * 0.37

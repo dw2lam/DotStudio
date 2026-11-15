@@ -29,7 +29,7 @@ final class CustomSceneLink {
         var assetsTex: [MTLTexture]?
         var film: CustomFilm?
         /// A layered film's mix this frame (prepass), per kind of render (live / one-off).
-        var layered: [Bool: (hdr: MTLTexture, glow: MTLTexture, screen: [simd_float4])] = [:]
+        var layered: [Bool: FilmLayers.Output] = [:]
     }
     private var entries: [String: Entry] = [:]
 
@@ -128,26 +128,47 @@ final class CustomSceneLink {
             guard let p = prepared(id), p.source != nil else { continue }
             if CustomScenePipelines.pipeline(p, device: device, format: format, wait: false) == nil,
                case .building = CustomScenePipelines.state(p, device: device, format: format) { ready = false }
-            if p.manifest.isLayeredFilm,          // its mix pass too
-               CustomScenePipelines.pipeline(p, device: device, format: FilmLayers.hdrFormat, wait: false,
-                                             fragment: FilmLayers.mixFunction, extraFormats: [FilmLayers.glowFormat]) == nil,
-               case .building = CustomScenePipelines.state(p, device: device, format: FilmLayers.hdrFormat,
-                                                           fragment: FilmLayers.mixFunction) { ready = false }
+            guard p.manifest.isLayeredFilm else { continue }
+            // its other passes too: mix, look, grain, the lean screen passes
+            for (fragment, f, more) in FilmLayers.passes + [(FilmLayers.dryFunction, format, []), (FilmLayers.dampFunction, format, [])] {
+                if CustomScenePipelines.pipeline(p, device: device, format: f, wait: false, fragment: fragment, extraFormats: more) == nil,
+                   case .building = CustomScenePipelines.state(p, device: device, format: f, fragment: fragment) { ready = false }
+            }
         }
         return ready
     }
 
     // MARK: Filling a pass
 
-    /// Before a Custom Scene pass's encoder opens: a layered film encodes its mix pass on `cmd`
-    /// (only when its video frame or light changed), which `fill` then binds. Others: nothing.
+    /// When a layered film runs its per-video-frame passes (benchmarks: .hold / .always measure the
+    /// screen pass and those passes apart). Live hosts leave it at .auto.
+    var filmMixMode: FilmLayers.MixMode = .auto
+
+    /// Before a Custom Scene pass's encoder opens: a layered film encodes its passes (the mix only
+    /// when its video frame or light changed, the grain lattice per grain frame), which `fill` then
+    /// binds. Others: nothing.
+    /// They go in a command buffer of their own on `cmd`'s queue, committed here, so ahead of the
+    /// frame: on the GPU timeline the frame's own buffer then holds just its screen pass (small
+    /// passes ahead of a big one in one command buffer measured ~1 ms more GPU time on an M5 Pro
+    /// at idle clocks than the same passes committed apart).
+    /// - size: the pass's size (the grain lattice is made for it).
+    /// - committing: called with that command buffer before it's committed (GPU time accounting).
     func prepass(_ cmd: MTLCommandBuffer, inst: EffectInstance, wall: Date, location: (lat: Double, lon: Double)?,
-                 weather: WeatherMix, time: Double, live: Bool, wait: Bool, now: CFTimeInterval = CACurrentMediaTime()) {
+                 weather: WeatherMix, time: Double, size: CGSize? = nil, live: Bool, wait: Bool,
+                 now: CFTimeInterval = CACurrentMediaTime(), committing: ((MTLCommandBuffer) -> Void)? = nil) {
         guard let id = inst.custom?.id, let p = prepared(id, now: now), p.manifest.isLayeredFilm,
               let film = film(id), let layers = film.layers else { return }
         let w = CustomFilm.weather(inst, live: weather)
         let el = CustomSceneLink.sun(at: wall, location: location).elevation
-        let out = layers.encode(cmd, device: cmd.device, elevation: el, weather: w, time: time, live: live, wait: wait)
+        let halation = cachedPack(inst, p).e.y                   // (the screen pass's u.scene[8].y)
+        let own = cmd.commandQueue.makeCommandBuffer()
+        let out = layers.encode(own ?? cmd, device: cmd.device, elevation: el, weather: w, time: time, halation: halation,
+                                screen: size.map { (Int($0.width), Int($0.height)) }, live: live, wait: wait, mode: filmMixMode)
+        if let own, out?.encoded == true {
+            own.label = "film layers"
+            committing?(own)
+            own.commit()
+        }
         lock.lock(); entries[id]?.layered[live] = out; lock.unlock()
     }
 
@@ -174,8 +195,15 @@ final class CustomSceneLink {
             lock.lock(); let out = entries[id]?.layered[live]; lock.unlock()
             guard let out, out.screen.count >= 4 else { return nil }      // (no prepass yet: the stand-in)
             u.scene.0 = out.screen[0]; u.scene.1 = out.screen[1]; u.scene.2 = out.screen[2]; u.scene.3 = out.screen[3]
-            let ph = CustomSceneAssets.placeholder(encoder.device)
-            tex = [out.hdr, out.glow, ph, ph]
+            tex = [out.hdr, out.light, out.mist, out.grain ?? CustomSceneAssets.placeholder(encoder.device)]
+            // dry or damp glass: the lean screen pass for it (the same pixels) once it's built
+            if let v = out.variant, let lean = CustomScenePipelines.pipeline(p, device: encoder.device, format: format,
+                                                                               wait: wait, fragment: v) {
+                encoder.setRenderPipelineState(lean)
+                for i in 0..<4 { encoder.setFragmentTexture(tex[i], index: 9 + i) }
+                encoder.setFragmentSamplerState(CustomSceneAssets.sampler(encoder.device), index: 0)
+                return p.hash
+            }
         } else if p.isFilm {
             guard let film = film(id),
                   let f = film.frame(device: encoder.device, now: now, wall: wall, location: location, weather: weather, live: live)
