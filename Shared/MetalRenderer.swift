@@ -517,11 +517,18 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     var measuresGPUTime = false
     private let gpuLock = NSLock()
     private var gpuAccum: Double = 0
+    private var gpuPrepassAccum: Double = 0
     /// Seconds of GPU time since the last call (thread-safe).
     func takeGPUSeconds() -> Double {
+        let s = takeGPUSecondsSplit()
+        return s.frames + s.prepasses
+    }
+    /// The same, split: the frames' own command buffers, and the passes a layered film commits
+    /// ahead of them (CustomSceneLink.prepass: mix, mips, look, grain lattice).
+    func takeGPUSecondsSplit() -> (frames: Double, prepasses: Double) {
         gpuLock.lock(); defer { gpuLock.unlock() }
-        let s = gpuAccum
-        gpuAccum = 0
+        let s = (gpuAccum, gpuPrepassAccum)
+        gpuAccum = 0; gpuPrepassAccum = 0
         return s
     }
     /// Debug pacing (live wallpaper): called on a Metal thread with each drawn frame's
@@ -1250,6 +1257,16 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         guard let self else { return }
         self.gpuLock.lock(); self.gpuAccum += dt; self.gpuLock.unlock()
     }
+    private lazy var accumulatePrepassGPUTime: MTLCommandBufferHandler = { [weak self] cb in
+        let dt = max(cb.gpuEndTime - cb.gpuStartTime, 0)
+        guard let self else { return }
+        self.gpuLock.lock(); self.gpuPrepassAccum += dt; self.gpuLock.unlock()
+    }
+    /// A layered film's own command buffer, before it's committed: GPU time accounting.
+    private lazy var decoratePrepass: (MTLCommandBuffer) -> Void = { [weak self] cb in
+        guard let self, self.measuresGPUTime else { return }
+        cb.addCompletedHandler(self.accumulatePrepassGPUTime)
+    }
 
     /// FXUniforms.clock / .date for `wall`: computed once per reading (every pass of both chains
     /// of a frame shares one), the day of the year once per day.
@@ -1327,11 +1344,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
 
             let target: PassTarget = isLast ? final : .texture(i % 2 == 0 ? pingA : pingB)
 
-            // A layered film mixes its light layers first (its own pass, at the tiles' size).
+            // A layered film mixes its light layers first (its own passes, at the tiles' size).
             if let inst, inst.kind == .custom {
                 customLink.prepass(cmd, inst: inst, wall: wall, location: location,
                                    weather: weatherLink.live(now: CACurrentMediaTime(), wall: wall), time: Double(time),
-                                   live: !thumbnailing, wait: waitsForScenePipelines || thumbnailing)
+                                   size: size, live: !thumbnailing, wait: waitsForScenePipelines || thumbnailing,
+                                   committing: decoratePrepass)
             }
 
             // The pass's effect id (as packed below): its own pipeline if it has one, else the

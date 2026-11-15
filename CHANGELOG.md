@@ -11,6 +11,9 @@
   yourself, instead of the nearest area macOS finds.
 - **Commute at night.** The city's lights now show in full in the live-lit version of the
   film, like the night render.
+- **Live-lit films use less power.** They're drawn at their own 24 fps where the display allows,
+  relight only when the picture or the light changes, and draw each frame with less work —
+  about a third less GPU time in clear weather, a little less in rain and snow, the same picture.
 - **Less weather fetching.** A style pinned to one weather condition no longer makes DotStudio
   fetch the live weather.
 

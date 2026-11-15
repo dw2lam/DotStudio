@@ -7,7 +7,7 @@
 //    u.scene[1] = (mix 0 = all A, the clip's frame rate, 0, 0)
 //    u.scene[8] = (Grain 0…1, Halation 0…1, Weather menu, 0)   — the engine's params (engine.json)
 //
-//  Light layers (docs/film-layers.md), two passes:
+//  Light layers (docs/film-layers.md):
 //  1. ds_film_mix, at the tiles' own resolution, only when the video frame or the light changed:
 //     the light tiles of the layers video (10-bit Y'CbCr planes, decoded pow4 × scale) summed with
 //     their weights (sun, low sun, sky, cabin, city — from the real sun and the weather, the
@@ -20,11 +20,23 @@
 //    u.scene[5…9] = weight rgb (scale, tint, exposure folded in) + tile index (−1: none) for
 //                   sun, sun_low, sky, cabin, city
 //    u.scene[10] = (mask tile index, sun gate (clear), cloud-shadow amount, cloud-shadow phase)
-//  2. ds_fragment (u.scene[1].z == 1) at the screen's size: the HDR aspect-filled, the glass
-//     weather drawn live through the mask (rain beads and runnels that refract, snow and sleet
-//     settling and melting, falling flakes beyond the glass, fog and condensation), halation and
-//     bloom from the mips, vignette, AgX, grain.
-//    u.scene[0] = (HDR width, height, 0, 0)
+//  2. ds_film_look (half the tiles' size) and, while there's mist, ds_film_mist (the tiles' size),
+//     right after the mix: what is a blur of the mix, so the screen pass reads it in one tap
+//     instead of five — the halation + bloom light (rgb) | the misted view (AgX of mip 3, rgb) and
+//     how far the mist creeps in from the glass's edges (a). Smooth over tens of tile pixels: one
+//     bilinear tap of them is the light the mip taps made.
+//    u.scene[0] = (halation, bloom, halation lod, bloom lod)
+//  3. ds_film_grain, once per grain frame (the clip's frame rate), at the screen's size / grain
+//     cell: the grain's lattice (film_hash of each cell corner), so the screen pass gathers four
+//     corners instead of hashing them. u.scene[0].x = the frame.
+//  4. the screen pass, at the screen's size: the HDR aspect-filled, the glass weather drawn live
+//     through the mask (rain beads and runnels that refract, snow and sleet settling and melting,
+//     falling flakes beyond the glass, fog and condensation), halation and bloom, vignette, AgX,
+//     grain. ds_film_damp is the same pass without the rain, snow and lightning code (drawn when
+//     they're 0: overcast, fog), ds_film_dry without any glass code (no mist either: clear, partly
+//     cloudy) — the same pixels, fewer registers and branches.
+//    dsA0 = HDR (mipped), dsA1 = look light, dsA2 = look mist, dsA3 = grain lattice
+//    u.scene[0] = (HDR width, height, the lattice's grain frame (−1: none), its screen height)
 //    u.scene[1] = (0, frame rate, 1, bloom strength)
 //    u.scene[2] = (rain 0…1, snow 0…1, fog 0…1, lightning flash 0…1)
 //    u.scene[3] = (vignette, halation lod, bloom lod, wind 0…1)
@@ -54,6 +66,17 @@ static inline float film_grain(float2 px, float cell, uint frame) {
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y) - 0.5;          // −0.5…0.5
 }
 
+/// film_grain from the grain pass's lattice (`lat`: film_hash of every cell corner for the frame):
+/// the same four values, gathered instead of hashed — the same grain.
+static inline float film_grain_lattice(float2 px, float cell, texture2d<float> lat, sampler s) {
+    float2 g = px / cell;
+    float2 fi = floor(g), f = g - fi;
+    f = f * f * (3.0 - 2.0 * f);
+    // the 2×2 texels around corner fi + 1: w = fi, z = fi + (1, 0), x = fi + (0, 1), y = fi + (1, 1)
+    float4 q = lat.gather(s, (fi + 1.0) / float2(lat.get_width(), lat.get_height()));
+    return mix(mix(q.w, q.z, f.x), mix(q.x, q.y, f.x), f.y) - 0.5;  // −0.5…0.5
+}
+
 /// Live grain on display sRGB `a` (both paths), then the finished pixel.
 static inline float4 film_finish(float3 a, float2 px, float2 res, constant FXUniforms& u) {
     float grain = saturate(u.scene[8].x);
@@ -74,11 +97,6 @@ static inline float4 film_finish(float3 a, float2 px, float2 res, constant FXUni
 // ================================================================================ light layers
 // (compiled for packages with "layers" only: CustomSceneCompiler defines DS_FILM_LAYERS)
 #ifdef DS_FILM_LAYERS
-
-struct FilmMixOut {
-    float4 hdr [[color(0)]];      // exposed scene-linear rgb, glass mask in a
-    float2 glow [[color(1)]];     // luminance over the halation / bloom thresholds
-};
 
 /// One tile's texel at tile-local pixel `p` (top-left origin) as R'G'B' (0…1 code values).
 /// Clamped inside the tile — by half a luma texel, and a whole one for the half-size chroma
@@ -104,6 +122,11 @@ static inline float3 film_light(texture2d<float> y, texture2d<float> c, sampler 
     return v2 * v2 * w.xyz;                                          // pow4 decode × weight
 }
 
+struct FilmMixOut {
+    float4 hdr [[color(0)]];      // exposed scene-linear rgb, glass mask in a
+    float2 glow [[color(1)]];     // luminance over the halation / bloom thresholds
+};
+
 fragment FilmMixOut ds_film_mix(DS_FRAGMENT_PARAMS) {
     // dsA0 = luma (r16Unorm), dsA1 = chroma (rg16Unorm), both the whole grid
     float2 video = max(u.scene[0].xy, float2(1.0)), tile = max(u.scene[0].zw, float2(1.0));
@@ -112,7 +135,7 @@ fragment FilmMixOut ds_film_mix(DS_FRAGMENT_PARAMS) {
     float2 uv = p / tile;
     // partly cloudy: cloud shadows drift over the sun's light, so it comes and goes
     float gate = u.scene[10].y;
-    if (u.scene[10].z > 0.0) {
+    if (u.scene[10].z > 0.0 && (any(u.scene[5].xyz != 0.0) || any(u.scene[6].xyz != 0.0))) {   // (at night: nothing to shade)
         float ph = u.scene[10].w;
         float n = dsNoise(float2(uv.x * 1.3 + ph, uv.y * 0.7 + ph * 0.37)) * 0.65
                 + dsNoise(float2(uv.x * 2.9 - ph * 1.7, uv.y * 1.6 + 3.1)) * 0.35;
@@ -136,8 +159,9 @@ fragment FilmMixOut ds_film_mix(DS_FRAGMENT_PARAMS) {
     return o;
 }
 
-/// AgX (Blender's view transform, "Medium High Contrast" look), minimal fit → display linear.
-static inline float3 film_agx(float3 c) {
+/// AgX (Blender's view transform, "Medium High Contrast" look), minimal fit, before its display
+/// gamma (film_agx: display linear; film_agx_srgb: display sRGB).
+static inline float3 film_agx_curve(float3 c) {
     const float3x3 inset = float3x3(float3(0.842479062253094, 0.0423282422610123, 0.0423756549057051),
                                     float3(0.0784335999999992, 0.878468636469772, 0.0784336),
                                     float3(0.0792237451477643, 0.0791661274605434, 0.879142973793104));
@@ -147,11 +171,21 @@ static inline float3 film_agx(float3 c) {
     const float lo = -12.47393, hi = 4.026069;
     float3 v = inset * max(c, 1e-10);
     v = (clamp(log2(v), lo, hi) - lo) / (hi - lo);
-    float3 x2 = v * v, x4 = x2 * x2;
-    v = 15.5 * x4 * x2 - 40.14 * x4 * v + 31.96 * x4 - 6.868 * x2 * v + 0.4298 * x2 + 0.1191 * v - 0.00232;
+    v = (((((15.5 * v - 40.14) * v + 31.96) * v - 6.868) * v + 0.4298) * v + 0.1191) * v - 0.00232;
     v = saturate(v);
     v = mix(v, v * v * (3.0 - 2.0 * v), 0.25);
-    return pow(max(outset * v, 0.0), 2.2);
+    return max(outset * v, 0.0);
+}
+
+static inline float3 film_agx(float3 c) { return pow(film_agx_curve(c), 2.2); }
+
+/// dsToSrgb(film_agx(c)) with one log2 + exp2 a channel instead of two of each: y^2.2 then
+/// ^(1/2.4) is y^(2.2/2.4), and sRGB's linear toe (≤ 0.0031308) is y^2.2 · 12.92.
+static inline float3 film_agx_srgb(float3 c) {
+    float3 l = log2(film_agx_curve(c));
+    bool3 toe = l * 2.2 <= log2(0.0031308);
+    float3 e = exp2(l * select(float3(2.2 / 2.4), float3(2.2), toe));
+    return select(1.055 * e - 0.055, e * 12.92, toe);
 }
 
 /// Rain on the glass: beads and runnels. `amount` 0…1 (drizzle ≈ 0.35: fine sparse beads, hardly
@@ -177,6 +211,7 @@ static inline float4 film_drops(float2 uv, float aspect, float t, float amount, 
         float r = (i == 0 ? 0.10 : i == 1 ? 0.12 : 0.15) + 0.08 * dsHash(cell + 1.7);
         float2 d = (f - c) / float2(1.0, 1.2);
         float l = length(d);
+        if (!runnel && l >= r) continue;                              // (outside this bead: nothing)
         float k = smoothstep(r, r * 0.8, l);
         off += -d / max(r, 1e-3) * k * (0.004 + 0.003 * float(i));
         cover = max(cover, k);
@@ -205,10 +240,12 @@ static inline float2 film_flakes(float2 uv, float aspect, float t, float amount,
         float2 c = (dsHash2(cell + 9.1) - 0.5) * 0.4;
         float2 d = f - c;
         float r = (0.10 + 0.08 * dsHash(cell + 4.2)) * mix(1.0, 0.55, smoothstep(0.4, 0.95, life));
+        float len = length(d);
+        if (len * 0.76 >= r) continue;                                // (lobes ≥ 0.77: outside this flake)
         float ang = atan2(d.y, d.x);
         // a soft, ragged clump of crystals (or a round slush blob), frosty at its edge
         float lobes = 1.0 + (0.14 * sin(ang * 5.0 + h * 40.0) + 0.09 * sin(ang * 3.0 - h * 17.0)) * (1.0 - slush);
-        float k = smoothstep(r, r * 0.2, length(d) * lobes) * a * (0.75 + 0.25 * dsHash(cell + 6.6));
+        float k = smoothstep(r, r * 0.2, len * lobes) * a * (0.75 + 0.25 * dsHash(cell + 6.6));
         cover = max(cover, k * (1.0 - smoothstep(0.6, 0.95, life) * 0.6));
         wet = max(wet, k * max(slush, smoothstep(0.5, 0.9, life)));
     }
@@ -232,16 +269,106 @@ static inline float film_falling(float2 uv, float aspect, float t, float amount,
     return s;
 }
 
-static inline float4 film_layered(DSVOut in, constant FXUniforms& u, texture2d<float> hdrT,
-                                  texture2d<float> glowT, sampler smp) {
-    float2 res = max(u.resolution, float2(1.0));
-    float2 size = max(u.scene[0].xy, float2(1.0));
+/// film_finish for light layers: the grain from the grain pass's lattice when it was made for this
+/// frame and screen (u.scene[0].zw), else hashed here — the same grain either way.
+static inline float4 film_finish_layers(float3 a, float2 px, float2 res, constant FXUniforms& u,
+                                        texture2d<float> lat, sampler s) {
+    float grain = saturate(u.scene[8].x);
+    if (grain > 0.0) {
+        float fps = u.scene[1].y > 1.0 ? u.scene[1].y : 24.0;
+        uint frame = uint(max(floor(u.time * fps), 0.0));
+        float cell = max(res.y / 1100.0 * 1.4, 1.0);
+        float l = dsLuma(a);
+        float w = 0.25 + 0.75 * saturate(4.0 * l * (1.0 - l));
+        uint2 need = uint2(floor((res - 0.5) / cell)) + 2u;          // the corners this screen reaches
+        bool lattice = u.scene[0].z == float(frame) && u.scene[0].w == res.y
+                    && lat.get_width() >= need.x && lat.get_height() >= need.y;
+        a += (lattice ? film_grain_lattice(px, cell, lat, s) : film_grain(px, cell, frame)) * grain * 0.16 * w;
+        // (the grain dithers already: ds_finish's own dither would only cost a sin a pixel)
+        uint3 e = as_type<uint3>(a) & 0x7f800000u;
+        return float4(any(e == 0x7f800000u) ? float3(0.0) : saturate(a), 1.0);
+    }
+    return ds_finish(a, px);
+}
+
+/// The vignette (in light, before the view transform, as the toolkit's look).
+static inline float3 film_vignette(float3 c, float2 tuv, float vg) {
+    if (vg > 0.0) {
+        float rr = length((tuv - 0.5) / 0.625);
+        float k = saturate((rr - 0.82) / 0.36);
+        c *= 1.0 - vg * k * k;
+    }
+    return c;
+}
+
+/// Halation + bloom (rgb), at half the tiles' size: mip taps of the highlights, two levels each
+/// for a softer falloff. dsA0 = HDR, dsA1 = highlights (both mipmapped).
+fragment float4 ds_film_look(DS_FRAGMENT_PARAMS) {
+    float2 uv = in.pos.xy / max(u.resolution, float2(1.0));
+    float hal = u.scene[0].x, bloom = u.scene[0].y;
+    float3 light = 0.0;
+    if (hal > 0.0 || bloom > 0.0) {
+        float lh = u.scene[0].z, lb = u.scene[0].w;
+        float h = 0.5 * (dsA1.sample(dsSmp, uv, level(lh - 0.5)).r + dsA1.sample(dsSmp, uv, level(lh + 0.7)).r);
+        float b = 0.5 * (dsA1.sample(dsSmp, uv, level(lb - 0.5)).g + dsA1.sample(dsSmp, uv, level(lb + 0.7)).g);
+        float3 bc = dsA0.sample(dsSmp, uv, level(lb)).rgb;
+        bc = bc / max(dsLuma(bc), 1e-4);
+        light = hal * (0.35 / 0.15) * h * float3(1.0, 0.32, 0.10) + bloom * b * min(bc, float3(4.0));
+    }
+    return float4(light, 0.0);
+}
+
+/// Fog / condensation, at the tiles' size (only while there's mist): the misted view (rgb,
+/// display linear) and how far the mist creeps in from the glass's edges (a). dsA0 = HDR.
+fragment float4 ds_film_mist(DS_FRAGMENT_PARAMS) {
+    float2 uv = in.pos.xy / max(u.resolution, float2(1.0));
+    return float4(film_agx(dsA0.sample(dsSmp, uv, level(3.0)).rgb) * 0.92 + 0.03,
+                  saturate((1.0 - dsA0.sample(dsSmp, uv, level(4.5)).a) * 2.2));
+}
+
+fragment float4 ds_film_grain(DS_FRAGMENT_PARAMS) {
+    // texel (x, y) = the grain's lattice point (x, y) for the frame (film_grain's corners)
+    return float4(film_hash(uint2(int2(in.pos.xy) + 32768), uint(u.scene[0].x)), 0.0, 0.0, 1.0);
+}
+
+/// The HDR's uv for screen uv `uv`: aspect-filled.
+static inline float2 film_fill(float2 uv, float2 res, float2 size) {
     float outA = res.x / res.y, img = size.x / size.y;
     float2 scale = (img > outA) ? float2(outA / img, 1.0) : float2(1.0, img / outA);
-    float2 tuv = (in.uv - 0.5) * scale + 0.5;
+    return (uv - 0.5) * scale + 0.5;
+}
 
-    float rain = saturate(u.scene[2].x), snow = saturate(u.scene[2].y), fog = saturate(u.scene[2].z);
-    float flash = saturate(u.scene[2].w), wind = saturate(u.scene[3].w);
+/// The screen pass for dry glass (FilmLayers' `dry`: no rain, snow or lightning, fog ≤ 0.02 so no
+/// mist): film_layered without the glass code it would skip.
+fragment float4 ds_film_dry(DS_FRAGMENT_PARAMS) {
+    float2 res = max(u.resolution, float2(1.0));
+    float2 tuv = film_fill(in.uv, res, max(u.scene[0].xy, float2(1.0)));
+    float4 base = dsA0.sample(dsSmp, tuv, level(0.0));
+    float3 c = base.rgb;
+    float fog = saturate(u.scene[2].z);
+    if (fog > 0.01 && base.a > 0.01) {                                // (partly cloudy's haze)
+        float3 amb = dsA0.sample(dsSmp, tuv, level(6.0)).rgb;
+        c = mix(c, amb * 1.05, base.a * fog * 0.6);
+    }
+    c += dsA1.sample(dsSmp, tuv, level(0.0)).rgb;
+    c = film_vignette(c, tuv, u.scene[3].x);
+    return film_finish_layers(film_agx_srgb(c), in.pos.xy, res, u, dsA3, dsSmp);
+}
+
+/// The screen pass. `precip`: rain, snow and lightning on the glass (false: compiled out, for
+/// ds_film_damp — drawn only when they're all 0, so the same pixels).
+template <bool precip>
+static inline float4 film_layered(DSVOut in, constant FXUniforms& u, texture2d<float> hdrT,
+                                  texture2d<float> lightT, texture2d<float> mistT, texture2d<float> latT,
+                                  sampler smp) {
+    float2 res = max(u.resolution, float2(1.0));
+    float2 size = max(u.scene[0].xy, float2(1.0));
+    float img = size.x / size.y;
+    float2 tuv = film_fill(in.uv, res, size);
+
+    float rain = precip ? saturate(u.scene[2].x) : 0.0, snow = precip ? saturate(u.scene[2].y) : 0.0;
+    float fog = saturate(u.scene[2].z);
+    float flash = precip ? saturate(u.scene[2].w) : 0.0, wind = saturate(u.scene[3].w);
     float t = u.time;
     float4 base = hdrT.sample(smp, tuv, level(0.0));
     float mask = base.a;
@@ -260,23 +387,10 @@ static inline float4 film_layered(DSVOut in, constant FXUniforms& u, texture2d<f
         float3 amb = hdrT.sample(smp, suv, level(6.0)).rgb;
         c = mix(c, amb * 1.05, mask * fog * 0.6);
     }
-    // halation and bloom: mip taps of the highlights (two levels each, for a softer falloff)
-    float hal = saturate(u.scene[8].y), bloom = u.scene[1].w;
-    if (hal > 0.0 || bloom > 0.0) {
-        float lh = u.scene[3].y, lb = u.scene[3].z;
-        float h = 0.5 * (glowT.sample(smp, suv, level(lh - 0.5)).r + glowT.sample(smp, suv, level(lh + 0.7)).r);
-        float b = 0.5 * (glowT.sample(smp, suv, level(lb - 0.5)).g + glowT.sample(smp, suv, level(lb + 0.7)).g);
-        float3 bc = hdrT.sample(smp, suv, level(lb)).rgb;
-        bc = bc / max(dsLuma(bc), 1e-4);
-        c += hal * (0.35 / 0.15) * h * float3(1.0, 0.32, 0.10) + bloom * b * min(bc, float3(4.0));
-    }
-    // vignette (in light, before the view transform, as the toolkit's look)
-    float vg = u.scene[3].x;
-    if (vg > 0.0) {
-        float rr = length((tuv - 0.5) / 0.625);
-        float m = 1.0 - pow(saturate((rr - 0.82) / 0.36), 2.0);
-        c *= 1.0 - vg * (1.0 - m);
-    }
+    c += lightT.sample(smp, suv, level(0.0)).rgb;                    // halation and bloom (ds_film_look)
+    c = film_vignette(c, tuv, u.scene[3].x);
+    // off the glass nothing below applies: straight to sRGB (as ds_film_dry)
+    if (mask <= 0.01) return film_finish_layers(film_agx_srgb(c), in.pos.xy, res, u, latT, smp);
     float3 o = film_agx(c);                                          // display linear
 
     // snow falling beyond the glass
@@ -293,8 +407,8 @@ static inline float4 film_layered(DSVOut in, constant FXUniforms& u, texture2d<f
         o = mix(o, o * float3(0.86, 0.9, 0.96) + 0.015, mask * wetness * 0.6);
         float damp = max(fog, max(0.5 * rain, 0.45 * snow));
         if (damp > 0.02) {
-            float edge = mask * saturate((1.0 - hdrT.sample(smp, tuv, level(4.5)).a) * 2.2);
-            float3 misted = film_agx(hdrT.sample(smp, suv, level(3.0)).rgb) * 0.92 + 0.03;
+            float edge = mask * mistT.sample(smp, tuv, level(0.0)).a;    // (ds_film_look)
+            float3 misted = mistT.sample(smp, suv, level(0.0)).rgb;
             o = mix(o, misted, saturate(edge * damp * 1.1 + mask * fog * 0.25));
         }
         o *= 1.0 - (0.30 - 0.15 * night) * rimDark;
@@ -308,11 +422,17 @@ static inline float4 film_layered(DSVOut in, constant FXUniforms& u, texture2d<f
         // lightning: a faint cool flicker on the glass, on top of the sky layer's own spike
         o += flash * mask * 0.03 * float3(0.8, 0.88, 1.0);
     }
-    return film_finish(dsToSrgb(o), in.pos.xy, res, u);
+    return film_finish_layers(dsToSrgb(o), in.pos.xy, res, u, latT, smp);
 }
 
 fragment float4 ds_fragment(DS_FRAGMENT_PARAMS) {
-    return film_layered(in, u, dsA0, dsA1, dsSmp);
+    return film_layered<true>(in, u, dsA0, dsA1, dsA2, dsA3, dsSmp);
+}
+
+/// The screen pass for damp glass without rain, snow or lightning (overcast, fog): ds_fragment
+/// without their code (FilmLayers picks it only when they're 0: the same pixels).
+fragment float4 ds_film_damp(DS_FRAGMENT_PARAMS) {
+    return film_layered<false>(in, u, dsA0, dsA1, dsA2, dsA3, dsSmp);
 }
 
 #else

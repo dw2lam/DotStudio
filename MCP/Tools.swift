@@ -287,10 +287,18 @@ final class Toolbox {
                 let r = try self.preview.benchmark(p, library: try self.lib.library(), width: w, height: h)
                 let scaled = r.min * (5120.0 * 2880.0) / Double(w * h)
                 let verdict = scaled <= 4 ? "within budget" : scaled <= 6 ? "acceptable, near the ceiling — consider fewer effects or lower detail params" : "too heavy for a screensaver: simplify (fewer looks, lower detail/octave params) or lower fps"
-                let text = String(format: "“%@” at %d×%d on %@: %.2f ms min, %.2f ms median GPU per frame (≈%.0f fps of GPU headroom). %@.",
+                var text = String(format: "“%@” at %d×%d on %@: %.2f ms min, %.2f ms median GPU per frame (≈%.0f fps of GPU headroom). %@.",
                                   p.name, w, h, PreviewRenderer.gpuName, r.min, r.median, 1000 / max(r.median, 0.01), verdict.prefix(1).uppercased() + verdict.dropFirst())
-                return .ok(text, ["minMs": r.min, "medianMs": r.median, "width": w, "height": h, "gpu": PreviewRenderer.gpuName,
-                                  "verdict": verdict, "budgetMs": 4, "ceilingMs": 6])
+                var out: JSONObject = ["minMs": r.min, "medianMs": r.median, "width": w, "height": h, "gpu": PreviewRenderer.gpuName,
+                                       "verdict": verdict, "budgetMs": 4, "ceilingMs": 6]
+                if let f = r.film {
+                    // a layered film: what a displayed frame costs depends on whether its video frame is new
+                    text += String(format: " A frame showing a new video frame (the per-frame figure above): the screen pass %.2f ms median + %.2f ms for the new frame's mix (light layers → HDR, mips, look, grain lattice; at most %.0f a second). One repeating a video frame: %.2f ms.",
+                                   f.screenMedian, f.videoFrameMedian, f.fps, f.screenMedian)
+                    out["film"] = ["screenMinMs": f.screenMin, "screenMedianMs": f.screenMedian,
+                                   "videoFrameMinMs": f.videoFrameMin, "videoFrameMedianMs": f.videoFrameMedian, "videoFPS": f.fps] as JSONObject
+                }
+                return .ok(text, out)
             },
             Tool(name: "export_style", title: "Export a style",
                  description: "Write a style as a .dotstudiopreset share file (the app's File ▸ Export Style… format: {formatVersion, preset, source?}). Anyone can double-click it to import. Returns the file path and its JSON.",

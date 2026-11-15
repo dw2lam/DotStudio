@@ -373,8 +373,13 @@ struct CustomSceneManifest: Codable, Equatable {
     var colorALabel: String { colors?.a?.label.flatMap { $0.isEmpty ? nil : $0 } ?? "Colour A" }
     var colorBLabel: String { colors?.b?.label.flatMap { $0.isEmpty ? nil : $0 } ?? "Colour B" }
     var usesSet: Set<String> { Set((uses ?? []).map { $0.lowercased() }) }
-    /// The frame rate the scene steps its time at, when "stepped" (else nil: smooth).
-    var steppedFPS: Double? { (stepped ?? false) ? Double(Swift.min(Swift.max(fps ?? 24, 1), 60)) : nil }
+    /// The frame rate the scene steps its time at, when "stepped" (else nil: smooth). A film that
+    /// states its "fps" is stepped at it unless it says "stepped": false: its video and grain only
+    /// change that often, so the hosts draw it at that rate where the display allows (24 on 120 Hz
+    /// rather than 30, or Smooth's 120; 30 on 60 Hz) — FramePacing.rate.
+    var steppedFPS: Double? {
+        (stepped ?? (engine.id == "film" && fps != nil)) ? Double(Swift.min(Swift.max(fps ?? 24, 1), 60)) : nil
+    }
     /// A film package playing light layers (docs/film-layers.md) rather than variant clips.
     var isLayeredFilm: Bool { engine.id == "film" && layers != nil }
     /// The video files a film package plays (its clips, and its layers video).
