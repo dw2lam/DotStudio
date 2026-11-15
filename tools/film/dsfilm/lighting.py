@@ -123,6 +123,10 @@ def setup(scene, coll, name="day", **over):
     ln.new(bg.outputs[0], nt.get("World Output").inputs["Surface"])
     try:
         w.sun_threshold = 1e4   # EEVEE: don't extract a sun from the (clamped) HDRI
+        # ...and don't shadow-map that (empty) world sun: EEVEE still renders its virtual shadow
+        # map every sample, geometry-bound — ~85 % of a Commute frame (0.3 s of 0.33 s per sample at
+        # any resolution). Off, the images are identical (README "Light layers": "Where the time went").
+        w.use_sun_shadow = False
     except Exception:
         pass
     return SimpleNamespace(sun=sun, world=w, mapping=mp, background=bg, params=p)

@@ -49,7 +49,9 @@ FULL = ("sun", "sky", "cabin", "city")
 #   sky @32  0.43 / 3.7 by day        cabin @32 0.57 / 4.1 at night      -> full samples
 # The mask is flat emission (no lights, GI or shadows): 8 samples cover AA, DOF and motion blur
 # (4 differ from 32 by 0.0015 mean). A scene can override any of these with "samples" in its
-# layers declaration ({tile: fraction <= 1 or a count > 1}).
+# layers declaration ({tile: fraction <= 1 or a count > 1}). Fewer samples + OpenImageDenoise was
+# measured and doesn't hold: EEVEE's low-sample error is blotchy and biased, not per-pixel noise
+# (README "Light layers" -> "Denoising doesn't help").
 SAMPLE_SCALE = {"sun": 0.5, "sun_low": 0.5, "sky": 1.0, "cabin": 1.0, "city": 0.25}
 SAMPLES = {"mask": 8}
 MIN_SAMPLES = 8
