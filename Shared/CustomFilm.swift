@@ -245,7 +245,7 @@ final class CustomFilm {
 ///
 /// Cost (Apple M5 Pro, 5120×2880, the 1600×1000-tile Commute loop, GPU at benchmark_style's
 /// idle clocks): the screen pass is what every displayed frame pays — 3.3 ms dry (clear, partly
-/// cloudy), 3.6 damp (overcast, fog), 4.9–6.0 with rain or snow on the glass (the drops and
+/// cloudy), 3.6 damp (overcast, fog), ≈ 4.4–5.1 with rain or snow on the glass (the drops and
 /// flakes, per glass pixel); the per-video-frame passes 0.85–1.05 ms, at most the clip's frame
 /// rate: a new video frame, or the light changing — light-only changes are rate-limited to the
 /// frame rate while live (the cloud shadows' drift, lightning, the weather easing and the sun
@@ -259,10 +259,20 @@ final class FilmLayers {
     /// snow, lightning or mist), damp glass (mist and fog, no rain, snow or lightning).
     static let dryFunction = "ds_film_dry"
     static let dampFunction = "ds_film_damp"
+    /// … and with rain but no snow, with snow but no rain (the full ds_fragment: both, sleet).
+    static let rainFunction = "ds_film_rain"
+    static let snowFunction = "ds_film_snow"
+    static let screenVariants = [dryFunction, dampFunction, rainFunction, snowFunction]
     static let hdrFormat: MTLPixelFormat = .rgba16Float
     static let glowFormat: MTLPixelFormat = .rg16Float
     static let lookFormat: MTLPixelFormat = .rgba16Float
     static let grainFormat: MTLPixelFormat = .r32Float
+    /// The glass's cell tables below the grain lattice: their rows, and the most cells a layer has
+    /// down (film.metal: FILM_TABLE_ROWS, FILM_TABLE_SC).
+    static let tableRows = 493
+    static let tableMaxCells: Float = 70
+    /// The glass map's block, in screen pixels (film.metal: FILM_MAP_BLOCK).
+    static let mapBlock = 8
 
     /// The extra pipelines a layered film needs beside its screen pass: (fragment, format, more formats).
     static let passes: [(String, MTLPixelFormat, [MTLPixelFormat])] = [
@@ -312,7 +322,8 @@ final class FilmLayers {
         var serial = -1
         var mixedAt: CFTimeInterval = -.infinity
         var grain: MTLTexture?
-        var grainKey: SIMD3<Float> = SIMD3(repeating: -1)
+        var grainFrame: Float = -1
+        var grainStaticKey: [Float] = []
     }
     private var targets: [Bool: Target] = [:]
 
@@ -623,32 +634,47 @@ final class FilmLayers {
             let gframe = max((Float(time) * fps).rounded(.down), 0)
             let cell = FilmLayers.grainCell(height: size.height)
             let gw = Int((Float(size.width) - 0.5) / cell) + 2, gh = Int((Float(size.height) - 0.5) / cell) + 2
-            let gkey = SIMD3<Float>(gframe, Float(size.width), Float(size.height))
-            if gkey == target.grainKey, mode != .always, let g = target.grain {
+            // below the lattice, the glass's cell tables (film.metal: film_drop_hashes) for this aspect,
+            // then the glass map (FilmLayers.mapBlock-pixel blocks) for this screen, rain, snow and wind
+            let aspect = Float(tw) / Float(th)
+            let mw = (size.width + FilmLayers.mapBlock - 1) / FilmLayers.mapBlock
+            let mh = (size.height + FilmLayers.mapBlock - 1) / FilmLayers.mapBlock
+            let fullW = max(gw, 2 * (Int((aspect * FilmLayers.tableMaxCells).rounded(.down)) + 1), mw)
+            let fullH = gh + FilmLayers.tableRows + mh
+            let staticKey: [Float] = [Float(size.width), Float(size.height), aspect, screen[2].x, screen[2].y, screen[3].w]
+            if gframe == target.grainFrame, staticKey == target.grainStaticKey, mode != .always, let g = target.grain {
                 grain = g
-            } else if let g = texture(device, FilmLayers.grainFormat, gw, gh, target.grain, mipmapped: false) {
+            } else if let g = texture(device, FilmLayers.grainFormat, fullW, fullH, target.grain, mipmapped: false) {
                 let rpd = MTLRenderPassDescriptor()
                 rpd.colorAttachments[0].texture = g
                 rpd.colorAttachments[0].loadAction = .dontCare
                 rpd.colorAttachments[0].storeAction = .store
+                // the tables and the map stay while their inputs do: then only the lattice's rows
+                if g === target.grain, staticKey == target.grainStaticKey {
+                    rpd.renderTargetWidth = fullW
+                    rpd.renderTargetHeight = gh
+                }
                 if let enc = cmd.makeRenderCommandEncoder(descriptor: rpd) {
                     var u = FXUniforms()
-                    u.resolution = simd_float2(Float(gw), Float(gh))
-                    u.scene.0 = simd_float4(gframe, 0, 0, 0)
+                    u.resolution = simd_float2(Float(fullW), Float(fullH))
+                    u.scene.0 = simd_float4(gframe, Float(gh), aspect, 0)
+                    u.scene.1 = simd_float4(Float(size.width), Float(size.height), Float(tw), Float(th))
+                    u.scene.2 = simd_float4(screen[2].x, screen[2].y, 0, screen[3].w)
                     enc.setRenderPipelineState(grainPSO)
                     enc.setFragmentBytes(&u, length: MemoryLayout<FXUniforms>.stride, index: 0)
                     enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
                     enc.endEncoding()
-                    target.grain = g; target.grainKey = gkey
+                    target.grain = g; target.grainFrame = gframe; target.grainStaticKey = staticKey
                     grain = g; grainEncoded = true
                 }
             }
-            if grain != nil { screen[0].z = gframe; screen[0].w = Float(size.height) }
+            if grain != nil { screen[0].z = gframe; screen[0].w = Float(size.height); screen[1].x = Float(gh) }
         }
         let s2 = screen[2]
         // no rain, snow or lightning: damp (or dry, without the mist and fog film_layered skips ≤ 0.02)
         let still = s2.x <= 0 && s2.y <= 0 && s2.w <= 0
-        let variant = !still ? nil : s2.z <= 0.02 ? FilmLayers.dryFunction : FilmLayers.dampFunction
+        let variant = still ? (s2.z <= 0.02 ? FilmLayers.dryFunction : FilmLayers.dampFunction)
+            : s2.y <= 0 ? FilmLayers.rainFunction : s2.x <= 0 ? FilmLayers.snowFunction : nil
         return Output(hdr: hdr, light: light, mist: mistT, grain: grain, screen: screen, variant: variant,
                       encoded: remix || relook || grainEncoded)
     }
