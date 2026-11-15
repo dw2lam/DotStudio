@@ -2,7 +2,7 @@
   "id": "film",
   "kind": "film",
   "name": "Film — prerendered photoreal loops",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "requires": {
     "blender": ">=5.1",
     "python3": ">=3.10",
