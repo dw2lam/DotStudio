@@ -75,3 +75,30 @@ weights `sun = high·clear`, `sun_low = low·clear`, `sky = (night blue 0.08·(1
 rain/cloud lift. Tone map: AgX (Blender's view; minimal fit), then the film look and live grain.
 Glass (mask): rain beads/runnels with refraction, fog veil, all drawn live.
 Reference implementation: docs/film-layers-demo/scene.metal (the metal-engine demo; passes.py there renders the layers for one frame).
+
+## Passes and cost (engine)
+
+Per **new video frame** (or light), in a command buffer of their own committed ahead of the
+frame (CustomSceneLink.prepass): `ds_film_mix` (tiles → HDR + highlights, at the tiles' size)
+→ mipmaps of both → `ds_film_look` (halation + bloom from the mips, at half the tiles' size)
+→ `ds_film_mist` (only while there's mist: the misted view, AgX of mip 3). Per **grain frame**:
+`ds_film_grain`, the grain's lattice for the screen size (so the screen pass gathers four
+corners instead of hashing them). Per **displayed frame**: the screen pass only — `ds_film_dry`
+(no rain, snow, lightning or mist), `ds_film_damp` (mist and fog only) or `ds_fragment`
+(everything); the lean ones are the full pass with code compiled out that the weather skips,
+so the same pixels.
+
+While live, light-only changes (the sun, the weather easing, cloud shadows drifting, lightning)
+re-mix at most at the clip's frame rate; with the video playing they ride on its frames. A film
+with an `fps` is drawn at that rate where the display allows (FramePacing: 24 on 120 Hz, 30 on
+60 Hz), since nothing in it changes faster.
+
+Measured on an M5 Pro at 5120×2880 with the full Commute loop (1600×1000 tiles), benchmark_style
+(GPU at idle clocks, as a 30 fps wallpaper runs it): screen pass 3.3 ms dry, 3.6 damp, 4.9–6.0
+with rain or snow (the drops and flakes, per glass pixel); the per-video-frame passes 0.85 ms
+(1.05 with mist), at most 24 a second. benchmark_style reports a film as a frame that shows a
+new video frame (screen + passes) and gives both parts. Before (1.6.0): 5.1 ms dry to 7.8 sleet
+per frame for the screen pass alone, with the mix re-run on every frame whenever the light moved.
+With 2560×1600 tiles (video 7696×3208) the screen pass is unchanged (it's per screen pixel) and
+the per-video-frame passes scale with the tiles' pixels: ~2.5× (best runs 0.25 → 0.63 ms, 0.31
+→ 0.72 with mist, on a busy GPU at high clocks), so ≈ 2.1–2.6 ms at idle clocks, ≤ 24 a second.

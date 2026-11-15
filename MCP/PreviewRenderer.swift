@@ -81,9 +81,22 @@ final class PreviewRenderer {
         return (ctx.makeImage()!, times)
     }
 
+    struct Benchmark {
+        var min: Double
+        var median: Double
+        /// A layered film: the screen pass every displayed frame pays, and the passes a new video
+        /// frame adds (mix, mips, look, grain lattice: at most the clip's `fps`). min / median are
+        /// their sums: a displayed frame that shows a new video frame (every draw at 24 fps).
+        var film: (screenMin: Double, screenMedian: Double, videoFrameMin: Double, videoFrameMedian: Double, fps: Double)?
+    }
+
     /// GPU milliseconds per live frame at `width`×`height` (min, median of 20), as the saver
     /// draws it (MetalRenderer.renderFrame with GPU timestamps — immune to CPU load).
-    func benchmark(_ preset: Preset, library: Library, width: Int = 5120, height: Int = 2880) throws -> (min: Double, median: Double) {
+    /// A layered film is measured in two parts, since what a frame costs depends on whether its
+    /// video frame is new: 20 frames holding the mix (the screen pass alone), and 20 re-running
+    /// the per-video-frame passes (their own command buffer: CustomSceneLink.prepass). (Its video
+    /// doesn't play here — this process's main thread reads stdin — so both draw its first frame.)
+    func benchmark(_ preset: Preset, library: Library, width: Int = 5120, height: Int = 2880) throws -> Benchmark {
         guard let r = MetalRenderer(pixelFormat: .bgra8Unorm, store: store) else { throw ToolError("No Metal GPU available.") }
         r.waitsForScenePipelines = true
         r.location = library.locationLat.flatMap { la in library.locationLon.map { (la, $0) } }
@@ -91,14 +104,31 @@ final class PreviewRenderer {
         for _ in 0..<6 { _ = r.renderFrame(width: width, height: height); Thread.sleep(forTimeInterval: 0.05) }
         r.measuresGPUTime = true
         _ = r.takeGPUSeconds()
-        var ms: [Double] = []
-        for _ in 0..<20 {
-            _ = r.renderFrame(width: width, height: height)
-            Thread.sleep(forTimeInterval: 0.01)
-            ms.append(r.takeGPUSeconds() * 1000)
+        func run(_ n: Int = 20) -> (frames: [Double], prepasses: [Double]) {
+            var f: [Double] = [], p: [Double] = []
+            for _ in 0..<n {
+                _ = r.renderFrame(width: width, height: height)
+                Thread.sleep(forTimeInterval: 0.01)
+                let s = r.takeGPUSecondsSplit()
+                f.append(s.frames * 1000); p.append(s.prepasses * 1000)
+            }
+            return (f, p)
         }
-        ms.sort()
-        return (ms[0], ms[ms.count / 2])
+        let lead = preset.effects.first(where: \.enabled)
+        if let id = lead?.custom?.id, CustomScenes.knownManifest(id: id)?.isLayeredFilm == true,
+           let layers = r.customLink.film(id)?.layers {
+            r.customLink.filmMixMode = .hold
+            let screen = run().frames.sorted()
+            r.customLink.filmMixMode = .always
+            let passes = run().prepasses.sorted()
+            r.customLink.filmMixMode = .auto
+            let med = { (a: [Double]) in a[a.count / 2] }
+            return Benchmark(min: screen[0] + passes[0], median: med(screen) + med(passes),
+                             film: (screen[0], med(screen), passes[0], med(passes), Double(layers.fps)))
+        }
+        let all = run()
+        let ms = zip(all.frames, all.prepasses).map(+).sorted()
+        return Benchmark(min: ms[0], median: ms[ms.count / 2], film: nil)
     }
 
     static var gpuName: String { MTLCreateSystemDefaultDevice()?.name ?? "no GPU" }
