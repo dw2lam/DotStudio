@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.6.3 (unreleased)
+## 1.6.3 — Bloom in black
 
 ### New
 - **A black theme for Bloom.** Blue Bloom, Baby's Breath and White Anemone have a Theme setting:
