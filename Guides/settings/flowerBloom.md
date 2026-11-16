@@ -21,6 +21,7 @@ A single flower swaying in a light breeze, set in tiny glyphs or glowing cells.
 | `glow` | Glow | slider | 0 … 1 | 0.6 |
 | `captions` | Captions | toggle | 0 / 1 | off |
 | `size` | Size | slider | 0.7 … 1.25 | 1 |
+| `theme` | Theme | menu | 0 Color · 1 Black | 0 (Color) |
 
 ## Colours
 

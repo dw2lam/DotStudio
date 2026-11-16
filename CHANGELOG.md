@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.6.3 (unreleased)
+
+### New
+- **A black theme for Bloom.** Blue Bloom, Baby's Breath and White Anemone have a Theme setting:
+  their own sky colour, as before, or black — the flower, its cells and glow unchanged.
+
+### Fixed
+- **Blue Bloom's petals are never cut off.** When the flower turned well away, its petals could
+  stretch out and be clipped along a circle, with a sliver of a second flower showing at the edge.
+  The petals are now drawn exactly at every angle.
+
 ## 1.6.2 — Commute, lit live
 
 ### Improved

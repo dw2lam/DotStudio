@@ -88,7 +88,7 @@ static inline CellLayer bloom_poppy(float2 p, float ts, float br, float3 petal, 
     float2 dc = p - C;
     float stemDx;
     float sx = bloom_stemX(st, p.y, stemDx);
-    bool nearHead = dot(dc, dc) < pow(1.45 * R + aa, 2.0);
+    bool nearHead = dot(dc, dc) < pow(1.62 * R + aa, 2.0);  // a turned head reaches ~1.55 R (checked: = no bound)
     bool nearStem = p.y < st.y1 + 0.02 && abs(p.x - sx) < 0.012 + aa;
     bool nearLeaf = p.y < 0.46 && p.y > -0.05 && abs(p.x - sx) < 0.23 + aa;
     if (!nearHead && !nearStem && !nearLeaf) return o;
@@ -104,15 +104,20 @@ static inline CellLayer bloom_poppy(float2 p, float ts, float br, float3 petal, 
         float3 e1 = normalize(cross(float3(0, 1, 0), n));
         float3 e2 = cross(n, e1);
         float cup = anemone ? 0.22 : 0.36;
+        // Solved by iteration: a point q of the plane, lifted by the cup, must land on this pixel.
+        // Two steps were enough facing the viewer, not turned well away — there the petals came
+        // out stretched and the bound round the head cut them along a circle — so it runs to
+        // convergence. Away from the head it can still land on a point that doesn't project back
+        // (a ghost copy of the head); only a point that does is the flower.
         float2 q = d0;
-        {
-            float2 d = d0;
-            for (int k = 0; k < 2; ++k) {
-                float3 P = float3(d, -(n.x * d.x + n.y * d.y) / n.z);
-                q = float2(dot(P, e1), dot(P, e2));
-                d = d0 - n.xy * (cup * dot(q, q) / R);
-            }
+        float2 ds = d0;
+        for (int k = 0; k < 8; ++k) {
+            float3 P = float3(ds, -(n.x * ds.x + n.y * ds.y) / n.z);
+            q = float2(dot(P, e1), dot(P, e2));
+            ds = d0 - n.xy * (cup * dot(q, q) / R);
         }
+        float2 back = (q.x * e1 + q.y * e2).xy + n.xy * (cup * dot(q, q) / R);
+        if (length(back - d0) < 0.06 * R + aa) {
         float r = length(q);
         float t = saturate(r / R);
         float2 nq = q / R;
@@ -199,6 +204,7 @@ static inline CellLayer bloom_poppy(float2 p, float ts, float br, float3 petal, 
             shade *= 1.0 - 0.45 * smoothstep(0.13 * R, 0.0, d) * (1.0 - a);
         }
         if (o.a > 0.996) return o;
+        }
     }
 
     // ---- leaves: two long ones low on the stem, a small one higher, swaying a little more
@@ -541,8 +547,8 @@ static inline float bloom_captions(float2 px, float2 res, int flower, int render
 
 // ============================================================ 79 BLOOM
 /// p0 = (flower 0 poppy / 1 baby's breath / 2 anemone, render 0 glyphs / 1 pixels / 2 dots, cell size per
-/// 1000 px of height, breeze), p1 = (sky gradient, glow, captions, size); colorA the sky (top),
-/// colorB the petals. Display sRGB out.
+/// 1000 px of height, breeze), p1 = (sky gradient, glow, captions, size), p2.x = theme (0 the sky
+/// colour, 1 black); colorA the sky (top), colorB the petals. Display sRGB out.
 static inline float3 bloom_scene(float2 px, float2 res, float t, constant FXUniforms& u,
                                  texture2d<float> A, sampler s) {
     int flower = clamp(int(u.p0.x + 0.5), 0, 2);
@@ -553,11 +559,12 @@ static inline float3 bloom_scene(float2 px, float2 res, float t, constant FXUnif
     float size = clamp(u.p1.w, 0.5, 1.5);
     float ts = floor(t * BLOOM_FPS) / BLOOM_FPS;          // the 24 fps cadence
 
-    // the sky: a smooth vertical gradient, top colour → a lighter, slightly greener bottom
+    // the sky: a smooth vertical gradient, top colour → a lighter, slightly greener bottom — or,
+    // in the Black theme, black (the flower, its cells and glow unchanged)
     float3 top = u.colorA.rgb;
     float3 bot = saturate(top + grad * float3(0.318, 0.361, 0.333));
     float gy = px.y / res.y;
-    float3 sky = mix(top, bot, gy);
+    float3 sky = u.p2.x > 0.5 ? float3(0.0) : mix(top, bot, gy);
     float3 bg = srgbToLinear(sky);
     float3 petal = srgbToLinear(u.colorB.rgb);
 
