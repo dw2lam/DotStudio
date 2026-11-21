@@ -147,7 +147,7 @@ struct DestinationGeometry: Equatable {
         if hasWallpaper && !layout.prefersStacking {
             let g = gap(key: keySize.width)
             let card = ((w - g) / 2).rounded(.down)
-            let t = thumb(card: card, cap: layout.widthClass.pick(280, 420, 560))
+            let t = thumb(card: card, cap: layout.widthClass.pick(280, 380, 420))
             if t >= thumbMin {
                 self.init(sideBySide: true, thumbWidth: t, gap: g, showsSubtitle: !layout.isCompact)
                 return
@@ -823,7 +823,7 @@ private struct NowPlayingKey: View {
         let _ = Perf.body("NowPlayingKey")
         Color.clear
             .frame(maxWidth: .infinity)
-            .frame(height: height ?? keyHeight + (layout.isWide ? Space.xs : 0))
+            .frame(height: height ?? keyHeight)
             .background(PanelKeyFace(shape: RoundedRectangle(cornerRadius: PanelKey.radius, style: .continuous), resting: 0.05))
             .overlay(alignment: .top) {
                 NowPlayingLine()
@@ -957,7 +957,7 @@ private struct DestinationHeader: View {
 
     var body: some View {
         // A wide window's cards are big: their titles step up with them.
-        let titleRole = layout.isWide ? TextRole(style: .title, weight: .semibold) : .cardTitle
+        let titleRole = TextRole.cardTitle
         VStack(alignment: .leading, spacing: layout.labelGap) {
             CardEyebrow(text: eyebrow)
             RollingReadout(from: titleFrom ?? title, to: title, progress: roll) { t in
@@ -969,7 +969,7 @@ private struct DestinationHeader: View {
             if let subtitle {
                 RollingReadout(from: subtitleFrom ?? subtitle, to: subtitle, progress: roll) { t in
                     Text(t)
-                        .textRole(layout.isWide ? .body : .callout)
+                        .textRole(.callout)
                         .foregroundStyle(PanelInk.secondary)
                         .truncating(t, lines: 2)
                 }
@@ -1072,7 +1072,7 @@ enum PanelKey {
         func body(content: Content) -> some View {
             content
                 .padding(.horizontal, layout.controlGap + Space.xxs)
-                .frame(maxWidth: .infinity, minHeight: height + (layout.isWide ? Space.xs : 0), alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: height, alignment: .leading)
         }
     }
 }

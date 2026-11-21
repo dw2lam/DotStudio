@@ -257,6 +257,7 @@ struct GeneralSettingsSection: View {
     /// Read through LoginItem (pinned in UI shots; never SMAppService there).
     @State private var loginStatus = LoginItem.status()
     @State private var loginError: String?
+    @AppStorage(MenuBarIcon.key) private var menuBarIcon: MenuBarIcon = .standard
 
     private var opensAtLogin: Bool { loginStatus != .off }
 
@@ -265,6 +266,19 @@ struct GeneralSettingsSection: View {
             if nudge.pending != nil { LoginNudgeBanner(topPadding: 0) }
             Toggle("Keep running in the menu bar", isOn: $presence.menuBarMode)
                 .formSwitchSize()
+            LabeledContent("Menu bar icon") {
+                Picker("Menu bar icon", selection: $menuBarIcon) {
+                    ForEach(MenuBarIcon.allCases) { i in
+                        Image(systemName: i.symbol(live: false))
+                            .help(i.name)
+                            .accessibilityLabel(i.name)
+                            .tag(i)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .fixedSize()
+            }
             Toggle("Open DotStudio at login", isOn: Binding(get: { opensAtLogin }, set: setOpenAtLogin))
                 .formSwitchSize()
             if loginStatus == .requiresApproval {

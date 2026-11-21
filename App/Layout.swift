@@ -186,7 +186,7 @@ struct LayoutMetrics: Equatable {
     var gridRowGap: CGFloat { gridColumnGap + Space.xxs }
     /// The narrowest a gallery tile (thumbnail + name) gets; columns are added as the page
     /// widens. Grows with the text so a name keeps roughly the same characters per line.
-    var tileMinWidth: CGFloat { scaled(widthClass.pick(200, 224, 320)) }
+    var tileMinWidth: CGFloat { scaled(widthClass.pick(200, 224, 256)) }
     /// The gallery grid's columns. No maximum: the tiles always fill the content column, so
     /// the grid's right edge is the page's right edge (section headers' trailing controls
     /// line up with it).

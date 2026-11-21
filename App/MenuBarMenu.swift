@@ -126,11 +126,12 @@ struct DotStudioMenuLabel: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     @ObservedObject private var wallpaper = WallpaperController.shared
+    @AppStorage(MenuBarIcon.key) private var icon: MenuBarIcon = .standard
 
     var body: some View {
         let _ = Perf.body("DotStudioMenuLabel")
         let live = wallpaper.isActive && !wallpaper.userPaused
-        Image(systemName: live ? "circle.grid.3x3.fill" : "circle.grid.3x3")
+        Image(systemName: icon.symbol(live: live))
             .accessibilityLabel("DotStudio")
             .accessibilityValue(live ? "Live wallpaper playing" : "")
             .onAppear {
@@ -138,5 +139,42 @@ struct DotStudioMenuLabel: View {
                 AppPresence.shared.register(openMainWindow: open, openSettings: { openSettings() })
                 WallpaperController.shared.registerOpenMainWindow(open)
             }
+    }
+}
+
+/// The menu-bar item's icon, chosen in Settings › General. Each has a quiet outline form and
+/// a filled one shown while a live wallpaper plays.
+enum MenuBarIcon: String, CaseIterable, Identifiable {
+    case hexagons, dots, bigDots, screen, night, horizon, frame, sparkles
+
+    static let key = "menuBarIcon"
+    static let standard: MenuBarIcon = .hexagons
+
+    var id: String { rawValue }
+
+    var name: String {
+        switch self {
+        case .hexagons: return "Hexagons"
+        case .dots: return "Dot Grid"
+        case .bigDots: return "Four Dots"
+        case .screen: return "Screen"
+        case .night: return "Night Sky"
+        case .horizon: return "Horizon"
+        case .frame: return "Picture Frame"
+        case .sparkles: return "Sparkles"
+        }
+    }
+
+    func symbol(live: Bool) -> String {
+        switch self {
+        case .hexagons: return live ? "circle.hexagongrid.fill" : "circle.hexagongrid"
+        case .dots: return live ? "circle.grid.3x3.fill" : "circle.grid.3x3"
+        case .bigDots: return live ? "circle.grid.2x2.fill" : "circle.grid.2x2"
+        case .screen: return live ? "sparkles.tv.fill" : "sparkles.tv"
+        case .night: return live ? "moon.stars.fill" : "moon.stars"
+        case .horizon: return live ? "sun.horizon.fill" : "sun.horizon"
+        case .frame: return live ? "photo.artframe.circle.fill" : "photo.artframe"
+        case .sparkles: return "sparkles"
+        }
     }
 }

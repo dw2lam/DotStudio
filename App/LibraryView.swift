@@ -36,7 +36,6 @@ struct LibraryView: View {
                                                                     synced: wallpaper.follows)),
                         filter: $filter, query: $query, searchFocused: $searchFocused)
         }
-        .windowScaledType()
         .toolbar {
             if model.editingID == nil {
                 ToolbarItemGroup(placement: .primaryAction) {
