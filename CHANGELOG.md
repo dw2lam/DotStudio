@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.6.4 — A lighter gallery
+
+### Improved
+- **Smooth scrolling.** The gallery no longer plays a live preview inside the scrolling page (the
+  Screensaver card shows a still; Preview still plays it full screen), and the glass, frost and
+  per-tile shadows that were redrawn on every frame of a scroll are gone. Opening the gallery is
+  also much quicker.
+- **A calmer layout.** The Screensaver and Wallpaper cards are lighter: their settings are quiet
+  rows instead of boxed keys with lights, and the wallpaper's Play · Pause · Off is one labelled
+  Playback row. Sync works as before. Big windows show more tiles at a normal size instead of
+  scaling everything up.
+- **Clearer tile buttons.** Hovering a style now shows **Screensaver** and **Wallpaper** buttons
+  — checked while it plays there — instead of unlabelled icons. **Set as Both**, the playlist,
+  Preview and Edit are in the **…** menu.
+
+### New
+- **Choose the menu bar icon.** Settings › General › Menu bar icon: eight icons, each filled
+  while a live wallpaper plays.
+
 ## 1.6.3 — Bloom in black
 
 ### New
