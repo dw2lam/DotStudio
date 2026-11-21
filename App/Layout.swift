@@ -17,7 +17,6 @@
 //    AdaptiveStack { hero; details }                       // side by side unless compact / huge text
 //    FlowLayout { chips }                                  // wraps onto as many lines as needed
 //    @ScaledLength(relativeTo: .body) private var column: CGFloat = 92   // macOS-safe @ScaledMetric
-//    page.windowScaledType()                                // type grows with a big window (gallery)
 //
 //  The three axes
 //  ──────────────
@@ -159,7 +158,7 @@ struct LayoutMetrics: Equatable {
     /// Between major blocks of a page (destination cards ↔ filter bar ↔ grid sections).
     var sectionGap: CGFloat { widthClass.pick(Space.l, Space.xl, Space.grid(10)) }            // 24 · 32 · 40
     /// Widest a page's content gets before it centres with growing side margins. Generous:
-    /// a big window should fill with bigger content (see `windowScaledType`), not margins.
+    /// a big window fills with more tiles, not wider margins.
     var contentMaxWidth: CGFloat { widthClass.pick(.infinity, 1600, 2400) }
     /// Widest a paragraph should run (comfortable line length), grown with the text.
     var readableWidth: CGFloat { scaled(widthClass.pick(520, 600, 640)) }
@@ -233,42 +232,6 @@ extension View {
     /// to everything inside. Apply once per window, sheet or popover root. Only a change of
     /// width CLASS re-renders readers — not every pixel of a live resize.
     func adaptiveLayout() -> some View { modifier(AdaptiveLayoutRoot()) }
-}
-
-extension View {
-    /// A page whose type grows with a big window: past `WindowScale.steps` widths the text
-    /// size steps up (.large → .xLarge → .xxLarge → .xxxLarge), and with it every text role, scaled
-    /// length and component gap — so a full-screen 2560-pt window reads like the app, not
-    /// like a small app floating in a big window. Re-publishes `\.layout` for the new size.
-    /// Never steps a standard size into the accessibility sizes. Use on a page root (the
-    /// gallery), not on popovers or sheets.
-    func windowScaledType() -> some View { modifier(WindowScaledType()) }
-}
-
-/// Widths at which `windowScaledType()` steps the text size up, one step each.
-enum WindowScale {
-    static let steps: [CGFloat] = [1700, 2100, 2500]
-
-    static func steps(width: CGFloat) -> Int { steps.filter { width >= $0 }.count }
-
-    static func typeSize(_ base: DynamicTypeSize, steps n: Int) -> DynamicTypeSize {
-        guard n > 0, let i = DynamicTypeSize.allCases.firstIndex(of: base) else { return base }
-        let all = DynamicTypeSize.allCases
-        let ceiling = base.isAccessibilitySize ? all.count - 1 : (all.firstIndex(of: .xxxLarge) ?? i)
-        return all[max(i, min(i + n, ceiling))]
-    }
-}
-
-private struct WindowScaledType: ViewModifier {
-    @Environment(\.dynamicTypeSize) private var typeSize
-    @State private var steps = 0
-
-    func body(content: Content) -> some View {
-        content
-            .adaptiveLayout()
-            .environment(\.dynamicTypeSize, WindowScale.typeSize(typeSize, steps: steps))
-            .onGeometryChange(for: Int.self) { WindowScale.steps(width: $0.size.width) } action: { steps = $0 }
-    }
 }
 
 private struct AdaptiveLayoutRoot: ViewModifier {

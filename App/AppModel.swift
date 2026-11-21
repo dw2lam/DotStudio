@@ -35,7 +35,6 @@ final class AppModel: ObservableObject {
     /// (in the background, Thumbnailer.prewarm).
     func releaseThumbnails() {
         _thumbnailer = nil
-        BlurCache.shared.removeAll()
     }
     @Published var library: Library
     @Published var selectedID: UUID? {

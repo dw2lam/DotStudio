@@ -3,7 +3,7 @@
 //    DOTSTUDIO_PERF=1   count SwiftUI body evaluations and background work (Perf.count) in
 //                       a normal run; nothing is printed unless a probe runs.
 //
-//    DOTSTUDIO_PERF_PROBE=idle|window|scroll|backdrop  (ALWAYS with DOTSTUDIO_STORE_DIR=<fresh temp dir>)
+//    DOTSTUDIO_PERF_PROBE=idle|window|scroll  (ALWAYS with DOTSTUDIO_STORE_DIR=<fresh temp dir>)
 //        Runs the app's background services headlessly — activation policy .prohibited, no
 //        Dock icon, no menu-bar item, never a window on screen — and prints what they cost:
 //          idle    menu-bar mode with every window closed: the model, music watching,
@@ -23,7 +23,6 @@
 //                    DOTSTUDIO_PERF_STYLES=<n>   pad the library to n styles (copies)
 //                    DOTSTUDIO_PERF_SIZE=880x600 the window's size (default 1440x900)
 //                    DOTSTUDIO_PERF_STEP=<pt>    points per step (default 12)
-//          backdrop  renders GalleryBackdrop for a look check (see runBackdrop)
 //        DOTSTUDIO_PERF_SECONDS=<n>   length of each measured quiet phase (default 30)
 //        DOTSTUDIO_PERF_BURST=<n>     (window) also n track changes and n selections 0.25 s
 //                                     apart — long enough for `sample` to attach to
@@ -131,7 +130,6 @@ enum PerfProbe {
             switch mode {
             case "window": runWindow()
             case "scroll": runScroll()
-            case "backdrop": runBackdrop()
             default: runIdle()
             }
         }
@@ -501,35 +499,5 @@ enum PerfProbe {
         say("thumbnailer freed: \((Perf.take()["Thumbnailer.deinit"] ?? 0) > 0 ? "yes" : "NO")")
         phase("closed-settle") { spin(3); return 3 }
         phase("closed-quiet") { spin(seconds); return seconds }
-    }
-
-    // MARK: Backdrop (look check)
-
-    /// DOTSTUDIO_PERF_PROBE=backdrop DOTSTUDIO_PERF_OUT=<dir>: renders the pre-blurred
-    /// GalleryBackdrop with SwiftUI's own renderer (ImageRenderer draws blur filters; offscreen
-    /// window captures don't) for a look check: it should match the still under
-    /// `blur(radius: GalleryBackdrop.radius, opaque: true)`.
-    @MainActor private static func runBackdrop() {
-        let (model, _) = bootServices()
-        let out = env["DOTSTUDIO_PERF_OUT"] ?? NSTemporaryDirectory()
-        let size = CGSize(width: 1440, height: 900)
-        let ids = [model.nowPlayingID] + model.library.presets.prefix(6).map { Optional($0.id) }
-        for (i, id) in ids.enumerated() {
-            for dark in [false, true] {
-                let scheme: ColorScheme = dark ? .dark : .light
-                func shot(_ v: some View, _ name: String) {
-                    let r = ImageRenderer(content: v.frame(width: size.width, height: size.height)
-                        .environment(\.colorScheme, scheme).environmentObject(model))
-                    r.scale = 1
-                    guard let cg = r.cgImage else { return }
-                    let url = URL(fileURLWithPath: out).appendingPathComponent("\(name)-\(i)\(dark ? "-dark" : "").png")
-                    try? NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:])?.write(to: url)
-                }
-                _ = model.thumbnailer.image(for: model.preset(id!)!, source: model.library.source,
-                                            music: model.library.musicSettings)
-                shot(GalleryBackdrop(presetID: id), "new")
-            }
-        }
-        say("backdrops written to \(out)")
     }
 }

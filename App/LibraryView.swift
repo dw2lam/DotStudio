@@ -9,9 +9,8 @@
 //  capped at `contentMaxWidth` and centred — shared by the cards, the filter bar and the
 //  grid, so the cards' glass edges, the search field, the section titles and the tiles all
 //  start (and end) on the same two lines. Blocks are `sectionGap` apart; a section header
-//  sits `itemGap` above its tiles. The filter bar's frost spans the whole window. The page
-//  scales with the window (`windowScaledType`): a big window gets bigger type, cards and
-//  tiles rather than wider margins.
+//  sits `itemGap` above its tiles. The pinned filter bar's backing spans the whole window. A
+//  big window gets more tiles, not bigger type.
 
 import SwiftUI
 import UniformTypeIdentifiers
@@ -89,8 +88,7 @@ struct LibraryView: View {
     }
 }
 
-/// The scrolling page: destination cards, the pinned filter bar, the grid. Reads the
-/// window-scaled `\.layout` (LibraryView applies `windowScaledType`).
+/// The scrolling page: destination cards, the pinned filter bar, the grid.
 private struct GalleryPage: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -99,6 +97,7 @@ private struct GalleryPage: View {
     @Binding var filter: GalleryFilter
     @Binding var query: String
     var searchFocused: FocusState<Bool>.Binding
+    @State private var scrollTopInset: CGFloat = 0
 
     var body: some View {
         let _ = Perf.body("GalleryPage")
@@ -126,7 +125,7 @@ private struct GalleryPage: View {
                         .padding(.bottom, Space.xxl)
                 } header: {
                     FilterBar(filter: $filter, query: $query, searchFocused: searchFocused,
-                              counts: counts(state))
+                              counts: counts(state), topInset: scrollTopInset)
                 }
             }
         }
@@ -142,6 +141,7 @@ private struct GalleryPage: View {
         .onAppear { prewarmStills() }
         .onChange(of: model.library.presets.count) { prewarmStills() }
         .coordinateSpace(name: FilterBar.space)
+        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: { scrollTopInset = $0 }
         .softScrollEdges()
         .motion(Motion.smooth, value: filter)
         .motion(Motion.smooth, value: query)
@@ -340,6 +340,10 @@ private struct FilterBar: View {
     @State private var chipsWidth: CGFloat = 0
     @State private var chipsViewport: CGFloat = 0
     @State private var chipFade = ChipEdgeFade()
+    /// The bar sits pinned under the toolbar (the page has scrolled past it).
+    @State private var pinned = false
+    /// The scroll view's top safe-area inset (under the toolbar): where the bar sticks.
+    let topInset: CGFloat
     /// Coordinate space of the chips' own horizontal scroll view.
     private static let chipSpace = "filterChipsScroll"
 
@@ -347,15 +351,13 @@ private struct FilterBar: View {
     private var searchWidth: CGFloat { layout.scaled(layout.widthClass.pick(208, 240, 288)) }
 
     private var chips: some View {
-        Group {
-            HStack(spacing: layout.controlGap) {
-                ForEach(GalleryFilter.chips) { f in
-                    let n = counts[f] ?? 0
-                    if f.alwaysShown || n > 0 || filter == f {
-                        FilterChip(filter: f, count: f == .all ? nil : n,
-                                   selected: filter == f) {
-                            Motion.run { filter = f }
-                        }
+        HStack(spacing: layout.controlGap) {
+            ForEach(GalleryFilter.chips) { f in
+                let n = counts[f] ?? 0
+                if f.alwaysShown || n > 0 || filter == f {
+                    FilterChip(filter: f, count: f == .all ? nil : n,
+                               selected: filter == f) {
+                        Motion.run { filter = f }
                     }
                 }
             }
@@ -397,23 +399,21 @@ private struct FilterBar: View {
         }
         .pageColumn(layout)
         .padding(.vertical, Self.verticalInset)
-        .background {
-            // Once pinned, an opaque strip of the window's own colour (and a hairline under it)
-            // keeps the chips legible over the tiles scrolling beneath — no blur, so nothing
-            // is re-sampled per scroll frame. Driven by the bar's own position, so no parent
-            // re-render. It spans the whole window, not just the page column.
-            GeometryReader { g in
-                let y = g.frame(in: .named(FilterBar.space)).minY
-                let pinned = min(max((150 - y) / 70, 0), 1)   // fully there once under the toolbar
-                if pinned > 0 {
-                    Color(nsColor: .windowBackgroundColor)
-                        .overlay(alignment: .bottom) { Divider() }
-                        .padding(.top, -(Space.xxl + Space.s))   // up under the toolbar
-                        .opacity(pinned)
-                }
+        // Once pinned, an opaque strip of the window's own colour (and a hairline under it)
+        // keeps the chips legible over the tiles scrolling beneath — no blur, nothing
+        // re-sampled per scroll frame. Only crossing the pin line changes state (not every
+        // frame of a scroll), and the strip spans the whole window, not just the page column.
+        .onGeometryChange(for: Bool.self) { $0.frame(in: .named(FilterBar.space)).minY < topInset + 8 } action: { pinned = $0 }
+        .background(alignment: .bottom) {
+            if pinned {
+                Color(nsColor: .windowBackgroundColor)
+                    .overlay(alignment: .bottom) { Divider() }
+                    .padding(.top, -(Space.xxl + Space.s))   // up under the toolbar
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
             }
-            .allowsHitTesting(false)
         }
+        .animation(.easeOut(duration: 0.15), value: pinned)
     }
 }
 

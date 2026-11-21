@@ -453,40 +453,22 @@ struct SyncKey: View {
 
 // MARK: - Card structure
 
-/// The one structure both destination cards share:
-///
-///     ┌───────────────────────────────────────────┐
-///     │ ┌──────────────────┐  EYEBROW              │
-///     │ │                  │  Title                │
-///     │ │    thumbnail     │  Subtitle             │
-///     │ │  fills the card  │                       │
-///     │ │      height      │  [key ············ ]  │     with an aside (the
-///     │ │                  │  [key ············ ]  │  ←  Wallpaper's Play /
-///     │ └▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒┘  [key ············ ]  │     Pause / Off keys):
-///     │ banner (setup strip), full width           │                    [▶]
-///     └───────────────────────────────────────────┘                    [‖]
-///                                                        [key ········] [⏻]
-///
-/// The column's header sits at the top and its keys at the bottom, level with the
-/// thumbnail's edges; an optional `aside` (a column of icon keys) stands beside the keys
-/// at the column's trailing edge, its foot level with the last key. `mirrored` puts the thumbnail on the
-/// trailing side (the Screensaver card side by side, so both thumbnails meet at the SYNC
-/// key). ▒ is the thumbnail's glow (DestinationGlow, which each card lays over its picture,
-/// under the picture's badges): a soft green light rising from its bottom edge while that
-/// destination plays, dimmer while it holds a frame, none while it's off — the only on/off
-/// readout the card shows. The card hands VoiceOver the same state, in words, as its
-/// value (`stateValue`).
-private struct DestinationCardLayout<Preview: View, Keys: View, Aside: View, Banner: View>: View {
+/// The one structure both destination cards share: a thumbnail that fills the card's
+/// height beside a column — label, title, subtitle at the top, the keys (rows) at the
+/// bottom, level with the thumbnail's edges — and an optional full-width banner under both
+/// (the setup strip). `mirrored` puts the thumbnail on the trailing side (the Screensaver
+/// card side by side, so both thumbnails meet at the SYNC key). The card hands VoiceOver
+/// its state in words as its value (`stateValue`).
+private struct DestinationCardLayout<Preview: View, Keys: View, Banner: View>: View {
     @Environment(\.layout) private var layout
     let geometry: DestinationGeometry
     let header: DestinationHeader
     var mirrored = false
     var drawsSurface = true
-    /// "On", "Paused", "Off"…: what the glow shows, in words.
+    /// "On", "Paused", "Off"…
     let stateValue: String
     @ViewBuilder var preview: Preview
     @ViewBuilder var keys: Keys
-    @ViewBuilder var aside: Aside
     @ViewBuilder var banner: Banner
 
     var body: some View {
@@ -524,16 +506,10 @@ private struct DestinationCardLayout<Preview: View, Keys: View, Aside: View, Ban
         VStack(alignment: .leading, spacing: 0) {
             header
             Spacer(minLength: layout.itemGap)
-            // The aside stands beside the keys, never the header: the header keeps the
-            // column's full width, and a card with an aside of three keys is as tall as
-            // one with three rows of keys (the two cards stay even, stacked too).
-            HStack(alignment: .bottom, spacing: PanelKey.gap(layout)) {
-                VStack(alignment: .leading, spacing: PanelKey.gap(layout)) {
-                    keys
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                aside
+            VStack(alignment: .leading, spacing: PanelKey.gap(layout)) {
+                keys
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -588,8 +564,6 @@ struct ScreensaverCard: View {
                 NowPlayingKey()
                     .transition(.lift(reduceMotion: reduceMotion))
             }
-        } aside: {
-            EmptyView()
         } banner: {
             if model.setupStatus != .ready {
                 SetupStrip(status: model.setupStatus)
@@ -735,7 +709,7 @@ struct ScreensaverCard: View {
         }
     }
 
-    /// Night · style name, its LED lit while a different style plays after sunset.
+    /// Night · style name (dimmed while off).
     private var nightKey: some View {
         let night = lineup.night.flatMap(model.preset)
         return Menu {
@@ -1054,10 +1028,10 @@ private struct ReadoutLayout: Layout {
 
 // MARK: - Panel keys
 
-/// The cards' controls, drawn as the keys of a climate panel (the SYNC key's family):
-/// raised rounded keys, one per row — an icon, the label, the current value on the right,
-/// then a chevron (opens a menu) and/or an LED (on while the feature is on). Every key has
-/// the same height and face, so the two cards' columns share one rhythm.
+/// The cards' controls as quiet rows: an icon, the label, the current value on the right
+/// (dimmer while the feature is off), then a chevron when it opens a menu. No face at rest,
+/// a soft wash under the pointer. Every row has the same height, so the two cards' columns
+/// share one rhythm.
 enum PanelKey {
     static let radius: CGFloat = Radius.s
 
@@ -1147,7 +1121,7 @@ private struct PanelKeyBody<Label: View>: View {
     }
 }
 
-/// What a key shows: icon · label ···· value  [LED] [chevron]. `values` are the value from
+/// What a key shows: icon · label ···· value  [chevron]. `values` are the value from
 /// longest to shortest: the longest that fits is shown (the last one truncates).
 struct PanelKeyLabel: View {
     enum Indicator: Equatable {
@@ -1252,10 +1226,9 @@ private struct CardEyebrow: View {
 
 // MARK: - Wallpaper transport
 
-/// Play · Pause · Off: the wallpaper's three states as a column of latching icon keys (the
-/// panel-key family, sized like a key's height): the current one sits pressed in, its LED
-/// lit — green while it plays or holds a frame, amber standby while it's off. No labels:
-/// each key says what it does in its tooltip and to VoiceOver.
+/// Play · Pause · Off: the wallpaper's three states as one row ("Playback" and a small
+/// segmented strip of icon keys, the current one pressed in). Each key says what it does in
+/// its tooltip and to VoiceOver.
 private struct WallpaperTransport: View {
     enum Mode: CaseIterable { case play, pause, off }
 
@@ -1548,8 +1521,6 @@ struct WallpaperCard: View {
                 displaysKey
                     .opacity(1 - 0.4 * progress)
             }
-        } aside: {
-            EmptyView()
         } banner: {
             LoginNudgeBanner(kind: .wallpaper)   // once, after turning it on (SetupGuide.swift)
         }
@@ -1838,23 +1809,6 @@ struct SearchField: View {
             TextField(prompt, text: $text).textFieldStyle(.plain).focused(focus)
         } else {
             TextField(prompt, text: $text).textFieldStyle(.plain)
-        }
-    }
-}
-
-extension View {
-    /// `glassSurface` with a tint (a selected chip, a state badge). Offscreen UIShots
-    /// captures can't draw TINTED Liquid Glass — one tinted shape blanks the whole render —
-    /// so there the tint is a plain fill under untinted glass. On screen this is exactly
-    /// `glassSurface(_:in:tint:interactive:)`.
-    @ViewBuilder
-    func tintedGlassSurface<S: Shape>(_ style: GlassStyle = .regular, in shape: S,
-                                      tint: Color?, interactive: Bool = false) -> some View {
-        if let tint, OffscreenCapture.isActive {
-            self.background(shape.fill(tint.opacity(0.85)))
-                .glassSurface(style, in: shape, interactive: interactive)
-        } else {
-            self.glassSurface(style, in: shape, tint: tint, interactive: interactive)
         }
     }
 }
