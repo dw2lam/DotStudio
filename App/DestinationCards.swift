@@ -556,7 +556,6 @@ struct ScreensaverCard: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.layout) private var layout
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.controlActiveState) private var activeState
     @ObservedObject private var roster = DisplayRoster.shared
     let state: GalleryState
     let geometry: DestinationGeometry
@@ -622,17 +621,10 @@ struct ScreensaverCard: View {
         ZStack {
             Group {
                 if let p = playing {
-                    // Live while the gallery is up front; a still otherwise (no GPU in the background).
-                    if model.editingID == nil && activeState != .inactive && !DemoHooks.livePreviewsPaused {
-                        // Music as the screensaver would show it (Show music: Corner, or Full
-                        // Screen easing in over the style).
-                        MetalPreview(preset: p, source: model.library.source,
-                                     location: model.locationTuple, store: model.store, maxFPS: 30,
-                                     music: model.library.musicSettings, showsMusic: true)
-                            .allowsHitTesting(false)
-                    } else {
-                        StyleThumb(preset: p, showsMusic: true)
-                    }
+                    // A still, never a live Metal view: a CAMetalLayer inside the scrolling page
+                    // presented out of step with the scroll (torn, "staticky" frames) and kept the
+                    // GPU busy for the whole time the gallery was up. Preview plays it live.
+                    StyleThumb(preset: p, showsMusic: true)
                 } else {
                     Color.black
                 }
@@ -642,9 +634,6 @@ struct ScreensaverCard: View {
             .contentShape(Rectangle())
             .onTapGesture(count: 2) { if let p = playing { model.edit(p.id) } }
             .help(playing.map { "\($0.name) — double-click to edit" } ?? "")
-
-            // Lit while the screensaver is on (under the badges: it lights the picture).
-            DestinationGlow(state: model.setupStatus == .ready ? .active : .off)
 
             // When / Night / Day top left; Preview (what it previews, right on it) bottom right.
             VStack(alignment: .leading, spacing: 0) {
@@ -835,7 +824,7 @@ private struct NowPlayingKey: View {
         Color.clear
             .frame(maxWidth: .infinity)
             .frame(height: height ?? keyHeight + (layout.isWide ? Space.xs : 0))
-            .background(PanelKeyFace(shape: RoundedRectangle(cornerRadius: PanelKey.radius, style: .continuous)))
+            .background(PanelKeyFace(shape: RoundedRectangle(cornerRadius: PanelKey.radius, style: .continuous), resting: 0.05))
             .overlay(alignment: .top) {
                 NowPlayingLine()
                     .fixedSize(horizontal: false, vertical: true)
@@ -1088,39 +1077,34 @@ enum PanelKey {
     }
 }
 
-/// A key's face: raised and bright over the panel in light mode, a lifted tone in dark, with
-/// a top highlight edge. Hover lifts it a touch; pressing sinks it.
+/// A key's face: nothing at rest (a row of the card, not a box), a soft wash under the
+/// pointer, a deeper one pressed or latched. `resting` gives it a quiet fill at rest (the
+/// floating SYNC key, the now-playing line). Flat fills only: no shadows, no highlights,
+/// nothing for the window server to re-composite as the page scrolls.
 struct PanelKeyFace<S: InsettableShape>: View {
-    @Environment(\.colorScheme) private var scheme
     let shape: S
     var hovering = false
     var pressed = false
+    var resting: Double = 0
 
     var body: some View {
-        let dark = scheme == .dark
-        let fill = dark
-            ? Color.white.opacity(pressed ? 0.06 : hovering ? 0.15 : 0.10)
-            : Color.white.opacity(pressed ? 0.45 : hovering ? 0.95 : 0.78)
+        let level = pressed ? 0.12 : hovering ? max(resting + 0.03, 0.06) : resting
         ZStack {
-            shape.fill(fill)
-            shape.strokeBorder(Color.primary.opacity(dark ? 0.16 : 0.13), lineWidth: 0.75)
-            shape.strokeBorder(LinearGradient(colors: [Color.white.opacity(dark ? 0.14 : 0.9), Color.white.opacity(0)],
-                                              startPoint: .top, endPoint: .center), lineWidth: 0.75)
+            shape.fill(Color.primary.opacity(level))
+            if resting > 0 { shape.strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5) }
         }
-        .shadow(color: .black.opacity(pressed ? 0 : (dark ? 0.30 : 0.10)), radius: 2, y: 1)
     }
 }
 
-/// The panel's indicator light: dark when off, glowing green (or `color`) when on. `level` fades it.
+/// An on/off light (the SYNC key): a quiet bar, accent-coloured when on. `level` fades it.
 struct PanelLED: View {
     let level: CGFloat
-    var color: Color = PanelInk.led
+    var color: Color = .accentColor
 
     var body: some View {
         Capsule()
-            .fill(Color.primary.opacity(0.18))
+            .fill(Color.primary.opacity(0.16))
             .overlay(Capsule().fill(color).opacity(level))
-            .shadow(color: color.opacity(0.8 * level), radius: 3)
             .accessibilityHidden(true)
     }
 }
@@ -1151,23 +1135,15 @@ private struct PanelKeyBody<Label: View>: View {
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        let key = label
+        label
             .background(PanelKeyFace(shape: shape, hovering: hovering && isEnabled && !latched,
-                                     pressed: pressed || latched))
+                                     pressed: pressed || latched, resting: floating ? 0.05 : 0))
+            .background { if floating { shape.fill(Color(nsColor: .windowBackgroundColor)) } }
             .contentShape(shape)
             .contentShape(.focusEffect, shape)
-        Group {
-            if floating {
-                key.glassSurface(.regular, in: shape, interactive: true)
-            } else {
-                key
-            }
-        }
-        .scaleEffect(pressed ? 0.97 : 1)
-        .opacity(isEnabled ? 1 : 0.45)
-        .onHover { hovering = $0 }
-        .animation(Motion.snappy, value: pressed)
-        .animation(Motion.snappy, value: hovering)
+            .opacity(isEnabled ? 1 : 0.45)
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }
 
@@ -1186,7 +1162,6 @@ struct PanelKeyLabel: View {
 
     @Environment(\.layout) private var layout
     @ScaledLength(relativeTo: .callout) private var iconBox: CGFloat = 16
-    @ScaledLength(relativeTo: .caption) private var led: CGFloat = 6
     let symbol: String
     let title: String
     var values: [String] = []
@@ -1220,10 +1195,9 @@ struct PanelKeyLabel: View {
                 EmptyView()
             case .menu:
                 chevron
-            case .led(let on):
-                PanelLED(level: on ? 1 : 0).frame(width: led, height: led)
-            case .menuLED(let on):
-                PanelLED(level: on ? 1 : 0).frame(width: led, height: led)
+            case .led:
+                EmptyView()
+            case .menuLED:
                 chevron
             }
         }
@@ -1231,10 +1205,18 @@ struct PanelKeyLabel: View {
         .contentShape(Rectangle())
     }
 
+    /// Off reads quieter than on (the light the keys used to carry).
+    private var isOn: Bool {
+        switch indicator {
+        case .led(let on), .menuLED(let on): return on
+        default: return true
+        }
+    }
+
     private func valueText(_ v: String) -> some View {
         Text(v)
             .textRole(.callout)
-            .foregroundStyle(PanelInk.secondary)
+            .foregroundStyle(isOn ? Color.primary.opacity(0.85) : PanelInk.tertiary)
             .lineLimit(1)
     }
 
@@ -1255,82 +1237,16 @@ extension View {
     }
 }
 
-/// "SCREENSAVER", "WALLPAPER": the small caps label that opens each card. Never breaks.
+/// "Screensaver", "Wallpaper": the quiet label that opens each card. Never breaks.
 private struct CardEyebrow: View {
     let text: String
 
     var body: some View {
         Text(text)
-            .textRole(.eyebrow)
-            .foregroundStyle(PanelInk.secondary)
+            .textRole(.calloutEmphasis)
+            .foregroundStyle(.secondary)
             .lineLimit(1)
             .fixedSize()
-    }
-}
-
-// MARK: - Glow
-
-/// What a destination's glow shows.
-enum GlowState: Equatable {
-    /// Playing: lit.
-    case active
-    /// Holding its frame (the wallpaper paused): a dim glow.
-    case paused
-    /// Not playing (the wallpaper off, the screensaver not set up): no glow.
-    case off
-}
-
-/// The destination's "on air" light: the thumbnail lit from below like a display — a soft
-/// green (the SYNC key's LED) bleeding up from its bottom edge inside the rounded frame,
-/// faint enough that the picture shows through. Paused, a dim version; off, nothing. It
-/// never moves: a state change eases it in or out, and that's all (no timeline, no state
-/// loop — nothing is scheduled while it shows).
-struct DestinationGlow: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    let state: GlowState
-
-    /// The glow's strength in each state (0 … 1).
-    private var level: Double {
-        switch state {
-        case .active: return 1
-        case .paused: return 0.4
-        case .off: return 0
-        }
-    }
-
-    var body: some View {
-        let _ = Perf.body("DestinationGlow")
-        GlowFace()
-            .opacity(level)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)   // the card carries the state as its value
-            .animation(reduceMotion ? Motion.reduced : .easeInOut(duration: 0.35), value: state)
-    }
-}
-
-/// One fixed drawing of the glow at full strength (DestinationGlow fades it): a light wash
-/// rising from the bottom edge and a brighter band right along it, added to the picture
-/// (plus-lighter) so it reads as light, not paint.
-private struct GlowFace: View {
-    var body: some View {
-        let led = PanelInk.led
-        GeometryReader { g in
-            // The wash reaches about a third of the way up (within limits).
-            let reach = min(max(g.size.height * 0.34, 40), 120)
-            ZStack(alignment: .bottom) {
-                LinearGradient(stops: [.init(color: led.opacity(0.40), location: 0),
-                                       .init(color: led.opacity(0.14), location: 0.3),
-                                       .init(color: led.opacity(0), location: 1)],
-                               startPoint: .bottom, endPoint: .top)
-                    .frame(height: reach)
-                // The lit edge.
-                LinearGradient(colors: [led.opacity(0.7), led.opacity(0)],
-                               startPoint: .bottom, endPoint: .top)
-                    .frame(height: 6)
-            }
-            .frame(width: g.size.width, height: g.size.height, alignment: .bottom)
-        }
-        .blendMode(.plusLighter)
     }
 }
 
@@ -1345,20 +1261,37 @@ private struct WallpaperTransport: View {
 
     @Environment(\.layout) private var layout
     @ScaledLength(relativeTo: .callout) private var height: CGFloat = 30
-    @ScaledLength(relativeTo: .caption2) private var ledWidth: CGFloat = 10
-    @ScaledLength(relativeTo: .caption2) private var ledHeight: CGFloat = 2.5
     let mode: Mode
     let select: (Mode) -> Void
 
+    @ScaledLength(relativeTo: .callout) private var iconBox: CGFloat = 16
+
     var body: some View {
-        // The same height as a panel key (PanelKey.Frame), a touch wider than tall.
-        let h = height + (layout.isWide ? Space.xs : 0)
-        VStack(spacing: PanelKey.gap(layout)) {
-            ForEach(Mode.allCases, id: \.self) { m in
-                key(m, height: h)
+        // A row like the other keys: icon · "Playback" ···· [▶ ‖ ⏻], the three as one
+        // small segmented strip, the current one pressed in.
+        let h = height - Space.xs
+        HStack(spacing: layout.controlGap) {
+            Image(systemName: "playpause")
+                .scaledFont { .scaled(.callout, $0, weight: .medium) }
+                .foregroundStyle(PanelInk.secondary)
+                .frame(width: iconBox)
+            // The word folds away before the strip would push the card wider.
+            ViewThatFits(in: .horizontal) {
+                Text("Playback").textRole(.control).lineLimit(1).fixedSize()
+                Color.clear.frame(width: 0, height: 0)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 2) {
+                ForEach(Mode.allCases, id: \.self) { m in
+                    key(m, height: h)
+                }
+            }
+            .padding(2)
+            .background(RoundedRectangle(cornerRadius: PanelKey.radius, style: .continuous)
+                .fill(Color.primary.opacity(0.05)))
+            .fixedSize()
         }
-        .fixedSize()
+        .modifier(PanelKey.Frame())
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Wallpaper playback")
     }
@@ -1366,17 +1299,13 @@ private struct WallpaperTransport: View {
     private func key(_ m: Mode, height h: CGFloat) -> some View {
         let on = m == mode
         return Button { if !on { select(m) } } label: {
-            VStack(spacing: Space.xxs - 1) {
-                PanelLED(level: on ? 1 : 0, color: m == .off ? PanelInk.standby : PanelInk.led)
-                    .frame(width: ledWidth, height: ledHeight)
-                Image(systemName: symbol(m))
-                    .scaledFont { .scaled(.footnote, $0, weight: .semibold) }
-                    .foregroundStyle(on ? Color.primary : PanelInk.secondary)
-            }
-            .frame(width: (h * 1.2).rounded(), height: h)
+            Image(systemName: symbol(m))
+                .scaledFont { .scaled(.footnote, $0, weight: .semibold) }
+                .foregroundStyle(on ? (m == .off ? Color.primary : Color.accentColor) : PanelInk.secondary)
+            .frame(width: (h * 1.4).rounded(), height: h)
             .contentShape(Rectangle())
         }
-        .buttonStyle(PanelKeyStyle(latched: on))
+        .buttonStyle(PanelKeyStyle(radius: PanelKey.radius - 2, latched: on))
         .disabled(m == .pause && mode == .off)
         .help(help(m))
         .accessibilityLabel(label(m))
@@ -1611,6 +1540,7 @@ struct WallpaperCard: View {
                               stateValue: stateValue) {
             preview
         } keys: {
+            WallpaperTransport(mode: mode) { select($0) }
             // Synced, the zone's own style recedes: it's following the driver.
             styleKey
                 .opacity(1 - 0.4 * progress)
@@ -1619,7 +1549,7 @@ struct WallpaperCard: View {
                     .opacity(1 - 0.4 * progress)
             }
         } aside: {
-            WallpaperTransport(mode: mode) { select($0) }
+            EmptyView()
         } banner: {
             LoginNudgeBanner(kind: .wallpaper)   // once, after turning it on (SetupGuide.swift)
         }
@@ -1635,14 +1565,6 @@ struct WallpaperCard: View {
 
     private var mode: WallpaperTransport.Mode {
         style == nil ? .off : paused ? .pause : .play
-    }
-
-    private var glow: GlowState {
-        switch mode {
-        case .play: return .active
-        case .pause: return .paused
-        case .off: return .off
-        }
     }
 
     private var stateValue: String {
@@ -1684,7 +1606,6 @@ struct WallpaperCard: View {
             }
             .scaleEffect(reduceMotion ? 1 : 1.06 - 0.06 * progress)
             .opacity(progress)
-            DestinationGlow(state: glow)
         }
     }
 
@@ -1909,7 +1830,7 @@ struct SearchField: View {
         }
         .padding(.horizontal, layout.controlGap + Space.xxs)
         .frame(height: height)
-        .glassSurface(.regular, in: Capsule())
+        .background(Capsule().fill(Color.primary.opacity(0.06)))
     }
 
     @ViewBuilder private var field: some View {

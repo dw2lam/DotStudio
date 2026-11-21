@@ -74,9 +74,11 @@ private struct PanelSurface<S: Shape>: ViewModifier {
     let shape: S
 
     func body(content: Content) -> some View {
+        // A flat tint and a hairline — no glass: a glass panel re-samples what's behind it
+        // for every frame it moves on screen, i.e. every frame of a gallery scroll.
         content
-            .background(shape.fill(Color(nsColor: .windowBackgroundColor).opacity(scheme == .dark ? 0.32 : 0.5)))
-            .glassSurface(.regular, in: shape)
+            .background(shape.fill(Color.primary.opacity(scheme == .dark ? 0.045 : 0.035)))
+            .overlay(shape.stroke(Color.primary.opacity(scheme == .dark ? 0.10 : 0.08), lineWidth: 0.75))
     }
 }
 

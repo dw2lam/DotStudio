@@ -106,8 +106,9 @@ struct StyleTile: View, Equatable {
             .overlay(RoundedRectangle(cornerRadius: Self.radius, style: .continuous)
                 .strokeBorder(.white.opacity(0.10), lineWidth: 1))
             .overlay { selectionRing }
-            .shadow(color: .black.opacity(hovering ? 0.28 : 0.14),
-                    radius: hovering ? 18 : 6, y: hovering ? 10 : 3)
+            // A shadow only on the lifted tile: one resting shadow per tile was an offscreen
+            // pass per tile for every frame of a scroll.
+            .shadow(color: .black.opacity(hovering ? 0.25 : 0), radius: hovering ? 16 : 0, y: hovering ? 8 : 0)
             .scaleEffect(hovering && !reduceMotion ? 1.025 : 1)
             .offset(y: hovering && !reduceMotion ? -2 : 0)
 
@@ -385,8 +386,10 @@ struct SelectionRing: NSViewRepresentable {
             let path = RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: rect).cgPath
             ctx.saveGState()
             // The tile's shadow (StyleTile), which the ring sat under.
-            ctx.setShadow(offset: CGSize(width: 0, height: -(hovering ? 10 : 3)), blur: hovering ? 18 : 6,
-                          color: NSColor.black.withAlphaComponent(hovering ? 0.28 : 0.14).cgColor)
+            if hovering {
+                ctx.setShadow(offset: CGSize(width: 0, height: -8), blur: 16,
+                              color: NSColor.black.withAlphaComponent(0.25).cgColor)
+            }
             ctx.addPath(path)
             ctx.setLineWidth(lw)
             ctx.setStrokeColor(NSColor(Color.accentColor).cgColor)
@@ -505,7 +508,8 @@ struct GlassBadge: View {
         .padding(.horizontal, text == nil ? Space.xxs + 2 : Space.xs)
         .frame(minHeight: height)
         .fixedSize()
-        .tintedGlassSurface(.regular, in: Capsule(), tint: tint)
+        // Solid, not glass: a tile can carry two, and glass re-samples while the page scrolls.
+        .background(Capsule().fill(tint ?? Color.black.opacity(0.5)))
     }
 }
 
@@ -522,7 +526,6 @@ private struct TileActionBar: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var wallpaper = WallpaperSlot.shared
     @ObservedObject private var roster = DisplayRoster.shared
-    @ScaledLength(relativeTo: .body) private var dividerHeight: CGFloat = 16
     let preset: Preset
     let badges: TileBadges
     let lineup: ScreensaverLineup
@@ -533,64 +536,62 @@ private struct TileActionBar: View {
     /// Play as Screensaver gives the one display back to it).
     private var isPlayingAlone: Bool { isOnly && !badges.lineupOffScreen }
 
+    /// Both destinations play this style: it's the whole screensaver playlist and the
+    /// wallpaper follows the screensaver.
+    private var isBoth: Bool { isPlayingAlone && WallpaperController.shared.followsScreensaver && wallpaper.styleID != nil }
+
     var body: some View {
         let _ = Perf.body("TileActionBar")
-        // Every action when the tile has room. On a narrow tile (or at large text sizes)
-        // Preview and Edit fold into a "…" menu; narrower still, everything but Play does.
-        // With several displays the "…" is always there: it holds "Set as Screensaver on ▸" and
-        // "Set as Wallpaper on ▸" (a SwiftUI button, so measuring it is safe — see moreMenu).
-        let multi = roster.showsControls(model.screensaverPins, wallpaper.pins, alive: { model.preset($0) != nil })
+        // Words, not a row of look-alike icons: "Set as  [Screensaver] [Wallpaper]  …", each
+        // destination checked while this style plays there. The rest — Set as Both, the
+        // playlist, per-display picks, Preview, Edit — is in "…". On a narrow tile (or at large
+        // text sizes) "Set as" folds away, then everything folds into "Set as…".
         ViewThatFits(in: .horizontal) {
             bar {
-                destinationIcons; divider; styleIcons
-                if multi { moreMenu(includeDestinations: false, includeStyle: false) }
+                Text("Set as").textRole(.badge).foregroundStyle(.secondary).padding(.leading, Space.xs)
+                destinationButtons
+                moreMenu(includeDestinations: false)
             }
-            bar { destinationIcons; divider; moreMenu(includeDestinations: false) }
-            bar { playIcon; moreMenu(includeDestinations: true) }
+            bar { destinationButtons; moreMenu(includeDestinations: false) }
+            bar { setAsMenu }
         }
     }
 
     private func bar<C: View>(@ViewBuilder _ content: () -> C) -> some View {
-        GlassGroup(spacing: Space.xs) {
-            HStack(spacing: Space.xxs) { content() }
-                .padding(Space.xxs)
-                .glassSurface(.regular, in: Capsule())
-        }
-        .fixedSize()
+        HStack(spacing: Space.xxs) { content() }
+            .padding(Space.xxs)
+            .glassSurface(.regular, in: Capsule())
+            .fixedSize()
     }
 
-    private var divider: some View {
-        Divider().frame(height: dividerHeight).padding(.horizontal, Space.xxs)
-    }
-
-    private var playIcon: some View {
-        icon(isPlayingAlone ? "checkmark" : "play.fill",
-             help: isPlayingAlone ? "Playing as your screensaver" : "Play as Screensaver") {
-            Motion.run { model.playAsScreensaver(preset.id) }
+    @ViewBuilder private var destinationButtons: some View {
+        DestinationButton(title: "Screensaver", symbol: "play.rectangle", on: isPlayingAlone,
+                          help: isPlayingAlone ? "Playing as your screensaver" : "Set as Screensaver — play only this style") {
+            if !isPlayingAlone { Motion.run { model.playAsScreensaver(preset.id) } }
         }
-        .disabled(isPlayingAlone)
-    }
-
-    @ViewBuilder private var destinationIcons: some View {
-        playIcon
-
-        icon(badges.onScreensaver ? "minus" : "plus",
-             help: badges.onScreensaver ? "Remove from Screensaver" : "Add to Screensaver") {
-            Motion.run { model.togglePlaylist(preset.id) }
-        }
-        .disabled(isOnly)
 
         if wallpaper.isAvailable {
-            icon(badges.wallpaper ? "photo.artframe.circle.fill" : "photo.artframe",
-                 help: badges.wallpaper ? "Stop Wallpaper" : "Set as Wallpaper") {
+            DestinationButton(title: "Wallpaper", symbol: "photo.on.rectangle", on: badges.wallpaper,
+                              help: badges.wallpaper ? "Playing as your wallpaper — click to stop it" : "Set as Wallpaper") {
                 Motion.run { wallpaper.toggle(preset.id) }
             }
         }
     }
 
-    @ViewBuilder private var styleIcons: some View {
-        icon("arrow.up.left.and.arrow.down.right", help: "Preview Full Screen") { preview() }
-        icon("slider.horizontal.3", help: "Edit") { model.edit(preset.id) }
+    /// The narrowest bar: one "Set as…" button with every action in its menu.
+    private var setAsMenu: some View {
+        Button { popUpMore(includeDestinations: true) } label: {
+            HStack(spacing: Space.xxs) {
+                Text("Set as\u{2026}")
+                Image(systemName: "chevron.down").imageScale(.small)
+            }
+            .textRole(.badge)
+            .padding(.horizontal, Space.xs)
+            .frame(minHeight: 26)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("Set as Screensaver, Wallpaper or both, and more")
     }
 
     /// "…": a SwiftUI button that pops up an AppKit menu. Not a SwiftUI `Menu`: that is an
@@ -611,15 +612,28 @@ private struct TileActionBar: View {
         var items: [ActionMenu.Item] = []
         let id = preset.id
         if includeDestinations {
-            items.append(.init(badges.onScreensaver ? "Remove from Screensaver" : "Add to Screensaver",
-                               enabled: !isOnly) { [model] in Motion.run { model.togglePlaylist(id) } })
+            items.append(.init("Set as Screensaver", enabled: !isPlayingAlone, checked: isPlayingAlone) { [model] in
+                Motion.run { model.playAsScreensaver(id) }
+            })
             if wallpaper.isAvailable {
                 items.append(.init(badges.wallpaper ? "Stop Wallpaper" : "Set as Wallpaper") { [wallpaper] in
                     Motion.run { wallpaper.toggle(id) }
                 })
             }
-            items.append(.separator)
         }
+        if wallpaper.isAvailable {
+            // Screensaver + wallpaper in sync (the top section's Sync).
+            items.append(.init("Set as Both", enabled: !isBoth, checked: isBoth) { [model] in
+                Motion.run(Motion.sync) {
+                    model.playAsScreensaver(id)
+                    WallpaperController.shared.setFollowsScreensaver(true)
+                }
+            })
+        }
+        items.append(.separator)
+        items.append(.init(badges.onScreensaver ? "Remove from Screensaver Playlist" : "Add to Screensaver Playlist",
+                           enabled: !isOnly) { [model] in Motion.run { model.togglePlaylist(id) } })
+        items.append(.separator)
         // Several displays: which ones play it (DisplayStyles.swift).
         let displays = roster.displays
         if roster.showsControls(model.screensaverPins, wallpaper.pins, alive: { model.preset($0) != nil }) {
@@ -644,11 +658,39 @@ private struct TileActionBar: View {
             preset: preset, source: model.library.source, store: model.store)
     }
 
-    private func icon(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol) }
-            .buttonStyle(ScaledIconButtonStyle())
-            .help(help)
-            .accessibilityLabel(help)
+}
+
+/// One destination in the hover bar: icon + word, in the accent colour with a checkmark
+/// while this style plays there.
+private struct DestinationButton: View {
+    @Environment(\.isEnabled) private var isEnabled
+    @ScaledLength(relativeTo: .body) private var height: CGFloat = 26
+    let title: String
+    let symbol: String
+    let on: Bool
+    let help: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Space.xxs + 1) {
+                Image(systemName: on ? "checkmark" : symbol)
+                Text(title)
+            }
+            .textRole(.badge)
+            .foregroundStyle(on ? Color.white : Color.primary)
+            .padding(.horizontal, Space.xs + 2)
+            .frame(minHeight: height)
+            .background(Capsule().fill(on ? AnyShapeStyle(Color.accentColor)
+                                          : AnyShapeStyle(Color.primary.opacity(hovering && isEnabled ? 0.14 : 0.07))))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(help)
+        .accessibilityLabel(help)
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
 

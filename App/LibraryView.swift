@@ -338,7 +338,6 @@ private struct FilterBar: View {
     @Binding var query: String
     var searchFocused: FocusState<Bool>.Binding
     let counts: [GalleryFilter: Int]
-    @Namespace private var chipNS
     @State private var chipsWidth: CGFloat = 0
     @State private var chipsViewport: CGFloat = 0
     @State private var chipFade = ChipEdgeFade()
@@ -349,13 +348,13 @@ private struct FilterBar: View {
     private var searchWidth: CGFloat { layout.scaled(layout.widthClass.pick(208, 240, 288)) }
 
     private var chips: some View {
-        GlassGroup(spacing: layout.controlGap) {
+        Group {
             HStack(spacing: layout.controlGap) {
                 ForEach(GalleryFilter.chips) { f in
                     let n = counts[f] ?? 0
                     if f.alwaysShown || n > 0 || filter == f {
                         FilterChip(filter: f, count: f == .all ? nil : n,
-                                   selected: filter == f, ns: chipNS) {
+                                   selected: filter == f) {
                             Motion.run { filter = f }
                         }
                     }
@@ -400,24 +399,18 @@ private struct FilterBar: View {
         .pageColumn(layout)
         .padding(.vertical, Self.verticalInset)
         .background {
-            // Once pinned, a soft frosted fade keeps the chips legible over the tiles
-            // scrolling beneath. Driven by the bar's own position, so no parent re-render.
-            // It spans the whole window, not just the page column.
+            // Once pinned, an opaque strip of the window's own colour (and a hairline under it)
+            // keeps the chips legible over the tiles scrolling beneath — no blur, so nothing
+            // is re-sampled per scroll frame. Driven by the bar's own position, so no parent
+            // re-render. It spans the whole window, not just the page column.
             GeometryReader { g in
                 let y = g.frame(in: .named(FilterBar.space)).minY
-                let frost = min(max((150 - y) / 70, 0), 1)
-                // Not there at all until it shows: no backdrop layer (or its blur) for the
-                // window server to keep while the page scrolls under an invisible frost.
-                if frost > 0 {
-                    Rectangle()
-                        .fill(.ultraThinMaterial)
-                        .mask(LinearGradient(stops: [.init(color: .black, location: 0),
-                                                     .init(color: .black.opacity(0.8), location: 0.6),
-                                                     .init(color: .clear, location: 1)],
-                                             startPoint: .top, endPoint: .bottom))
+                let pinned = min(max((150 - y) / 70, 0), 1)   // fully there once under the toolbar
+                if pinned > 0 {
+                    Color(nsColor: .windowBackgroundColor)
+                        .overlay(alignment: .bottom) { Divider() }
                         .padding(.top, -(Space.xxl + Space.s))   // up under the toolbar
-                        .padding(.bottom, -Space.m)              // a soft tail over the first row
-                        .opacity(frost)
+                        .opacity(pinned)
                 }
             }
             .allowsHitTesting(false)
@@ -470,21 +463,12 @@ private struct FilterChip: View {
     let filter: GalleryFilter
     let count: Int?
     let selected: Bool
-    let ns: Namespace.ID
     let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: layout.labelGap) {
-                if let s = filter.symbol {
-                    // Monochrome and an explicit colour: some symbols (leaf, camera.filters,
-                    // scribble) otherwise draw their layers faintly over glass.
-                    Image(systemName: s)
-                        .symbolRenderingMode(.monochrome)
-                        .scaledFont { .scaled(points: 10.5, $0, weight: .semibold) }
-                        .foregroundStyle(selected ? Color.white : Color.primary.opacity(0.8))
-                }
                 Text(filter.title)
                 if let count {
                     Text("\(count)")
@@ -502,11 +486,12 @@ private struct FilterChip: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .tintedGlassSurface(.regular, in: Capsule(), tint: selected ? Color.accentColor : nil, interactive: true)
-        .glassID(filter.id, in: ns)
-        .scaleEffect(hovering && !selected ? 1.04 : 1)
+        // Flat capsules: the selected one in the accent colour, the rest a quiet wash that
+        // deepens under the pointer. No glass (it re-samples the page on every scroll frame).
+        .background(Capsule().fill(selected ? AnyShapeStyle(Color.accentColor)
+                                            : AnyShapeStyle(Color.primary.opacity(hovering ? 0.10 : 0.05))))
         .onHover { hovering = $0 }
-        .motion(Motion.snappy, value: hovering)
+        .animation(.easeOut(duration: 0.12), value: hovering)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

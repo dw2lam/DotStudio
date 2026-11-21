@@ -40,10 +40,8 @@ struct ContentView: View {
         }
         .adaptiveLayout()   // width class + text size → \.layout for every view inside (Layout.swift)
         .stillContext(model)   // what every StyleThumb needs, so none of them observes the model
-        .background {
-            GalleryBackdrop(presetID: editing?.id ?? model.nowPlayingID)
-                .ignoresSafeArea()
-        }
+        // The window's own colour: no colour-washed backdrop behind the page.
+        .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
         .environment(\.heroNamespace, reduceMotion ? nil : hero)
         .animation(Motion.pick(Motion.hero, reduceMotion: reduceMotion), value: model.editingID)
         .navigationTitle(editing?.name ?? "DotStudio")
