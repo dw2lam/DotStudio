@@ -497,7 +497,7 @@ struct EffectRow: View {
                     ForEach(effect.paramSpecs) { spec in
                         ParamRow(spec: spec, value: paramBinding(spec))
                     }
-                    if effect.kind.usesColors {
+                    if effect.kind.usesColors, !wells.isEmpty {
                         ColorWellsRow(wells: wells)
                     }
                     if effect.kind == .custom {
@@ -597,8 +597,13 @@ struct EffectRow: View {
 
     private var wells: [ColorWellsRow<EmptyView>.Well] {
         var out: [ColorWellsRow<EmptyView>.Well] = []
-        if effect.defaultColorAValue != nil { out.append(.init(title: effect.colorALabelText, color: colorBinding(isA: true))) }
-        if effect.defaultColorBValue != nil { out.append(.init(title: effect.colorBLabelText, color: colorBinding(isA: false))) }
+        // A scene package shows colour wells only for colours it declares (a film's video can't be
+        // recoloured): the kind's fallback colours aren't settings it reads.
+        let m = effect.kind == .custom ? effect.customManifest : nil
+        let hasA = effect.kind == .custom ? m?.colors?.a != nil : effect.defaultColorAValue != nil
+        let hasB = effect.kind == .custom ? m?.colors?.b != nil : effect.defaultColorBValue != nil
+        if hasA { out.append(.init(title: effect.colorALabelText, color: colorBinding(isA: true))) }
+        if hasB { out.append(.init(title: effect.colorBLabelText, color: colorBinding(isA: false))) }
         return out
     }
 

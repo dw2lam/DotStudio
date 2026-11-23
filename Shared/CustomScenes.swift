@@ -1147,7 +1147,7 @@ extension EffectInstance {
         guard kind == .custom else { return kind.params }
         guard let m = customManifest else { return [] }
         let engineParams = CustomScenes.resolveEngine(m.engine, store: CustomScenes.defaultStore)?.engineParamSpecs ?? []
-        return m.paramSpecs + engineParams
+        return m.paramSpecs + CustomFilm.editableParams(m, engine: engineParams)   // only settings that do something
     }
     var defaultParamValues: [String: Double] {
         var d: [String: Double] = [:]
@@ -1186,7 +1186,7 @@ extension Preset {
                 // a film follows the sun, and the live weather when it has a rain clip or light
                 // layers — unless the style pins its weather
                 switch feature {
-                case "sun": return true
+                case "sun": return CustomFilm.timeMode(inst) == 0   // pinned to day / night / appearance: not the sun
                 case "weather":
                     guard CustomFilm.pinnedCondition(inst) == nil else { return false }
                     return m.usesSet.contains(feature) || m.layers != nil

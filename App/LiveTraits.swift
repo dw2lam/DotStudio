@@ -21,14 +21,14 @@ struct LiveTraits: Equatable {
         let on = preset.effects.filter(\.enabled)
         // Built-in film packages, read once up front: a style's own manifest is only known to
         // customUses after something has drawn it, so the gallery would miss them at first.
-        let films = on.compactMap { $0.kind == .custom ? $0.custom?.id : nil }
         let builtInWeather = on.contains { e in
             e.kind == .custom && CustomFilm.pinnedCondition(e) == nil && Self.builtInFilms[e.custom?.id ?? ""] == true
         }
         t.weather = WeatherLink.followsLive(preset) || builtInWeather
         t.clock = on.contains { clockKinds.contains($0.kind) }
         t.sky = on.contains { followsSky($0) } || preset.customUses("sun")
-            || films.contains { Self.builtInFilms[$0] != nil }   // a film's day/night follows the sun
+            || on.contains { $0.kind == .custom && Self.builtInFilms[$0.custom?.id ?? ""] != nil
+                             && CustomFilm.timeMode($0) == 0 }   // a film's day/night follows the sun
         return t
     }
 

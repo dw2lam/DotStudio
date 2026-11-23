@@ -84,6 +84,37 @@ final class CustomFilm {
         return clips.first
     }
 
+    /// Time of day (ds.time) for variant clips: 0 follows the real sun, 1 always day, 2 always
+    /// night, 3 follows the Mac's Light/Dark mode.
+    static func timeMode(_ inst: EffectInstance) -> Int {
+        Int(saturating: inst.params["ds.time"] ?? 0, .toNearestOrAwayFromZero)
+    }
+
+    /// The sun elevation (°) the clip choice uses: the real one, or one well inside day / night.
+    static func elevation(mode: Int, real: () -> Double) -> Double {
+        switch mode {
+        case 1: return 45
+        case 2: return -20
+        case 3: return systemDark ? -20 : 45
+        default: return real()
+        }
+    }
+
+    /// The Mac's appearance (the global AppleInterfaceStyle; readable from the saver too).
+    static var systemDark: Bool { UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark" }
+
+    /// The settings a film style can really change, from what its package holds — so a film
+    /// never shows a control that does nothing:
+    ///   • light layers (relit live): Grain, Halation, Weather — the screen pass draws them;
+    ///   • variant clips: Time of day (which clip plays), and Weather only with a rain clip.
+    ///     Their look is baked into the clips (grain comes from the package's "look").
+    static func editableParams(_ m: CustomSceneManifest, engine: [ParamSpec]) -> [ParamSpec] {
+        guard m.engine.id == "film" else { return engine }
+        if m.layers != nil { return engine.filter { $0.key != "ds.time" } }
+        let rain = (m.clips ?? []).contains { $0.variant.lowercased() == "rain" }
+        return engine.filter { $0.key == "ds.time" || ($0.key == "ds.weather" && rain) }
+    }
+
     /// The engine's Weather menu (ds.weather): 0 = Live, then every condition in declaration order.
     static let weatherMenu = ["Live", "Clear", "Partly Cloudy", "Overcast", "Fog", "Drizzle", "Rain", "Heavy Rain",
                               "Thunderstorm", "Snow", "Sleet"]
@@ -112,13 +143,13 @@ final class CustomFilm {
     /// mix (0 = all A). `live`: a host drawing continuously (plays video); else a still from the
     /// clips' posters (thumbnails, the gallery).
     func frame(device: MTLDevice, now: CFTimeInterval, wall: Date, location: (lat: Double, lon: Double)?,
-               weather: WeatherMix, live: Bool) -> (a: MTLTexture, b: MTLTexture, mix: Float, fps: Float)? {
+               weather: WeatherMix, live: Bool, timeMode: Int = 0) -> (a: MTLTexture, b: MTLTexture, mix: Float, fps: Float)? {
         let clips = prepared.manifest.clips ?? []
         guard !clips.isEmpty else { return nil }
         lock.lock(); defer { lock.unlock() }
         if current == nil || now - lastCheck >= CustomFilm.recheckSeconds || !live {
             lastCheck = now
-            let el = CustomSceneLink.sun(at: wall, location: location).elevation
+            let el = CustomFilm.elevation(mode: timeMode) { CustomSceneLink.sun(at: wall, location: location).elevation }
             let raining = weather.precip * (1 - weather.snow) > 0.25
             if let c = CustomFilm.choose(clips, elevation: el, raining: raining), c != current?.clip {
                 let next = make(c, device: device, live: live)

@@ -429,6 +429,10 @@ enum UIShots {
             WallpaperSlot.shared.set(st.scene)
             st.edit(st.scene)
         }, view: main))
+        // A film scene's editor: only the settings its package can really use (Time of day)
+        s.append(Screen(name: "editor-film-field", frame: .window, prepare: { st in
+            if let p = st.model.library.presets.first(where: { $0.name == "Field" }) { st.edit(p.id) }
+        }, view: main))
         // The Themes strip: Lava Lamp in Blue, and in Multicolour (SceneThemes.swift)
         for theme in ["blue", "multicolour"] {
             s.append(Screen(name: "editor-theme-\(theme)", frame: .window, prepare: { st in

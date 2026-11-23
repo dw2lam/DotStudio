@@ -206,7 +206,8 @@ final class CustomSceneLink {
             }
         } else if p.isFilm {
             guard let film = film(id),
-                  let f = film.frame(device: encoder.device, now: now, wall: wall, location: location, weather: weather, live: live)
+                  let f = film.frame(device: encoder.device, now: now, wall: wall, location: location, weather: weather, live: live,
+                                         timeMode: CustomFilm.timeMode(inst))
             else { return nil }
             u.scene.0 = simd_float4(Float(f.a.width), Float(f.a.height), Float(f.b.width), Float(f.b.height))
             u.scene.1 = simd_float4(f.mix, f.fps, 0, 0)

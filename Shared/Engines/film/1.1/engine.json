@@ -4,14 +4,60 @@
   "kind": "film",
   "name": "Film",
   "summary": "Looping video clips that follow the real sun and weather: variant clips (day, golden hour, night, rain) crossfading, or one video of light layers relit live for any time of day and any weather.",
-  "base": { "id": "metal", "version": ">=1" },
+  "base": {
+    "id": "metal",
+    "version": ">=1"
+  },
   "headers": [],
   "wrapper": "film.metal",
   "params": [
-    { "key": "ds.grain", "label": "Grain", "kind": "slider", "min": 0, "max": 1, "default": 0.35 },
-    { "key": "ds.halation", "label": "Halation", "kind": "slider", "min": 0, "max": 1, "default": 0 },
-    { "key": "ds.weather", "label": "Weather", "kind": "menu", "default": 0,
-      "options": ["Live", "Clear", "Partly Cloudy", "Overcast", "Fog", "Drizzle", "Rain", "Heavy Rain", "Thunderstorm", "Snow", "Sleet"] }
+    {
+      "key": "ds.time",
+      "label": "Time of day",
+      "kind": "menu",
+      "default": 0,
+      "options": [
+        "Follow the sun",
+        "Always day",
+        "Always night",
+        "Match Light/Dark mode"
+      ]
+    },
+    {
+      "key": "ds.grain",
+      "label": "Grain",
+      "kind": "slider",
+      "min": 0,
+      "max": 1,
+      "default": 0.35
+    },
+    {
+      "key": "ds.halation",
+      "label": "Halation",
+      "kind": "slider",
+      "min": 0,
+      "max": 1,
+      "default": 0
+    },
+    {
+      "key": "ds.weather",
+      "label": "Weather",
+      "kind": "menu",
+      "default": 0,
+      "options": [
+        "Live",
+        "Clear",
+        "Partly Cloudy",
+        "Overcast",
+        "Fog",
+        "Drizzle",
+        "Rain",
+        "Heavy Rain",
+        "Thunderstorm",
+        "Snow",
+        "Sleet"
+      ]
+    }
   ],
   "guide": "guide.md",
   "examples": [],

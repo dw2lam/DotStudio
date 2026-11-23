@@ -50,10 +50,22 @@ enum SceneThemes {
                                   colorB: b.map { retint($0, hue: t.hueB, chroma: t.chromaB, lift: t.liftB) },
                                   params: off))
         }
+        // A theme that changes nothing visible (black or white can't take a tint) isn't a choice:
+        // keep the first of any that come out the same, and none at all if only Original is left.
+        var unique: [SceneTheme] = []
+        for t in out where !unique.contains(where: { close($0.colorA, t.colorA) && close($0.colorB, t.colorB) && $0.params == t.params }) {
+            unique.append(t)
+        }
+        out = unique
         if keys.contains("rainbow") {
             out.insert(SceneTheme(id: "multicolour", name: "Multicolour", colorA: a, colorB: b, params: ["rainbow": 1]), at: 1)
         }
-        return out
+        return out.count > 1 ? out : []
+    }
+
+    /// The theme `effect` is wearing now (the first that matches), if any.
+    static func current(_ themes: [SceneTheme], _ effect: EffectInstance) -> String? {
+        themes.first { isCurrent($0, effect) }?.id
     }
 
     /// Whether `effect` is wearing `theme` now (its colours and the params the theme sets).
@@ -123,8 +135,9 @@ struct SceneThemeStrip: View {
             VStack(alignment: .leading, spacing: layout.labelGap) {
                 Text("Theme").textRole(.callout).foregroundStyle(.secondary)
                 FlowLayout(spacing: Space.xs, lineSpacing: Space.xs) {
+                    let current = SceneThemes.current(themes, effect)
                     ForEach(themes) { t in
-                        let on = SceneThemes.isCurrent(t, effect)
+                        let on = t.id == current
                         Button { SceneThemes.apply(t, to: &effect) } label: {
                             VStack(spacing: 3) {
                                 swatch(t)
