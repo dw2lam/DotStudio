@@ -1,6 +1,6 @@
 //  SetupCoachViews.swift — what the setup coach draws (SetupCoach.swift): the glowing ring
 //  and its callout over System Settings (CoachMarkView, in the click-through overlay), and the
-//  guide panel's coach card (offer · waiting for permission · the live step · all set).
+//  guide panel's coach card (waiting for permission · what the coach sees · all set).
 //  CoachOverlayPreview stands in for System Settings in UI shots (Shots.swift: coach-*).
 
 import SwiftUI
@@ -118,7 +118,8 @@ private struct CalloutSizeKey: PreferenceKey {
 
 // MARK: - The panel's coach card
 
-/// Top of the guide panel: offers the coach, waits for permission, or shows the live step.
+/// Under the setup card in the guide panel (SetupGuideCard.swift), once Guide Me was clicked:
+/// waits for permission, or says what the coach sees. The step itself (its line and picture) is the card's.
 struct CoachCard: View {
     @Environment(\.layout) private var layout
     @ObservedObject var coach: SetupCoach
@@ -127,47 +128,16 @@ struct CoachCard: View {
     var body: some View {
         Group {
             switch coach.mode {
-            case .off: offer
+            case .off: EmptyView()   // the setup card offers Guide Me
             case .waitingForPermission: waiting
             case .coaching: coaching
             }
         }
-        .padding(layout.cardPadding)
+        .padding(layout.itemGap + Space.xxs)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Color.accentColor.opacity(0.08)))
         .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).strokeBorder(Color.accentColor.opacity(0.22)))
         .accessibilityElement(children: .contain)
-        .onAppear { coach.refreshTrust() }
-    }
-
-    // MARK: Offer
-
-    private var offer: some View {
-        VStack(alignment: .leading, spacing: layout.itemGap) {
-            HStack(alignment: .top, spacing: layout.itemGap) {
-                icon("hand.point.up.left.fill")
-                VStack(alignment: .leading, spacing: layout.labelGap) {
-                    Text("Guide Me in System Settings").textRole(.headline).wrapping()
-                    Text(coach.trusted
-                         ? "DotStudio points at each button in System Settings and moves on as you click."
-                         : "DotStudio points at each button in System Settings and moves on as you click. macOS asks once for Accessibility permission, so DotStudio can see where the buttons are \u{2014} it only reads System Settings, and only while this guide is open.")
-                        .textRole(.callout)
-                        .foregroundStyle(.secondary)
-                        .wrapping()
-                }
-            }
-            HStack {
-                Spacer(minLength: 0)
-                let button = Button { coach.guideMe() } label: { Text("Guide Me").textRole(.body) }
-                    .adaptiveControlSize(.large)
-                    .accessibilityHint("Points at the controls to click in System Settings")
-                if guide.snapshot.status == .ready {
-                    button.buttonStyle(.bordered)
-                } else {
-                    button.buttonStyle(.borderedProminent)
-                }
-            }
-        }
     }
 
     // MARK: Waiting for permission
@@ -178,27 +148,28 @@ struct CoachCard: View {
                 icon("lock.shield")
                 VStack(alignment: .leading, spacing: layout.labelGap) {
                     HStack(spacing: layout.controlGap) {
-                        Text("Waiting for permission").textRole(.headline).wrapping()
+                        Text("Waiting for Permission").textRole(.headline).wrapping()
                         ProgressView().controlSize(.small)
                     }
-                    Text("In the window macOS showed, click Open System Settings, then turn on DotStudio under Accessibility. The guide starts by itself.")
+                    Text("Turn on DotStudio in Privacy & Security \u{203A} Accessibility. The guide starts by itself.")
                         .textRole(.callout)
                         .foregroundStyle(.secondary)
                         .wrapping()
-                    Text("If DotStudio is already listed there, remove it with \u{2212} and add it again.")
+                    Text("Already listed? Remove it with \u{2212}, then add it again.")
                         .textRole(.caption)
                         .foregroundStyle(.secondary)
                         .wrapping()
                 }
             }
             ReflowStack(rowAlignment: .center, columnAlignment: .leading, spacing: layout.controlGap) {
-                Button { coach.openAccessibilitySettings() } label: { Text("Open Accessibility Settings\u{2026}").textRole(.body) }
+                Button { coach.openAccessibilitySettings() } label: { Text("Accessibility Settings\u{2026}").textRole(.body) }
                     .buttonStyle(.link)
                     .accessibilityHint("Opens System Settings at Privacy & Security, Accessibility")
                 Spacer(minLength: 0)
-                Button { coach.useIllustratedGuide() } label: { Text("Use the Picture Instead").textRole(.body) }
+                Button { coach.useIllustratedGuide() } label: { Text("Just Show Pictures").textRole(.body) }
                     .buttonStyle(.bordered)
                     .adaptiveControlSize()
+                    .accessibilityHint("Skips the pointer; step through the pictures instead")
             }
         }
     }
@@ -208,183 +179,97 @@ struct CoachCard: View {
     private var step: CoachStep { coach.shownStep }
     private var manual: Bool { coach.override != nil }
 
-    @ViewBuilder private var coaching: some View {
-        if step == .finished {
-            finished
-        } else {
-            VStack(alignment: .leading, spacing: layout.itemGap) {
-                HStack(alignment: .top, spacing: layout.itemGap) {
-                    StepBadge(number: step.walkthroughStep + 1)
-                    VStack(alignment: .leading, spacing: layout.labelGap) {
-                        Text("Step \(step.walkthroughStep + 1) of 4").textRole(.eyebrow).foregroundStyle(.secondary)
-                        Text(title).textRole(.headline).wrapping()
-                        Text(.init(detail)).textRole(.callout).foregroundStyle(.secondary).wrapping()
+    private var coaching: some View {
+        VStack(alignment: .leading, spacing: layout.itemGap) {
+            HStack(alignment: .top, spacing: layout.itemGap) {
+                icon(step == .finished ? "checkmark.seal.fill" : statusSymbol)
+                VStack(alignment: .leading, spacing: layout.labelGap) {
+                    Text(headline).textRole(.headline).wrapping()
+                    if let line = statusLine {
+                        Text(.init(line)).textRole(.callout).foregroundStyle(.secondary).wrapping()
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                if let status = statusLine {
-                    Label { Text(status).textRole(.caption).wrapping() } icon: {
-                        Image(systemName: statusSymbol)
-                    }
-                    .foregroundStyle(coach.degraded || manual ? Color.secondary : Color.accentColor)
-                    .accessibilityElement(children: .combine)
-                }
-                if showsPicture {
-                    SetupWalkthrough(frozenStep: step.walkthroughStep, narrow: true)
-                }
-                actionRow
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .animation(.easeOut(duration: 0.2), value: step)
+            ReflowStack(rowAlignment: .center, columnAlignment: .leading, spacing: layout.controlGap) {
+                primaryButton
+                Spacer(minLength: 0)
+                Button { coach.useIllustratedGuide() } label: { Text("Stop Guiding").textRole(.body) }
+                    .buttonStyle(.link)
+                    .accessibilityHint("Turns off the pointer; step through the pictures instead")
+            }
         }
+        .animation(.easeOut(duration: 0.2), value: step)
     }
 
-    private var title: String {
+    /// What the coach sees, in a few words.
+    private var headline: String {
+        if step == .finished { return "All Set" }
+        if manual { return "Guide Paused" }
+        if coach.accessibilityOff { return "Accessibility Is Off" }
         switch coach.decision.situation {
-        case .settingsClosed where !manual: return "Open System Settings"
-        case .elsewhere where !manual: return "Go Back to Wallpaper"
-        case .otherDisplay where !manual && step == .openChooser: return "Now Your Other Display"
-        default: return step.title
+        case .settingsClosed: return "System Settings Is Closed"
+        case .elsewhere: return "Go Back to Wallpaper"
+        case .otherDisplay where step == .openChooser: return "Now Your Other Display"
+        default: break
         }
-    }
-
-    private var detail: String {
-        if !manual {
-            switch coach.decision.situation {
-            case .settingsClosed:
-                return "System Settings isn't open. Open it at Wallpaper and the guide picks up where you are."
-            case .elsewhere:
-                return "System Settings is showing another page. Click **Wallpaper** in its sidebar, or use the button below."
-            case .otherDisplay where step == .openChooser:
-                if case .chosen(let on, let of) = guide.snapshot.choice {
-                    return "DotStudio is on \(on) of \(of) displays. At the top of the Wallpaper page, pick the other display, then click **Screen Saver\u{2026}** again."
-                }
-            default: break
-            }
-        }
-        switch step {
-        case .openWallpaper: return "In System Settings, click **Wallpaper** in the sidebar."
-        case .openChooser: return "Click **Screen Saver\u{2026}** at the bottom of the Wallpaper page."
-        case .scrollToTile: return "Scroll down the screen savers to the **Other** section."
-        case .chooseTile: return "Click **DotStudio** under Other."
-        case .clickDone: return "DotStudio is chosen. Click **Done** to close the screen savers."
-        case .finished: return ""
-        }
+        if coach.blockedByGuide || coach.degraded { return "Use the Picture" }
+        return coach.ringShown ? "Follow the Ring" : "Looking in System Settings\u{2026}"
     }
 
     private var statusLine: String? {
-        if manual { return "You moved ahead of the guide \u{2014} it follows again when you click in System Settings." }
+        if step == .finished { return "DotStudio stops reading System Settings now." }
+        if manual { return "You moved ahead. The ring follows your next click." }
         if coach.accessibilityOff {
-            return "Accessibility is turned off for DotStudio, so it can't point at the buttons \u{2014} here's the picture. Turn it on in Privacy & Security \u{203A} Accessibility (if DotStudio is listed, remove it with \u{2212} and add it again)."
+            return "So there\u{2019}s no ring. Turn DotStudio on in Privacy & Security \u{203A} Accessibility (listed already? Remove it with \u{2212} and add it again)."
         }
-        if coach.blockedByGuide {
-            return "This guide is covering it \u{2014} here's the picture. Move the guide aside to see the ring."
+        switch coach.decision.situation {
+        case .settingsClosed: return "Open it and the guide picks up where you are."
+        case .elsewhere: return "System Settings is on another page."
+        case .otherDisplay where step == .openChooser:
+            if case .chosen(let on, let of) = guide.snapshot.choice {
+                return "Done on \(on) of \(of). Pick the other display at the top of Wallpaper, then click **Screen Saver\u{2026}**."
+            }
+        default: break
         }
+        if coach.blockedByGuide { return "This guide covers it. Move the guide aside to see the ring." }
         if coach.degraded {
-            if let d = coach.lastDump { return "DotStudio can't find this on screen, so here's the picture. (Saved what it sees to \(d).)" }
-            return "DotStudio can't find this on screen \u{2014} the picture shows where it is."
+            if let d = coach.lastDump { return "Can\u{2019}t find it on screen. (Saved what it sees to \(d).)" }
+            return "Can\u{2019}t find it on screen. The picture above shows where it is."
         }
-        if coach.decision.situation == .settingsClosed { return nil }
-        if coach.ringShown { return "Look for the glowing ring in System Settings." }
-        if coach.decision.target != nil { return "Bring System Settings to the front to see where to click." }
-        return "Looking for it in System Settings\u{2026}"
+        if coach.ringShown { return "A glowing ring marks where to click." }
+        if coach.decision.target != nil { return "Bring System Settings to the front." }
+        return nil
     }
 
     private var statusSymbol: String {
         if manual { return "hand.raised" }
         if coach.accessibilityOff { return "lock.shield" }
+        switch coach.decision.situation {
+        case .settingsClosed, .elsewhere: return "gearshape"
+        case .otherDisplay: return "display.2"
+        case .normal: break
+        }
         if coach.degraded { return "photo" }
         return coach.ringShown ? "scope" : "magnifyingglass"
     }
 
-    /// The illustrated step: when the coach can't point, or the user stepped away from it.
-    private var showsPicture: Bool { coach.degraded || manual || coach.accessibilityOff }
-
-    private var actionRow: some View {
-        ReflowStack(rowAlignment: .center, columnAlignment: .leading, spacing: layout.controlGap) {
-            HStack(spacing: layout.controlGap) {
-                Button { coach.back() } label: { Label("Back", systemImage: "chevron.left").textRole(.body) }
-                    .disabled(step == .openWallpaper)
-                    .accessibilityHint("Shows the previous step")
-                Button { coach.skip() } label: { Label("Skip", systemImage: "chevron.right").textRole(.body) }
-                    .disabled(step >= .clickDone)
-                    .accessibilityHint("Shows the next step")
-            }
-            .buttonStyle(.bordered)
-            .adaptiveControlSize(.small)
-            .fixedSize()
-            Spacer(minLength: 0)
-            HStack(spacing: layout.controlGap) {
-                Button { coach.useIllustratedGuide() } label: { Text("Stop Guiding").textRole(.body) }
-                    .buttonStyle(.link)
-                    .accessibilityHint("Turns off the pointers and shows the picture guide")
-                if coach.accessibilityOff {
-                    Button { coach.openAccessibilitySettings() } label: { Text("Accessibility Settings\u{2026}").textRole(.body) }
-                        .buttonStyle(.borderedProminent)
-                        .adaptiveControlSize()
-                        .accessibilityHint("Opens System Settings at Privacy & Security, Accessibility")
-                } else if !manual && coach.decision.situation == .settingsClosed {
-                    Button { coach.reopenWallpaper() } label: { Text("Open System Settings").textRole(.body) }
-                        .buttonStyle(.borderedProminent)
-                        .adaptiveControlSize()
-                } else if !manual && coach.decision.situation == .elsewhere {
-                    Button { coach.reopenWallpaper() } label: { Text("Go Back to Wallpaper").textRole(.body) }
-                        .buttonStyle(.borderedProminent)
-                        .adaptiveControlSize()
-                        .accessibilityHint("Opens System Settings at Wallpaper")
-                }
-            }
-            .fixedSize()
-        }
-    }
-
-    // MARK: All set
-
-    private var finished: some View {
-        let s = guide.snapshot
-        let conflicts = s.displaySleepConflicts
-        return VStack(alignment: .leading, spacing: layout.itemGap) {
-            HStack(alignment: .top, spacing: layout.itemGap) {
-                Image(systemName: "checkmark.circle.fill")
-                    .scaledFont { .scaled(points: 26, $0, weight: .semibold) }
-                    .foregroundStyle(.green)
-                    .symbolEffect(.bounce, value: coach.decision.step)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: layout.labelGap) {
-                    Text("DotStudio Is Your Screensaver").textRole(.headline).wrapping()
-                    Text(chosenWhere(s)).textRole(.callout).foregroundStyle(.secondary).wrapping()
-                }
-            }
-            if !s.startsWhenInactive {
-                attention("\u{201C}Start Screen Saver when inactive\u{201D} is set to Never, so it won't start on its own. Pick a time in Lock Screen settings.")
-            } else if !conflicts.isEmpty {
-                attention("Your display turns off before the screensaver starts (\(conflicts.map { "on \($0.source) after \(SetupWords.short(seconds: $0.minutes * 60))" }.joined(separator: ", "))). Set it later than \(SetupWords.short(seconds: s.effectiveIdle)) in Lock Screen settings.")
-            } else {
-                Text("It starts after \(SetupWords.duration(seconds: s.effectiveIdle)) of inactivity. Nothing else to do.")
-                    .textRole(.callout).foregroundStyle(.secondary).wrapping()
-            }
-            HStack {
-                Spacer(minLength: 0)
-                Button { coach.useIllustratedGuide() } label: { Text("Stop Guiding").textRole(.body) }
-                    .buttonStyle(.link)
-            }
-        }
-    }
-
-    private func chosenWhere(_ s: SetupSnapshot) -> String {
-        if case .chosen(let on, let of) = s.choice, of > 1 {
-            return on >= of ? (of == 2 ? "On both displays." : "On all \(of) displays.") : "On \(on) of \(of) displays."
-        }
-        return "Chosen in System Settings \u{203A} Wallpaper."
-    }
-
-    private func attention(_ text: String) -> some View {
-        VStack(alignment: .leading, spacing: layout.controlGap) {
-            Label { Text(text).textRole(.callout).wrapping() } icon: {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-            }
-            Button { SystemSettingsLink.openLockScreen() } label: { Text("Lock Screen Settings\u{2026}").textRole(.body) }
-                .buttonStyle(.link)
-                .accessibilityHint("Opens System Settings at Lock Screen")
+    @ViewBuilder private var primaryButton: some View {
+        if coach.accessibilityOff {
+            Button { coach.openAccessibilitySettings() } label: { Text("Accessibility Settings\u{2026}").textRole(.body) }
+                .buttonStyle(.borderedProminent)
+                .adaptiveControlSize()
+                .accessibilityHint("Opens System Settings at Privacy & Security, Accessibility")
+        } else if !manual && coach.decision.situation == .settingsClosed && step != .finished {
+            Button { coach.reopenWallpaper() } label: { Text("Open System Settings").textRole(.body) }
+                .buttonStyle(.borderedProminent)
+                .adaptiveControlSize()
+                .accessibilityHint("Opens System Settings at Wallpaper")
+        } else if !manual && coach.decision.situation == .elsewhere {
+            Button { coach.reopenWallpaper() } label: { Text("Go Back to Wallpaper").textRole(.body) }
+                .buttonStyle(.borderedProminent)
+                .adaptiveControlSize()
+                .accessibilityHint("Opens System Settings at Wallpaper")
         }
     }
 
@@ -392,23 +277,8 @@ struct CoachCard: View {
         Image(systemName: name)
             .scaledFont { .scaled(points: 20, $0, weight: .medium) }
             .symbolRenderingMode(.hierarchical)
-            .foregroundStyle(Color.accentColor)
+            .foregroundStyle(step == .finished && coach.mode == .coaching ? Color.green : Color.accentColor)
             .frame(width: 28)
-            .accessibilityHidden(true)
-    }
-}
-
-/// A step's number in an accent disc (the walkthrough's style).
-private struct StepBadge: View {
-    @ScaledLength(relativeTo: .headline) private var size: CGFloat = 26
-    let number: Int
-
-    var body: some View {
-        Text("\(number)")
-            .scaledFont { .scaled(points: 13, $0, weight: .bold, design: .rounded) }
-            .foregroundStyle(.white)
-            .frame(width: size, height: size)
-            .background(Circle().fill(Color.accentColor))
             .accessibilityHidden(true)
     }
 }

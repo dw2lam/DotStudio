@@ -3,9 +3,10 @@
 //  panel (Help ▸ Set Up Screensaver…, the Screensaver card, Settings › General), and the
 //  one-time "start at login" nudge.
 //
-//  Views: SetupGuideWalkthrough.swift (the animated System Settings illustration) and
-//  SetupGuideChecklist.swift (the live checklist, and the guide laid out for the onboarding
-//  step and the panel). Parsers: SetupGuideStore.swift.
+//  Views: SetupGuideCard.swift (the setup card: the panel and Settings › Screensaver),
+//  SetupGuideWalkthrough.swift (the drawn System Settings and the onboarding walkthrough) and
+//  SetupGuideChecklist.swift (the live checklist, the panel's layout). Parsers:
+//  SetupGuideStore.swift.
 //
 //  Read-only toward the system: it reads the wallpaper store, the screensaver and power prefs
 //  and the login-item status. The only things it changes are DotStudio's own login item (when
@@ -273,7 +274,7 @@ final class SetupGuidePanel: NSObject, NSWindowDelegate {
     private var panel: NSPanel?
 
     /// The panel's content size at the default text size (it grows with the text).
-    static let size = CGSize(width: 440, height: 680)
+    static let size = CGSize(width: 420, height: 820)
 
     func attach(model: AppModel) { self.model = model }
 
@@ -304,7 +305,7 @@ final class SetupGuidePanel: NSObject, NSWindowDelegate {
         p.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
         p.contentViewController = NSHostingController(rootView: root)
         p.setContentSize(Self.size)
-        p.contentMinSize = CGSize(width: 380, height: 520)
+        p.contentMinSize = CGSize(width: 400, height: 560)
         p.delegate = self
         p.center()
         // Small displays: never taller than the visible area (the guide scrolls inside), so

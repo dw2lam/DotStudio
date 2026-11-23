@@ -195,8 +195,8 @@ private struct StepNumber: View {
 // MARK: - The mock
 
 /// System Settings, drawn: a window with a sidebar and the Wallpaper page; the screen-saver
-/// sheet over it from step 3. Drawn on a 480 × 300 design grid scaled to the width it gets,
-/// so every line stays crisp. Its text is part of the picture: fixed sizes on purpose (it
+/// sheet over it from step 3; step 5 (index 4, the setup card only) clicks its Done. Drawn on
+/// a 480 × 300 design grid scaled to the width it gets, so every line stays crisp. Its text is part of the picture: fixed sizes on purpose (it
 /// doesn't follow the text size, the captions beside it do), and VoiceOver reads the
 /// caption instead.
 struct SettingsMock: View {
@@ -272,7 +272,8 @@ struct SettingsMock: View {
             case 0: return CGPoint(x: wallpaperRow.midX - 18, y: wallpaperRow.midY)
             case 1: return CGPoint(x: screenSaverButton.midX, y: screenSaverButton.midY)
             case 2: return CGPoint(x: viewport.midX + 30, y: viewport.midY + 20)
-            default: let t = dotStudioTile(scroll: scrollDistance); return CGPoint(x: t.midX + 6, y: t.midY + 4)
+            case 3: let t = dotStudioTile(scroll: scrollDistance); return CGPoint(x: t.midX + 6, y: t.midY + 4)
+            default: return CGPoint(x: done.midX + 4, y: done.midY + 2)
             }
         }
         static let rest = CGPoint(x: 300, y: 150)
@@ -286,7 +287,8 @@ struct SettingsMock: View {
         private var wallpaperSelected: Bool { step > 0 || phase == .clicked }
         private var sheetShown: Bool { step >= 2 }
         private var scroll: CGFloat { step >= 3 || (step == 2 && phase == .clicked) ? G.scrollDistance : 0 }
-        private var dotStudioChosen: Bool { step == 3 && phase == .clicked }
+        private var dotStudioChosen: Bool { step == 3 && phase == .clicked || step >= 4 }
+        private var donePressed: Bool { step >= 4 && phase == .clicked }
 
         var body: some View {
             ZStack(alignment: .topLeading) {
@@ -446,6 +448,8 @@ struct SettingsMock: View {
                     .foregroundStyle(.white)
                     .frame(width: G.done.width * k, height: G.done.height * k)
                     .background(RoundedRectangle(cornerRadius: 6 * k, style: .continuous).fill(Color.accentColor))
+                    .overlay(RoundedRectangle(cornerRadius: 6 * k, style: .continuous)
+                        .fill(Color.black.opacity(donePressed ? 0.18 : 0)))
                     .offset(x: G.done.minX * k, y: G.done.minY * k)
             }
         }
@@ -512,10 +516,11 @@ struct SettingsMock: View {
             case 0: r = G.wallpaperRow
             case 1: r = G.screenSaverButton
             case 2: r = G.otherHeader(scroll: G.scrollDistance); corner = 6
-            default:
+            case 3:
                 // The tile and its name under it
                 let t = G.dotStudioTile(scroll: G.scrollDistance)
                 r = CGRect(x: t.minX - 4, y: t.minY - 4, width: t.width + 8, height: t.height + 20); corner = 9
+            default: r = G.done
             }
             let on = phase == .clicked
             return RoundedRectangle(cornerRadius: corner * k, style: .continuous)

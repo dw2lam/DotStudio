@@ -1,49 +1,11 @@
 //  SetupGuideChecklist.swift — the guided setup's live checklist (installed, chosen, starts
-//  when inactive, display sleep, open at login, music permission) and the guide laid out two
-//  ways: the onboarding "Turn It On" step (OnboardingView) and the floating panel
-//  (SetupGuidePanel). State: SetupGuide.swift.
+//  when inactive, display sleep, open at login, music permission), the onboarding step's
+//  "Open System Settings" button, and the floating panel's content (SetupGuidePanelView: the
+//  setup card from SetupGuideCard.swift over the checklist). State: SetupGuide.swift.
 
 import SwiftUI
 
-// MARK: - The guide (walkthrough + checklist)
-
-/// The walkthrough with its "Open System Settings" button, and the checklist: side by side
-/// when there's room, else stacked (walkthrough first).
-struct SetupGuideContent: View {
-    @EnvironmentObject var model: AppModel
-    @Environment(\.layout) private var layout
-    @ObservedObject var guide: SetupGuideModel
-    /// Side by side (a wide sheet or panel) or stacked.
-    var sideBySide: Bool
-    /// "when you continue" / "when you click Done": when "Open at login" is applied.
-    var commitPhrase: String
-    var frozenStep: Int?
-    var forceStill = false
-    /// Opens Wallpaper settings (the panel also moves beside it).
-    var onOpenSettings: () -> Void
-
-    var body: some View {
-        if sideBySide {
-            HStack(alignment: .top, spacing: layout.sectionGap) {
-                walkthrough.frame(maxWidth: layout.scaled(560), alignment: .top)
-                SetupChecklist(guide: guide, commitPhrase: commitPhrase)
-                    .frame(maxWidth: .infinity, alignment: .top)
-            }
-        } else {
-            VStack(alignment: .leading, spacing: layout.sectionGap) {
-                walkthrough
-                SetupChecklist(guide: guide, commitPhrase: commitPhrase)
-            }
-        }
-    }
-
-    private var walkthrough: some View {
-        VStack(alignment: .leading, spacing: layout.itemGap) {
-            SetupWalkthrough(frozenStep: frozenStep, forceStill: forceStill, narrow: !sideBySide && layout.prefersStacking)
-            SetupOpenSettingsButton(guide: guide, action: onOpenSettings)
-        }
-    }
-}
+// MARK: - Open System Settings
 
 /// "Open System Settings" — the prominent, Return-key button while choosing DotStudio is
 /// what's left to do. Used by the guide and the onboarding "Turn It On" step.
@@ -76,8 +38,10 @@ struct SetupChecklist: View {
     @ObservedObject var guide: SetupGuideModel
     @ObservedObject private var music = MusicNow.shared
     var commitPhrase: String
-    /// The coach is pointing in System Settings (no picture on screen): the wording follows.
+    /// The coach is pointing in System Settings: the wording follows.
     var coaching = false
+    /// The install row's own Install button (the setup card has one above it).
+    var showsInstallButton = true
 
     private var s: SetupSnapshot { guide.snapshot }
 
@@ -129,7 +93,7 @@ struct SetupChecklist: View {
                      title: s.installed ? "Screensaver installed" : "Install the screensaver",
                      detail: s.installed ? "DotStudio is in your screen savers."
                                          : "Adds DotStudio, then opens System Settings.") {
-            if !s.installed {
+            if !s.installed && showsInstallButton {
                 Button { model.installScreensaver(); guide.refresh() } label: { Text("Install").textRole(.body) }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
@@ -160,16 +124,14 @@ struct SetupChecklist: View {
             detail = of == 2 ? "On both displays." : of > 2 ? "On all \(of) displays." : "Set in System Settings › Wallpaper."
         case .unknown where s.installed:
             title = "Choose DotStudio as your screensaver"
-            detail = coaching ? "Can't check this here. Follow the ring in System Settings."
-                              : "Can't check this here. Follow the picture."
+            detail = coaching ? "Can't check this here. Follow the ring."
+                              : "Can't check this here. Follow the steps."
         default:
             title = "Choose DotStudio as your screensaver"
             if coaching {
-                detail = s.installed ? "Follow the ring in System Settings."
-                                     : "Install first, then follow the ring."
+                detail = s.installed ? "Follow the ring in System Settings." : "Install first, then follow the ring."
             } else {
-                detail = s.installed ? "Follow the steps in the picture."
-                                     : "Install first, then follow the picture."
+                detail = s.installed ? "Follow the steps above." : "Install first, then follow the steps."
             }
         }
         return ChecklistRow(state: chooseState, title: title, detail: detail) { EmptyView() }
@@ -413,8 +375,8 @@ struct ChecklistRow<Action: View, Extra: View>: View {
 
 // MARK: - The floating panel
 
-/// SetupGuidePanel's content: the guide under a short header, Done at the foot. Stacked in
-/// the narrow panel; side by side once it's dragged (or rendered) wide.
+/// SetupGuidePanel's content: the setup card (SetupGuideCard.swift) and the checklist, Done at
+/// the foot. The picture goes beside the steps once the panel is dragged (or rendered) wide.
 struct SetupGuidePanelView: View {
     @Environment(\.layout) private var layout
     @ObservedObject var guide: SetupGuideModel
@@ -427,36 +389,20 @@ struct SetupGuidePanelView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let wide = geo.size.width >= layout.scaled(720) && !layout.typeSize.isAccessibilitySize
+            let wide = geo.size.width >= layout.scaled(760) && !layout.typeSize.isAccessibilitySize
             VStack(spacing: 0) {
                 ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: layout.sectionGap) {
-                        VStack(alignment: .leading, spacing: layout.labelGap) {
-                            Text("Set Up Your Screensaver")
-                                .textRole(.sectionTitle)
-                                .wrapping()
-                            Text(coach.mode == .coaching
-                                 ? "macOS lets only you choose the screensaver. DotStudio points at each click in System Settings \u{2014} this guide stays beside it."
-                                 : "macOS lets only you choose the screensaver. Follow the picture in System Settings — this guide stays on top while you do.")
-                                .textRole(.callout)
-                                .foregroundStyle(.secondary)
-                                .wrapping()
+                        SetupCard(guide: guide, coach: coach, context: .panel, status: guide.snapshot.status,
+                                  sideBySide: wide, frozenStep: frozenStep, forceStill: forceStill) {
+                            onOpenSettings()
+                            guide.openSystemSettings()
                         }
-                        CoachCard(coach: coach, guide: guide)
-                        if coach.mode == .coaching {
-                            // The ring in System Settings replaces the picture (the card brings
-                            // it back for a step the coach can't point at).
-                            SetupChecklist(guide: guide, commitPhrase: "when you click Done", coaching: true)
-                        } else {
-                            SetupGuideContent(guide: guide, sideBySide: wide, commitPhrase: "when you click Done",
-                                              frozenStep: frozenStep, forceStill: forceStill) {
-                                onOpenSettings()
-                                guide.openSystemSettings()
-                            }
-                        }
+                        SetupChecklist(guide: guide, commitPhrase: "when you click Done",
+                                       coaching: coach.mode == .coaching, showsInstallButton: false)
                     }
                     .padding(wide ? layout.pagePadding : layout.cardPadding + Space.xxs)
-                    .frame(maxWidth: wide ? 1200 : .infinity, alignment: .leading)
+                    .frame(maxWidth: wide ? 1100 : .infinity, alignment: .leading)
                     .frame(maxWidth: .infinity)
                 }
                 .scrollBounceBehavior(.basedOnSize)

@@ -127,28 +127,10 @@ struct SettingsView: View {
 
     // MARK: Setup
 
+    /// The setup card, the same one the floating guide shows (SetupGuideCard.swift): status,
+    /// the current step's picture, Open System Settings and Reinstall.
     private var setupSection: some View {
-        Section {
-            LabeledContent("Status") {
-                switch model.setupStatus {
-                case .ready:
-                    Label("Installed and selected", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                case .notChosen:
-                    Label("Installed, not selected", systemImage: "exclamationmark.circle.fill").foregroundStyle(.orange)
-                case .notInstalled:
-                    Label("Not installed", systemImage: "xmark.circle.fill").foregroundStyle(.secondary)
-                }
-            }
-            // Controls sit on the trailing edge like every other row, and wrap if they outgrow it.
-            FlowLayout(spacing: layout.controlGap, lineSpacing: layout.controlGap, alignment: .trailing) {
-                Button(scaled: model.setupStatus == .notInstalled ? "Install" : "Reinstall") { model.installScreensaver() }
-                Button(scaled: "Open Wallpaper Settings") { Installer.openScreenSaverSettings() }
-            }
-        } header: {
-            SettingsHeader("Screensaver")
-        } footer: {
-            SettingsNote("Reinstall if the screensaver looks out of date — macOS picks up the new copy the next time it starts.")
-        }
+        SetupSettingsSection()
     }
 
     // MARK: Transitions
