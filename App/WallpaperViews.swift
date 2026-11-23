@@ -102,7 +102,6 @@ func menuName(_ name: String, limit: Int = 32) -> String {
 struct WallpaperSettingsSection: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var wallpaper = WallpaperController.shared
-    @ScaledLength(relativeTo: .body) private var segmentWidth: CGFloat = SettingsMetrics.segmentWidth
     @ScaledLength(relativeTo: .body) private var popUpMaxWidth: CGFloat = SettingsMetrics.popUpMaxWidth
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -134,8 +133,7 @@ struct WallpaperSettingsSection: View {
                         .help(wallpaper.settings.presetID.flatMap(model.preset)?.name ?? "None")
                 }
             }
-            // Segmented pickers share one width so their leading edges line up.
-            SettingsValueRow("Quality", valueWidth: segmentWidth) {
+            DemoSettingRow(title: "Quality", detail: qualityDetail, demo: .quality(wallpaper.settings.quality)) {
                 ScaledSegmentedPicker(title: "Quality", selection: Binding(
                     get: { wallpaper.settings.quality },
                     set: { v in wallpaper.update { $0.quality = v } }),
@@ -147,24 +145,23 @@ struct WallpaperSettingsSection: View {
                 get: { wallpaper.settings.lockScreen },
                 set: { wallpaper.setLockScreen($0) }))
                 .formSwitchSize()
+                .help("macOS shows a still of the wallpaper on the lock and login screens. It updates when your Mac locks; turning it off restores your previous picture.")
         } header: {
             SettingsHeader("Live Wallpaper")
         } footer: {
-            // Under the card rather than a row in it; short paragraphs, not one wall.
-            VStack(alignment: .leading, spacing: Space.xs) {
-                SettingsNote("The wallpaper plays while DotStudio is open — closing the window keeps it running from the menu bar. Same as Screensaver plays whatever the screensaver shows — same playlist and night style — in step, so the screensaver starts right where your desktop was.")
-                SettingsNote("Balanced quality renders at three-quarter resolution on Retina displays. macOS shows the lock-screen picture on the lock and login screens; it updates when your Mac locks, and turning it off restores your previous picture.")
-            }
+            SettingsNote("Plays while DotStudio is open — closing the window keeps it running from the menu bar. Same as Screensaver plays exactly what the screensaver shows, in step.")
         }
 
-        // Power saving, side by side with how a laptop is used: what plays plugged in, what
-        // plays on battery, and in both what happens while another app is focused.
+        // Power saving, the way a laptop is used: what plays plugged in, what plays on
+        // battery, and in both what happens while another app is focused. Each row acts out
+        // its current choice in a little animated desktop (WallpaperDemos.swift).
         Section {
-            SettingsValueRow("Frame Rate", valueWidth: segmentWidth) {
+            DemoSettingRow(title: "Frame Rate", detail: frameRateDetail,
+                           demo: .frameRate(wallpaper.settings.frameRate)) {
                 ScaledSegmentedPicker(title: "Frame Rate", selection: Binding(
                     get: { wallpaper.settings.frameRate },
                     set: { v in wallpaper.update { $0.frameRate = v } }),
-                    options: WallpaperSettings.FrameRate.allCases.map { ($0.title, $0) },
+                    options: [("Balanced", .balanced), ("Smooth", .smooth)],
                     fills: true)
             }
             otherAppRow(\.otherAppPluggedIn)
@@ -173,8 +170,8 @@ struct WallpaperSettingsSection: View {
         }
 
         Section {
-            // What it does unplugged (WallpaperBudget): Efficient by default.
-            SettingsValueRow("Playback", valueWidth: segmentWidth) {
+            DemoSettingRow(title: "Playback", detail: batteryDetail,
+                           demo: .battery(wallpaper.settings.batteryMode)) {
                 ScaledSegmentedPicker(title: "Playback on battery", selection: Binding(
                     get: { wallpaper.settings.batteryMode },
                     set: { v in wallpaper.update { $0.batteryMode = v } }),
@@ -185,21 +182,48 @@ struct WallpaperSettingsSection: View {
         } header: {
             powerHeader("On Battery", symbol: "battery.75percent")
         } footer: {
-            VStack(alignment: .leading, spacing: Space.xs) {
-                SettingsNote("On battery, Efficient plays at 20 fps and a lower resolution, Full plays as when plugged in (up to 30 fps), and Pause holds a frame.")
-                SettingsNote("“Another app” is anything but DotStudio or the Finder — click the desktop to play again. Always paused while a full-screen app or windows cover the desktop, the screen is locked or asleep, or the screensaver runs; held still in Low Power Mode or when your Mac runs hot. A paused clock still turns over each minute.")
-            }
+            SettingsNote("Always paused while a full-screen app or windows cover the desktop, the screen is locked or asleep, or the screensaver runs. Held still in Low Power Mode or when your Mac runs hot.")
+        }
+    }
+
+    // One line each, describing the current choice (the demo beside it shows it).
+    private var qualityDetail: String {
+        switch wallpaper.settings.quality {
+        case .full: return "Sharpest, at your display's full resolution."
+        case .balanced: return "Three-quarter resolution — looks the same, costs less."
+        case .efficient: return "Standard resolution — softest, lightest on the GPU."
+        }
+    }
+
+    private var frameRateDetail: String {
+        wallpaper.settings.frameRate == .balanced
+            ? "30 frames a second — smooth enough, half the work."
+            : "Your display's own rate, up to 120 fps — silkiest, uses more power."
+    }
+
+    private var batteryDetail: String {
+        switch wallpaper.settings.batteryMode {
+        case .full: return "Plays as when plugged in, up to 30 fps."
+        case .efficient: return "20 fps at lower resolution — about a quarter of the work."
+        case .still: return "Holds one frame until you plug in."
         }
     }
 
     /// Pause (hold the frame) while an app other than DotStudio or the Finder is in front —
     /// stored per power source as WallpaperSettings.OtherAppMode.
     private func otherAppRow(_ key: WritableKeyPath<WallpaperSettings, WallpaperSettings.OtherAppMode>) -> some View {
-        Toggle("Pause while another app is focused", isOn: Binding(
-            get: { wallpaper.settings[keyPath: key] == .pause },
-            set: { on in wallpaper.update { $0[keyPath: key] = on ? .pause : .keepPlaying } }))
-            .formSwitchSize()
-            .help("Holds the current frame while any app other than DotStudio or the Finder is in front, even with some desktop showing. Click the desktop to play again.")
+        let pauses = wallpaper.settings[keyPath: key] == .pause
+        return DemoSettingRow(title: "Pause behind other apps",
+                              detail: pauses ? "Holds the frame while you work in another app. Click the desktop to play again."
+                                             : "Keeps playing behind other apps while some desktop shows.",
+                              demo: .otherApp(pauses: pauses), inlineControl: true) {
+            Toggle("Pause behind other apps", isOn: Binding(
+                get: { pauses },
+                set: { on in wallpaper.update { $0[keyPath: key] = on ? .pause : .keepPlaying } }))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .formSwitchSize()
+        }
     }
 
     private func powerHeader(_ title: String, symbol: String) -> some View {
