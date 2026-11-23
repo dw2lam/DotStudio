@@ -80,7 +80,7 @@ struct SettingsView: View {
                 }
                 Divider()
                 Button { model.settingsPane = nil } label: {
-                    Text("Done").frame(maxWidth: .infinity)
+                    Text("Done").textRole(.bodyEmphasis).frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
@@ -90,21 +90,8 @@ struct SettingsView: View {
             .frame(width: sidebarWidth)
             .background(.background.secondary)
             Divider()
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: Space.s) {
-                    Image(systemName: pane.symbol)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 30, height: 30)
-                        .background(pane.tint.gradient, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    Text(pane.title).textRole(.sectionTitle)
-                }
-                .padding(.horizontal, Space.l)
-                .padding(.top, Space.l)
-                detail(pane)
-                    .environment(\.settingsPaneTitle, pane.title)
-            }
-            .background(Color(nsColor: .windowBackgroundColor))
+            detail(pane)
+                .background(Color(nsColor: .windowBackgroundColor))
         }
         .onAppear {
             model.refreshSetupStatus()
@@ -167,27 +154,14 @@ struct SettingsView: View {
 
     private var transitionsSection: some View {
         Section {
-            DemoSettingRow(title: "Crossfade", detail: crossfadeDetail,
-                           demo: .crossfade(seconds: model.rotation.transitionSeconds)) {
-                HStack(spacing: layout.controlGap) {
-                    Slider(value: Binding(get: { model.rotation.transitionSeconds },
-                                          set: { v in model.updateRotation { $0.transitionSeconds = v } }),
-                           in: 0...3)
-                        .labelsHidden()
-                        .accessibilityLabel("Crossfade")
-                        .accessibilityValue(model.rotation.transitionSeconds < 0.05
-                                            ? "Off" : String(format: "%.1f seconds", model.rotation.transitionSeconds))
-                    Text(model.rotation.transitionSeconds < 0.05
-                         ? "Off" : String(format: "%.1f s", model.rotation.transitionSeconds))
-                        .textRole(.value)
-                        .foregroundStyle(.secondary)
-                        .frame(minWidth: valueWidth, alignment: .trailing)   // a minimum: the readout never truncates
-                }
-            }
+            ChoiceSetting(title: "Crossfade", detail: "How one style turns into the next — as the playlist moves on, and at sunrise and sunset.",
+                          options: Self.crossfades.map { .init(label: $0.label, value: $0.seconds, scene: .crossfade(seconds: $0.seconds)) },
+                          selection: Binding(get: { Self.nearestCrossfade(model.rotation.transitionSeconds) },
+                                             set: { v in model.updateRotation { $0.transitionSeconds = v } }))
         } header: {
             SettingsHeader("Transitions")
         } footer: {
-            SettingsNote("Used when the playlist moves to the next style, and at sunrise and sunset.")
+            SettingsNote("Hover a picture to see it play.")
         }
     }
 
@@ -195,12 +169,11 @@ struct SettingsView: View {
 
     private var performanceSection: some View {
         Section {
-            DemoSettingRow(title: "Quality", detail: screensaverQualityDetail,
-                           demo: .screensaverQuality(model.library.renderScale ?? 1.0)) {
-                ScaledSegmentedPicker(title: "Quality", selection: qualityBinding,
-                                      options: [("Full", 1.0), ("Balanced", 0.75), ("Efficient", 0.5)],
-                                      fills: true)
-            }
+            ChoiceSetting(title: "Quality", detail: "How sharp the screensaver is drawn. Lower uses less power on Retina displays.",
+                          options: [.init(label: "Full", value: 1.0, scene: .screensaverQuality(1.0)),
+                                    .init(label: "Balanced", value: 0.75, scene: .screensaverQuality(0.75)),
+                                    .init(label: "Efficient", value: 0.5, scene: .screensaverQuality(0.5))],
+                          selection: qualityBinding)
         } header: {
             // The screensaver's render scale — distinct from Live Wallpaper › Quality.
             SettingsHeader("Performance")
@@ -304,17 +277,11 @@ struct SettingsView: View {
         }
     }
 
-    private var crossfadeDetail: String {
-        let v = model.rotation.transitionSeconds
-        return v < 0.05 ? "Off — styles change with a cut." : String(format: "Styles blend into each other over %.1f seconds.", v)
-    }
-
-    private var screensaverQualityDetail: String {
-        switch model.library.renderScale ?? 1.0 {
-        case 0.75...0.99: return "Three-quarter resolution — looks the same, costs less."
-        case ..<0.75: return "Half resolution — chunkier, lightest on battery."
-        default: return "Sharpest, at your display's full resolution."
-        }
+    /// The crossfade choices (seconds); a value set elsewhere (an assistant, an older build's
+    /// slider) shows as the nearest.
+    static let crossfades: [(label: String, seconds: Double)] = [("Off", 0), ("Gentle", 1.0), ("Slow", 2.5)]
+    static func nearestCrossfade(_ v: Double) -> Double {
+        crossfades.min { abs($0.seconds - v) < abs($1.seconds - v) }?.seconds ?? 0
     }
 
     // MARK: Bindings
@@ -322,6 +289,40 @@ struct SettingsView: View {
     private var qualityBinding: Binding<Double> {
         Binding(get: { model.library.renderScale ?? 1.0 },
                 set: { model.library.renderScale = $0 >= 1.0 ? nil : $0; model.save() })
+    }
+}
+
+/// The menu bar icon as a row of big icon buttons (it fills in while a live wallpaper plays).
+private struct MenuBarIconChoice: View {
+    @Binding var selection: MenuBarIcon
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Menu bar icon").textRole(.rowTitle)
+                Text("\(selection.name) — it fills in while a live wallpaper plays.")
+                    .textRole(.body).foregroundStyle(.secondary)
+            }
+            HStack(spacing: Space.xs) {
+                ForEach(MenuBarIcon.allCases) { i in
+                    Button { selection = i } label: {
+                        Image(systemName: i.symbol(live: false))
+                            .font(.system(size: 18))
+                            .frame(width: 44, height: 44)
+                            .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
+                                .fill(i == selection ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.05)))
+                            .overlay(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
+                                .strokeBorder(i == selection ? Color.accentColor : .clear, lineWidth: 2))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(i.name)
+                    .accessibilityLabel(i.name)
+                    .accessibilityAddTraits(i == selection ? [.isButton, .isSelected] : .isButton)
+                }
+            }
+        }
+        .padding(.vertical, Space.xs)
     }
 }
 
@@ -378,29 +379,11 @@ struct GeneralSettingsSection: View {
     var body: some View {
         Section {
             if nudge.pending != nil { LoginNudgeBanner(topPadding: 0) }
-            DemoSettingRow(title: "Keep running in the menu bar",
-                           detail: presence.menuBarMode
-                               ? "Closing the window leaves DotStudio in the menu bar, so your wallpaper keeps playing."
-                               : "Closing the window quits DotStudio.",
-                           demo: .menuBarMode(keepsRunning: presence.menuBarMode), inlineControl: true) {
-                Toggle("Keep running in the menu bar", isOn: $presence.menuBarMode)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-            }
-            DemoSettingRow(title: "Menu bar icon", detail: "\(menuBarIcon.name) — fills in while a live wallpaper plays.",
-                           demo: .menuBarIcon(menuBarIcon.symbol(live: false))) {
-                Picker("Menu bar icon", selection: $menuBarIcon) {
-                    ForEach(MenuBarIcon.allCases) { i in
-                        Image(systemName: i.symbol(live: false))
-                            .help(i.name)
-                            .accessibilityLabel(i.name)
-                            .tag(i)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .fixedSize()
-            }
+            ChoiceSetting(title: "When you close the window", detail: "Stay in the menu bar to keep your live wallpaper and music working.",
+                          options: [.init(label: "Quit", value: false, scene: .menuBarMode(keepsRunning: false)),
+                                    .init(label: "Stay in menu bar", value: true, scene: .menuBarMode(keepsRunning: true))],
+                          selection: $presence.menuBarMode)
+            MenuBarIconChoice(selection: $menuBarIcon)
             Toggle("Open DotStudio at login", isOn: Binding(get: { opensAtLogin }, set: setOpenAtLogin))
                 .formSwitchSize()
             if loginStatus == .requiresApproval {
@@ -487,20 +470,9 @@ enum SettingsMetrics {
 struct SettingsHeader: View {
     let title: String
     init(_ title: String) { self.title = title }
-    @Environment(\.settingsPaneTitle) private var paneTitle
 
     var body: some View {
-        // Under a pane's own big title, a section named the same says it twice: leave it out.
-        if title != paneTitle { Text(title).textRole(.headline) }
-    }
-}
-
-private struct SettingsPaneTitleKey: EnvironmentKey { static let defaultValue: String? = nil }
-extension EnvironmentValues {
-    /// The Settings pane showing (its title is the page's heading).
-    var settingsPaneTitle: String? {
-        get { self[SettingsPaneTitleKey.self] }
-        set { self[SettingsPaneTitleKey.self] = newValue }
+        Text(title).textRole(.sectionTitle)
     }
 }
 

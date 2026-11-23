@@ -137,11 +137,9 @@ struct MusicSettingsSection: View {
                 MusicSettingsNowPlaying(now: now)
             }
             // "Show music", then only the options of the mode picked.
-            DemoSettingRow(title: "Show music", detail: showMusicDetail(spec.displayMode),
-                           demo: .music(spec.displayMode)) {
-                ScaledSegmentedPicker(title: "Show music", selection: binding(\.displayMode) { $0.setDisplay($1) },
-                                      options: MusicSpec.Display.allCases.map { ($0.label, $0) }, fills: true)
-            }
+            ChoiceSetting(title: "Show music", detail: "What the screensaver shows while a song plays.",
+                          options: MusicSpec.Display.allCases.map { .init(label: $0.label, value: $0, scene: .music($0)) },
+                          selection: binding(\.displayMode) { $0.setDisplay($1) })
             if spec.displayMode == .corner {
                 LabeledContent("Corner") {
                     SettingsPopUp(title: "Corner", selection: binding(\.corner) { $0.cardCorner = $1 },

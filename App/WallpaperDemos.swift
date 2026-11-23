@@ -41,24 +41,27 @@ struct WallpaperDemo: View {
     let scene: Scene
     /// A fixed moment instead of the clock (offscreen contact sheets).
     var at: Double? = nil
+    /// Off: hold one telling frame (a choice that isn't picked or hovered stays still).
+    var animates = true
+    /// The frame a still tile shows: mid-story (window in front, paused badge, menu bar icon).
+    static let stillMoment: Double = 600 + 3.0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Drawn at `base` (all the stories' coordinates) and scaled up to `size`.
     static let base = CGSize(width: 176, height: 110)
-    static let size = CGSize(width: 232, height: 145)
     /// One run of each story (window in, click, close…).
     private static let loop: Double = 6
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion || at != nil)) { ctx in
-            let t = at ?? (reduceMotion ? 2.5 : ctx.date.timeIntervalSinceReferenceDate)
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion || at != nil || !animates)) { ctx in
+            let t = at ?? (reduceMotion || !animates ? Self.stillMoment : ctx.date.timeIntervalSinceReferenceDate)
             Canvas(rendersAsynchronously: false) { g, size in
                 var g = g
                 g.scaleBy(x: size.width / Self.base.width, y: size.height / Self.base.height)
                 draw(&g, CGRect(origin: .zero, size: Self.base), t)
             }
         }
-        .frame(width: Self.size.width, height: Self.size.height)
+        .aspectRatio(Self.base.width / Self.base.height, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: Radius.s, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
             .strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.75))
@@ -476,41 +479,95 @@ struct WallpaperDemo: View {
     }
 }
 
-/// A Form row: the demo on the leading side, then the setting's name, a one-line description
-/// and its control. At large text sizes the demo sits above the rest.
-struct DemoSettingRow<Control: View>: View {
+/// A setting shown as pictures: its name and a line about it, then one picture per option —
+/// click a picture to choose it (like System Settings › Appearance). The chosen one is ringed
+/// and plays; the others hold a still frame until hovered.
+struct ChoiceSetting<Value: Hashable>: View {
+    struct Option {
+        let label: String
+        let value: Value
+        let scene: WallpaperDemo.Scene
+    }
+
     let title: String
     let detail: String
-    let demo: WallpaperDemo.Scene
-    /// Switches sit trailing on the title line; pickers get their own line under the text.
-    var inlineControl = false
-    @ViewBuilder var control: () -> Control
-    @Environment(\.dynamicTypeSize) private var typeSize
+    let options: [Option]
+    @Binding var selection: Value
 
     var body: some View {
-        let stacked = typeSize >= SettingsMetrics.scaledControlsFrom
-        let layout = stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: Space.s))
-                             : AnyLayout(HStackLayout(alignment: .center, spacing: Space.l))
-        layout {
-            WallpaperDemo(scene: demo)
-            VStack(alignment: .leading, spacing: Space.xs) {
-                HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(title).textRole(.rowTitle)
-                        Text(detail).textRole(.body).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if inlineControl {
-                        Spacer(minLength: Space.xs)
-                        control()
-                    }
-                }
-                if !inlineControl { control() }
+        VStack(alignment: .leading, spacing: Space.s) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).textRole(.rowTitle)
+                Text(detail).textRole(.body).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            ChoiceTileRow(spacing: Space.m) {
+                ForEach(options.indices, id: \.self) { i in
+                    let o = options[i]
+                    ChoiceTile(label: o.label, scene: o.scene, selected: o.value == selection) { selection = o.value }
+                }
+            }
         }
         .padding(.vertical, Space.xs)
         .accessibilityElement(children: .contain)
+        .accessibilityLabel(title)
+    }
+}
+
+private struct ChoiceTile: View {
+    let label: String
+    let scene: WallpaperDemo.Scene
+    let selected: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: Space.xs) {
+                WallpaperDemo(scene: scene, animates: selected || hovering)
+                    .padding(4)
+                    .overlay(RoundedRectangle(cornerRadius: Radius.s + 4, style: .continuous)
+                        .strokeBorder(selected ? Color.accentColor : hovering ? Color.primary.opacity(0.2) : .clear,
+                                      lineWidth: selected ? 3 : 1.5))
+                Text(label)
+                    .textRole(selected ? .bodyEmphasis : .body)
+                    .foregroundStyle(selected ? .primary : .secondary)
+                    .lineLimit(1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+/// Picture choices on a shared grid: every setting's tiles are one third of the row (at most
+/// `maxTile` wide), left-aligned — so a two-option row lines up with the three-option rows.
+struct ChoiceTileRow: Layout {
+    var spacing: CGFloat
+    var columns = 3
+    var maxTile: CGFloat = 250
+
+    private func tileWidth(_ width: CGFloat?) -> CGFloat {
+        guard let width, width.isFinite else { return maxTile }
+        return max(80, min((width - spacing * CGFloat(columns - 1)) / CGFloat(columns), maxTile))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let w = tileWidth(proposal.width)
+        let h = subviews.map { $0.sizeThatFits(ProposedViewSize(width: w, height: nil)).height }.max() ?? 0
+        let used = CGFloat(subviews.count) * w + CGFloat(max(subviews.count - 1, 0)) * spacing
+        return CGSize(width: proposal.width ?? used, height: h)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let w = tileWidth(bounds.width)
+        for (i, v) in subviews.enumerated() {
+            v.place(at: CGPoint(x: bounds.minX + CGFloat(i) * (w + spacing), y: bounds.minY),
+                    proposal: ProposedViewSize(width: w, height: nil))
+        }
     }
 }
 
@@ -533,7 +590,7 @@ struct WallpaperDemoSheet: View {
                 GridRow {
                     Text(scenes[i].0).font(.caption).frame(width: 130, alignment: .leading)
                     ForEach(moments, id: \.self) { m in
-                        WallpaperDemo(scene: scenes[i].1, at: 600 + m)
+                        WallpaperDemo(scene: scenes[i].1, at: 600 + m).frame(width: 176)
                     }
                 }
             }
