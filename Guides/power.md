@@ -48,9 +48,10 @@ The wallpaper (App/WallpaperController.swift, App/WallpaperPower.swift) only run
 
 - **Frame Rate**: Balanced 30 fps (default) or Smooth = the display's refresh, up to 120 Hz on ProMotion. Balanced is capped further by the style's `fps`; Smooth ignores it.
 - **Quality** (pixels per point): Full = the display's own density, Balanced = 1.5 (0.75 per axis on Retina, about 56 % of the pixels; default), Efficient = 1.0 (a quarter of the pixels on Retina). A 5K benchmark number is roughly halved at Balanced.
-- **On Battery**: Efficient (default) = 20 fps at 0.6x Quality's pixels per point (about 0.36x the pixels, roughly 70-80 % less GPU work); Full = as on power but never above 30 fps; Still = hold one frame.
-- **Stills**: Low Power Mode, a hot Mac (thermal state serious or critical) and On Battery: Still hold one frame. A clock still turns over once a minute.
-- **Pauses**: nothing is drawn and nothing wakes while the wallpaper cannot be seen: covered by windows, screen locked, display or Mac asleep, screensaver running, or paused from the menu bar.
+- **On Battery**: Efficient (default) = 20 fps at 0.6x Quality's pixels per point (about 0.36x the pixels, roughly 70-80 % less GPU work); Full = as on power but never above 30 fps; Pause (`still`) = hold one frame.
+- **Another App Focused** (plugged in and on battery separately; default Keep Playing): Pause holds one frame while a regular app other than DotStudio or the Finder is frontmost, even with desktop showing around it. Menu-bar and panel apps (Spotlight, Raycast) don't count. Clicking the desktop (Finder) plays again.
+- **Stills**: Low Power Mode, a hot Mac (thermal state serious or critical), On Battery: Pause and Another App Focused: Pause hold one frame. A clock still turns over once a minute.
+- **Pauses**: nothing is drawn and nothing wakes while the wallpaper cannot be seen: covered by windows or a full-screen app, screen locked, display or Mac asleep, screensaver running, or paused from the menu bar.
 - **Clocks idle**: the built-in clock kinds draw one frame a second and only animate for a short burst around each change (StandBy 0.65 s a minute, Flip Clock 0.8 s). A clock wallpaper costs almost nothing. Custom scenes and every other scene always count as continuous motion, so build clocks from the built-in clock kinds.
 - **Still Looks**: a Look over a still photo whose effects never read time is drawn once.
 - Rendering runs on its own thread, on the GPU that drives each display.

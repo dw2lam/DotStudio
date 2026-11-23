@@ -70,9 +70,28 @@ do {
     s.batteryMode = .still
     var st = WallpaperPowerMonitor.State()
     st.onBattery = true
-    check(WallpaperBudget.stillReason(s, st) == "Still — on battery", "battery Still holds")
+    check(WallpaperBudget.stillReason(s, st) == "Paused — on battery", "battery Pause holds")
     st.onBattery = false
-    check(WallpaperBudget.stillReason(s, st) == nil, "AC with Still set: plays")
+    check(WallpaperBudget.stillReason(s, st) == nil, "AC with Pause set: plays")
+    // Another app focused: keep playing by default; Pause per power source
+    var fs = WallpaperSettings()
+    var fo = WallpaperPowerMonitor.State()
+    fo.otherAppFront = true
+    check(WallpaperBudget.stillReason(fs, fo) == nil, "another app focused, defaults: keeps playing")
+    fs.otherAppOnBattery = .pause
+    check(WallpaperBudget.stillReason(fs, fo) == nil, "plugged in, Pause set only on battery: plays")
+    fo.onBattery = true
+    check(WallpaperBudget.stillReason(fs, fo) == "Paused — another app in front", "on battery + another app focused: holds")
+    fo.otherAppFront = false
+    check(WallpaperBudget.stillReason(fs, fo) == nil, "desktop focused again: plays")
+    fs.otherAppPluggedIn = .pause
+    fo.onBattery = false; fo.otherAppFront = true
+    check(WallpaperBudget.stillReason(fs, fo) == "Paused — another app in front", "plugged in + Pause: holds")
+    let round = try! JSONDecoder().decode(WallpaperSettings.self, from: JSONEncoder().encode(fs))
+    check(round.otherAppPluggedIn == .pause && round.otherAppOnBattery == .pause, "focus modes survive wallpaper.json")
+    let old = try! JSONDecoder().decode(WallpaperSettings.self, from: Data(#"{"enabled":true,"batteryMode":"full"}"#.utf8))
+    check(old.otherAppPluggedIn == .keepPlaying && old.otherAppOnBattery == .keepPlaying && old.batteryMode == .full,
+          "a 1.6.4 wallpaper.json: keeps playing, battery mode kept")
     st.thermalHot = true
     check(WallpaperBudget.stillReason(WallpaperSettings(), st) == "Still — Mac is running hot", "hot Mac holds")
     // Low Power Mode holds a still (drawn first) instead of pausing: a wallpaper turned on in

@@ -127,6 +127,10 @@ extension AIBridgeHost {
             case "wallpaper.frameRate": w.update { $0.frameRate = v.stringValue == "smooth" ? .smooth : .balanced }
             case "wallpaper.quality": w.update { $0.quality = WallpaperSettings.Quality(rawValue: v.stringValue ?? "") ?? .balanced }
             case "wallpaper.onBattery": w.update { $0.batteryMode = WallpaperSettings.BatteryMode(rawValue: v.stringValue ?? "") ?? .efficient }
+            case "wallpaper.otherAppPluggedIn":
+                w.update { $0.otherAppPluggedIn = WallpaperSettings.OtherAppMode(rawValue: v.stringValue ?? "") ?? .keepPlaying }
+            case "wallpaper.otherAppOnBattery":
+                w.update { $0.otherAppOnBattery = WallpaperSettings.OtherAppMode(rawValue: v.stringValue ?? "") ?? .keepPlaying }
             case "wallpaper.lockScreenPicture": w.setLockScreen(v.boolValue ?? false)
             case "updates.checkAutomatically", "updates.installAutomatically":
                 guard let u = UpdateController.current else { problems.append("the updater isn't ready yet"); continue }

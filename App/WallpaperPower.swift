@@ -70,7 +70,15 @@ struct WallpaperSettings: Codable, Equatable {
         /// Hold a still frame; a clock still turns over each minute.
         case still
         var id: String { rawValue }
-        var title: String { rawValue.capitalized }
+        var title: String { self == .still ? "Pause" : rawValue.capitalized }
+    }
+
+    /// While another app is in front (not full screen — a covered desktop always pauses):
+    /// keep playing, or hold the frame (Settings › Live Wallpaper › Power Saving).
+    enum OtherAppMode: String, Codable, CaseIterable, Identifiable {
+        case keepPlaying, pause
+        var id: String { rawValue }
+        var title: String { self == .pause ? "Pause" : "Keep Playing" }
     }
 
     var enabled = false
@@ -79,6 +87,9 @@ struct WallpaperSettings: Codable, Equatable {
     var quality: Quality = .balanced
     /// On battery: Efficient unless the user picks Full or Still.
     var batteryMode: BatteryMode = .efficient
+    /// Another app in front, plugged in / on battery: keep playing unless the user picks Pause.
+    var otherAppPluggedIn: OtherAppMode = .keepPlaying
+    var otherAppOnBattery: OtherAppMode = .keepPlaying
     /// "Match Screensaver": show whatever the screensaver would (Playback.effectivePreset —
     /// rotation, night style) on the shared wall-clock time base, instead
     /// of `presetID`. See WallpaperController.setFollowsScreensaver(_:).
@@ -99,6 +110,7 @@ struct WallpaperSettings: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case enabled, presetID, frameRate, quality, batteryMode, followsScreensaver
+        case otherAppPluggedIn, otherAppOnBattery
         case lockScreen, savedDesktopPictures, displayStyles
         /// The 1.4 on/off "Freeze on battery": read when `batteryMode` is missing (on → Still,
         /// off → Efficient), and still written (on ⇔ Still) so an older build reading this
@@ -120,6 +132,8 @@ struct WallpaperSettings: Codable, Equatable {
             batteryMode = froze ? .still : .efficient
         }
         followsScreensaver = (try? c.decode(Bool.self, forKey: .followsScreensaver)) ?? false
+        otherAppPluggedIn = (try? c.decode(OtherAppMode.self, forKey: .otherAppPluggedIn)) ?? .keepPlaying
+        otherAppOnBattery = (try? c.decode(OtherAppMode.self, forKey: .otherAppOnBattery)) ?? .keepPlaying
         lockScreen = (try? c.decode(Bool.self, forKey: .lockScreen)) ?? false
         savedDesktopPictures = (try? c.decode([String: SavedDesktopPicture].self, forKey: .savedDesktopPictures)) ?? [:]
         displayStyles = (try? c.decode([String: DisplayPin].self, forKey: .displayStyles)) ?? [:]
@@ -134,6 +148,8 @@ struct WallpaperSettings: Codable, Equatable {
         try c.encode(batteryMode, forKey: .batteryMode)
         try c.encode(batteryMode == .still, forKey: .freezeOnBattery)
         try c.encode(followsScreensaver, forKey: .followsScreensaver)
+        try c.encode(otherAppPluggedIn, forKey: .otherAppPluggedIn)
+        try c.encode(otherAppOnBattery, forKey: .otherAppOnBattery)
         try c.encode(lockScreen, forKey: .lockScreen)
         if !savedDesktopPictures.isEmpty { try c.encode(savedDesktopPictures, forKey: .savedDesktopPictures) }
         if !displayStyles.isEmpty { try c.encode(displayStyles, forKey: .displayStyles) }
@@ -244,12 +260,15 @@ final class WallpaperPowerMonitor {
         var lowPowerMode = false
         var thermalHot = false          // .serious or .critical
         var onBattery = false
+        /// A regular app other than DotStudio or Finder is frontmost (the desktop may still
+        /// show around its windows; a full-screen app or covered desktop pauses regardless).
+        var otherAppFront = false
     }
 
     private(set) var state = State()
     var onChange: ((State) -> Void)?
 
-    /// DEV: DOTSTUDIO_WALLPAPER_FORCE=battery,lowpower,thermal forces those conditions
+    /// DEV: DOTSTUDIO_WALLPAPER_FORCE=battery,lowpower,thermal,otherapp forces those conditions
     /// on, to verify the policy on a Mac that can't be unplugged or heated on demand;
     /// `ac` forces mains power (to measure the plugged-in default on a laptop on battery).
     private let forced: Set<String> = Set(
@@ -299,6 +318,9 @@ final class WallpaperPowerMonitor {
         on(local, ProcessInfo.thermalStateDidChangeNotification) { [weak self] s in
             s.thermalHot = self?.readThermal() ?? false
         }
+        on(ws, NSWorkspace.didActivateApplicationNotification) { [weak self] s in
+            s.otherAppFront = self?.readOtherAppFront(was: s.otherAppFront) ?? false
+        }
 
         // Battery ↔ AC: IOKit's power-source run-loop notification (no polling).
         let ctx = Unmanaged.passUnretained(self).toOpaque()
@@ -315,7 +337,8 @@ final class WallpaperPowerMonitor {
                       screensaverRunning: Self.screensaverActive(),
                       lowPowerMode: readLowPower(),
                       thermalHot: readThermal(),
-                      onBattery: readBattery())
+                      onBattery: readBattery(),
+                      otherAppFront: readOtherAppFront(was: false))
     }
 
     func stop() {
@@ -352,6 +375,17 @@ final class WallpaperPowerMonitor {
               let type = IOPSGetProvidingPowerSourceType(snap)?.takeUnretainedValue() as String?
         else { return false }
         return type == kIOPMBatteryPowerKey
+    }
+
+    /// Finder (the desktop itself) and DotStudio count as the desktop. A menu-bar or panel app
+    /// (Spotlight, Raycast, a menu extra) coming forward changes nothing: it covers next to
+    /// nothing and leaves in a moment — the answer stays what the last regular app made it.
+    private func readOtherAppFront(was: Bool) -> Bool {
+        if forced.contains("otherapp") { return true }
+        guard let app = NSWorkspace.shared.frontmostApplication else { return was }
+        guard app.activationPolicy == .regular else { return was }
+        return app.bundleIdentifier != "com.apple.finder"
+            && app.processIdentifier != ProcessInfo.processInfo.processIdentifier
     }
 
     /// After a wake: the lock and screensaver as they are now, not as the last notification said.
@@ -518,7 +552,10 @@ enum WallpaperBudget {
     static func stillReason(_ settings: WallpaperSettings, _ s: WallpaperPowerMonitor.State) -> String? {
         if s.lowPowerMode { return "Still — Low Power Mode" }
         if s.thermalHot { return "Still — Mac is running hot" }
-        if s.onBattery && settings.batteryMode == .still { return "Still — on battery" }
+        if s.onBattery && settings.batteryMode == .still { return "Paused — on battery" }
+        if s.otherAppFront, (s.onBattery ? settings.otherAppOnBattery : settings.otherAppPluggedIn) == .pause {
+            return "Paused — another app in front"
+        }
         return nil
     }
 

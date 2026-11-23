@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.5 — Power saving, your way
+
+### New
+- **Pause while another app is focused.** The live wallpaper can hold its frame whenever you're
+  working in another app — not just when windows cover the desktop — and play again when you click
+  the desktop or come back to DotStudio. Set it separately for plugged in and on battery
+  (Settings › Live Wallpaper). Off by default, so nothing changes until you turn it on.
+
+### Improved
+- **Clearer power settings.** Settings › Live Wallpaper now has a When Plugged In card and an On
+  Battery card, side by side with what each one controls. On Battery's Still is now called Pause.
+
 ## 1.6.4 — A lighter gallery
 
 ### Improved

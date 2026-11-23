@@ -741,7 +741,7 @@ final class WallpaperController: ObservableObject {
     }
 
     /// Holds: keep the last frame (a clock still turns over once a minute) — hot Mac, or
-    /// On Battery: Still.
+    /// On Battery: Pause, or Another App Focused: Pause.
     private var stillReason: String? { WallpaperBudget.stillReason(settings, power.state) }
 
     /// Frames per second asked of a display's link (WallpaperBudget.fps: 30, Smooth's display

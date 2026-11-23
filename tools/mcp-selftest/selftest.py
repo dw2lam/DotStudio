@@ -506,6 +506,11 @@ active = library(T)["activeID"]
 check(w["enabled"] is True and w["presetID"] == active and w["frameRate"] == 120 and w["quality"] == "full"
       and w["batteryMode"] == "still" and w["freezeOnBattery"] is True and w["lockScreen"] is True,
       "  → wallpaper.json (on plays the screensaver's style; 1.4's freezeOnBattery kept in step)")
+ok(upd({"wallpaper.otherAppOnBattery": "pause"}), "wallpaper: pause on battery while another app is focused")
+got = settings_of(tc.call("get_settings", {"keys": ["wallpaper.otherAppOnBattery", "wallpaper.otherAppPluggedIn"]}))
+check(wall(T)["otherAppOnBattery"] == "pause" and got["wallpaper.otherAppOnBattery"]["value"] == "pause"
+      and got["wallpaper.otherAppPluggedIn"]["value"] == "keepPlaying", "  → written, and read back (plugged in keeps playing)")
+err(upd({"wallpaper.otherAppPluggedIn": "stop"}), "  → an unknown mode is refused")
 ok(upd({"wallpaper.sameAsScreensaver": True}), "wallpaper: same as screensaver")
 check(wall(T)["followsScreensaver"] is True and library(T).get("syncTimeBase") is True, "  → follows, and the saver's shared time base")
 ok(upd({"wallpaper.sameAsScreensaver": False, "wallpaper.style": "Golden Hour"}), "wallpaper: own style by name")

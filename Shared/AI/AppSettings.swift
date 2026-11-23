@@ -188,8 +188,14 @@ enum AppSettings {
                    meaning: "Render resolution: full (native), balanced (1.5 px per point), efficient (1 px per point).",
                    type: .choice(["full", "balanced", "efficient"]), store: .wallpaper),
         SettingDef(key: "wallpaper.onBattery", label: "On Battery", place: "Settings ▸ Live Wallpaper",
-                   meaning: "Unplugged: efficient (20 fps, lower resolution), full (as on power, at most 30 fps), or still (hold a frame).",
+                   meaning: "Unplugged: efficient (20 fps, lower resolution), full (as on power, at most 30 fps), or still (pause: hold a frame).",
                    type: .choice(["efficient", "full", "still"]), store: .wallpaper),
+        SettingDef(key: "wallpaper.otherAppPluggedIn", label: "Another App Focused (plugged in)", place: "Settings ▸ When Plugged In",
+                   meaning: "Plugged in, while an app other than DotStudio or the Finder is in front (not full screen — a covered desktop always pauses): keepPlaying, or pause (hold the frame until the desktop or DotStudio is focused again).",
+                   type: .choice(["keepPlaying", "pause"]), store: .wallpaper),
+        SettingDef(key: "wallpaper.otherAppOnBattery", label: "Another App Focused (on battery)", place: "Settings ▸ On Battery",
+                   meaning: "On battery, while an app other than DotStudio or the Finder is in front: keepPlaying, or pause (hold the frame).",
+                   type: .choice(["keepPlaying", "pause"]), store: .wallpaper),
         SettingDef(key: "wallpaper.lockScreenPicture", label: "Use as lock & login screen picture", place: "Settings ▸ Live Wallpaper",
                    meaning: "A still of the wallpaper becomes the desktop picture macOS shows on the lock and login screens; off puts the user's own picture back.",
                    type: .bool, store: .wallpaper, gated: true),
@@ -339,6 +345,9 @@ enum AppSettings {
         o["wallpaper.quality"] = .string(["full", "balanced", "efficient"].first { $0 == w["quality"]?.stringValue } ?? "balanced")
         let battery = w["batteryMode"]?.stringValue ?? ((w["freezeOnBattery"]?.boolValue ?? false) ? "still" : "efficient")
         o["wallpaper.onBattery"] = .string(["efficient", "full", "still"].contains(battery) ? battery : "efficient")
+        for k in ["otherAppPluggedIn", "otherAppOnBattery"] {
+            o["wallpaper." + k] = .string(w[k]?.stringValue == "pause" ? "pause" : "keepPlaying")
+        }
         o["wallpaper.lockScreenPicture"] = .bool(w["lockScreen"]?.boolValue ?? false)
         var wpins: [String: JSONValue] = [:]
         if case .object(let pins)? = w["displayStyles"] {
@@ -645,6 +654,8 @@ enum AppSettings {
         case "wallpaper.onBattery":
             s.wallpaper["batteryMode"] = v
             s.wallpaper["freezeOnBattery"] = .bool(v.stringValue == "still")   // what a 1.4 build reads
+        case "wallpaper.otherAppPluggedIn": s.wallpaper["otherAppPluggedIn"] = v
+        case "wallpaper.otherAppOnBattery": s.wallpaper["otherAppOnBattery"] = v
         case "wallpaper.lockScreenPicture": s.wallpaper["lockScreen"] = v
         case "source.kind": lib.source.kind = SourceKind(rawValue: v.stringValue ?? "") ?? .collection
         case "source.photos":
