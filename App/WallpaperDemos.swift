@@ -581,7 +581,7 @@ struct OptionCards<Value: Hashable>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
             Label {
-                Text(title).textRole(.rowTitle)
+                Text(title).textRole(.bodyEmphasis)
             } icon: {
                 if let icon { Image(systemName: icon).foregroundStyle(.secondary) }
             }
@@ -644,7 +644,7 @@ private struct OptionCard: View {
                         }
                     }
                 Text(label)
-                    .textRole(active ? .bodyEmphasis : .body)
+                    .textRole(active ? .calloutEmphasis : .callout)
                     .foregroundStyle(active ? .primary : .secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)

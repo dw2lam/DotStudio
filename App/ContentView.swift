@@ -53,8 +53,10 @@ struct ContentView: View {
                                                        set: { if !$0 { model.settingsPane = nil } })) {
                     SettingsView()
                         .environmentObject(model)
-                        .frame(width: min(max(geo.size.width * 0.84, 820), 1180),
-                               height: min(max(geo.size.height * 0.86, 560), 880))
+                        // About a stock Settings window (NotchTune's 780×560 ideal), a little
+                        // wider for the pictures; never bigger than the window.
+                        .frame(width: min(max(geo.size.width * 0.7, 760), 900, geo.size.width - 40),
+                               height: min(max(geo.size.height * 0.75, 540), 700, geo.size.height - 40))
                         .adaptiveLayout()
                 }
             }

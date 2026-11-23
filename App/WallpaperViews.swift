@@ -248,7 +248,7 @@ struct WallpaperSettingsSection: View {
     }
 
     private func powerHeader(_ title: String, symbol: String) -> some View {
-        Label(title, systemImage: symbol).textRole(.rowTitle)
+        Label(title, systemImage: symbol).textRole(.headline)
     }
 
     private var styleSelection: Binding<UUID?> {
@@ -377,13 +377,13 @@ private struct PowerPresetPicker: View {
                                 .foregroundStyle(.white)
                                 .frame(width: 38, height: 38)
                                 .background(p.tint.gradient, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            Text(p.title).textRole(.rowTitle)
+                            Text(p.title).textRole(.bodyEmphasis)
                             Text(p.summary).textRole(.callout).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                             Spacer(minLength: 0)
                         }
                         .padding(Space.m)
-                        .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
+                        .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
                         .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
                             .fill(current == p ? p.tint.opacity(0.12) : Color.primary.opacity(0.04)))
                         .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
@@ -423,11 +423,11 @@ private struct FrameRateRow: View {
     var body: some View {
         HStack(alignment: .center, spacing: Space.l) {
             WallpaperDemo(scene: .fps(Self.stops[index]))
-                .frame(width: 240)
+                .frame(width: 200)
             VStack(alignment: .leading, spacing: Space.s) {
                 HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
-                    Text("\(Self.stops[index])").font(.system(size: 34, weight: .semibold, design: .rounded)).monospacedDigit()
-                    Text("fps").textRole(.rowTitle).foregroundStyle(.secondary)
+                    Text("\(Self.stops[index])").font(.system(size: 28, weight: .semibold, design: .rounded)).monospacedDigit()
+                    Text("fps").textRole(.bodyEmphasis).foregroundStyle(.secondary)
                 }
                 Slider(value: Binding(get: { Double(index) }, set: { fps = Self.stops[Int($0.rounded())] }),
                        in: 0...Double(Self.stops.count - 1), step: 1)

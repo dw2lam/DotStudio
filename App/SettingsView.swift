@@ -37,6 +37,25 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Sidebar sections, as in a stock Settings window.
+    enum Group: CaseIterable {
+        case dotstudio, extras, app
+        var title: String {
+            switch self {
+            case .dotstudio: return "DotStudio"
+            case .extras: return "Extras"
+            case .app: return "App"
+            }
+        }
+        var panes: [SettingsPane] {
+            switch self {
+            case .dotstudio: return [.general, .screensaver, .wallpaper, .power]
+            case .extras: return [.music, .liveData, .ai]
+            case .app: return [.updates]
+            }
+        }
+    }
+
     var tint: Color {
         switch self {
         case .general: return .gray
@@ -59,40 +78,39 @@ struct SettingsView: View {
     @ScaledLength(relativeTo: .caption) private var valueWidth: CGFloat = SettingsMetrics.valueWidth
     @ScaledLength(relativeTo: .body) private var segmentWidth: CGFloat = SettingsMetrics.segmentWidth
     @ScaledLength(relativeTo: .title2) private var iconBox: CGFloat = SettingsMetrics.iconBox
-    @ScaledLength(relativeTo: .body) private var sidebarWidth: CGFloat = SettingsMetrics.sidebarWidth
 
     private var pane: SettingsPane { model.settingsPane ?? .general }
 
-    /// A sheet on the main window: the panes in a sidebar, the chosen one beside it under
-    /// its title; Done (or Esc) closes it.
+    /// A sheet on the main window, laid out like a stock macOS Settings window (as NotchTune's):
+    /// a sidebar list grouped into sections, the chosen pane's grouped Form beside it, and Done
+    /// in the toolbar (or Esc).
     var body: some View {
-        HStack(spacing: 0) {
-            // The panes, System Settings style: a tinted icon tile and the name; the chosen one
-            // on a soft accent highlight (drawn here, so it reads the same focused or not).
-            VStack(alignment: .leading, spacing: 0) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(SettingsPane.allCases) { p in
-                            SettingsSidebarRow(pane: p, selected: p == pane) { model.settingsPane = p }
+        NavigationSplitView {
+            List(selection: Binding(get: { model.settingsPane }, set: { if let p = $0 { model.settingsPane = p } })) {
+                ForEach(SettingsPane.Group.allCases, id: \.self) { group in
+                    Section(group.title) {
+                        ForEach(group.panes) { p in
+                            Label {
+                                Text(p.title)
+                            } icon: {
+                                Image(systemName: p.symbol).foregroundStyle(p.tint)
+                            }
+                            .tag(p)
                         }
                     }
-                    .padding(.horizontal, Space.xs)
-                    .padding(.vertical, Space.s)
                 }
-                Divider()
-                Button { model.settingsPane = nil } label: {
-                    Text("Done").textRole(.bodyEmphasis).frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .keyboardShortcut(.cancelAction)
-                .padding(Space.s)
             }
-            .frame(width: sidebarWidth)
-            .background(.background.secondary)
-            Divider()
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
+        } detail: {
             detail(pane)
-                .background(Color(nsColor: .windowBackgroundColor))
+                .navigationTitle(pane.title)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { model.settingsPane = nil }
+                            .keyboardShortcut(.cancelAction)
+                    }
+                }
         }
         .onAppear {
             model.refreshSetupStatus()
@@ -119,9 +137,8 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .textRole(.bodyLarge)     // a roomy sheet: everything a step up from the stock 13 pt
-        .controlSize(.large)      // bigger pickers, buttons and switches
-        .formControlSize()        // and a step further per text-size bump
+        .textRole(.body)          // row labels follow the text size (macOS never scales them itself)
+        .formControlSize()        // stock sizes at standard text; a step up per text bump after
         .id(p)                    // each pane scrolls from its top
     }
 
@@ -315,38 +332,6 @@ private struct MenuBarIconChoice: View {
     }
 }
 
-/// One pane in the Settings sidebar.
-private struct SettingsSidebarRow: View {
-    let pane: SettingsPane
-    let selected: Bool
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: Space.xs) {
-                Image(systemName: pane.symbol)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 22, height: 22)
-                    .background(pane.tint.gradient, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                Text(pane.title)
-                    .textRole(selected ? .bodyEmphasis : .body)
-                    .foregroundStyle(.primary)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, Space.xs)
-            .padding(.vertical, 5)
-            .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
-                .fill(selected ? Color.accentColor.opacity(0.18) : hovering ? Color.primary.opacity(0.06) : .clear))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-}
-
 // MARK: - General
 
 /// How DotStudio runs: in the menu bar when its window is closed (menu-bar mode, on by
@@ -444,7 +429,7 @@ enum SettingsMetrics {
     /// controls at stock sizes; from it, role-sized stand-ins (segmented, the Style pull-down).
     static let scaledControlsFrom: DynamicTypeSize = .xxLarge
     /// The size a grouped Form gives its switches when nothing sets one.
-    static let switchSize: ControlSize = .regular
+    static let switchSize: ControlSize = .mini
     /// The Style pop-up's widest; a long style name truncates (full name in the tooltip).
     static let popUpMaxWidth = Space.grid(60)     // 240
     /// Minimum width of a slider's value readout ("1.5 s").
@@ -459,7 +444,7 @@ struct SettingsHeader: View {
     init(_ title: String) { self.title = title }
 
     var body: some View {
-        Text(title).textRole(.rowTitle)
+        Text(title).textRole(.headline)
     }
 }
 
