@@ -57,6 +57,7 @@ struct SettingsView: View {
     @Environment(\.layout) private var layout
 
     @ScaledLength(relativeTo: .caption) private var valueWidth: CGFloat = SettingsMetrics.valueWidth
+    @ScaledLength(relativeTo: .body) private var segmentWidth: CGFloat = SettingsMetrics.segmentWidth
     @ScaledLength(relativeTo: .title2) private var iconBox: CGFloat = SettingsMetrics.iconBox
     @ScaledLength(relativeTo: .body) private var sidebarWidth: CGFloat = SettingsMetrics.sidebarWidth
 
@@ -154,14 +155,26 @@ struct SettingsView: View {
 
     private var transitionsSection: some View {
         Section {
-            ChoiceSetting(title: "Crossfade", detail: "How one style turns into the next — as the playlist moves on, and at sunrise and sunset.",
-                          options: Self.crossfades.map { .init(label: $0.label, value: $0.seconds, scene: .crossfade(seconds: $0.seconds)) },
-                          selection: Binding(get: { Self.nearestCrossfade(model.rotation.transitionSeconds) },
-                                             set: { v in model.updateRotation { $0.transitionSeconds = v } }))
+            SettingsValueRow("Crossfade", valueWidth: segmentWidth) {
+                HStack(spacing: layout.controlGap) {
+                    Slider(value: Binding(get: { model.rotation.transitionSeconds },
+                                          set: { v in model.updateRotation { $0.transitionSeconds = v } }),
+                           in: 0...3)
+                        .labelsHidden()   // outside a LabeledContent a Form keeps a label column for it
+                        .accessibilityLabel("Crossfade")
+                        .accessibilityValue(model.rotation.transitionSeconds < 0.05
+                                            ? "Off" : String(format: "%.1f seconds", model.rotation.transitionSeconds))
+                    Text(model.rotation.transitionSeconds < 0.05
+                         ? "Off" : String(format: "%.1f s", model.rotation.transitionSeconds))
+                        .textRole(.value)
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: valueWidth, alignment: .trailing)   // a minimum: the readout never truncates
+                }
+            }
         } header: {
             SettingsHeader("Transitions")
         } footer: {
-            SettingsNote("Hover a picture to see it play.")
+            SettingsNote("Blend between styles as the playlist moves on, and at sunrise and sunset.")
         }
     }
 
@@ -169,16 +182,16 @@ struct SettingsView: View {
 
     private var performanceSection: some View {
         Section {
-            ChoiceSetting(title: "Quality", detail: "How sharp the screensaver is drawn. Lower uses less power on Retina displays.",
-                          options: [.init(label: "Full", value: 1.0, scene: .screensaverQuality(1.0)),
-                                    .init(label: "Balanced", value: 0.75, scene: .screensaverQuality(0.75)),
-                                    .init(label: "Efficient", value: 0.5, scene: .screensaverQuality(0.5))],
-                          selection: qualityBinding)
+            SettingsValueRow("Quality", valueWidth: segmentWidth) {
+                ScaledSegmentedPicker(title: "Quality", selection: qualityBinding,
+                                      options: [("Full", 1.0), ("Balanced", 0.75), ("Efficient", 0.5)],
+                                      fills: true)
+            }
         } header: {
             // The screensaver's render scale — distinct from Live Wallpaper › Quality.
             SettingsHeader("Performance")
         } footer: {
-            SettingsNote("On battery the screensaver's frame rate also caps automatically.")
+            SettingsNote("Balanced and Efficient draw at a lower resolution — much less GPU work and battery on Retina displays. On battery the frame rate also caps automatically.")
         }
     }
 
@@ -277,12 +290,6 @@ struct SettingsView: View {
         }
     }
 
-    /// The crossfade choices (seconds); a value set elsewhere (an assistant, an older build's
-    /// slider) shows as the nearest.
-    static let crossfades: [(label: String, seconds: Double)] = [("Off", 0), ("Gentle", 1.0), ("Slow", 2.5)]
-    static func nearestCrossfade(_ v: Double) -> Double {
-        crossfades.min { abs($0.seconds - v) < abs($1.seconds - v) }?.seconds ?? 0
-    }
 
     // MARK: Bindings
 
@@ -299,9 +306,9 @@ private struct MenuBarIconChoice: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Menu bar icon").textRole(.rowTitle)
+                Text("Menu bar icon")
                 Text("\(selection.name) — it fills in while a live wallpaper plays.")
-                    .textRole(.body).foregroundStyle(.secondary)
+                    .textRole(.callout).foregroundStyle(.secondary)
             }
             HStack(spacing: Space.xs) {
                 ForEach(MenuBarIcon.allCases) { i in
@@ -379,10 +386,8 @@ struct GeneralSettingsSection: View {
     var body: some View {
         Section {
             if nudge.pending != nil { LoginNudgeBanner(topPadding: 0) }
-            ChoiceSetting(title: "When you close the window", detail: "Stay in the menu bar to keep your live wallpaper and music working.",
-                          options: [.init(label: "Quit", value: false, scene: .menuBarMode(keepsRunning: false)),
-                                    .init(label: "Stay in menu bar", value: true, scene: .menuBarMode(keepsRunning: true))],
-                          selection: $presence.menuBarMode)
+            Toggle("Keep running in the menu bar", isOn: $presence.menuBarMode)
+                .formSwitchSize()
             MenuBarIconChoice(selection: $menuBarIcon)
             Toggle("Open DotStudio at login", isOn: Binding(get: { opensAtLogin }, set: setOpenAtLogin))
                 .formSwitchSize()
@@ -472,7 +477,7 @@ struct SettingsHeader: View {
     init(_ title: String) { self.title = title }
 
     var body: some View {
-        Text(title).textRole(.sectionTitle)
+        Text(title).textRole(.rowTitle)
     }
 }
 

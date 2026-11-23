@@ -102,6 +102,7 @@ func menuName(_ name: String, limit: Int = 32) -> String {
 struct WallpaperSettingsSection: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var wallpaper = WallpaperController.shared
+    @ScaledLength(relativeTo: .body) private var segmentWidth: CGFloat = SettingsMetrics.segmentWidth
     @ScaledLength(relativeTo: .body) private var popUpMaxWidth: CGFloat = SettingsMetrics.popUpMaxWidth
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -144,20 +145,25 @@ struct WallpaperSettingsSection: View {
                         .help(wallpaper.settings.presetID.flatMap(model.preset)?.name ?? "None")
                 }
             }
-            ChoiceSetting(title: "Quality", detail: "How sharp the wallpaper is drawn. Lower uses less power on Retina displays.",
-                          options: WallpaperSettings.Quality.allCases.map { .init(label: $0.title, value: $0, scene: .quality($0)) },
-                          selection: Binding(get: { wallpaper.settings.quality },
-                                             set: { v in wallpaper.update { $0.quality = v } }))
+            SettingsValueRow("Quality", valueWidth: segmentWidth) {
+                ScaledSegmentedPicker(title: "Quality", selection: Binding(
+                    get: { wallpaper.settings.quality },
+                    set: { v in wallpaper.update { $0.quality = v } }),
+                    options: WallpaperSettings.Quality.allCases.map { ($0.title, $0) },
+                    fills: true)
+            }
             // A still of the wallpaper as the desktop picture macOS shows when locked (LockScreenPicture).
-            ChoiceSetting(title: "Lock & login screen", detail: "What your Mac shows when it locks.",
-                          options: [.init(label: "Your picture", value: false, scene: .lockScreen(on: false)),
-                                    .init(label: "Your wallpaper", value: true, scene: .lockScreen(on: true))],
-                          selection: Binding(get: { wallpaper.settings.lockScreen },
-                                             set: { wallpaper.setLockScreen($0) }))
+            Toggle("Use as lock & login screen picture", isOn: Binding(
+                get: { wallpaper.settings.lockScreen },
+                set: { wallpaper.setLockScreen($0) }))
+                .formSwitchSize()
         } header: {
             SettingsHeader("Live Wallpaper")
         } footer: {
-            SettingsNote("Plays while DotStudio is open — closing the window keeps it running from the menu bar. Same as Screensaver plays exactly what the screensaver shows, in step.")
+            VStack(alignment: .leading, spacing: Space.xs) {
+                SettingsNote("Plays while DotStudio is open — closing the window keeps it running from the menu bar. Same as Screensaver plays exactly what the screensaver shows, in step.")
+                SettingsNote("Balanced quality draws at three-quarter resolution on Retina displays. The lock-screen picture updates when your Mac locks; turning it off restores your own picture.")
+            }
         }
 
     }
@@ -167,41 +173,61 @@ struct WallpaperSettingsSection: View {
     // choice in a little animated Mac (WallpaperDemos.swift).
     @ViewBuilder private var powerSections: some View {
         Section {
-            ChoiceSetting(title: "Frame rate", detail: "Balanced is 30 frames a second; Smooth matches your display, up to 120.",
-                          options: [.init(label: "Balanced", value: WallpaperSettings.FrameRate.balanced, scene: .frameRate(.balanced)),
-                                    .init(label: "Smooth", value: .smooth, scene: .frameRate(.smooth))],
-                          selection: Binding(get: { wallpaper.settings.frameRate },
-                                             set: { v in wallpaper.update { $0.frameRate = v } }))
+            SettingsValueRow("Frame Rate", valueWidth: segmentWidth) {
+                ScaledSegmentedPicker(title: "Frame Rate", selection: Binding(
+                    get: { wallpaper.settings.frameRate },
+                    set: { v in wallpaper.update { $0.frameRate = v } }),
+                    options: WallpaperSettings.FrameRate.allCases.map { ($0.title, $0) },
+                    fills: true)
+            }
             otherAppRow(\.otherAppPluggedIn)
         } header: {
             powerHeader("When Plugged In", symbol: "powerplug")
         }
 
         Section {
-            ChoiceSetting(title: "Playback", detail: "Efficient plays at 20 fps and lower resolution — about a quarter of the work.",
-                          options: WallpaperSettings.BatteryMode.allCases.map { .init(label: $0.title, value: $0, scene: .battery($0)) },
-                          selection: Binding(get: { wallpaper.settings.batteryMode },
-                                             set: { v in wallpaper.update { $0.batteryMode = v } }))
+            VisualSettingRow(title: "Playback", detail: batteryDetail, demo: .battery(wallpaper.settings.batteryMode)) {
+                ScaledSegmentedPicker(title: "Playback on battery", selection: Binding(
+                    get: { wallpaper.settings.batteryMode },
+                    set: { v in wallpaper.update { $0.batteryMode = v } }),
+                    options: WallpaperSettings.BatteryMode.allCases.map { ($0.title, $0) })
+                    .fixedSize()
+            }
             otherAppRow(\.otherAppOnBattery)
         } header: {
             powerHeader("On Battery", symbol: "battery.75percent")
         } footer: {
-            SettingsNote("Always paused while a full-screen app or windows cover the desktop, the screen is locked or asleep, or the screensaver runs. Held still in Low Power Mode or when your Mac runs hot. Hover a picture to see it play.")
+            SettingsNote("Always paused while a full-screen app or windows cover the desktop, the screen is locked or asleep, or the screensaver runs. Held still in Low Power Mode or when your Mac runs hot.")
         }
     }
 
-    /// Keep playing, or hold the frame, while an app other than DotStudio or the Finder is in
-    /// front — stored per power source as WallpaperSettings.OtherAppMode.
+    private var batteryDetail: String {
+        switch wallpaper.settings.batteryMode {
+        case .full: return "Plays as when plugged in, up to 30 fps."
+        case .efficient: return "20 fps at lower resolution — about a quarter of the work."
+        case .still: return "Holds one frame until you plug in."
+        }
+    }
+
+    /// Pause (hold the frame) while an app other than DotStudio or the Finder is in front —
+    /// stored per power source as WallpaperSettings.OtherAppMode.
     private func otherAppRow(_ key: WritableKeyPath<WallpaperSettings, WallpaperSettings.OtherAppMode>) -> some View {
-        ChoiceSetting(title: "While you use other apps", detail: "Pause holds the frame until you click the desktop or come back to DotStudio.",
-                      options: [.init(label: "Keep playing", value: WallpaperSettings.OtherAppMode.keepPlaying, scene: .otherApp(pauses: false)),
-                                .init(label: "Pause", value: .pause, scene: .otherApp(pauses: true))],
-                      selection: Binding(get: { wallpaper.settings[keyPath: key] },
-                                         set: { v in wallpaper.update { $0[keyPath: key] = v } }))
+        let pauses = wallpaper.settings[keyPath: key] == .pause
+        return VisualSettingRow(title: "Pause behind other apps",
+                                detail: pauses ? "Holds the frame while you work in another app; click the desktop to play again."
+                                               : "Keeps playing behind other apps while some desktop shows.",
+                                demo: .otherApp(pauses: pauses)) {
+            Toggle("Pause behind other apps", isOn: Binding(
+                get: { pauses },
+                set: { on in wallpaper.update { $0[keyPath: key] = on ? .pause : .keepPlaying } }))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .formSwitchSize()
+        }
     }
 
     private func powerHeader(_ title: String, symbol: String) -> some View {
-        Label(title, systemImage: symbol).textRole(.sectionTitle)
+        Label(title, systemImage: symbol).textRole(.rowTitle)
     }
 
     private var styleSelection: Binding<UUID?> {

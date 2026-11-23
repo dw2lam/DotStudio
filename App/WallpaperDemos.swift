@@ -479,95 +479,32 @@ struct WallpaperDemo: View {
     }
 }
 
-/// A setting shown as pictures: its name and a line about it, then one picture per option —
-/// click a picture to choose it (like System Settings › Appearance). The chosen one is ringed
-/// and plays; the others hold a still frame until hovered.
-struct ChoiceSetting<Value: Hashable>: View {
-    struct Option {
-        let label: String
-        let value: Value
-        let scene: WallpaperDemo.Scene
-    }
-
+/// A Form row for a setting whose effect is easier to see than to read: the name and a line
+/// about it with its control (switch or picker) on the same line, and underneath, in the same
+/// cell, a little animated Mac acting out what the control is set to now.
+struct VisualSettingRow<Control: View>: View {
     let title: String
     let detail: String
-    let options: [Option]
-    @Binding var selection: Value
+    let demo: WallpaperDemo.Scene
+    @ViewBuilder var control: () -> Control
+    @ScaledLength(relativeTo: .body) private var demoWidth: CGFloat = 280
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).textRole(.rowTitle)
-                Text(detail).textRole(.body).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            ChoiceTileRow(spacing: Space.m) {
-                ForEach(options.indices, id: \.self) { i in
-                    let o = options[i]
-                    ChoiceTile(label: o.label, scene: o.scene, selected: o.value == selection) { selection = o.value }
+            HStack(alignment: .center, spacing: Space.m) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                    Text(detail).textRole(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                control()
             }
+            WallpaperDemo(scene: demo)
+                .frame(width: demoWidth)
         }
-        .padding(.vertical, Space.xs)
+        .padding(.vertical, Space.xxs)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(title)
-    }
-}
-
-private struct ChoiceTile: View {
-    let label: String
-    let scene: WallpaperDemo.Scene
-    let selected: Bool
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: Space.xs) {
-                WallpaperDemo(scene: scene, animates: selected || hovering)
-                    .padding(4)
-                    .overlay(RoundedRectangle(cornerRadius: Radius.s + 4, style: .continuous)
-                        .strokeBorder(selected ? Color.accentColor : hovering ? Color.primary.opacity(0.2) : .clear,
-                                      lineWidth: selected ? 3 : 1.5))
-                Text(label)
-                    .textRole(selected ? .bodyEmphasis : .body)
-                    .foregroundStyle(selected ? .primary : .secondary)
-                    .lineLimit(1)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .accessibilityLabel(label)
-        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-    }
-}
-
-/// Picture choices on a shared grid: every setting's tiles are one third of the row (at most
-/// `maxTile` wide), left-aligned — so a two-option row lines up with the three-option rows.
-struct ChoiceTileRow: Layout {
-    var spacing: CGFloat
-    var columns = 3
-    var maxTile: CGFloat = 250
-
-    private func tileWidth(_ width: CGFloat?) -> CGFloat {
-        guard let width, width.isFinite else { return maxTile }
-        return max(80, min((width - spacing * CGFloat(columns - 1)) / CGFloat(columns), maxTile))
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let w = tileWidth(proposal.width)
-        let h = subviews.map { $0.sizeThatFits(ProposedViewSize(width: w, height: nil)).height }.max() ?? 0
-        let used = CGFloat(subviews.count) * w + CGFloat(max(subviews.count - 1, 0)) * spacing
-        return CGSize(width: proposal.width ?? used, height: h)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let w = tileWidth(bounds.width)
-        for (i, v) in subviews.enumerated() {
-            v.place(at: CGPoint(x: bounds.minX + CGFloat(i) * (w + spacing), y: bounds.minY),
-                    proposal: ProposedViewSize(width: w, height: nil))
-        }
     }
 }
 
