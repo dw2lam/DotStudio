@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.6.6 — Make it yours
+
+### New
+- **Customize, right where you are.** A Customize button on the Screensaver and Wallpaper cards
+  and on any style you hover or select opens its editor in one click.
+- **Themes.** Every scene's editor has one-click colour themes — Blue, Neon, Sunset, Forest and
+  Monochrome — that keep the scene's look while changing its colours. Lava Lamp adds Multicolour.
+- **Live tags.** Styles that follow your real weather or the real sun say so ("Live weather",
+  "Live sky") and lead the gallery, Golden Hour first.
+
+### Fixed
+- **Lava Lamp** no longer shows thin lines down the left and right of the glass.
+
 ## 1.6.5 — Power saving, your way
 
 ### New
