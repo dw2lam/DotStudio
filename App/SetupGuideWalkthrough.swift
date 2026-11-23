@@ -19,13 +19,13 @@ struct SetupWalkthrough: View {
 
     static let steps: [Step] = [
         Step(title: "Open Wallpaper",
-             detail: "In System Settings, click **Wallpaper** in the sidebar."),
+             detail: "Click **Wallpaper** in the sidebar."),
         Step(title: "Click Screen Saver\u{2026}",
-             detail: "It's the **Screen Saver\u{2026}** button at the bottom of the Wallpaper page."),
+             detail: "Click **Screen Saver\u{2026}** at the bottom of the page."),
         Step(title: "Scroll to Other",
-             detail: "Scroll to the bottom of the screen savers, to the **Other** section."),
+             detail: "Scroll down to **Other**."),
         Step(title: "Choose DotStudio",
-             detail: "Click **DotStudio**, then **Done**. More than one display? Choose it on each."),
+             detail: "Click **DotStudio**, then **Done**. More displays? Do each."),
     ]
 
     /// The picture's widest (it grows with the text by half the text's growth).

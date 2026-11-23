@@ -2,9 +2,11 @@
 //
 //  Five short steps: what DotStudio is, pick a preset or create your own, turn the
 //  screensaver on in System Settings (the guided setup: an illustrated walkthrough of System
-//  Settings beside a live checklist — SetupGuide*.swift), showing what's playing in Spotify or
+//  Settings above a live checklist — SetupGuide*.swift), showing what's playing in Spotify or
 //  Apple Music (how it connects, how it's controlled, what stays private), and where to go to
 //  keep creating.
+//  A tall, portrait card: every step is one column — a picture on top, then the title, a
+//  one-line subtitle and the step's content — with the step dots and buttons pinned below.
 //  ContentView presents it and records completion (`hasCompletedOnboarding`) when the sheet
 //  goes away, however that happens.
 
@@ -24,6 +26,7 @@ struct OnboardingView: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.layout) private var layout
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     @State private var step: Step
     @State private var forward = true
@@ -42,19 +45,37 @@ struct OnboardingView: View {
     /// UI shots: the walkthrough held on this step; or its Reduce Motion still cards.
     private let walkthroughStep: Int?
     private let stillWalkthrough: Bool
+    /// The presenting window's height: the card never grows taller than it allows (nil: no
+    /// limit, as in UI shots).
+    private let windowHeight: CGFloat?
 
-    /// The sheet at the default text size — and its minimum (UIShots renders it at this size).
-    static let size = CGSize(width: 760, height: 600)
+    /// The card at the default text size: a tall portrait card (UIShots renders it at this size).
+    static let size = CGSize(width: 560, height: 780)
+    /// The shortest the card gets, however short the window.
+    static let minHeight: CGFloat = 600
+    /// Room kept between the card and the window's height.
+    static let windowMargin: CGFloat = 40
     /// Side inset shared by every step AND the footer, so the content edges, the step dots and
     /// the buttons sit on one grid and don't jump between steps. Local to this sheet: it is
     /// always `.compact`, where `layout.pagePadding` (20) is too tight for a modal.
     static let inset = Space.xl
 
     /// Grows with the text (by half the text's growth, like component spacing), so bigger
-    /// text gets a bigger sheet and not only more scrolling. Never below `size`.
+    /// text gets a bigger card and not only more scrolling. Never below `size` — except that
+    /// it is never taller than the window allows (and never below `minHeight`).
     private var sheetSize: CGSize {
-        CGSize(width: max(Self.size.width, layout.scaled(Self.size.width)),
-               height: max(Self.size.height, layout.scaled(Self.size.height)))
+        var height = max(Self.size.height, layout.scaled(Self.size.height))
+        if let windowHeight, windowHeight > 0 {
+            height = max(Self.minHeight, min(height, windowHeight - Self.windowMargin))
+        }
+        return CGSize(width: max(Self.size.width, layout.scaled(Self.size.width)), height: height)
+    }
+
+    /// The card's text runs one text size above the app's (up to xxxLarge — the accessibility
+    /// sizes are big already), so its few words read easily.
+    private static func cardTypeSize(_ size: DynamicTypeSize) -> DynamicTypeSize {
+        guard size < .xxxLarge else { return size }
+        return DynamicTypeSize.allCases.first { $0 > size } ?? size
     }
 
     static var starterDraft: Preset {
@@ -65,7 +86,8 @@ struct OnboardingView: View {
 
     init(initialStep: Step = .welcome, pickMode: PickMode = .presets,
          livePreview: Bool = true, statusOverride: Installer.Status? = nil,
-         guide: SetupGuideModel? = nil, walkthroughStep: Int? = nil, stillWalkthrough: Bool = false) {
+         guide: SetupGuideModel? = nil, walkthroughStep: Int? = nil, stillWalkthrough: Bool = false,
+         windowHeight: CGFloat? = nil) {
         _step = State(initialValue: initialStep)
         _pickMode = State(initialValue: pickMode)
         self.livePreview = livePreview
@@ -73,6 +95,7 @@ struct OnboardingView: View {
         _guide = ObservedObject(wrappedValue: guide ?? SetupGuideModel.shared)
         self.walkthroughStep = walkthroughStep
         self.stillWalkthrough = stillWalkthrough
+        self.windowHeight = windowHeight
     }
 
     private var status: Installer.Status { statusOverride ?? model.setupStatus }
@@ -92,8 +115,12 @@ struct OnboardingView: View {
 
             footer
         }
+        // The card's own text size, and the layout metrics re-measured for it (the card's
+        // size, below, follows the app's text size).
+        .adaptiveLayout()
+        .environment(\.dynamicTypeSize, Self.cardTypeSize(typeSize))
         .frame(minWidth: Self.size.width, idealWidth: sheetSize.width, maxWidth: sheetSize.width,
-               minHeight: Self.size.height, idealHeight: sheetSize.height, maxHeight: sheetSize.height)
+               minHeight: Self.minHeight, idealHeight: sheetSize.height, maxHeight: sheetSize.height)
         .background(Color(nsColor: .windowBackgroundColor))
         .background {
             // Esc closes the whole flow (counts as completed — the Screensaver card still offers setup).
@@ -236,6 +263,30 @@ private struct StepDots: View {
 
 // MARK: - Shared bits
 
+/// One step, one column: the picture, the title and a one-line subtitle (centred under it),
+/// then the step's content on the card's leading edge. Scrolls when it outgrows the card.
+private struct OnboardingPage<Visual: View, Content: View>: View {
+    @Environment(\.layout) private var layout
+    let title: String
+    let subtitle: String
+    /// Centre short content in the height (the welcome step).
+    var centered = false
+    @ViewBuilder var visual: Visual
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        PageScroll(centered: centered) {
+            VStack(spacing: layout.sectionGap) {
+                visual
+                    .frame(maxWidth: .infinity)
+                PageHeader(title: title, subtitle: subtitle)
+                content
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+}
+
 private struct PageHeader: View {
     @Environment(\.layout) private var layout
     let title: String
@@ -251,13 +302,14 @@ private struct PageHeader: View {
                 .foregroundStyle(.secondary)
                 .wrapping(.center)
         }
-        .readableWidth(layout, alignment: .center)
         .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
     }
 }
 
-/// A step's body. It scrolls when the text outgrows the sheet (the footer stays pinned), and
-/// every step shares the same side inset and top padding, so the header holds its place from
+/// A step's body. It scrolls when the text outgrows the card (the footer stays pinned), and
+/// every step shares the same side inset and top padding, so the edges hold their place from
 /// step to step. `centered` centres short content in the height (the welcome step).
 private struct PageScroll<Content: View>: View {
     var centered = false
@@ -274,6 +326,21 @@ private struct PageScroll<Content: View>: View {
             }
             .scrollBounceBehavior(.basedOnSize)
         }
+    }
+}
+
+/// A step's picture when it has no illustration of its own: a large symbol, like the Done
+/// step's seal.
+private struct HeroSymbol: View {
+    let symbol: String
+    let tint: Color
+
+    var body: some View {
+        Image(systemName: symbol)
+            .scaledFont { .scaled(points: 52, $0) }
+            .symbolRenderingMode(.hierarchical)
+            .foregroundStyle(tint)
+            .accessibilityHidden(true)
     }
 }
 
@@ -296,6 +363,26 @@ private struct ThumbCard: View {
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             .strokeBorder(Color.white.opacity(0.12)))
+    }
+}
+
+/// A style's preview card: its thumbnail, with the live Metal preview over it when live.
+private struct PreviewCard: View {
+    @EnvironmentObject var model: AppModel
+    let preset: Preset
+    let live: Bool
+
+    var body: some View {
+        ThumbCard(preset: preset, cornerRadius: Radius.m)
+            .overlay {
+                if live {
+                    MetalPreview(preset: preset, source: model.library.source,
+                                 location: model.locationTuple, store: model.store,
+                                 music: model.library.musicSettings)
+                        .clipShape(RoundedRectangle(cornerRadius: Radius.m, style: .continuous))
+                        .allowsHitTesting(false)
+                }
+            }
     }
 }
 
@@ -334,6 +421,8 @@ private struct WelcomePage: View {
     @Environment(\.layout) private var layout
     let livePreview: Bool
     @State private var appeared = false
+    /// The tips' icon column, as on the other steps.
+    @ScaledLength(relativeTo: .headline) private var iconColumn: CGFloat = 44
 
     private var hero: [Preset] {
         let picks = model.onboardingPicks(scenes: 3, looks: 0)
@@ -346,50 +435,53 @@ private struct WelcomePage: View {
     }
 
     var body: some View {
-        PageScroll(centered: true) {
-            VStack(spacing: layout.sectionGap) {
-                heroStack
-                    .frame(height: 200)   // the front card (187.5) plus the tilted side cards' overhang
-                PageHeader(title: "Welcome to DotStudio",
-                           subtitle: "Living, generative screensavers for your Mac.")
+        OnboardingPage(title: "Welcome to DotStudio",
+                       subtitle: "Living, generative screensavers for your Mac.",
+                       centered: true) {
+            heroStack
+        } content: {
+            // What the next steps do — one line each.
+            VStack(alignment: .leading, spacing: layout.itemGap) {
+                Tip(symbol: "paintpalette.fill", tint: .purple, iconColumn: iconColumn,
+                    title: "Pick a style", detail: "Start from a preset, or make your own.")
+                Tip(symbol: "gearshape.fill", tint: .gray, iconColumn: iconColumn,
+                    title: "Turn it on", detail: "Choose DotStudio in System Settings.")
+                Tip(symbol: "music.note", tint: .pink, iconColumn: iconColumn,
+                    title: "Show what's playing", detail: "Spotify or Apple Music, on your screensaver.")
             }
+            .padding(.horizontal, layout.cardPadding)
         }
         .onAppear {
             withAnimation(.spring(response: 0.6, dampingFraction: 0.8).delay(0.05)) { appeared = true }
         }
     }
 
+    /// Three cards fanned out across the card's width: the front one at 60 %, the side ones
+    /// tucked behind it. Sized from the width it gets, so it scales with the card.
     private var heroStack: some View {
         let cards = hero
-        return ZStack {
-            ForEach(Array(cards.enumerated()), id: \.element.id) { i, preset in
-                let isFront = cards.count == 3 ? i == 1 : i == 0
-                let side: CGFloat = i == 0 ? -1 : 1
-                card(preset, live: isFront && livePreview)
-                    .frame(width: isFront ? 300 : 230)
-                    .shadow(color: .black.opacity(isFront ? 0.35 : 0.22), radius: isFront ? 18 : 10, y: isFront ? 10 : 5)
-                    .rotationEffect(.degrees(isFront ? 0 : Double(side) * (appeared ? 7 : 2)))
-                    .offset(x: isFront ? 0 : side * (appeared ? 168 : 60), y: isFront ? 0 : 14)
-                    .zIndex(isFront ? 1 : 0)
-                    .opacity(isFront || appeared ? 1 : 0)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func card(_ preset: Preset, live: Bool) -> some View {
-        if live {
-            ThumbCard(preset: preset, cornerRadius: Radius.m)
-                .overlay {
-                    MetalPreview(preset: preset, source: model.library.source,
-                                 location: model.locationTuple, store: model.store,
-                                 music: model.library.musicSettings)
-                        .clipShape(RoundedRectangle(cornerRadius: Radius.m, style: .continuous))
-                        .allowsHitTesting(false)
+        return Color.clear
+            .aspectRatio(2.1, contentMode: .fit)   // the front card plus the tilted side cards' overhang
+            .overlay {
+                GeometryReader { geo in
+                    let w = geo.size.width
+                    ZStack {
+                        ForEach(Array(cards.enumerated()), id: \.element.id) { i, preset in
+                            let isFront = cards.count == 3 ? i == 1 : i == 0
+                            let side: CGFloat = i == 0 ? -1 : 1
+                            PreviewCard(preset: preset, live: isFront && livePreview)
+                                .frame(width: w * (isFront ? 0.6 : 0.42))
+                                .shadow(color: .black.opacity(isFront ? 0.35 : 0.22), radius: isFront ? 18 : 10, y: isFront ? 10 : 5)
+                                .rotationEffect(.degrees(isFront ? 0 : Double(side) * (appeared ? 7 : 2)))
+                                .offset(x: isFront ? 0 : side * w * (appeared ? 0.27 : 0.1), y: isFront ? 0 : w * 0.03)
+                                .zIndex(isFront ? 1 : 0)
+                                .opacity(isFront || appeared ? 1 : 0)
+                        }
+                    }
+                    .frame(width: w, height: geo.size.height)
                 }
-        } else {
-            ThumbCard(preset: preset, cornerRadius: Radius.m)
-        }
+            }
+            .accessibilityHidden(true)
     }
 }
 
@@ -404,28 +496,32 @@ private struct PickPage: View {
     let livePreview: Bool
     @State private var picks: [Preset] = []
 
+    /// The preview's width at the default text size (grows with `layout.scaled`). Kept modest
+    /// so the tiles — the step's main control — start on the first screen.
+    private static let previewWidth: CGFloat = 320
+
     var body: some View {
-        Group {
-            if mode == .create && !CreatePanel.stacks(layout) {
-                // Side by side: the effect picker scrolls on its own and fills the height
-                // under the header, so this page doesn't scroll as a whole. Same insets as
-                // PageScroll, so the header doesn't move when switching tabs.
-                VStack(spacing: layout.sectionGap) {
-                    header
-                    CreatePanel(draft: $draft, nameEdited: $nameEdited, livePreview: livePreview, stacked: false)
-                        .frame(maxHeight: .infinity, alignment: .top)
+        OnboardingPage(title: "Make Your Screensaver",
+                       subtitle: "Pick a preset, or create your own.") {
+            // The style it will play: the pick, or the one being made.
+            Group {
+                if let shown {
+                    PreviewCard(preset: shown, live: livePreview)
+                        .shadow(color: .black.opacity(0.25), radius: 10, y: 5)
+                        .id(shown.id)
+                        .transition(.opacity)
                 }
-                .padding(.horizontal, OnboardingView.inset)
-                .padding(.vertical, Space.l)
-            } else {
-                PageScroll {
-                    VStack(spacing: layout.sectionGap) {
-                        header
-                        switch mode {
-                        case .presets: presetGrid
-                        case .create: CreatePanel(draft: $draft, nameEdited: $nameEdited, livePreview: livePreview, stacked: true)
-                        }
-                    }
+            }
+            .frame(maxWidth: layout.scaled(Self.previewWidth))
+            .accessibilityHidden(true)
+        } content: {
+            VStack(alignment: .leading, spacing: layout.sectionGap) {
+                ScaledSegmentedPicker(title: "Mode", selection: $mode.animation(.easeOut(duration: 0.18)),
+                                      options: OnboardingView.PickMode.allCases.map { ($0.rawValue, $0) },
+                                      fills: true, alignment: .center)
+                switch mode {
+                case .presets: presetGrid
+                case .create: CreatePanel(draft: $draft, nameEdited: $nameEdited)
                 }
             }
         }
@@ -433,19 +529,15 @@ private struct PickPage: View {
         .onAppear { if picks.isEmpty { picks = model.onboardingPicks() } }
     }
 
-    private var header: some View {
-        VStack(spacing: layout.sectionGap) {
-            PageHeader(title: "Make Your Screensaver",
-                       subtitle: "Start from a preset, or create your own. You can change it any time.")
-            ScaledSegmentedPicker(title: "Mode", selection: $mode.animation(.easeOut(duration: 0.18)),
-                                  options: OnboardingView.PickMode.allCases.map { ($0.rawValue, $0) },
-                                  fills: true, alignment: .center)
-                .frame(maxWidth: layout.scaled(Space.grid(80)))   // 320: two equal segments
+    private var shown: Preset? {
+        switch mode {
+        case .create: return draft
+        case .presets: return model.preset(model.library.activeID ?? UUID()) ?? picks.first
         }
     }
 
     private var presetGrid: some View {
-        LazyVGrid(columns: layout.columns(minimum: 200, spacing: layout.gridColumnGap),
+        LazyVGrid(columns: layout.columns(minimum: 136, spacing: layout.gridColumnGap),
                   spacing: layout.gridRowGap) {
             ForEach(picks) { preset in
                 PickTile(preset: preset,
@@ -457,29 +549,13 @@ private struct PickPage: View {
     }
 }
 
-/// "Create Your Own": live preview + name, beside (or, at large text, above) the same
-/// Effect / Canvas pickers as the editor. Picking a Scene makes it a Scene.
+/// "Create Your Own" (the preview is the page's picture): the name and what the effect makes,
+/// above the same Effect / Canvas pickers as the editor. Picking a Scene makes it a Scene.
 private struct CreatePanel: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.layout) private var layout
     @Binding var draft: Preset
     @Binding var nameEdited: Bool
-    let livePreview: Bool
-    /// Stacked: a full-width row (preview beside the name and blurb) above the full-width
-    /// pickers, inside the page's scroll (the pickers get a fixed height). Side by side: the
-    /// pickers fill the height beside the details column.
-    let stacked: Bool
-
-    /// Side by side, the details column has a fixed height to fit in; from .xxLarge text on
-    /// (and whenever the layout prefers stacking) it no longer reliably does, so stack.
-    static func stacks(_ layout: LayoutMetrics) -> Bool {
-        layout.prefersStacking || layout.typeSize >= .xxLarge
-    }
-
-    /// The stacked preview's width at the default text size (grows with `layout.scaled`). Kept
-    /// small so the row stays short and the effect picker — the step's main control — starts
-    /// on the first screen.
-    private static let stackedPreviewWidth = Space.grid(60)   // 240
     @State private var tab: Tab = .effect
 
     enum Tab: String, CaseIterable, Identifiable {
@@ -490,32 +566,16 @@ private struct CreatePanel: View {
     private var kind: EffectKind? { draft.effects.first?.kind }
 
     var body: some View {
-        if stacked {
-            // Spans the page like the header and the preset grid: no empty half beside it.
-            VStack(alignment: .leading, spacing: layout.sectionGap) {
-                HStack(alignment: .top, spacing: layout.sectionGap) {
-                    preview
-                        .frame(width: layout.scaled(Self.stackedPreviewWidth))
-                    detailText
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                effectPanel
-                    .frame(height: layout.scaled(360))
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            HStack(alignment: .top, spacing: layout.sectionGap) {
-                VStack(alignment: .leading, spacing: layout.itemGap) {
-                    preview
-                    detailText
-                }
-                .frame(width: layout.scaled(300)...layout.scaled(360), alignment: .top)
-                effectPanel
-            }
+        VStack(alignment: .leading, spacing: layout.sectionGap) {
+            detailText
+            // A fixed height inside the page's scroll: the picker scrolls on its own.
+            effectPanel
+                .frame(height: layout.scaled(360))
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Name, effect and what it makes — under the preview side by side, beside it stacked.
+    /// Name, effect and what it makes.
     private var detailText: some View {
         VStack(alignment: .leading, spacing: layout.itemGap) {
             TextField("Name", text: nameBinding)
@@ -532,8 +592,8 @@ private struct CreatePanel: View {
                 }
             }
             Text(draft.isScene
-                 ? "A Scene draws itself. Add more layers in the editor."
-                 : "A Look restyles your canvas. Add more effects in the editor.")
+                 ? "A Scene draws itself. Add layers in the editor."
+                 : "A Look restyles your canvas. Add effects in the editor.")
                 .textRole(.caption)
                 .foregroundStyle(.secondary)
                 .wrapping()
@@ -580,20 +640,6 @@ private struct CreatePanel: View {
             .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).strokeBorder(Color.primary.opacity(0.07)))
             .clipShape(RoundedRectangle(cornerRadius: Radius.m, style: .continuous))
         }
-    }
-
-    private var preview: some View {
-        ThumbCard(preset: draft, cornerRadius: Radius.m)
-            .overlay {
-                if livePreview {
-                    MetalPreview(preset: draft, source: model.library.source,
-                                 location: model.locationTuple, store: model.store,
-                                 music: model.library.musicSettings)
-                        .clipShape(RoundedRectangle(cornerRadius: Radius.m, style: .continuous))
-                        .allowsHitTesting(false)
-                }
-            }
-            .shadow(color: .black.opacity(0.25), radius: 10, y: 5)
     }
 
     private var nameBinding: Binding<String> {
@@ -644,15 +690,13 @@ private struct PickTile: View {
                     .scaleEffect(hovering ? 1.02 : 1)
                 // One weight for every tile: selection shows as the ring and the checkmark,
                 // so the name never shifts or re-truncates when the pick moves.
-                HStack(alignment: .firstTextBaseline, spacing: layout.controlGap) {
+                VStack(alignment: .leading, spacing: 0) {
                     Text(preset.name)
                         .textRole(.itemTitle)
                         .truncating(preset.name)
-                    Spacer(minLength: 0)
                     Text(preset.isScene ? "Scene" : "Look")
                         .textRole(.caption)
                         .foregroundStyle(.secondary)
-                        .fixedSize()
                 }
             }
             .contentShape(Rectangle())
@@ -668,8 +712,9 @@ private struct PickTile: View {
 
 // MARK: - 3. Turn it on (the guided setup)
 
-/// The guided setup: the System Settings walkthrough with its "Open System Settings" button,
-/// beside the live checklist (SetupGuideChecklist.swift). Polls ~1 s while on screen.
+/// The guided setup: the System Settings walkthrough on top (its picture, the current step's
+/// caption), then the "Open System Settings" button and the live checklist
+/// (SetupGuideChecklist.swift). Polls ~1 s while on screen.
 private struct EnablePage: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.layout) private var layout
@@ -678,18 +723,18 @@ private struct EnablePage: View {
     let forceStill: Bool
 
     var body: some View {
-        PageScroll {
-            VStack(spacing: layout.sectionGap) {
-                PageHeader(title: "Turn It On",
-                           subtitle: "macOS lets only you choose the screensaver. Here's exactly where — it takes a minute, once.")
-                SetupGuideContent(guide: guide, sideBySide: !layout.prefersStacking,
-                                  commitPhrase: "when you continue",
-                                  frozenStep: frozenStep, forceStill: forceStill) {
+        OnboardingPage(title: "Turn It On",
+                       subtitle: "Choose DotStudio in System Settings. Just once.") {
+            SetupWalkthrough(frozenStep: frozenStep, forceStill: forceStill, narrow: layout.prefersStacking)
+        } content: {
+            VStack(alignment: .leading, spacing: layout.sectionGap) {
+                SetupOpenSettingsButton(guide: guide) {
                     // The floating guide keeps the steps beside System Settings; it opens
                     // first so System Settings comes up in front of everything else.
                     SetupGuidePanel.shared.show(model: model)
                     guide.openSystemSettings()
                 }
+                SetupChecklist(guide: guide, commitPhrase: "when you continue")
             }
         }
         .onAppear {
@@ -719,38 +764,35 @@ private struct MusicPage: View {
 
     var body: some View {
         let spec = model.library.musicSettings
-        PageScroll {
-            VStack(spacing: layout.sectionGap) {
-                PageHeader(title: "Show What's Playing",
-                           subtitle: "While a song plays in Spotify or Apple Music, your screensaver shows it. When the music stops, it goes away.")
-
-                VStack(alignment: .leading, spacing: layout.sectionGap) {
-                    displayCard(spec)
-                    VStack(alignment: .leading, spacing: layout.itemGap) {
-                        Tip(symbol: "link", tint: .green, iconColumn: iconColumn,
-                            title: "Connects on this Mac",
-                            detail: "No account or sign-in: DotStudio reads the Spotify and Music apps. The first time a song plays, macOS asks if DotStudio may control the app — allow it. Without it, songs still show but the controls don't work. Change it in System Settings › Privacy & Security › Automation.")
-                        if now.isMonitoring {
-                            players
-                                .padding(.leading, iconColumn + layout.itemGap)
-                                .transition(.opacity)
-                        }
-                        Tip(symbol: "playpause.fill", tint: .blue, iconColumn: iconColumn,
-                            title: "Play, pause and skip",
-                            detail: "From the menu bar, the song on the Screensaver card, or Settings › Music — which also has the source and the live wallpaper option.")
-                        Tip(symbol: "lock.fill", tint: .gray, iconColumn: iconColumn,
-                            title: "Stays on your Mac",
-                            detail: "Song details come from the players on this Mac. When a player doesn't hand over the cover, DotStudio looks it up in Spotify's or Apple's public catalog — only the song's ID, or its artist and album, is sent.")
-                        Tip(symbol: "menubar.rectangle", tint: .orange, iconColumn: iconColumn,
-                            title: "Keep DotStudio running",
-                            detail: "It only knows what's playing while it runs. Closing its window keeps it in the menu bar; turn on Open DotStudio at login in Settings › General.")
+        OnboardingPage(title: "Show What's Playing",
+                       subtitle: "Your screensaver shows the song that's playing.") {
+            HeroSymbol(symbol: "music.note.tv.fill", tint: .pink)
+        } content: {
+            VStack(alignment: .leading, spacing: layout.sectionGap) {
+                displayCard(spec)
+                VStack(alignment: .leading, spacing: layout.itemGap) {
+                    Tip(symbol: "link", tint: .green, iconColumn: iconColumn,
+                        title: "Connects on this Mac",
+                        detail: "No sign-in. When macOS asks, click OK so the controls work. Change it in Privacy & Security › Automation.")
+                    if now.isMonitoring {
+                        players
+                            .padding(.leading, iconColumn + layout.itemGap)
+                            .transition(.opacity)
                     }
-                    .padding(.horizontal, layout.cardPadding)
+                    Tip(symbol: "playpause.fill", tint: .blue, iconColumn: iconColumn,
+                        title: "Play, pause and skip",
+                        detail: "From the menu bar, the Screensaver card or Settings › Music.")
+                    Tip(symbol: "lock.fill", tint: .gray, iconColumn: iconColumn,
+                        title: "Stays on your Mac",
+                        detail: "A missing cover comes from Spotify's or Apple's catalog — only the song's ID, or its artist and album, is sent.")
+                    Tip(symbol: "menubar.rectangle", tint: .orange, iconColumn: iconColumn,
+                        title: "Keep DotStudio running",
+                        detail: "Closing the window keeps it in the menu bar. Turn on Open at login in Settings › General.")
                 }
-                .readableWidth(layout)
-                .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: spec.displayMode)
-                .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: now.isMonitoring)
+                .padding(.horizontal, layout.cardPadding)
             }
+            .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: spec.displayMode)
+            .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: now.isMonitoring)
         }
         // A silent re-check (never a prompt), as Settings › Music does.
         .onAppear { now.refreshAutomation() }
@@ -782,21 +824,22 @@ private struct MusicPage: View {
                 .wrapping()
         }
         .padding(layout.cardPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(shape.fill(Color.primary.opacity(0.04)))
         .overlay(shape.strokeBorder(Color.primary.opacity(0.08)))
     }
 
     private func modeLine(_ spec: MusicSpec) -> String {
-        let paused = "A paused song stays for \(MusicSettingsSection.lingerLabel(spec.linger))."
+        let paused = "A paused song stays \(MusicSettingsSection.lingerLabel(spec.linger))."
         switch spec.displayMode {
         case .off:
-            return "Nothing shows. Turn it on any time with the Music key on the Screensaver card."
+            return "Nothing shows. Turn it on later with the Music key on the Screensaver card."
         case .corner:
-            return "The song sits in a corner of your screensaver. \(paused)"
+            return "The song sits in a corner. \(paused)"
         case .fullScreen:
-            let over = !spec.layout.usesBackdrop ? "The cover itself fills the screen."
+            let over = !spec.layout.usesBackdrop ? "The cover fills the screen."
                 : spec.backdrop == .albumArt ? "The song fills the screen, over the album's living art."
-                : "The song fills the screen, over your screensaver, softly blurred."
+                : "The song fills the screen, over your blurred screensaver."
             return "\(over) \(paused)"
         }
     }
@@ -828,40 +871,32 @@ private struct DonePage: View {
     let onCreate: () -> Void
 
     var body: some View {
-        PageScroll {
-            VStack(spacing: layout.sectionGap) {
-                // The glyph's own side bearing and the title's ascent already add ~11 pt, so
-                // the tightest step keeps the icon visibly grouped with its header.
-                VStack(spacing: Space.xxs) {
-                    Image(systemName: status == .ready ? "checkmark.seal.fill" : "sparkles")
-                        .scaledFont { .scaled(points: 46, $0) }
-                        .symbolRenderingMode(.hierarchical)
-                        .foregroundStyle(status == .ready ? Color.green : Color.accentColor)
-                    PageHeader(title: status == .ready ? "You're All Set" : "Ready When You Are",
-                               subtitle: status == .ready
-                                   ? "DotStudio will play the next time your screensaver starts."
-                                   : "Turn it on any time from the Screensaver card in the gallery.")
+        OnboardingPage(title: status == .ready ? "You're All Set" : "Ready When You Are",
+                       subtitle: status == .ready
+                           ? "DotStudio plays the next time your screensaver starts."
+                           : "Turn it on later from the Screensaver card.",
+                       centered: true) {
+            HeroSymbol(symbol: status == .ready ? "checkmark.seal.fill" : "sparkles",
+                       tint: status == .ready ? .green : .accentColor)
+        } content: {
+            // Card and tips share one inner grid.
+            VStack(alignment: .leading, spacing: layout.sectionGap) {
+                createCard
+                VStack(alignment: .leading, spacing: layout.itemGap) {
+                    Tip(symbol: "arrow.triangle.2.circlepath", tint: .orange, iconColumn: iconColumn,
+                        title: "Mix it up",
+                        detail: "Add styles to the Screensaver card to rotate them, or set one for night.")
+                    Tip(symbol: "cursorarrow.click.2", tint: .purple, iconColumn: iconColumn,
+                        title: "Edit anything",
+                        detail: "Double-click a tile to change its effects, colors and motion.")
                 }
-
-                // Card and tips share one readable column and one inner grid.
-                VStack(alignment: .leading, spacing: layout.sectionGap) {
-                    createCard
-                    VStack(alignment: .leading, spacing: layout.itemGap) {
-                        Tip(symbol: "arrow.triangle.2.circlepath", tint: .orange, iconColumn: iconColumn,
-                            title: "Mix it up",
-                            detail: "Add styles to the Screensaver card to rotate them, or set one for night.")
-                        Tip(symbol: "cursorarrow.click.2", tint: .purple, iconColumn: iconColumn,
-                            title: "Edit anything",
-                            detail: "Double-click any tile to change its effects, colors and motion.")
-                    }
-                    .padding(.horizontal, layout.cardPadding)
-                }
-                .readableWidth(layout)
+                .padding(.horizontal, layout.cardPadding)
             }
         }
     }
 
-    /// The app is about making styles — end on that, not just on "done".
+    /// The app is about making styles — end on that, not just on "done". The button sits
+    /// under the text, on the text's edge.
     private var createCard: some View {
         let icon = Image(systemName: "paintbrush.pointed.fill")
             .scaledFont { .scaled(points: 20, $0, weight: .semibold) }
@@ -873,8 +908,8 @@ private struct DonePage: View {
                 .textRole(.headline)
                 .wrapping()
             Text(createdName == nil
-                 ? "Stack effects on a gradient, photo or video — or build a Scene from scratch."
-                 : "Open it in the editor to layer more effects and tune colors and motion.")
+                 ? "Stack effects on a gradient, photo or video — or build a Scene."
+                 : "Layer more effects and tune colors and motion in the editor.")
                 .textRole(.callout)
                 .foregroundStyle(.secondary)
                 .wrapping()
@@ -883,18 +918,12 @@ private struct DonePage: View {
         let button = Button(scaled: createdName == nil ? "Create a Style" : "Open in Editor", action: onCreate)
             .adaptiveControlSize(.large)
 
-        return Group {
-            if layout.prefersStacking {
-                // Large text: the button drops under the text instead of squeezing it.
-                VStack(alignment: .leading, spacing: layout.itemGap) {
-                    HStack(alignment: .top, spacing: layout.itemGap) { icon; text }
-                    button.padding(.leading, iconColumn + layout.itemGap)
-                }
-            } else {
-                HStack(spacing: layout.itemGap) { icon; text; button }
-            }
+        return VStack(alignment: .leading, spacing: layout.itemGap) {
+            HStack(alignment: .top, spacing: layout.itemGap) { icon; text }
+            button.padding(.leading, iconColumn + layout.itemGap)
         }
         .padding(layout.cardPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Color.accentColor.opacity(0.09)))
         .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).strokeBorder(Color.accentColor.opacity(0.25)))
     }
@@ -918,6 +947,7 @@ private struct Tip: View {
                 .frame(width: tile, height: tile)
                 .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous).fill(tint.gradient))
                 .frame(width: iconColumn)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: layout.labelGap) {
                 Text(title)
                     .textRole(.headline)
@@ -927,6 +957,8 @@ private struct Tip: View {
                     .foregroundStyle(.secondary)
                     .wrapping()
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .accessibilityElement(children: .combine)
     }
 }

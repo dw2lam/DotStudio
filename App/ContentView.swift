@@ -13,6 +13,9 @@ struct ContentView: View {
     @Environment(\.openSettings) private var openSettings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var hero
+    /// The window's height (in 8-pt steps): the welcome sheet stays shorter than it.
+    @State private var onboardingWindowHeight: CGFloat?
+    private static func step(_ h: CGFloat) -> CGFloat { (h / 8).rounded(.down) * 8 }
 
     /// Offscreen UI renders (Shots.swift) must never present the sheet or touch the flag.
     private static let isRenderingShots = ProcessInfo.processInfo.environment["DOTSTUDIO_UI_SHOTS"] != nil
@@ -58,9 +61,19 @@ struct ContentView: View {
             hasCompletedOnboarding = true   // finishing, skipping, or Esc all count
         }) {
             OnboardingView(initialStep: DemoHooks.onboardingCreate ? .pick : .welcome,
-                           pickMode: DemoHooks.onboardingCreate ? .create : .presets)
+                           pickMode: DemoHooks.onboardingCreate ? .create : .presets,
+                           windowHeight: onboardingWindowHeight)   // never taller than the window
                 .environmentObject(model)
                 .adaptiveLayout()   // the sheet is its own root: measure the sheet, not the window
+        }
+        .background {
+            // The window's height, for the welcome sheet's height cap. Kept in 8-pt steps, so a
+            // live resize doesn't re-render this view every pixel.
+            GeometryReader { g in
+                Color.clear
+                    .onAppear { onboardingWindowHeight = Self.step(g.size.height) }
+                    .onChange(of: Self.step(g.size.height)) { _, h in onboardingWindowHeight = h }
+            }
         }
         .onAppear {
             // At launch this runs inside the launch's first Apple event, before the app
