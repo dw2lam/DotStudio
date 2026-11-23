@@ -12,18 +12,6 @@
   "wrapper": "film.metal",
   "params": [
     {
-      "key": "ds.time",
-      "label": "Time of day",
-      "kind": "menu",
-      "default": 0,
-      "options": [
-        "Sunrise & sunset",
-        "Always day",
-        "Always night",
-        "Match Light/Dark mode"
-      ]
-    },
-    {
       "key": "ds.grain",
       "label": "Grain",
       "kind": "slider",
@@ -56,6 +44,18 @@
         "Thunderstorm",
         "Snow",
         "Sleet"
+      ]
+    },
+    {
+      "key": "ds.time",
+      "label": "Time of day",
+      "kind": "menu",
+      "default": 0,
+      "options": [
+        "Sunrise & sunset",
+        "Always day",
+        "Always night",
+        "Match Light/Dark mode"
       ]
     }
   ],

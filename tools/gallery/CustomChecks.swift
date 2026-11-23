@@ -441,12 +441,15 @@ func customSceneChecks() -> Bool {
                       String(format: "film: live frames play the %@ clip from the video decoder (mean rgb %.2f %.2f %.2f)", want, lc.0, lc.1, lc.2))
                 r2.setMediaPaused(true)
             }
-            // The live grain (and halation): engine params in the Inspector, zero-mean, stepped at the
-            // clip's frame rate, one cheap pass.
+            // Only real settings: a film of variant clips shows Time of day (which clip plays) and
+            // nothing it can't use; its look (grain) still comes from the package. Engine params are
+            // packed by position, so Time of day must stay after Grain / Halation / Weather.
             let specs = Preset.customScene(m).effects[0].paramSpecs.map(\.key)
-            check(specs.contains("ds.grain") && specs.contains("ds.halation")
-                  && Preset.customScene(m).effects[0].defaultParamValues["ds.grain"] == 0.35,
-                  "film: Grain (default 0.35) and Halation are engine params in the Inspector \(specs)")
+            let engineKeys = (CustomScenes.resolveEngine(m.engine, store: storeURL)?.engineParamSpecs ?? []).map(\.key)
+            check(specs.contains("ds.time") && !specs.contains("ds.grain") && !specs.contains("ds.halation")
+                  && Array(engineKeys.prefix(2)) == ["ds.grain", "ds.halation"] && engineKeys.last == "ds.time",
+                  "film: a clips film's Inspector shows Time of day only \(specs); engine slots keep Grain, Halation first \(engineKeys)")
+            // The live grain (and halation): zero-mean, stepped at the clip's frame rate, one cheap pass.
             func still(grain: Double, halation: Double = 0, time: Float) -> CGImage? {
                 var q = Preset.customScene(m)
                 q.effects[0].params["ds.grain"] = grain
