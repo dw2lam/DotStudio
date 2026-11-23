@@ -527,10 +527,10 @@ enum UIShots {
         }))
 
         // The guided setup on its own (SetupGuidePanelView — the floating panel's content, which
-        // can be dragged to any size): rendered like a window so it shows at 880x600 (stacked)
-        // and 1440x900 (side by side). The walkthrough held on each step, its Reduce Motion still
-        // cards, and the checklist in each state that matters.
-        for step in 0..<4 {
+        // can be dragged to any size): rendered like a window so it shows at 880x600 and
+        // 1440x900 (picture beside the steps). The setup card on each of its five steps, its
+        // Reduce Motion picture, and the checklist in each state that matters.
+        for step in 0..<SetupSteps.count {
             s.append(Screen(name: "setup-step\(step + 1)", frame: .window, view: { _ in
                 AnyView(SetupGuidePanelView(guide: SetupDemo.notChosen.guide, frozenStep: step))
             }))
@@ -542,18 +542,31 @@ enum UIShots {
                              (.idleNever, "idle-never"), (.sleepWarning, "sleep-warning"),
                              (.loginApproval, "login-approval"), (.unknownChoice, "unknown")] {
             s.append(Screen(name: "setup-\(tag)", frame: .window, view: { _ in
-                AnyView(SetupGuidePanelView(guide: state.guide, frozenStep: 3))
+                AnyView(SetupGuidePanelView(guide: state.guide))
             }))
         }
         // Music display on: the permission line before macOS asks, and after it was refused
         for (scenario, tag) in [(MusicDemo.Scenario.ask, "ask"), (.denied, "denied")] {
             s.append(Screen(name: "setup-music-\(tag)", frame: .window, prepare: { _ in MusicDemo.apply(scenario) },
-                            view: { _ in AnyView(SetupGuidePanelView(guide: SetupDemo.chosen.guide, frozenStep: 3)) }))
+                            view: { _ in AnyView(SetupGuidePanelView(guide: SetupDemo.chosen.guide)) }))
         }
-        // The floating panel at the size it opens at
+        // The floating panel at the size it opens at: not chosen (step 1), mid-way (step 3),
+        // not installed, all set, and on 1 of 2 displays
         s.append(Screen(name: "setup-panel", frame: .fixed(SetupGuidePanel.size), view: { _ in
             AnyView(SetupGuidePanelView(guide: SetupDemo.notChosen.guide, frozenStep: 0))
         }))
+        for (state, tag, step) in [(SetupDemo.notChosen, "step3", 2 as Int?), (.notInstalled, "notinstalled", nil),
+                                   (.chosen, "ready", nil), (.partial, "partial", nil)] {
+            s.append(Screen(name: "setup-panel-\(tag)", frame: .fixed(SetupGuidePanel.size), view: { _ in
+                AnyView(SetupGuidePanelView(guide: state.guide, frozenStep: step))
+            }))
+        }
+        // Settings › Screensaver's setup section: the same card, in each status
+        for (status, tag) in [(Installer.Status.notChosen, "notchosen"), (.notInstalled, "notinstalled"), (.ready, "ready")] {
+            s.append(Screen(name: "setup-settings-card-\(tag)", frame: .fit(width: 820, minHeight: 300),
+                            prepare: { $0.setup(status) },
+                            view: { _ in AnyView(SettingsSectionPreview { SetupSettingsSection() }) }))
+        }
         // The setup coach (SetupCoach.swift): the overlay's ring and callout over a stand-in for
         // System Settings, and the guide panel's coach card in each state (pinned; nothing reads
         // System Settings here)
