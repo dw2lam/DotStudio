@@ -22,23 +22,16 @@ struct ContentView: View {
     var body: some View {
         let _ = Perf.body("ContentView")
         let editing = editing
-        let settings = model.settingsPane != nil
         ZStack {
             // The gallery stays alive under the editor (scroll position, hover state) and
             // recedes slightly while the editor is up front.
             LibraryView()
-                .opacity(editing == nil && !settings ? 1 : 0)
-                .scaleEffect(editing == nil && !settings || reduceMotion ? 1 : 0.985)
-                .allowsHitTesting(editing == nil && !settings)
-                .accessibilityHidden(editing != nil || settings)
+                .opacity(editing == nil ? 1 : 0)
+                .scaleEffect(editing == nil || reduceMotion ? 1 : 0.985)
+                .allowsHitTesting(editing == nil)
+                .accessibilityHidden(editing != nil)
 
-            // Settings is a page of this window (not a window of its own), so it's there in
-            // full screen too.
-            if settings {
-                SettingsView()
-                    .transition(.opacity)
-                    .zIndex(2)
-            } else if let editing {
+            if let editing {
                 EditorView(id: editing.id)
                     .transition(.opacity)
                     .zIndex(1)
@@ -50,9 +43,22 @@ struct ContentView: View {
         .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
         .environment(\.heroNamespace, reduceMotion ? nil : hero)
         .animation(Motion.pick(Motion.hero, reduceMotion: reduceMotion), value: model.editingID)
-        .animation(Motion.pick(Motion.hero, reduceMotion: reduceMotion), value: settings)
-        .navigationTitle(settings ? "Settings" : editing?.name ?? "DotStudio")
-        .navigationSubtitle(settings ? model.settingsPane?.title ?? "" : editing.map { $0.isScene ? "Scene" : "Look" } ?? "")
+        .navigationTitle(editing?.name ?? "DotStudio")
+        .navigationSubtitle(editing.map { $0.isScene ? "Scene" : "Look" } ?? "")
+        // Settings: a large sheet on this window (not a window of its own), so it's there in
+        // full screen too. Sized from the window, within limits.
+        .background {
+            GeometryReader { geo in
+                Color.clear.sheet(isPresented: Binding(get: { model.settingsPane != nil },
+                                                       set: { if !$0 { model.settingsPane = nil } })) {
+                    SettingsView()
+                        .environmentObject(model)
+                        .frame(width: min(max(geo.size.width * 0.84, 820), 1180),
+                               height: min(max(geo.size.height * 0.86, 560), 880))
+                        .adaptiveLayout()
+                }
+            }
+        }
         .frame(minWidth: 880, minHeight: 600)
         .onReceive(NotificationCenter.default.publisher(for: CrashReporter.safeModeChanged)) { _ in
             model.objectWillChange.send()   // live previews come back (safe mode ended)

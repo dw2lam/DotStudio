@@ -162,7 +162,6 @@ struct WallpaperSettingsSection: View {
                     set: { wallpaper.setLockScreen($0) }))
                     .labelsHidden()
                     .toggleStyle(.switch)
-                    .formSwitchSize()
             }
         } header: {
             SettingsHeader("Live Wallpaper")
@@ -243,7 +242,6 @@ struct WallpaperSettingsSection: View {
                 set: { on in wallpaper.update { $0[keyPath: key] = on ? .pause : .keepPlaying } }))
                 .labelsHidden()
                 .toggleStyle(.switch)
-                .formSwitchSize()
         }
     }
 

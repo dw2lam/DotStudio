@@ -43,14 +43,20 @@ struct WallpaperDemo: View {
     var at: Double? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    static let size = CGSize(width: 176, height: 110)
+    /// Drawn at `base` (all the stories' coordinates) and scaled up to `size`.
+    static let base = CGSize(width: 176, height: 110)
+    static let size = CGSize(width: 232, height: 145)
     /// One run of each story (window in, click, close…).
     private static let loop: Double = 6
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion || at != nil)) { ctx in
             let t = at ?? (reduceMotion ? 2.5 : ctx.date.timeIntervalSinceReferenceDate)
-            Canvas(rendersAsynchronously: false) { g, size in draw(&g, CGRect(origin: .zero, size: size), t) }
+            Canvas(rendersAsynchronously: false) { g, size in
+                var g = g
+                g.scaleBy(x: size.width / Self.base.width, y: size.height / Self.base.height)
+                draw(&g, CGRect(origin: .zero, size: Self.base), t)
+            }
         }
         .frame(width: Self.size.width, height: Self.size.height)
         .clipShape(RoundedRectangle(cornerRadius: Radius.s, style: .continuous))
@@ -174,7 +180,7 @@ struct WallpaperDemo: View {
     private static let foam = 0.022
     /// The rolling wave lines' depths (0 at the horizon … 1 at the shore), moving in.
     private static func waveDepths(_ t: Double) -> [Double] {
-        (0..<4).map { k in (Double(k) / 4 + t * 0.07).truncatingRemainder(dividingBy: 1) }
+        (0..<2).map { k in (Double(k) / 2 + 0.25 + t * 0.06).truncatingRemainder(dividingBy: 1) }
     }
 
     private func color(_ c: SIMD3<Double>, _ a: Double = 1) -> Color { Color(red: c.x, green: c.y, blue: c.z).opacity(a) }
@@ -210,19 +216,16 @@ struct WallpaperDemo: View {
         sea.closeSubpath()
         g.fill(sea, with: .linearGradient(Gradient(colors: [color(p.seaFar), color(p.seaNear)]),
                                           startPoint: CGPoint(x: 0, y: hy), endPoint: CGPoint(x: 0, y: H * 0.72)))
-        // the sun's glitter on the water
-        g.fill(Path(CGRect(x: sun.x - sr * 0.6, y: hy, width: sr * 1.2, height: H * 0.16)),
-               with: .linearGradient(Gradient(colors: [color(p.sun, 0.35), color(p.sun, 0)]),
-                                     startPoint: CGPoint(x: 0, y: hy), endPoint: CGPoint(x: 0, y: hy + H * 0.16)))
         // rolling wave lines, brighter as they near the shore
         for d in Self.waveDepths(t) {
             var line = Path()
             for i in 0...16 {
                 let u = Double(i) / 16
-                let y = hy + (H * Self.shore(u, t) - hy) * d * d + sin(u * 14 + t * 2 + d * 6) * 0.6
+                let y = hy + (H * Self.shore(u, t) - hy) * d * d + sin(u * 6 + t * 1.2 + d * 6) * 0.5
                 if i == 0 { line.move(to: CGPoint(x: W * u, y: y)) } else { line.addLine(to: CGPoint(x: W * u, y: y)) }
             }
-            g.stroke(line, with: .color(.white.opacity(0.15 + 0.45 * d)), lineWidth: 0.5 + d)
+            let fade = min(d / 0.25, 1) * min((1 - d) / 0.2, 1)   // fade in at the horizon, out at the shore
+            g.stroke(line, with: .color(.white.opacity(0.35 * max(fade, 0))), style: StrokeStyle(lineWidth: 0.8, lineCap: .round))
         }
         // foam where the water meets the sand
         var foam = Path()
@@ -231,7 +234,7 @@ struct WallpaperDemo: View {
             let pt = CGPoint(x: W * u, y: H * Self.shore(u, t))
             if i == 0 { foam.move(to: pt) } else { foam.addLine(to: pt) }
         }
-        g.stroke(foam, with: .color(.white.opacity(0.9)), lineWidth: H * Self.foam)
+        g.stroke(foam, with: .color(.white.opacity(0.85)), style: StrokeStyle(lineWidth: H * Self.foam, lineCap: .round, lineJoin: .round))
     }
 
     private func sunCenter(_ r: CGRect, _ sunset: Double) -> CGPoint {
@@ -243,7 +246,6 @@ struct WallpaperDemo: View {
         let cols = Int((r.width / cell).rounded(.up)), rows = Int((r.height / cell).rounded(.up))
         var px = [UInt8](repeating: 255, count: cols * rows * 4)
         let sun = sunCenter(CGRect(x: 0, y: 0, width: 1, height: 1), sunset)
-        let depths = Self.waveDepths(t)
         let aspect = Double(r.width / r.height)
         for j in 0..<rows {
             let v = (Double(j) + 0.5) / Double(rows)
@@ -259,8 +261,6 @@ struct WallpaperDemo: View {
                 } else if v < shore - Self.foam / 2 {
                     let k = min((v - Self.horizon) / (0.72 - Self.horizon), 1)
                     c = p.seaFar + (p.seaNear - p.seaFar) * k
-                    let depth = ((v - Self.horizon) / (shore - Self.horizon)).squareRoot()
-                    if depths.contains(where: { abs($0 - depth) < 0.03 }) { c += (SIMD3(1, 1, 1) - c) * (0.2 + 0.4 * depth) }
                 } else if v < shore + Self.foam / 2 {
                     c = [0.97, 0.98, 1]
                 } else {
@@ -298,7 +298,7 @@ struct WallpaperDemo: View {
     private func desktopChrome(_ g: inout GraphicsContext, _ r: CGRect, frontApp: Int = 0,
                                showsStatusIcon: Bool = true, dotStudioInDock: Bool = false) {
         let mh = Self.menuBarHeight
-        g.fill(Path(CGRect(x: 0, y: 0, width: r.width, height: mh)), with: .color(.white.opacity(0.32)))
+        g.fill(Path(CGRect(x: 0, y: 0, width: r.width, height: mh)), with: .color(.white.opacity(0.45)))
         symbol(&g, "apple.logo", in: CGRect(x: 5, y: 1.5, width: 5, height: mh - 3), color: .black.opacity(0.75))
         let widths: [CGFloat] = [frontApp == 0 ? 14 : 10, 7, 6, 8]
         var x: CGFloat = 14
@@ -316,12 +316,10 @@ struct WallpaperDemo: View {
         let s: CGFloat = 9, gap: CGFloat = 2.5
         let dw = CGFloat(icons.count) * (s + gap) + gap + 2
         let dock = CGRect(x: (r.width - dw) / 2, y: r.height - s - 6, width: dw, height: s + 4)
-        g.fill(Path(roundedRect: dock, cornerRadius: 4), with: .color(.white.opacity(0.35)))
+        g.fill(Path(roundedRect: dock, cornerRadius: 4.5), with: .color(.white.opacity(0.5)))
         for (i, c) in icons.enumerated() {
             let ir = CGRect(x: dock.minX + gap + 1 + CGFloat(i) * (s + gap), y: dock.minY + 2, width: s, height: s)
-            g.fill(Path(roundedRect: ir, cornerRadius: 2.2), with: .linearGradient(
-                Gradient(colors: [c.opacity(0.95), c.opacity(0.7)]), startPoint: CGPoint(x: ir.midX, y: ir.minY),
-                endPoint: CGPoint(x: ir.midX, y: ir.maxY)))
+            g.fill(Path(roundedRect: ir, cornerRadius: 2.4), with: .color(c.opacity(0.85)))
             if c == .teal { symbol(&g, "circle.hexagongrid.fill", in: ir.insetBy(dx: 2, dy: 2), color: .white) }
         }
     }
@@ -498,8 +496,8 @@ struct DemoSettingRow<Control: View>: View {
             VStack(alignment: .leading, spacing: Space.xs) {
                 HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(title).textRole(.bodyEmphasis)
-                        Text(detail).textRole(.callout).foregroundStyle(.secondary)
+                        Text(title).textRole(.rowTitle)
+                        Text(detail).textRole(.body).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     if inlineControl {

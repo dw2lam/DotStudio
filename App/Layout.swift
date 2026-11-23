@@ -386,11 +386,15 @@ struct TextRole: Equatable {
     static let eyebrow = TextRole(style: .caption, weight: .semibold, tracking: 0.8, uppercase: true)
     /// Titles of panels, rows and empty states.
     static let headline = TextRole(style: .headline)
+    /// A Settings row's name beside its demo (15 pt semibold).
+    static let rowTitle = TextRole(style: .title3, weight: .semibold)
     /// A tile's or list item's name (13 pt semibold on the Mac).
     static let itemTitle = TextRole(style: .body, weight: .semibold)
 
     // Running text
     static let body = TextRole(style: .body)
+    /// Settings rows: a step up from body (15 pt).
+    static let bodyLarge = TextRole(style: .title3)
     static let bodyEmphasis = TextRole(style: .body, weight: .medium)
     /// Secondary lines, subtitles, descriptions (12 pt).
     static let callout = TextRole(style: .callout)

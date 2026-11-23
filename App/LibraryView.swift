@@ -36,7 +36,7 @@ struct LibraryView: View {
                         filter: $filter, query: $query, searchFocused: $searchFocused)
         }
         .toolbar {
-            if model.editingID == nil && model.settingsPane == nil {
+            if model.editingID == nil {
                 ToolbarItemGroup(placement: .primaryAction) {
                     UpdateReadyButton()
                     newMenu

@@ -62,38 +62,49 @@ struct SettingsView: View {
 
     private var pane: SettingsPane { model.settingsPane ?? .general }
 
-    /// A page of the main window: the panes in a sidebar, the chosen one beside it, and Back
-    /// (toolbar, or Esc) to the gallery.
+    /// A sheet on the main window: the panes in a sidebar, the chosen one beside it under
+    /// its title; Done (or Esc) closes it.
     var body: some View {
         HStack(spacing: 0) {
             // The panes, System Settings style: a tinted icon tile and the name; the chosen one
             // on a soft accent highlight (drawn here, so it reads the same focused or not).
-            ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(SettingsPane.allCases) { p in
-                        SettingsSidebarRow(pane: p, selected: p == pane) { model.settingsPane = p }
+            VStack(alignment: .leading, spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(SettingsPane.allCases) { p in
+                            SettingsSidebarRow(pane: p, selected: p == pane) { model.settingsPane = p }
+                        }
                     }
+                    .padding(.horizontal, Space.xs)
+                    .padding(.vertical, Space.s)
                 }
-                .padding(.horizontal, Space.xs)
-                .padding(.vertical, Space.s)
+                Divider()
+                Button { model.settingsPane = nil } label: {
+                    Text("Done").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .keyboardShortcut(.cancelAction)
+                .padding(Space.s)
             }
             .frame(width: sidebarWidth)
             .background(.background.secondary)
             Divider()
-            detail(pane)
-        }
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button { model.settingsPane = nil } label: {
-                    Label("Back to Gallery", systemImage: "chevron.backward")
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: Space.s) {
+                    Image(systemName: pane.symbol)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 30, height: 30)
+                        .background(pane.tint.gradient, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    Text(pane.title).textRole(.sectionTitle)
                 }
-                .help("Back to the gallery (Esc)")
+                .padding(.horizontal, Space.l)
+                .padding(.top, Space.l)
+                detail(pane)
+                    .environment(\.settingsPaneTitle, pane.title)
             }
-        }
-        .background {
-            Button("Back") { model.settingsPane = nil }
-                .keyboardShortcut(.cancelAction)
-                .opacity(0).allowsHitTesting(false)
+            .background(Color(nsColor: .windowBackgroundColor))
         }
         .onAppear {
             model.refreshSetupStatus()
@@ -120,8 +131,9 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .textRole(.body)          // row labels follow the text size (macOS never scales them itself)
-        .formControlSize()        // stock sizes at standard text; a step up per text bump after
+        .textRole(.bodyLarge)     // a roomy sheet: everything a step up from the stock 13 pt
+        .controlSize(.large)      // bigger pickers, buttons and switches
+        .formControlSize()        // and a step further per text-size bump
         .id(p)                    // each pane scrolls from its top
     }
 
@@ -374,7 +386,6 @@ struct GeneralSettingsSection: View {
                 Toggle("Keep running in the menu bar", isOn: $presence.menuBarMode)
                     .labelsHidden()
                     .toggleStyle(.switch)
-                    .formSwitchSize()
             }
             DemoSettingRow(title: "Menu bar icon", detail: "\(menuBarIcon.name) — fills in while a live wallpaper plays.",
                            demo: .menuBarIcon(menuBarIcon.symbol(live: false))) {
@@ -463,7 +474,7 @@ enum SettingsMetrics {
     /// controls at stock sizes; from it, role-sized stand-ins (segmented, the Style pull-down).
     static let scaledControlsFrom: DynamicTypeSize = .xxLarge
     /// The size a grouped Form gives its switches when nothing sets one.
-    static let switchSize: ControlSize = .mini
+    static let switchSize: ControlSize = .regular
     /// The Style pop-up's widest; a long style name truncates (full name in the tooltip).
     static let popUpMaxWidth = Space.grid(60)     // 240
     /// Minimum width of a slider's value readout ("1.5 s").
@@ -476,9 +487,20 @@ enum SettingsMetrics {
 struct SettingsHeader: View {
     let title: String
     init(_ title: String) { self.title = title }
+    @Environment(\.settingsPaneTitle) private var paneTitle
 
     var body: some View {
-        Text(title).textRole(.headline)
+        // Under a pane's own big title, a section named the same says it twice: leave it out.
+        if title != paneTitle { Text(title).textRole(.headline) }
+    }
+}
+
+private struct SettingsPaneTitleKey: EnvironmentKey { static let defaultValue: String? = nil }
+extension EnvironmentValues {
+    /// The Settings pane showing (its title is the page's heading).
+    var settingsPaneTitle: String? {
+        get { self[SettingsPaneTitleKey.self] }
+        set { self[SettingsPaneTitleKey.self] = newValue }
     }
 }
 
