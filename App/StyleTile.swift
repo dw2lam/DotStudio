@@ -197,6 +197,24 @@ struct StyleTile: View, Equatable {
             HStack(alignment: .top, spacing: 0) {
                 TileBadgeCluster(badges: badges, rotates: lineup.rotates)
                 Spacer(minLength: 0)
+                // Customize, right on the tile (issue #2): on the selected tile, and on hover —
+                // the editor (colours, effects, speed) is otherwise a double-click or a menu away.
+                if selected || hovering {
+                    Button(action: open) {
+                        Label("Customize", systemImage: "slider.horizontal.3")
+                            .labelStyle(.titleAndIcon)
+                            .textRole(.captionEmphasis)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, Space.xs)
+                            .padding(.vertical, Space.xxs)
+                            .background(Capsule().fill(.black.opacity(0.55)))
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Customize “\(preset.name)” — colours, effects and more")
+                    .accessibilityLabel("Customize \(preset.name)")
+                    .transition(.opacity)
+                }
             }
             Spacer(minLength: 0)
             if hovering {
