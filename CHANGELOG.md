@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.6.7 — Field and Butterflies
+
+### New
+- **Field** — rolling hills and long grass moving in the wind; by night a full moon, stars and
+  the odd shooting star.
+- **Butterflies** — butterflies over a daisy meadow among swaying trees; by night they glow
+  under the moon, with fireflies.
+- Both are photoreal, rendered in Blender at 60 fps, and switch between day and night with the
+  real sun.
+
+### Improved
+- Live tags shrink to icons when a style's name needs the room, and film scenes (Commute too)
+  show what makes them live.
+
 ## 1.6.6 — Make it yours
 
 ### New
