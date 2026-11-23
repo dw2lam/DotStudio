@@ -747,7 +747,8 @@ final class WallpaperController: ObservableObject {
     /// Frames per second asked of a display's link (WallpaperBudget.fps: 30, Smooth's display
     /// rate, 30 / 20 on battery; less only if its style itself asks for fewer).
     private func targetFPS(_ preset: Preset?) -> Double {
-        WallpaperBudget.fps(settings, presetFPS: preset?.fps ?? 0, onBattery: power.state.onBattery)
+        WallpaperBudget.fps(settings, presetFPS: preset?.fps ?? 0, onBattery: power.state.onBattery,
+                            slowed: WallpaperBudget.slowed(settings, power.state))
     }
 
     /// How long a desktop must stay covered before the wallpaper pauses: Space switches and
@@ -770,12 +771,13 @@ final class WallpaperController: ObservableObject {
         let visible = Set(hosts.values.filter(isVisible).map(\.displayID))
         let still = stillReason
         let onBattery = power.state.onBattery
+        let slowed = WallpaperBudget.slowed(settings, power.state)
 
         var status: String?
         if let hard { status = hard }
         else if visible.isEmpty { status = "Paused — desktop covered" }
         else if let still { status = still }
-        else { status = WallpaperBudget.batteryStatus(settings, onBattery: onBattery) }
+        else { status = WallpaperBudget.batteryStatus(settings, onBattery: onBattery, slowed: slowed) }
         if status != statusText { statusText = status }
 
         // Efficient on battery draws fewer pixels (moving styles only): resize those displays'
@@ -788,9 +790,9 @@ final class WallpaperController: ObservableObject {
             var profile = profiles[id] ?? .still
             // A film (video clips) holds a still on battery Efficient: its decoder runs at the
             // clip's own rate however few frames are drawn (Low Power / Still hold one anyway).
-            if onBattery, settings.batteryMode == .efficient,
+            if slowed || (onBattery && settings.batteryMode == .efficient),
                (applied?.styles[id] ?? applied?.fallback)?.isFilmScene == true { profile = .still }
-            let scale = WallpaperBudget.renderScale(settings, onBattery: onBattery, profile: profile)
+            let scale = WallpaperBudget.renderScale(settings, onBattery: onBattery, profile: profile, slowed: slowed)
             if scale != (renderScales[id] ?? 1) {
                 renderScales[id] = scale
                 configure(h)

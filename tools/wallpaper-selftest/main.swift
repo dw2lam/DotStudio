@@ -87,6 +87,17 @@ do {
     fs.otherAppPluggedIn = .pause
     fo.onBattery = false; fo.otherAppFront = true
     check(WallpaperBudget.stillReason(fs, fo) == "Paused — another app in front", "plugged in + Pause: holds")
+    var sd = WallpaperSettings()
+    sd.otherAppPluggedIn = .efficient
+    var so = WallpaperPowerMonitor.State()
+    so.otherAppFront = true
+    check(WallpaperBudget.slowed(sd, so) && WallpaperBudget.stillReason(sd, so) == nil, "Slow Down: slowed, not held")
+    check(WallpaperBudget.fps(sd, presetFPS: 30, onBattery: false, slowed: true) == 20
+          && WallpaperBudget.renderScale(sd, onBattery: false, profile: .motion, slowed: true) == 0.6,
+          "Slow Down: Efficient's 20 fps and 0.6x resolution, plugged in")
+    check(WallpaperBudget.batteryStatus(sd, onBattery: false, slowed: true) == "Slowed — another app in front", "Slow Down: status")
+    so.otherAppFront = false
+    check(!WallpaperBudget.slowed(sd, so), "Slow Down: desktop focused again — full speed")
     let round = try! JSONDecoder().decode(WallpaperSettings.self, from: JSONEncoder().encode(fs))
     check(round.otherAppPluggedIn == .pause && round.otherAppOnBattery == .pause, "focus modes survive wallpaper.json")
     let old = try! JSONDecoder().decode(WallpaperSettings.self, from: Data(#"{"enabled":true,"batteryMode":"full"}"#.utf8))

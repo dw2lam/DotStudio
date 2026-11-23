@@ -76,9 +76,17 @@ struct WallpaperSettings: Codable, Equatable {
     /// While another app is in front (not full screen — a covered desktop always pauses):
     /// keep playing, or hold the frame (Settings › Live Wallpaper › Power Saving).
     enum OtherAppMode: String, Codable, CaseIterable, Identifiable {
-        case keepPlaying, pause
+        /// Plays as usual. `efficient`: slows to Efficient's 20 fps at lower resolution
+        /// (like On Battery › Efficient). `pause`: holds the frame.
+        case keepPlaying, efficient, pause
         var id: String { rawValue }
-        var title: String { self == .pause ? "Pause" : "Keep Playing" }
+        var title: String {
+            switch self {
+            case .keepPlaying: return "Keep Playing"
+            case .efficient: return "Slow Down"
+            case .pause: return "Pause"
+            }
+        }
     }
 
     var enabled = false
@@ -532,7 +540,10 @@ enum WallpaperBudget {
     /// Frames per second asked of the display links: Balanced 30, Smooth each display's own
     /// refresh (120 on ProMotion, 60 on most externals — divisorRate clamps it); on battery 30
     /// (Full) or 20 (Efficient). Less only if the style itself asks for fewer.
-    static func fps(_ settings: WallpaperSettings, presetFPS: Int, onBattery: Bool) -> Double {
+    /// `slowed`: another app is in front and set to Slow Down (WallpaperBudget.slowed) —
+    /// Efficient's rate and resolution, plugged in or not.
+    static func fps(_ settings: WallpaperSettings, presetFPS: Int, onBattery: Bool, slowed: Bool = false) -> Double {
+        if slowed { return presetFPS > 0 ? min(efficientFPS, Double(presetFPS)) : efficientFPS }
         if !onBattery, settings.frameRate == .smooth { return 120 }
         var fps = onBattery && settings.batteryMode == .efficient ? efficientFPS
                 : onBattery ? batteryMaxFPS : 30
@@ -543,9 +554,15 @@ enum WallpaperBudget {
     /// Multiplier on Quality's pixels per point. Below 1 only for Efficient on battery, and only
     /// while the style moves continuously: a clock that draws once a second keeps crisp
     /// figures (its few frames cost next to nothing either way).
-    static func renderScale(_ settings: WallpaperSettings, onBattery: Bool, profile: WallpaperPacing.Profile) -> CGFloat {
-        guard onBattery, settings.batteryMode == .efficient, profile == .motion else { return 1 }
+    static func renderScale(_ settings: WallpaperSettings, onBattery: Bool, profile: WallpaperPacing.Profile,
+                            slowed: Bool = false) -> CGFloat {
+        guard profile == .motion, slowed || (onBattery && settings.batteryMode == .efficient) else { return 1 }
         return efficientScale
+    }
+
+    /// Another app is in front and this power source's Another App Focused is Slow Down.
+    static func slowed(_ settings: WallpaperSettings, _ s: WallpaperPowerMonitor.State) -> Bool {
+        s.otherAppFront && (s.onBattery ? settings.otherAppOnBattery : settings.otherAppPluggedIn) == .efficient
     }
 
     /// Why motion holds on its last frame (a clock still turns over once a minute).
@@ -560,7 +577,8 @@ enum WallpaperBudget {
     }
 
     /// A note for the menu and the Wallpaper card while it plays reduced on battery.
-    static func batteryStatus(_ settings: WallpaperSettings, onBattery: Bool) -> String? {
+    static func batteryStatus(_ settings: WallpaperSettings, onBattery: Bool, slowed: Bool = false) -> String? {
+        if slowed { return "Slowed — another app in front" }
         guard onBattery else { return nil }
         switch settings.batteryMode {
         case .efficient: return "Efficient — on battery"

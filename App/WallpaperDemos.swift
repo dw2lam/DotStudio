@@ -25,7 +25,11 @@ struct WallpaperDemo: View {
         /// Full plays, Efficient steps and coarsens, Pause holds.
         case battery(WallpaperSettings.BatteryMode)
         /// A window comes forward; with `pauses` the wallpaper holds until the desktop is clicked.
-        case otherApp(pauses: Bool)
+        case otherApp(WallpaperSettings.OtherAppMode)
+        /// A full-screen app comes up over the desktop: the wallpaper always pauses.
+        case covered
+        /// Low Power Mode on (or a hot Mac): the wallpaper holds a still frame.
+        case lowPower
         /// The lock screen: the wallpaper's still, or your own picture.
         case lockScreen(on: Bool)
         /// The screensaver changing style (day → sunset) with this crossfade (0 = a cut).
@@ -93,14 +97,41 @@ struct WallpaperDemo: View {
             desktopChrome(&g, r)
             badge(&g, r, symbol: "battery.50percent")
             if m == .still { pauseBadge(&g, r) }
-        case .otherApp(let pauses):
+        case .otherApp(let mode):
             let w = WindowStory(phase: phase)
-            let held = pauses && w.focused
-            beach(&g, r, t: held ? now - phase + 2.4 : now)
+            let held = mode == .pause && w.focused
+            let slowed = mode == .efficient && w.focused
+            if slowed { beach(&g, r, t: stepped(now, 5), cell: 2.5) }
+            else { beach(&g, r, t: held ? now - phase + 2.4 : now) }
             desktopChrome(&g, r, frontApp: w.focused ? 1 : 0)
             appWindow(&g, r, slide: w.slide, focused: w.focused)
             pointer(&g, r, at: w.cursor, clicking: w.clicking)
             if held { pauseBadge(&g, r) }
+            if slowed { badge(&g, r, symbol: "tortoise.fill") }
+        case .covered:
+            // a full-screen app grows over the desktop, then leaves
+            let k = phase < 1.5 ? 0 : phase < 2.1 ? ease((phase - 1.5) / 0.6) : phase < 4.6 ? 1 : 1 - ease((phase - 4.6) / 0.6)
+            beach(&g, r, t: k > 0.98 ? now - phase + 2.1 : now)
+            desktopChrome(&g, r)
+            let full = CGRect(x: r.minX, y: r.minY, width: r.width, height: r.height)
+            let small = CGRect(x: r.width * 0.3, y: r.height * 0.25, width: r.width * 0.4, height: r.height * 0.45)
+            if k > 0 {
+                let f = CGRect(x: small.minX + (full.minX - small.minX) * k, y: small.minY + (full.minY - small.minY) * k,
+                               width: small.width + (full.width - small.width) * k,
+                               height: small.height + (full.height - small.height) * k)
+                g.fill(Path(roundedRect: f, cornerRadius: 4 * (1 - k)), with: .color(Color(white: 0.96).opacity(min(1, k * 2))))
+                for i in 0..<4 {
+                    g.fill(Path(roundedRect: CGRect(x: f.minX + 10, y: f.minY + 14 + CGFloat(i) * 9,
+                                                    width: f.width * (i == 3 ? 0.35 : 0.6), height: 3.5), cornerRadius: 1.75),
+                           with: .color(.black.opacity(0.12 * k)))
+                }
+            }
+            if k > 0.98 { pauseBadge(&g, r) }
+        case .lowPower:
+            beach(&g, r, t: 3)
+            desktopChrome(&g, r)
+            badge(&g, r, symbol: "leaf.fill")
+            pauseBadge(&g, r)
         case .lockScreen(let on):
             if on { beach(&g, r, t: 3) } else { ownPicture(&g, r) }
             lockScreenOverlay(&g, r)
@@ -508,12 +539,132 @@ struct VisualSettingRow<Control: View>: View {
     }
 }
 
+/// A Power Saving row in the manner of Wallpaper Engine's performance settings: the situation
+/// ("Another app is focused"), a line about it, and a card per option, each acting out what it
+/// does. The active option is in full colour with an accent ring that slides to whichever card
+/// is picked; the others are greyed out (and hold still) until hovered or picked.
+struct OptionCards<Value: Hashable>: View {
+    struct Option {
+        let label: String
+        let value: Value
+        let scene: WallpaperDemo.Scene
+    }
+
+    let title: String
+    let detail: String
+    let options: [Option]
+    @Binding var selection: Value
+    /// A row with a single card states what always happens; it isn't a choice.
+    var fixed = false
+    @Namespace private var ring
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).textRole(.bodyEmphasis)
+                    Text(detail).textRole(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: Space.s)
+                if !fixed, let current = options.first(where: { $0.value == selection }) {
+                    Text(current.label).textRole(.calloutEmphasis).foregroundStyle(Color.accentColor)
+                }
+            }
+            OptionCardRow(spacing: Space.s) {
+                ForEach(options.indices, id: \.self) { i in
+                    let o = options[i]
+                    OptionCard(label: o.label, scene: o.scene, active: fixed || o.value == selection,
+                               fixed: fixed, ring: ring) {
+                        withAnimation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.85)) {
+                            selection = o.value
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.vertical, Space.xxs)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(title)
+        .accessibilityAdjustableAction { dir in
+            guard !fixed, let i = options.firstIndex(where: { $0.value == selection }) else { return }
+            let j = dir == .increment ? min(i + 1, options.count - 1) : max(i - 1, 0)
+            selection = options[j].value
+        }
+    }
+}
+
+private struct OptionCard: View {
+    let label: String
+    let scene: WallpaperDemo.Scene
+    let active: Bool
+    let fixed: Bool
+    let ring: Namespace.ID
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: Space.xs) {
+                WallpaperDemo(scene: scene, animates: active || hovering)
+                    .saturation(active || hovering ? 1 : 0)
+                    .opacity(active ? 1 : hovering ? 0.9 : 0.55)
+                    .padding(4)
+                    .background {
+                        if active && !fixed {
+                            RoundedRectangle(cornerRadius: Radius.s + 4, style: .continuous)
+                                .strokeBorder(Color.accentColor, lineWidth: 3)
+                                .matchedGeometryEffect(id: "ring", in: ring)
+                        }
+                    }
+                Text(label)
+                    .textRole(active ? .calloutEmphasis : .callout)
+                    .foregroundStyle(active ? .primary : .secondary)
+                    .lineLimit(1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(fixed)
+        .onHover { hovering = $0 && !active }
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(active ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+/// The option cards on a shared three-column grid, left-aligned, so every row's cards line up.
+struct OptionCardRow: Layout {
+    var spacing: CGFloat
+    var columns = 3
+
+    private func cardWidth(_ width: CGFloat?) -> CGFloat {
+        guard let width, width.isFinite else { return 200 }
+        return max(90, (width - spacing * CGFloat(columns - 1)) / CGFloat(columns))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let w = cardWidth(proposal.width)
+        let h = subviews.map { $0.sizeThatFits(ProposedViewSize(width: w, height: nil)).height }.max() ?? 0
+        return CGSize(width: proposal.width ?? CGFloat(columns) * w, height: h)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let w = cardWidth(bounds.width)
+        for (i, v) in subviews.enumerated() {
+            v.place(at: CGPoint(x: bounds.minX + CGFloat(i) * (w + spacing), y: bounds.minY),
+                    proposal: ProposedViewSize(width: w, height: nil))
+        }
+    }
+}
+
 /// Every demo across one loop, for checking the animation offscreen (UIShots
 /// "settings-wallpaper-demos"): rows = scenes, columns = moments.
 struct WallpaperDemoSheet: View {
     private let scenes: [(String, WallpaperDemo.Scene)] = [
         ("Quality Full", .quality(.full)), ("Quality Efficient", .quality(.efficient)),
-        ("Battery Pause", .battery(.still)), ("Other app: pause", .otherApp(pauses: true)),
+        ("Battery Pause", .battery(.still)), ("Other app: pause", .otherApp(.pause)),
+        ("Other app: slow down", .otherApp(.efficient)), ("Full screen", .covered), ("Low Power", .lowPower),
         ("Lock screen", .lockScreen(on: true)), ("Crossfade 1.5 s", .crossfade(seconds: 1.5)),
         ("Music corner", .music(.corner)), ("Music full", .music(.fullScreen)),
         ("Menu bar: keeps running", .menuBarMode(keepsRunning: true)), ("Menu bar: quits", .menuBarMode(keepsRunning: false)),

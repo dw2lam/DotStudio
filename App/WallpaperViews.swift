@@ -171,59 +171,49 @@ struct WallpaperSettingsSection: View {
     // Power saving, the way a laptop is used: what plays plugged in, what plays on battery,
     // and in both what happens while another app is focused. Each row acts out its current
     // choice in a little animated Mac (WallpaperDemos.swift).
+    // Power saving the way Wallpaper Engine lays it out: each situation is a row, each option
+    // a card acting out what it does; the active card is in colour, the rest greyed.
     @ViewBuilder private var powerSections: some View {
         Section {
-            SettingsValueRow("Frame Rate", valueWidth: segmentWidth) {
-                ScaledSegmentedPicker(title: "Frame Rate", selection: Binding(
-                    get: { wallpaper.settings.frameRate },
-                    set: { v in wallpaper.update { $0.frameRate = v } }),
-                    options: WallpaperSettings.FrameRate.allCases.map { ($0.title, $0) },
-                    fills: true)
-            }
+            OptionCards(title: "Frame rate", detail: "How smoothly the wallpaper moves.",
+                        options: [.init(label: "Balanced · 30 fps", value: WallpaperSettings.FrameRate.balanced, scene: .frameRate(.balanced)),
+                                  .init(label: "Smooth · up to 120", value: .smooth, scene: .frameRate(.smooth))],
+                        selection: Binding(get: { wallpaper.settings.frameRate },
+                                           set: { v in wallpaper.update { $0.frameRate = v } }))
             otherAppRow(\.otherAppPluggedIn)
         } header: {
             powerHeader("When Plugged In", symbol: "powerplug")
         }
 
         Section {
-            VisualSettingRow(title: "Playback", detail: batteryDetail, demo: .battery(wallpaper.settings.batteryMode)) {
-                ScaledSegmentedPicker(title: "Playback on battery", selection: Binding(
-                    get: { wallpaper.settings.batteryMode },
-                    set: { v in wallpaper.update { $0.batteryMode = v } }),
-                    options: WallpaperSettings.BatteryMode.allCases.map { ($0.title, $0) })
-                    .fixedSize()
-            }
+            OptionCards(title: "Playback", detail: "What plays while your Mac runs on battery.",
+                        options: WallpaperSettings.BatteryMode.allCases.map { .init(label: $0.title, value: $0, scene: .battery($0)) },
+                        selection: Binding(get: { wallpaper.settings.batteryMode },
+                                           set: { v in wallpaper.update { $0.batteryMode = v } }))
             otherAppRow(\.otherAppOnBattery)
         } header: {
             powerHeader("On Battery", symbol: "battery.75percent")
+        }
+
+        Section {
+            OptionCards(title: "Always", detail: "Nobody sees it, or your Mac needs the power — so it stops on its own.",
+                        options: [.init(label: "Full-screen app · pauses", value: 0, scene: .covered),
+                                  .init(label: "Low Power Mode · holds still", value: 1, scene: .lowPower)],
+                        selection: .constant(0), fixed: true)
+        } header: {
+            powerHeader("Automatically", symbol: "leaf")
         } footer: {
-            SettingsNote("Always paused while a full-screen app or windows cover the desktop, the screen is locked or asleep, or the screensaver runs. Held still in Low Power Mode or when your Mac runs hot.")
+            SettingsNote("Also paused while the screen is locked or asleep and while the screensaver runs; held still when your Mac runs hot. A paused clock still turns over each minute.")
         }
     }
 
-    private var batteryDetail: String {
-        switch wallpaper.settings.batteryMode {
-        case .full: return "Plays as when plugged in, up to 30 fps."
-        case .efficient: return "20 fps at lower resolution — about a quarter of the work."
-        case .still: return "Holds one frame until you plug in."
-        }
-    }
-
-    /// Pause (hold the frame) while an app other than DotStudio or the Finder is in front —
-    /// stored per power source as WallpaperSettings.OtherAppMode.
+    /// Another app in front (not full screen): keep playing, slow down, or pause — per power
+    /// source, as WallpaperSettings.OtherAppMode.
     private func otherAppRow(_ key: WritableKeyPath<WallpaperSettings, WallpaperSettings.OtherAppMode>) -> some View {
-        let pauses = wallpaper.settings[keyPath: key] == .pause
-        return VisualSettingRow(title: "Pause behind other apps",
-                                detail: pauses ? "Holds the frame while you work in another app; click the desktop to play again."
-                                               : "Keeps playing behind other apps while some desktop shows.",
-                                demo: .otherApp(pauses: pauses)) {
-            Toggle("Pause behind other apps", isOn: Binding(
-                get: { pauses },
-                set: { on in wallpaper.update { $0[keyPath: key] = on ? .pause : .keepPlaying } }))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .formSwitchSize()
-        }
+        OptionCards(title: "Another app is focused", detail: "You're working in another app and some desktop still shows. Clicking the desktop plays again.",
+                    options: WallpaperSettings.OtherAppMode.allCases.map { .init(label: $0.title, value: $0, scene: .otherApp($0)) },
+                    selection: Binding(get: { wallpaper.settings[keyPath: key] },
+                                       set: { v in wallpaper.update { $0[keyPath: key] = v } }))
     }
 
     private func powerHeader(_ title: String, symbol: String) -> some View {
