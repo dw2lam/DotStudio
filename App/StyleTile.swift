@@ -425,27 +425,11 @@ struct TileLabel: View {
     var body: some View {
         let _ = Perf.body("TileLabel")
         VStack(alignment: .leading, spacing: layout.labelGap) {
-            HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
-                // Up to two lines, then "…" with the full name as a tooltip.
-                Text(title)
-                    .textRole(.itemTitle)
-                    .foregroundStyle(dimmed ? .secondary : .primary)
-                    .truncating(title, lines: 2)
-                if traits.sky || traits.weather {
-                    Spacer(minLength: Space.xs)
-                    // What makes it live, on the right of the name line.
-                    HStack(spacing: Space.xxs) {
-                        if traits.weather {
-                            LiveTag(text: "Live weather", symbol: "cloud.sun.rain.fill", tint: .orange,
-                                    help: "Shows your real weather — rain, clouds, fog — as it changes")
-                        }
-                        if traits.sky {
-                            LiveTag(text: "Live sky", symbol: "sun.horizon.fill", tint: .blue,
-                                    help: "Its light follows the real sun: sunrise, day, sunset and night")
-                        }
-                    }
-                    .fixedSize()
-                }
+            // The name, then (on the right) what makes it live — as labelled tags while they fit
+            // beside the name on one line, else as icons only, so the name never gets squeezed.
+            ViewThatFits(in: .horizontal) {
+                nameLine(compactTags: false)
+                nameLine(compactTags: true)
             }
             if let summary {
                 Text(summary)
@@ -456,6 +440,30 @@ struct TileLabel: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    private func nameLine(compactTags: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
+            Text(title)
+                .textRole(.itemTitle)
+                .foregroundStyle(dimmed ? .secondary : .primary)
+                .lineLimit(compactTags ? 2 : 1)
+                .help(title)
+            if traits.sky || traits.weather {
+                Spacer(minLength: Space.xs)
+                HStack(spacing: Space.xxs) {
+                    if traits.weather {
+                        LiveTag(text: "Live weather", symbol: "cloud.sun.rain.fill", tint: .orange, compact: compactTags,
+                                help: "Live weather — shows your real weather (rain, clouds, fog) as it changes")
+                    }
+                    if traits.sky {
+                        LiveTag(text: "Live sky", symbol: "sun.horizon.fill", tint: .blue, compact: compactTags,
+                                help: "Live sky — its light follows the real sun: sunrise, day, sunset and night")
+                    }
+                }
+                .fixedSize()
+            }
+        }
+    }
 }
 
 /// A small tinted tag beside a tile's name: what makes the style live.
@@ -463,11 +471,14 @@ private struct LiveTag: View {
     let text: String
     let symbol: String
     let tint: Color
+    var compact = false
     let help: String
 
     var body: some View {
-        Label(text, systemImage: symbol)
-            .labelStyle(.titleAndIcon)
+        Group {
+            if compact { Label(text, systemImage: symbol).labelStyle(.iconOnly) }
+            else { Label(text, systemImage: symbol).labelStyle(.titleAndIcon) }
+        }
             .textRole(.captionEmphasis)
             .foregroundStyle(tint)
             .padding(.horizontal, 6)

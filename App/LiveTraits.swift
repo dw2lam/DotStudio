@@ -18,12 +18,27 @@ struct LiveTraits: Equatable {
 
     static func of(_ preset: Preset) -> LiveTraits {
         var t = LiveTraits()
-        t.weather = WeatherLink.followsLive(preset)
         let on = preset.effects.filter(\.enabled)
+        // Built-in film packages, read once up front: a style's own manifest is only known to
+        // customUses after something has drawn it, so the gallery would miss them at first.
+        let films = on.compactMap { $0.kind == .custom ? $0.custom?.id : nil }
+        let builtInWeather = on.contains { e in
+            e.kind == .custom && CustomFilm.pinnedCondition(e) == nil && Self.builtInFilms[e.custom?.id ?? ""] == true
+        }
+        t.weather = WeatherLink.followsLive(preset) || builtInWeather
         t.clock = on.contains { clockKinds.contains($0.kind) }
-        t.sky = on.contains { followsSky($0) }
+        t.sky = on.contains { followsSky($0) } || preset.customUses("sun")
+            || films.contains { Self.builtInFilms[$0] != nil }   // a film's day/night follows the sun
         return t
     }
+
+    /// Built-in film scenes (Shared/Films) by id → whether they follow the live weather (a rain
+    /// clip, light layers, or "uses": weather). Every film follows the sun.
+    private static let builtInFilms: [String: Bool] = Dictionary(uniqueKeysWithValues:
+        CustomScenes.builtInManifests().filter { $0.engine.id == "film" }.map { m in
+            (m.id, m.usesSet.contains("weather") || m.layers != nil
+                || (m.clips ?? []).contains { $0.variant.lowercased() == "rain" })
+        })
 
     private static let clockKinds: Set<EffectKind> = Set(SceneCatalog.clocks.keys).union(SceneCatalog.standby.keys)
 

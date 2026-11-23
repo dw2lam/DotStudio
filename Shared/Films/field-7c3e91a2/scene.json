@@ -1,0 +1,33 @@
+{
+  "format": 1,
+  "id": "field-7c3e91a2",
+  "name": "Field",
+  "author": "DotStudio",
+  "licence": "DotStudio built-in. Rendered with Blender.",
+  "engine": {
+    "id": "film",
+    "version": ">=1.0"
+  },
+  "fps": 60,
+  "description": "Rolling hills and long grass moving in the wind, a lone tree on the ridge. By night: a full moon, stars, moonlit wisps and the odd shooting star. Day and night follow the real sun.",
+  "uses": [
+    "sun"
+  ],
+  "clips": [
+    {
+      "variant": "day",
+      "file": "clips/day.mov",
+      "loop": true,
+      "codec": "hevc"
+    },
+    {
+      "variant": "night",
+      "file": "clips/night.mov",
+      "loop": true,
+      "codec": "hevc"
+    }
+  ],
+  "look": {
+    "grain": 0.15
+  }
+}
