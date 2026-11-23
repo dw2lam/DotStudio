@@ -489,6 +489,10 @@ struct EffectRow: View {
                     if effect.kind == .custom {
                         CustomSceneStatusRow(effect: effect)
                     }
+                    // One-click colour themes for a scene (SceneThemes.swift), above its settings.
+                    if effect.kind.isScene && effect.kind != .custom && effect.kind.usesColors {
+                        SceneThemeStrip(effect: $effect)
+                    }
                     // (a Custom Scene's params and colours are its package manifest's)
                     ForEach(effect.paramSpecs) { spec in
                         ParamRow(spec: spec, value: paramBinding(spec))

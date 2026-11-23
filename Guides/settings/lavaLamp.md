@@ -19,6 +19,7 @@ Glossy wax rising and falling through warm, backlit liquid.
 | `gloss` | Gloss | slider | 0 … 1 | 0.7 |
 | `heat` | Lamp Glow | slider | 0 … 2 | 1 |
 | `glass` | Glass | toggle | 0 / 1 | on |
+| `rainbow` | Multicolour | slider | 0 … 1 | 0 |
 
 ## Colours
 

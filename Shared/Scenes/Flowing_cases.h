@@ -109,7 +109,7 @@
                // from the field itself (n ∝ (−K∇F, √(F−T))), so domes, necks and saddles all shade
                // smoothly. Wrap diffuse + thickness-dependent transmission, glossy reflections of a
                // soft studio, a hazy defocused back layer, behind curved glass.
-               // p0 = (speed, blobs, size, gloss), p1.x lamp glow, p1.y glass.
+               // p0 = (speed, blobs, size, gloss), p1.x lamp glow, p1.y glass, p1.z multicolour.
         float speed = u.p0.x, size = max(u.p0.z, 0.3), gloss = u.p0.w;
         int nb = clamp(int(u.p0.y + 0.5), 1, 10);
         float heat = u.p1.x, glassOn = u.p1.y;
@@ -192,7 +192,9 @@
         float3 ld = normalize(float3(-p.x * 0.25, -1.0, 0.45));
         float wrap = clamp((dot(n, ld) + 0.8) / 1.8, 0.0, 1.0);          // wax scatters: soft terminator
         float hot = exp(-(p.y + 0.5) * 3.0);                       // wax near the bulb runs hotter
-        float3 waxH = flowing_oklabToLinear(oklabHue(srgbToOklab(u.colorB.rgb), 0.42 * hot) + float3(0.08 * hot, 0.0, 0.0));
+        float rainbow = u.p1.z;                                    // Multicolour: hue drifts with height
+        float3 waxLab = oklabHue(srgbToOklab(u.colorB.rgb), 0.42 * hot + rainbow * (p.y * 3.2 + p.x * 0.9 + ts * 2.0));
+        float3 waxH = flowing_oklabToLinear(waxLab + float3(0.08 * hot, 0.0, 0.0));
         float3 trans = pow(waxH, float3(0.8 + 1.8 * thick));      // thick wax deepens & saturates
         float edge = max(1.0 - n.z, 0.0);                          // n.z can round above 1: no NaN
         float rimLit = pow(edge, 1.5) * clamp(-dir.y * 0.8 + 0.3, 0.0, 1.0);
@@ -209,14 +211,12 @@
         if (glassOn > 0.5) {
             float ax = abs(xc);
             col *= 1.0 - 0.55 * pow(ax, 4.0);
-            float pxc = pix / (0.5 * aspect);                     // one pixel in xc units
-            float edgeY = 0.70 + 0.30 * smoothstep(-0.5, 0.45, p.y);
-            float winY = smoothstep(-0.48, 0.05, p.y);
-            float cL = (xc + 0.735) / max(0.009, 1.2 * pxc), bL = (xc + 0.70) / 0.075;
-            float cR = (xc - 0.862) / max(0.005, 1.2 * pxc), bR = (xc - 0.845) / 0.035;
-            float glint = (exp(-cL * cL) * 0.055 + exp(-bL * bL) * 0.030) * winY
-                        + exp(-cR * cR) * 0.032 + exp(-bR * bR) * 0.010;
-            col += float3(1.0, 0.97, 0.94) * edgeY * glint;
+            // soft sheens of a window (left) and a strip light (right) on the curved glass —
+            // wide and faded top and bottom: pixel-thin glints read as stray lines on a screen
+            float fadeY = smoothstep(-0.5, -0.1, p.y) * smoothstep(0.5, 0.15, p.y);
+            float bL = (xc + 0.70) / 0.09, bR = (xc - 0.845) / 0.05;
+            float glint = (exp(-bL * bL) * 0.016 + exp(-bR * bR) * 0.008) * fadeY;
+            col += float3(1.0, 0.97, 0.94) * glint;
             col += warm * 0.06 * heat * smoothstep(0.8, 1.0, ax) * smoothstep(0.2, -0.5, p.y);
         }
         return flowing_out(col, px);

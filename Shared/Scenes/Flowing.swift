@@ -33,7 +33,8 @@ extension SceneCatalog {
                      ParamSpec("size", "Size", 0.5, 1.6, def: 1.0),
                      ParamSpec("gloss", "Gloss", 0, 1, def: 0.7),
                      ParamSpec("heat", "Lamp Glow", 0, 2, def: 1.0),
-                     ParamSpec("glass", "Glass", 0, 1, def: 1, toggle: true)],
+                     ParamSpec("glass", "Glass", 0, 1, def: 1, toggle: true),
+                     ParamSpec("rainbow", "Multicolour", 0, 1, def: 0)],
             colorA: RGBA(0.10, 0.02, 0.08), colorB: RGBA(1.0, 0.36, 0.16),
             colorALabel: "Liquid", colorBLabel: "Wax"),
         .inkFluid: SceneSpec(

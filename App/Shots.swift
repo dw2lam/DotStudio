@@ -429,6 +429,17 @@ enum UIShots {
             WallpaperSlot.shared.set(st.scene)
             st.edit(st.scene)
         }, view: main))
+        // The Themes strip: Lava Lamp in Blue, and in Multicolour (SceneThemes.swift)
+        for theme in ["blue", "multicolour"] {
+            s.append(Screen(name: "editor-theme-\(theme)", frame: .window, prepare: { st in
+                guard let i = st.model.library.presets.firstIndex(where: { $0.name == "Lava Lamp" }),
+                      var fx = st.model.library.presets[i].effects.first,
+                      let t = SceneThemes.themes(for: fx).first(where: { $0.id == theme }) else { return }
+                SceneThemes.apply(t, to: &fx)
+                st.model.library.presets[i].effects[0] = fx
+                st.edit(st.model.library.presets[i].id)
+            }, view: main))
+        }
         s.append(Screen(name: "editor-look", frame: .window, prepare: { st in
             st.lineup([st.hero], night: st.stress ? st.look : nil)
             st.edit(st.look)
