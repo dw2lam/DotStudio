@@ -162,7 +162,10 @@ private struct GalleryPage: View {
     }
 
     private func sections(_ matcher: StyleMatcher) -> [GallerySection] {
-        let all = model.library.presets
+        // Styles that follow the time or the weather lead each section (in library order otherwise).
+        let lib = model.library.presets
+        let live = lib.filter { LiveTraits.of($0).any }
+        let all = live + lib.filter { !LiveTraits.of($0).any }
         guard matcher.isFiltering else {
             return [
                 GallerySection(kind: .scenes, title: "Scenes", subtitle: "",

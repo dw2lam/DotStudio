@@ -112,7 +112,7 @@ struct StyleTile: View, Equatable {
             .scaleEffect(hovering && !reduceMotion ? 1.025 : 1)
             .offset(y: hovering && !reduceMotion ? -2 : 0)
 
-            TileLabel(title: preset.name, summary: summary)
+            TileLabel(title: preset.name, summary: summary, traits: LiveTraits.of(preset))
         }
         .contentShape(Rectangle())
         .motion(Motion.snappy, value: hovering)
@@ -419,15 +419,35 @@ struct TileLabel: View {
     let title: String
     let summary: String?
     var dimmed = false
+    /// Follows the time / the live weather: small icons after the name.
+    var traits = LiveTraits()
 
     var body: some View {
         let _ = Perf.body("TileLabel")
         VStack(alignment: .leading, spacing: layout.labelGap) {
-            // Up to two lines, then "…" with the full name as a tooltip.
-            Text(title)
-                .textRole(.itemTitle)
-                .foregroundStyle(dimmed ? .secondary : .primary)
-                .truncating(title, lines: 2)
+            HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
+                // Up to two lines, then "…" with the full name as a tooltip.
+                Text(title)
+                    .textRole(.itemTitle)
+                    .foregroundStyle(dimmed ? .secondary : .primary)
+                    .truncating(title, lines: 2)
+                if traits.any {
+                    HStack(spacing: Space.xxs) {
+                        if traits.time {
+                            Image(systemName: "clock.fill").foregroundStyle(.blue)
+                                .help("Changes with the time of day")
+                                .accessibilityLabel("Follows the time")
+                        }
+                        if traits.weather {
+                            Image(systemName: "cloud.sun.fill").symbolRenderingMode(.multicolor)
+                                .help("Follows your live weather")
+                                .accessibilityLabel("Follows the weather")
+                        }
+                    }
+                    .textRole(.callout)
+                    .fixedSize()
+                }
+            }
             if let summary {
                 Text(summary)
                     .textRole(.caption)
