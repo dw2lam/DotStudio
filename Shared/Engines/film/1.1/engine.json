@@ -17,7 +17,7 @@
       "kind": "menu",
       "default": 0,
       "options": [
-        "Follow the sun",
+        "Sunrise & sunset",
         "Always day",
         "Always night",
         "Match Light/Dark mode"

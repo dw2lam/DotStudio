@@ -7,12 +7,13 @@
   the odd shooting star.
 - **Butterflies** — butterflies over a daisy meadow among swaying trees; by night they glow
   under the moon, with fireflies.
-- Both are photoreal, rendered in Blender at 60 fps, and switch between day and night with the
-  real sun.
+- Both are photoreal, rendered in Blender at 60 fps, with a day and a night version that switch at
+  sunrise and sunset — or pick Always day, Always night, or Match Light/Dark mode in Customize.
 
 ### Improved
-- Live tags shrink to icons when a style's name needs the room, and film scenes (Commute too)
-  show what makes them live.
+- Live tags shrink to icons when a style's name needs the room; film scenes say whether they're
+  re-lit live (Live sky) or switch between day and night versions (Day & night).
+- A style's editor shows only settings that do something for it.
 
 ## 1.6.6 — Make it yours
 

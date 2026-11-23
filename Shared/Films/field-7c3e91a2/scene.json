@@ -9,7 +9,7 @@
     "version": ">=1.0"
   },
   "fps": 60,
-  "description": "Rolling hills and long grass moving in the wind, a lone tree on the ridge. By night: a full moon, stars, moonlit wisps and the odd shooting star. Day and night follow the real sun.",
+  "description": "Rolling hills and long grass moving in the wind, a lone tree on the ridge. By night: a full moon, stars, moonlit wisps and the odd shooting star. Switches to night after sunset.",
   "uses": [
     "sun"
   ],

@@ -9,12 +9,15 @@ struct LiveTraits: Equatable {
     var sky = false
     /// Follows the live weather.
     var weather = false
+    /// Separate day and night videos switching at sunrise and sunset (a film of variant clips):
+    /// fixed pictures, not a sky that moves — "Day & night", not "Live sky".
+    var dayNight = false
     /// A clock (shows the time; no tag — that's plain to see — but it sorts after the live scenes).
     var clock = false
-    var any: Bool { sky || weather || clock }
+    var any: Bool { sky || weather || clock || dayNight }
 
     /// Gallery order: live weather first (Golden Hour leads), then live sky, then clocks.
-    var rank: Int { weather ? 0 : sky ? 1 : clock ? 2 : 3 }
+    var rank: Int { weather ? 0 : (sky || dayNight) ? 1 : clock ? 2 : 3 }
 
     static func of(_ preset: Preset) -> LiveTraits {
         var t = LiveTraits()
@@ -26,14 +29,24 @@ struct LiveTraits: Equatable {
         }
         t.weather = WeatherLink.followsLive(preset) || builtInWeather
         t.clock = on.contains { clockKinds.contains($0.kind) }
-        t.sky = on.contains { followsSky($0) } || preset.customUses("sun")
-            || on.contains { $0.kind == .custom && Self.builtInFilms[$0.custom?.id ?? ""] != nil
-                             && CustomFilm.timeMode($0) == 0 }   // a film's day/night follows the sun
+        // Films: light layers are re-lit from the real sun (Live sky); variant clips only switch
+        // between day and night videos (Day & night). Pinned to a time of day: neither.
+        var layered = false, clips = false
+        for e in on where e.kind == .custom && CustomFilm.timeMode(e) == 0 {
+            guard let id = e.custom?.id,
+                  let m = Self.builtInFilmManifests[id] ?? CustomScenes.knownManifest(id: id), m.engine.id == "film" else { continue }
+            if m.layers != nil { layered = true } else { clips = true }
+        }
+        t.sky = on.contains { followsSky($0) } || layered
+        t.dayNight = clips && !t.sky
         return t
     }
 
     /// Built-in film scenes (Shared/Films) by id → whether they follow the live weather (a rain
     /// clip, light layers, or "uses": weather). Every film follows the sun.
+    private static let builtInFilmManifests: [String: CustomSceneManifest] = Dictionary(uniqueKeysWithValues:
+        CustomScenes.builtInManifests().filter { $0.engine.id == "film" }.map { ($0.id, $0) })
+
     private static let builtInFilms: [String: Bool] = Dictionary(uniqueKeysWithValues:
         CustomScenes.builtInManifests().filter { $0.engine.id == "film" }.map { m in
             (m.id, m.usesSet.contains("weather") || m.layers != nil

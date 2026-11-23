@@ -84,8 +84,9 @@ final class CustomFilm {
         return clips.first
     }
 
-    /// Time of day (ds.time) for variant clips: 0 follows the real sun, 1 always day, 2 always
-    /// night, 3 follows the Mac's Light/Dark mode.
+    /// Time of day (ds.time) for variant clips: 0 switches clips at sunrise and sunset (the real
+    /// sun's elevation picks day / golden / night — fixed videos, not a sky that moves), 1 always
+    /// day, 2 always night, 3 follows the Mac's Light/Dark mode.
     static func timeMode(_ inst: EffectInstance) -> Int {
         Int(saturating: inst.params["ds.time"] ?? 0, .toNearestOrAwayFromZero)
     }

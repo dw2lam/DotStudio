@@ -9,7 +9,7 @@
     "version": ">=1.0"
   },
   "fps": 60,
-  "description": "Butterflies drifting over a daisy meadow among swaying trees. By night they glow under the moon, with fireflies. Day and night follow the real sun.",
+  "description": "Butterflies drifting over a daisy meadow among swaying trees. By night they glow under the moon, with fireflies. Switches to night after sunset.",
   "uses": [
     "sun"
   ],

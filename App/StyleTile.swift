@@ -448,7 +448,7 @@ struct TileLabel: View {
                 .foregroundStyle(dimmed ? .secondary : .primary)
                 .lineLimit(compactTags ? 2 : 1)
                 .help(title)
-            if traits.sky || traits.weather {
+            if traits.sky || traits.weather || traits.dayNight {
                 Spacer(minLength: Space.xs)
                 HStack(spacing: Space.xxs) {
                     if traits.weather {
@@ -458,6 +458,10 @@ struct TileLabel: View {
                     if traits.sky {
                         LiveTag(text: "Live sky", symbol: "sun.horizon.fill", tint: .blue, compact: compactTags,
                                 help: "Live sky — its light follows the real sun: sunrise, day, sunset and night")
+                    }
+                    if traits.dayNight {
+                        LiveTag(text: "Day & night", symbol: "circle.lefthalf.filled", tint: .indigo, compact: compactTags,
+                                help: "Day & night — a day version and a night version, switching at sunrise and sunset")
                     }
                 }
                 .fixedSize()
