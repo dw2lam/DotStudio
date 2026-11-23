@@ -40,12 +40,19 @@ struct SetupGuideContent: View {
     private var walkthrough: some View {
         VStack(alignment: .leading, spacing: layout.itemGap) {
             SetupWalkthrough(frozenStep: frozenStep, forceStill: forceStill, narrow: !sideBySide && layout.prefersStacking)
-            openButton
+            SetupOpenSettingsButton(guide: guide, action: onOpenSettings)
         }
     }
+}
 
-    @ViewBuilder private var openButton: some View {
-        let button = Button(action: onOpenSettings) {
+/// "Open System Settings" — the prominent, Return-key button while choosing DotStudio is
+/// what's left to do. Used by the guide and the onboarding "Turn It On" step.
+struct SetupOpenSettingsButton: View {
+    @ObservedObject var guide: SetupGuideModel
+    let action: () -> Void
+
+    var body: some View {
+        let button = Button(action: action) {
             Label("Open System Settings", systemImage: "gearshape")
                 .textRole(.body)
         }
@@ -96,7 +103,7 @@ struct SetupChecklist: View {
             }
             .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(.background.secondary))
             .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).strokeBorder(Color.primary.opacity(0.07)))
-            Text("Ticks itself as you go — no need to come back and check.")
+            Text("Ticks itself as you go.")
                 .textRole(.caption)
                 .foregroundStyle(.secondary)
                 .wrapping()
@@ -120,8 +127,8 @@ struct SetupChecklist: View {
     private var installRow: some View {
         ChecklistRow(state: installState, first: true,
                      title: s.installed ? "Screensaver installed" : "Install the screensaver",
-                     detail: s.installed ? "DotStudio is in your Mac's screen savers."
-                                         : "Adds DotStudio to your Mac's screen savers, then opens System Settings.") {
+                     detail: s.installed ? "DotStudio is in your screen savers."
+                                         : "Adds DotStudio, then opens System Settings.") {
             if !s.installed {
                 Button { model.installScreensaver(); guide.refresh() } label: { Text("Install").textRole(.body) }
                     .buttonStyle(.borderedProminent)
@@ -147,22 +154,22 @@ struct SetupChecklist: View {
         switch s.choice {
         case .chosen(let on, let of) where s.installed && on > 0 && on < of:
             title = "Chosen on \(on) of \(of) displays"
-            detail = "Pick another display at the top of the Wallpaper page, then choose DotStudio for it too."
+            detail = "Pick the next display at the top of Wallpaper, then choose DotStudio."
         case .chosen(let on, let of) where s.installed && on > 0:
             title = "DotStudio is your screensaver"
-            detail = of == 2 ? "On both displays." : of > 2 ? "On all \(of) displays." : "Chosen in System Settings › Wallpaper."
+            detail = of == 2 ? "On both displays." : of > 2 ? "On all \(of) displays." : "Set in System Settings › Wallpaper."
         case .unknown where s.installed:
             title = "Choose DotStudio as your screensaver"
-            detail = coaching ? "DotStudio can't check this on your Mac — follow the ring in System Settings."
-                              : "DotStudio can't check this on your Mac — follow the steps in the picture."
+            detail = coaching ? "Can't check this here. Follow the ring in System Settings."
+                              : "Can't check this here. Follow the picture."
         default:
             title = "Choose DotStudio as your screensaver"
             if coaching {
-                detail = s.installed ? "Follow the ring in System Settings. This ticks itself when it's done."
-                                     : "After installing, follow the ring in System Settings."
+                detail = s.installed ? "Follow the ring in System Settings."
+                                     : "Install first, then follow the ring."
             } else {
-                detail = s.installed ? "Follow the steps in the picture. This ticks itself when it's done."
-                                     : "After installing, follow the steps in the picture."
+                detail = s.installed ? "Follow the steps in the picture."
+                                     : "Install first, then follow the picture."
             }
         }
         return ChecklistRow(state: chooseState, title: title, detail: detail) { EmptyView() }
@@ -178,11 +185,11 @@ struct SetupChecklist: View {
         if s.startsWhenInactive {
             title = "Starts after \(SetupWords.duration(seconds: s.effectiveIdle)) of inactivity"
             detail = s.idleSeconds == nil
-                ? "macOS's default. Change it in Lock Screen › Start Screen Saver when inactive."
-                : "Change it in Lock Screen › Start Screen Saver when inactive."
+                ? "macOS default. Change it in Lock Screen settings."
+                : "Change it in Lock Screen settings."
         } else {
             title = "Screensaver never starts on its own"
-            detail = "\u{201C}Start Screen Saver when inactive\u{201D} is set to Never in Lock Screen settings."
+            detail = "Set \u{201C}Start Screen Saver when inactive\u{201D} in Lock Screen settings."
         }
         return ChecklistRow(state: idleState, title: title, detail: detail) {
             if !s.startsWhenInactive { lockScreenLink }
@@ -208,14 +215,14 @@ struct SetupChecklist: View {
         let detail: String
         if conflicts.isEmpty {
             title = "Your display stays on for it"
-            detail = sleepSummary.map { "It turns off after \($0) — after the screensaver starts." }
+            detail = sleepSummary.map { "It turns off after \($0), once the screensaver is on." }
                 ?? "Your display never turns off on its own."
         } else {
             title = "Your display turns off first"
             if conflicts.count == 2 && conflicts[0].minutes == conflicts[1].minutes {
-                detail = "On battery and on power adapter your display turns off after \(SetupWords.short(seconds: conflicts[0].minutes * 60)), before the screensaver starts at \(idle)."
+                detail = "It turns off after \(SetupWords.short(seconds: conflicts[0].minutes * 60)); the screensaver starts at \(idle)."
             } else {
-                detail = conflicts.map { "On \($0.source) your display turns off after \(SetupWords.short(seconds: $0.minutes * 60)), before the screensaver starts at \(idle)." }
+                detail = conflicts.map { "On \($0.source): off after \(SetupWords.short(seconds: $0.minutes * 60)); the screensaver starts at \(idle)." }
                     .joined(separator: " ")
             }
         }
@@ -252,11 +259,11 @@ struct SetupChecklist: View {
         let detail: String
         switch s.login {
         case .requiresApproval:
-            detail = "macOS needs your OK: turn DotStudio on in System Settings › General › Login Items."
+            detail = "Turn DotStudio on in General › Login Items."
         case .enabled where !guide.wantsLogin, .off where guide.wantsLogin:
-            detail = "Starts quietly in the menu bar, so your live wallpaper and music keep working after a restart. Applies \(commitPhrase)."
+            detail = "Keeps your wallpaper and music going after a restart. Applies \(commitPhrase)."
         default:
-            detail = "Starts quietly in the menu bar, so your live wallpaper and music keep working after a restart."
+            detail = "Keeps your wallpaper and music going after a restart."
         }
         return ChecklistRow(state: loginState, title: "Open DotStudio at login", detail: detail) {
             Toggle("Open DotStudio at login", isOn: $guide.wantsLogin)
@@ -293,13 +300,13 @@ struct SetupChecklist: View {
         let detail: String
         if let denied {
             title = "Allow DotStudio to control \(denied.source.displayName)"
-            detail = "It was turned off, so the screensaver can't show exact progress or artwork. Turn on \(denied.source.automationName) under DotStudio in Privacy & Security › Automation."
+            detail = "Turn on \(denied.source.automationName) under DotStudio in Privacy & Security › Automation."
         } else if musicState == .done {
             title = "Music can show on your screensaver"
-            detail = "DotStudio may read what's playing in \(running.map(\.source.displayName).joined(separator: " and "))."
+            detail = "Allowed for \(running.map(\.source.displayName).joined(separator: " and "))."
         } else {
             title = "Music on your screensaver"
-            detail = "The first time a song plays, macOS asks once: \u{201C}DotStudio wants to control Spotify\u{201D} (or Music). Click OK — DotStudio only reads what's playing, and plays or pauses it when you ask."
+            detail = "When macOS asks to let DotStudio control Spotify or Music, click OK."
         }
         return ChecklistRow(state: musicState, title: title, detail: detail) {
             if let denied {
