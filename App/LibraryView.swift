@@ -162,10 +162,13 @@ private struct GalleryPage: View {
     }
 
     private func sections(_ matcher: StyleMatcher) -> [GallerySection] {
-        // Styles that follow the time or the weather lead each section (in library order otherwise).
+        // Live styles lead each section: live weather (Golden Hour first), live sky, then clocks.
         let lib = model.library.presets
-        let live = lib.filter { LiveTraits.of($0).any }
-        let all = live + lib.filter { !LiveTraits.of($0).any }
+        let ranks = Dictionary(uniqueKeysWithValues: lib.map { ($0.id, LiveTraits.of($0).rank) })
+        let all = lib.enumerated().sorted { a, b in
+            let ra = ranks[a.element.id] ?? 3, rb = ranks[b.element.id] ?? 3
+            return ra != rb ? ra < rb : a.offset < b.offset    // stable: library order within a rank
+        }.map(\.element)
         guard matcher.isFiltering else {
             return [
                 GallerySection(kind: .scenes, title: "Scenes", subtitle: "",

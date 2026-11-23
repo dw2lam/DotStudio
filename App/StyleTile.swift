@@ -431,20 +431,19 @@ struct TileLabel: View {
                     .textRole(.itemTitle)
                     .foregroundStyle(dimmed ? .secondary : .primary)
                     .truncating(title, lines: 2)
-                if traits.any {
+                if traits.sky || traits.weather {
+                    Spacer(minLength: Space.xs)
+                    // What makes it live, on the right of the name line.
                     HStack(spacing: Space.xxs) {
-                        if traits.time {
-                            Image(systemName: "clock.fill").foregroundStyle(.blue)
-                                .help("Changes with the time of day")
-                                .accessibilityLabel("Follows the time")
-                        }
                         if traits.weather {
-                            Image(systemName: "cloud.sun.fill").symbolRenderingMode(.multicolor)
-                                .help("Follows your live weather")
-                                .accessibilityLabel("Follows the weather")
+                            LiveTag(text: "Live weather", symbol: "cloud.sun.rain.fill", tint: .orange,
+                                    help: "Shows your real weather — rain, clouds, fog — as it changes")
+                        }
+                        if traits.sky {
+                            LiveTag(text: "Live sky", symbol: "sun.horizon.fill", tint: .blue,
+                                    help: "Its light follows the real sun: sunrise, day, sunset and night")
                         }
                     }
-                    .textRole(.callout)
                     .fixedSize()
                 }
             }
@@ -456,6 +455,25 @@ struct TileLabel: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A small tinted tag beside a tile's name: what makes the style live.
+private struct LiveTag: View {
+    let text: String
+    let symbol: String
+    let tint: Color
+    let help: String
+
+    var body: some View {
+        Label(text, systemImage: symbol)
+            .labelStyle(.titleAndIcon)
+            .textRole(.captionEmphasis)
+            .foregroundStyle(tint)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(tint.opacity(0.12)))
+            .help(help)
     }
 }
 
