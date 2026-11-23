@@ -609,6 +609,12 @@ struct ScreensaverCard: View {
             .onTapGesture(count: 2) { if let p = playing { model.edit(p.id) } }
             .help(playing.map { "\($0.name) — double-click to edit" } ?? "")
 
+            // Customize (the style playing now) top right.
+            if let p = playing {
+                CustomizeButton(name: p.name) { model.edit(p.id) }
+                    .padding(Space.xs)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            }
             // When / Night / Day top left; Preview (what it previews, right on it) bottom right.
             VStack(alignment: .leading, spacing: 0) {
                 if let rule = model.activeRule {
@@ -1577,6 +1583,13 @@ struct WallpaperCard: View {
             }
             .scaleEffect(reduceMotion ? 1 : 1.06 - 0.06 * progress)
             .opacity(progress)
+        }
+        .overlay(alignment: .topTrailing) {
+            // Customize what's on the desktop now: its own style, or the screensaver's when synced.
+            if let shown = (progress > 0.5 ? driver : own) ?? style {
+                CustomizeButton(name: shown.name) { model.edit(shown.id) }
+                    .padding(Space.xs)
+            }
         }
     }
 

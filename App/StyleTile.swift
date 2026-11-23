@@ -200,20 +200,8 @@ struct StyleTile: View, Equatable {
                 // Customize, right on the tile (issue #2): on the selected tile, and on hover —
                 // the editor (colours, effects, speed) is otherwise a double-click or a menu away.
                 if selected || hovering {
-                    Button(action: open) {
-                        Label("Customize", systemImage: "slider.horizontal.3")
-                            .labelStyle(.titleAndIcon)
-                            .textRole(.captionEmphasis)
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, Space.xs)
-                            .padding(.vertical, Space.xxs)
-                            .background(Capsule().fill(.black.opacity(0.55)))
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .help("Customize “\(preset.name)” — colours, effects and more")
-                    .accessibilityLabel("Customize \(preset.name)")
-                    .transition(.opacity)
+                    CustomizeButton(name: preset.name, action: open)
+                        .transition(.opacity)
                 }
             }
             Spacer(minLength: 0)
@@ -506,6 +494,23 @@ struct TileBadgeCluster: View {
 
 /// A small tinted glass capsule over imagery: an icon and an optional word, always white.
 /// The tile badges and the Night/Day badge on the Screensaver card's preview.
+/// "Customize" on a style's picture — a gallery tile, the Screensaver and Wallpaper cards —
+/// opening it in the editor (issue #2: the editor was a double-click or a menu away).
+struct CustomizeButton: View {
+    let name: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            GlassBadge(text: "Customize", symbol: "slider.horizontal.3", tint: Color.black.opacity(0.55))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("Customize “\(name)” — colours, effects and more")
+        .accessibilityLabel("Customize \(name)")
+    }
+}
+
 struct GlassBadge: View {
     /// Between neighbouring badges (a half step: badges are small).
     static let spacing = Space.xxs + 2
