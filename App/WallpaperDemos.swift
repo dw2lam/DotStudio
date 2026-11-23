@@ -22,6 +22,8 @@ struct WallpaperDemo: View {
         case screensaverQuality(Double)
         /// Balanced steps, Smooth glides.
         case frameRate(WallpaperSettings.FrameRate)
+        /// The one frame rate: fewer frames step more visibly (exaggerated so 15 vs 30 reads).
+        case fps(Int)
         /// Full plays, Efficient steps and coarsens, Pause holds.
         case battery(WallpaperSettings.BatteryMode)
         /// A window comes forward; with `pauses` the wallpaper holds until the desktop is clicked.
@@ -88,6 +90,12 @@ struct WallpaperDemo: View {
             beach(&g, r, t: f == .balanced ? stepped(now, 8) : now)
             desktopChrome(&g, r)
             badge(&g, r, symbol: "powerplug")
+        case .fps(let f):
+            let shown: Double? = f >= 120 ? nil : f >= 60 ? 24 : f >= 30 ? 12 : f >= 24 ? 9 : 6
+            beach(&g, r, t: shown.map { stepped(now, $0) } ?? now)
+            desktopChrome(&g, r)
+            g.draw(Text("\(f) fps").font(.system(size: 9, weight: .bold, design: .rounded)).foregroundStyle(.white),
+                   at: CGPoint(x: r.width - 22, y: Self.menuBarHeight + 11))
         case .battery(let m):
             switch m {
             case .full: beach(&g, r, t: now)
@@ -540,58 +548,75 @@ struct VisualSettingRow<Control: View>: View {
 }
 
 /// A Power Saving row in the manner of Wallpaper Engine's performance settings: the situation
-/// ("Another app is focused"), a line about it, and a card per option, each acting out what it
-/// does. The active option is in full colour with an accent ring that slides to whichever card
-/// is picked; the others are greyed out (and hold still) until hovered or picked.
+/// ("Another app is focused"), then a card per option acting out what it does, with a stepped
+/// slider under them — each stop under its card — and a line saying what the chosen option
+/// does. The active card is in full colour with an accent ring that slides along with the
+/// slider; the others are greyed (and hold still) until hovered or picked.
 struct OptionCards<Value: Hashable>: View {
     struct Option {
         let label: String
         let value: Value
         let scene: WallpaperDemo.Scene
+        /// What it does, in a sentence (shown under the slider while it's the chosen one).
+        var explain: String = ""
     }
 
     let title: String
-    let detail: String
+    var icon: String? = nil
     let options: [Option]
     @Binding var selection: Value
-    /// A row with a single card states what always happens; it isn't a choice.
+    /// A row that states what always happens (cards only, no slider).
     var fixed = false
     @Namespace private var ring
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var width: CGFloat = 0
+
+    private var index: Int { options.firstIndex { $0.value == selection } ?? 0 }
+
+    private func choose(_ i: Int) {
+        guard options.indices.contains(i), options[i].value != selection else { return }
+        withAnimation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.85)) { selection = options[i].value }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).textRole(.bodyEmphasis)
-                    Text(detail).textRole(.callout).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: Space.s)
-                if !fixed, let current = options.first(where: { $0.value == selection }) {
-                    Text(current.label).textRole(.calloutEmphasis).foregroundStyle(Color.accentColor)
-                }
+            Label {
+                Text(title).textRole(.rowTitle)
+            } icon: {
+                if let icon { Image(systemName: icon).foregroundStyle(.secondary) }
             }
             OptionCardRow(spacing: Space.s) {
                 ForEach(options.indices, id: \.self) { i in
-                    let o = options[i]
-                    OptionCard(label: o.label, scene: o.scene, active: fixed || o.value == selection,
-                               fixed: fixed, ring: ring) {
-                        withAnimation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.85)) {
-                            selection = o.value
-                        }
+                    OptionCard(label: options[i].label, scene: options[i].scene, active: fixed || i == index,
+                               fixed: fixed, ring: ring) { choose(i) }
+                }
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+            if !fixed && options.count > 1 {
+                // The slider: its ends sit under the first and last cards' centres.
+                let card = OptionCardRow.cardWidth(width, spacing: Space.s)
+                let span = CGFloat(options.count - 1) * (card + Space.s)
+                Slider(value: Binding(get: { Double(index) }, set: { choose(Int($0.rounded())) }),
+                       in: 0...Double(options.count - 1), step: 1)
+                    .labelsHidden()
+                    .frame(width: span + 24)
+                    .padding(.leading, max(card / 2 - 12, 0))
+                    .accessibilityLabel(title)
+                    .accessibilityValue(options[index].label)
+                let chosen = options[index]
+                if !chosen.explain.isEmpty {
+                    HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
+                        Text(chosen.label).textRole(.bodyEmphasis).foregroundStyle(Color.accentColor)
+                        Text(chosen.explain).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
+                    .id(index)
+                    .transition(.opacity)
                 }
             }
         }
-        .padding(.vertical, Space.xxs)
+        .padding(.vertical, Space.xs)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(title)
-        .accessibilityAdjustableAction { dir in
-            guard !fixed, let i = options.firstIndex(where: { $0.value == selection }) else { return }
-            let j = dir == .increment ? min(i + 1, options.count - 1) : max(i - 1, 0)
-            selection = options[j].value
-        }
     }
 }
 
@@ -619,9 +644,10 @@ private struct OptionCard: View {
                         }
                     }
                 Text(label)
-                    .textRole(active ? .calloutEmphasis : .callout)
+                    .textRole(active ? .bodyEmphasis : .body)
                     .foregroundStyle(active ? .primary : .secondary)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
             .contentShape(Rectangle())
         }
@@ -638,10 +664,11 @@ struct OptionCardRow: Layout {
     var spacing: CGFloat
     var columns = 3
 
-    private func cardWidth(_ width: CGFloat?) -> CGFloat {
-        guard let width, width.isFinite else { return 200 }
+    static func cardWidth(_ width: CGFloat?, spacing: CGFloat, columns: Int = 3) -> CGFloat {
+        guard let width, width.isFinite, width > 0 else { return 200 }
         return max(90, (width - spacing * CGFloat(columns - 1)) / CGFloat(columns))
     }
+    private func cardWidth(_ width: CGFloat?) -> CGFloat { Self.cardWidth(width, spacing: spacing, columns: columns) }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let w = cardWidth(proposal.width)

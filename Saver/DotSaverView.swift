@@ -327,7 +327,7 @@ final class DotSaverView: ScreenSaverView {
             } else {
                 renderer?.apply(target, source: lib.source)
             }
-            presetFPS = target.fps
+            presetFPS = lib.frameRate ?? target.fps   // Power Saving's one frame rate, else the style's own
             stepFPS = FramePacing.steppedFPS(target)
             updateInterval()
             shownPreset = target

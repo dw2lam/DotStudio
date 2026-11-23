@@ -3,14 +3,20 @@
 ## 1.6.5 — Power saving, your way
 
 ### New
-- **Pause while another app is focused.** The live wallpaper can hold its frame whenever you're
-  working in another app — not just when windows cover the desktop — and play again when you click
-  the desktop or come back to DotStudio. Set it separately for plugged in and on battery
-  (Settings › Live Wallpaper). Off by default, so nothing changes until you turn it on.
+- **Power Saving presets.** Best Quality, Balanced or Battery Saver set everything at once —
+  change anything after and it's yours.
+- **One frame rate for everything.** A single slider (15 · 24 · 30 · 60 · 120 fps) for the
+  screensaver and the live wallpaper, instead of each style's own. Battery and Low Power Mode
+  still cap it lower.
+- **When another app is focused** — Keep Playing, Slow Down (20 fps, lower resolution) or Pause,
+  set separately plugged in and on battery. Click the desktop and it plays again.
+- **Settings lives in the main window** as a sheet, so it works in full screen, with a sidebar of
+  panes and little animated pictures where a setting is easier to see than to read.
 
 ### Improved
-- **Clearer power settings.** Settings › Live Wallpaper now has a When Plugged In card and an On
-  Battery card, side by side with what each one controls. On Battery's Still is now called Pause.
+- **Clearer onboarding.** A bigger welcome, with every step cut to one short line.
+- **A real setup helper.** Beside System Settings, a card shows each of the five clicks with a
+  picture; Settings › Screensaver shows the same card.
 
 ## 1.6.4 — A lighter gallery
 

@@ -748,7 +748,8 @@ final class WallpaperController: ObservableObject {
     /// rate, 30 / 20 on battery; less only if its style itself asks for fewer).
     private func targetFPS(_ preset: Preset?) -> Double {
         WallpaperBudget.fps(settings, presetFPS: preset?.fps ?? 0, onBattery: power.state.onBattery,
-                            slowed: WallpaperBudget.slowed(settings, power.state))
+                            slowed: WallpaperBudget.slowed(settings, power.state),
+                            universal: model?.library.frameRate)
     }
 
     /// How long a desktop must stay covered before the wallpaper pauses: Space switches and

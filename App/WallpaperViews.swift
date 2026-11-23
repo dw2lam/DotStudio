@@ -171,23 +171,38 @@ struct WallpaperSettingsSection: View {
     // Power saving, the way a laptop is used: what plays plugged in, what plays on battery,
     // and in both what happens while another app is focused. Each row acts out its current
     // choice in a little animated Mac (WallpaperDemos.swift).
-    // Power saving the way Wallpaper Engine lays it out: each situation is a row, each option
-    // a card acting out what it does; the active card is in colour, the rest greyed.
+    // Power saving the way Wallpaper Engine lays it out: a preset on top that sets everything,
+    // then one frame rate for everything, then each situation as a row of option cards with a
+    // slider under them.
     @ViewBuilder private var powerSections: some View {
         Section {
-            OptionCards(title: "Frame rate", detail: "How smoothly the wallpaper moves.",
-                        options: [.init(label: "Balanced · 30 fps", value: WallpaperSettings.FrameRate.balanced, scene: .frameRate(.balanced)),
-                                  .init(label: "Smooth · up to 120", value: .smooth, scene: .frameRate(.smooth))],
-                        selection: Binding(get: { wallpaper.settings.frameRate },
-                                           set: { v in wallpaper.update { $0.frameRate = v } }))
+            PowerPresetPicker(current: PowerPreset.matching(wallpaper.settings, model.library)) { preset in
+                preset.apply(wallpaper: wallpaper, model: model)
+            }
+        } header: {
+            powerHeader("Preset", symbol: "slider.horizontal.3")
+        }
+
+        Section {
+            FrameRateRow(fps: Binding(get: { model.library.frameRate ?? (wallpaper.settings.frameRate == .smooth ? 120 : 30) },
+                                      set: { v in PowerPreset.setFrameRate(v, wallpaper: wallpaper, model: model) }))
+        } header: {
+            powerHeader("Frame Rate", symbol: "speedometer")
+        } footer: {
+            SettingsNote("One frame rate for the screensaver and the live wallpaper. On battery it's capped at 30 (20 when Efficient); Low Power Mode draws 15.")
+        }
+
+        Section {
             otherAppRow(\.otherAppPluggedIn)
         } header: {
             powerHeader("When Plugged In", symbol: "powerplug")
         }
 
         Section {
-            OptionCards(title: "Playback", detail: "What plays while your Mac runs on battery.",
-                        options: WallpaperSettings.BatteryMode.allCases.map { .init(label: $0.title, value: $0, scene: .battery($0)) },
+            OptionCards(title: "Playback",
+                        options: WallpaperSettings.BatteryMode.allCases.map {
+                            .init(label: $0.title, value: $0, scene: .battery($0), explain: Self.batteryExplain($0))
+                        },
                         selection: Binding(get: { wallpaper.settings.batteryMode },
                                            set: { v in wallpaper.update { $0.batteryMode = v } }))
             otherAppRow(\.otherAppOnBattery)
@@ -196,22 +211,38 @@ struct WallpaperSettingsSection: View {
         }
 
         Section {
-            OptionCards(title: "Always", detail: "Nobody sees it, or your Mac needs the power — so it stops on its own.",
-                        options: [.init(label: "Full-screen app · pauses", value: 0, scene: .covered),
-                                  .init(label: "Low Power Mode · holds still", value: 1, scene: .lowPower)],
+            OptionCards(title: "Always", options: [
+                            .init(label: "Full-screen app", value: 0, scene: .covered),
+                            .init(label: "Low Power Mode", value: 1, scene: .lowPower)],
                         selection: .constant(0), fixed: true)
         } header: {
             powerHeader("Automatically", symbol: "leaf")
         } footer: {
-            SettingsNote("Also paused while the screen is locked or asleep and while the screensaver runs; held still when your Mac runs hot. A paused clock still turns over each minute.")
+            SettingsNote("Pauses when a full-screen app or windows cover the desktop, the screen locks or sleeps, or the screensaver runs. Holds still in Low Power Mode or when your Mac runs hot. A paused clock still turns over each minute.")
+        }
+    }
+
+    private static func batteryExplain(_ m: WallpaperSettings.BatteryMode) -> String {
+        switch m {
+        case .full: return "plays as when plugged in, up to 30 fps."
+        case .efficient: return "20 fps at lower resolution — about a quarter of the work."
+        case .still: return "holds one frame until you plug in."
         }
     }
 
     /// Another app in front (not full screen): keep playing, slow down, or pause — per power
     /// source, as WallpaperSettings.OtherAppMode.
     private func otherAppRow(_ key: WritableKeyPath<WallpaperSettings, WallpaperSettings.OtherAppMode>) -> some View {
-        OptionCards(title: "Another app is focused", detail: "You're working in another app and some desktop still shows. Clicking the desktop plays again.",
-                    options: WallpaperSettings.OtherAppMode.allCases.map { .init(label: $0.title, value: $0, scene: .otherApp($0)) },
+        OptionCards(title: "Another app is focused",
+                    options: WallpaperSettings.OtherAppMode.allCases.map { m in
+                        .init(label: m.title, value: m, scene: .otherApp(m), explain: {
+                            switch m {
+                            case .keepPlaying: return "the wallpaper plays on behind your windows."
+                            case .efficient: return "drops to 20 fps at lower resolution until you click the desktop."
+                            case .pause: return "holds the frame until you click the desktop or come back to DotStudio."
+                            }
+                        }())
+                    },
                     selection: Binding(get: { wallpaper.settings[keyPath: key] },
                                        set: { v in wallpaper.update { $0[keyPath: key] = v } }))
     }
@@ -253,5 +284,166 @@ struct WallpaperSettingsSection: View {
             .menuStyle(.button)
             .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+
+// MARK: - Power presets
+
+/// One-click Power Saving setups. Each sets the frame rate, quality and every situation below;
+/// changing any of them by hand makes it Custom (no preset ringed).
+enum PowerPreset: String, CaseIterable, Identifiable {
+    case quality, balanced, saver
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .quality: return "Best Quality"
+        case .balanced: return "Balanced"
+        case .saver: return "Battery Saver"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .quality: return "sparkles"
+        case .balanced: return "circle.lefthalf.filled"
+        case .saver: return "leaf.fill"
+        }
+    }
+    var tint: Color {
+        switch self {
+        case .quality: return .purple
+        case .balanced: return .blue
+        case .saver: return .green
+        }
+    }
+    var summary: String {
+        switch self {
+        case .quality: return "60 fps, full resolution, always playing."
+        case .balanced: return "30 fps, lighter on battery. The default."
+        case .saver: return "24 fps, lower resolution; pauses whenever you're busy."
+        }
+    }
+
+    private var fps: Int { self == .quality ? 60 : self == .balanced ? 30 : 24 }
+    private var quality: WallpaperSettings.Quality { self == .quality ? .full : self == .balanced ? .balanced : .efficient }
+    private var screensaverScale: Double? { self == .saver ? 0.5 : nil }
+    private var battery: WallpaperSettings.BatteryMode { self == .quality ? .full : self == .balanced ? .efficient : .still }
+    private var pluggedIn: WallpaperSettings.OtherAppMode { self == .saver ? .efficient : .keepPlaying }
+    private var onBattery: WallpaperSettings.OtherAppMode { self == .saver ? .pause : .keepPlaying }
+
+    static func matching(_ w: WallpaperSettings, _ lib: Library) -> PowerPreset? {
+        allCases.first { p in
+            (lib.frameRate ?? (w.frameRate == .smooth ? 120 : 30)) == p.fps && w.quality == p.quality && lib.renderScale == p.screensaverScale
+                && w.batteryMode == p.battery && w.otherAppPluggedIn == p.pluggedIn && w.otherAppOnBattery == p.onBattery
+        }
+    }
+
+    @MainActor func apply(wallpaper: WallpaperController, model: AppModel) {
+        model.library.frameRate = fps
+        model.library.renderScale = screensaverScale
+        model.save()
+        wallpaper.update {
+            $0.quality = quality
+            $0.frameRate = fps > 30 ? .smooth : .balanced
+            $0.batteryMode = battery
+            $0.otherAppPluggedIn = pluggedIn
+            $0.otherAppOnBattery = onBattery
+        }
+    }
+
+    /// The one frame rate (Library.frameRate), and the wallpaper's own setting in step with it
+    /// (so a build without the shared rate keeps about the same).
+    @MainActor static func setFrameRate(_ v: Int, wallpaper: WallpaperController, model: AppModel) {
+        model.library.frameRate = v
+        model.save()
+        wallpaper.update { $0.frameRate = v > 30 ? .smooth : .balanced }
+    }
+}
+
+/// The presets as three big cards; the matching one is ringed, none when it's Custom.
+private struct PowerPresetPicker: View {
+    let current: PowerPreset?
+    let choose: (PowerPreset) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            HStack(spacing: Space.s) {
+                ForEach(PowerPreset.allCases) { p in
+                    Button { choose(p) } label: {
+                        VStack(alignment: .leading, spacing: Space.xs) {
+                            Image(systemName: p.symbol)
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 38, height: 38)
+                                .background(p.tint.gradient, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            Text(p.title).textRole(.rowTitle)
+                            Text(p.summary).textRole(.callout).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(Space.m)
+                        .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
+                        .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
+                            .fill(current == p ? p.tint.opacity(0.12) : Color.primary.opacity(0.04)))
+                        .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
+                            .strokeBorder(current == p ? p.tint : Color.primary.opacity(0.08), lineWidth: current == p ? 2.5 : 1))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(current == p ? [.isButton, .isSelected] : .isButton)
+                }
+            }
+            Text(current == nil ? "Custom — you've changed settings below. Pick a preset to start over."
+                                : "Sets everything below. Change anything to make it your own.")
+                .textRole(.callout).foregroundStyle(.secondary)
+        }
+        .padding(.vertical, Space.xs)
+    }
+}
+
+/// One frame rate for everything: a big picture playing at the chosen rate (exaggerated so the
+/// steps read), the value in large type, and a slider with a stop per rate.
+private struct FrameRateRow: View {
+    @Binding var fps: Int
+    static let stops = [15, 24, 30, 60, 120]
+
+    private var index: Int { Self.stops.firstIndex(of: fps) ?? Self.stops.firstIndex { $0 >= fps } ?? 2 }
+
+    private var explain: String {
+        switch Self.stops[index] {
+        case 15: return "Lightest. Slow scenes still look calm; fast motion steps."
+        case 24: return "Film rate — gentle on battery."
+        case 30: return "Smooth for most styles, half the work of 60."
+        case 60: return "Fluid motion. Uses about twice the power of 30."
+        default: return "Your display's full rate on ProMotion. Uses the most power."
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: Space.l) {
+            WallpaperDemo(scene: .fps(Self.stops[index]))
+                .frame(width: 240)
+            VStack(alignment: .leading, spacing: Space.s) {
+                HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
+                    Text("\(Self.stops[index])").font(.system(size: 34, weight: .semibold, design: .rounded)).monospacedDigit()
+                    Text("fps").textRole(.rowTitle).foregroundStyle(.secondary)
+                }
+                Slider(value: Binding(get: { Double(index) }, set: { fps = Self.stops[Int($0.rounded())] }),
+                       in: 0...Double(Self.stops.count - 1), step: 1)
+                    .labelsHidden()
+                    .accessibilityLabel("Frame rate")
+                    .accessibilityValue("\(Self.stops[index]) frames per second")
+                HStack {
+                    ForEach(Self.stops.indices, id: \.self) { i in
+                        Text("\(Self.stops[i])").textRole(.callout)
+                            .foregroundStyle(i == index ? Color.accentColor : .secondary)
+                        if i < Self.stops.count - 1 { Spacer(minLength: 0) }
+                    }
+                }
+                Text(explain).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.vertical, Space.xs)
     }
 }

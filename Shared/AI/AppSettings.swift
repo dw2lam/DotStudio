@@ -120,6 +120,9 @@ enum AppSettings {
         SettingDef(key: "screensaver.crossfadeSeconds", label: "Crossfade", place: "Settings ▸ Transitions",
                    meaning: "Seconds to blend between styles as the playlist changes and at sunrise/sunset; below 0.05 is Off.",
                    type: .number(min: 0, max: 3), store: .library),
+        SettingDef(key: "power.frameRate", label: "Frame rate", place: "Settings ▸ Power Saving",
+                   meaning: "One frame rate for the screensaver and the live wallpaper: 15, 24, 30, 60 or 120 fps; style = each style's own rate. Battery, Low Power Mode and Slow Down still cap it lower.",
+                   type: .choice(["style", "15", "24", "30", "60", "120"]), store: .library),
         SettingDef(key: "screensaver.quality", label: "Quality", place: "Settings ▸ Screensaver Performance",
                    meaning: "The screensaver's render resolution: full (native Retina), balanced (0.75×), efficient (0.5×) — less GPU memory and battery, same look. On battery it also caps its frame rate by itself.",
                    type: .choice(["full", "balanced", "efficient"]), store: .library),
@@ -315,6 +318,7 @@ enum AppSettings {
         o["screensaver.shuffle"] = .bool(rot.shuffle)
         o["screensaver.crossfadeSeconds"] = .number(rot.transitionSeconds)
         o["screensaver.quality"] = .string(qualityName(lib.renderScale))
+        o["power.frameRate"] = .string(lib.frameRate.map(String.init) ?? "style")
         let lineup = lib.screensaverLineup
         o["screensaver.playlist"] = .array(lineup.playlist.map(name))
         o["screensaver.night"] = lineup.night.map(name) ?? .null
@@ -613,6 +617,7 @@ enum AppSettings {
         case "screensaver.shuffle": rotation { $0.shuffle = v.boolValue ?? false }
         case "screensaver.crossfadeSeconds": rotation { $0.transitionSeconds = v.doubleValue ?? 1.5 }
         case "screensaver.quality": lib.renderScale = renderScale(v.stringValue)
+        case "power.frameRate": lib.frameRate = v.stringValue.flatMap { Int($0) }
         case "music.show": music { $0.setDisplay(MusicSpec.Display(rawValue: v.stringValue ?? "") ?? .corner) }
         case "music.corner": music { $0.cardCorner = MusicSpec.Corner(rawValue: v.stringValue ?? "") }
         case "music.size": music { $0.cardSize = MusicSpec.CardSize(rawValue: v.stringValue ?? "") }

@@ -456,6 +456,10 @@ lib = library(T)
 check(lib["rotation"]["intervalMinutes"] == 15 and lib["rotation"]["shuffle"] is True and lib["rotation"]["transitionSeconds"] == 2.5
       and lib["renderScale"] == 0.5, "  → library.json rotation + renderScale")
 ok(upd({"screensaver.quality": "full"}), "screensaver: quality back to full")
+ok(upd({"power.frameRate": "24"}), "power: one frame rate for everything")
+check(library(T)["frameRate"] == 24, "  → library.json frameRate 24")
+ok(upd({"power.frameRate": "style"}), "power: back to each style's own")
+check("frameRate" not in library(T), "  → frameRate gone")
 check("renderScale" not in library(T), "  → full is stored as absent, as the app does")
 res = upd({"music.show": "fullScreen", "music.layout": "stage", "music.behind": "screensaver", "music.corner": "topRight",
            "music.size": "large", "music.onWallpaper": True, "music.keepPausedSongMinutes": 15, "music.source": "spotify"})

@@ -542,7 +542,16 @@ enum WallpaperBudget {
     /// (Full) or 20 (Efficient). Less only if the style itself asks for fewer.
     /// `slowed`: another app is in front and set to Slow Down (WallpaperBudget.slowed) —
     /// Efficient's rate and resolution, plugged in or not.
-    static func fps(_ settings: WallpaperSettings, presetFPS: Int, onBattery: Bool, slowed: Bool = false) -> Double {
+    /// `universal`: Power Saving's one frame rate (Library.frameRate) — replaces the style's own
+    /// and Balanced / Smooth; battery and Slow Down still cap it.
+    static func fps(_ settings: WallpaperSettings, presetFPS: Int, onBattery: Bool, slowed: Bool = false,
+                    universal: Int? = nil) -> Double {
+        if let u = universal, u > 0 {
+            var f = Double(u)
+            if onBattery { f = min(f, settings.batteryMode == .efficient ? efficientFPS : batteryMaxFPS) }
+            if slowed { f = min(f, efficientFPS) }
+            return f
+        }
         if slowed { return presetFPS > 0 ? min(efficientFPS, Double(presetFPS)) : efficientFPS }
         if !onBattery, settings.frameRate == .smooth { return 120 }
         var fps = onBattery && settings.batteryMode == .efficient ? efficientFPS

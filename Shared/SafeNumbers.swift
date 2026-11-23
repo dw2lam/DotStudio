@@ -116,6 +116,7 @@ extension Library {
         for i in unknownPresets.indices where unknownPresets[i].preset.sanitize() { changed = true }
         if let r = renderScale, !(r.isFinite && r > 0) { renderScale = nil; changed = true }
         else if let r = renderScale, r > 1 { renderScale = 1; changed = true }
+        if let f = frameRate, !(1...240).contains(f) { frameRate = nil; changed = true }
         if var rot = rotation {
             // (Playback floors the interval at 15 s itself; only what it can't handle is replaced)
             let iv = rot.intervalMinutes.isFinite && rot.intervalMinutes > 0 ? rot.intervalMinutes : 5

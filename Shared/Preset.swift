@@ -195,6 +195,10 @@ struct Library: Codable, Equatable {
     /// Saver render resolution as a fraction of native (1 = full Retina). Optional so
     /// older builds still decode the library; nil means full quality.
     var renderScale: Double?
+    /// One frame rate for everything — the screensaver and the live wallpaper — instead of each
+    /// style's own (Settings › Power Saving). nil = each style's own rate (and the wallpaper's
+    /// Balanced / Smooth). Battery, Low Power Mode and Slow Down still cap it lower.
+    var frameRate: Int?
     /// Automatic preset rotation; nil = show the active preset only.
     var rotation: RotationSpec?
     /// Day/night scheduling; when enabled it overrides rotation.
@@ -291,7 +295,7 @@ extension Preset {
 /// Library: as the synthesized Codable, except `presets` (see unknownPresets).
 extension Library {
     private enum CodingKeys: String, CodingKey {
-        case presets, source, activeID, version, locationLat, locationLon, renderScale, rotation,
+        case presets, source, activeID, version, locationLat, locationLon, renderScale, frameRate, rotation,
              schedule, music, seenBuiltIns, syncTimeBase, displayStyles, signals, rules,
              locationMode, manualPlace, autoPlace
     }
@@ -317,6 +321,7 @@ extension Library {
         manualPlace = ((try? c.decodeIfPresent(NamedPlace.self, forKey: .manualPlace)) ?? nil).flatMap { $0.isValid ? $0 : nil }
         autoPlace = ((try? c.decodeIfPresent(NamedPlace.self, forKey: .autoPlace)) ?? nil).flatMap { $0.isValid ? $0 : nil }
         renderScale = try c.decodeIfPresent(Double.self, forKey: .renderScale)
+        frameRate = (try? c.decodeIfPresent(Int.self, forKey: .frameRate)) ?? nil
         rotation = try c.decodeIfPresent(RotationSpec.self, forKey: .rotation)
         schedule = try c.decodeIfPresent(ScheduleSpec.self, forKey: .schedule)
         music = try c.decodeIfPresent(MusicSpec.self, forKey: .music)
@@ -350,6 +355,7 @@ extension Library {
         try c.encodeIfPresent(manualPlace, forKey: .manualPlace)
         try c.encodeIfPresent(autoPlace, forKey: .autoPlace)
         try c.encodeIfPresent(renderScale, forKey: .renderScale)
+        try c.encodeIfPresent(frameRate, forKey: .frameRate)
         try c.encodeIfPresent(rotation, forKey: .rotation)
         try c.encodeIfPresent(schedule, forKey: .schedule)
         try c.encodeIfPresent(music, forKey: .music)
