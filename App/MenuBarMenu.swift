@@ -124,7 +124,6 @@ struct MenuBarStylePicker: View {
 /// the main window was closed or never opened (login launch).
 struct DotStudioMenuLabel: View {
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.openSettings) private var openSettings
     @ObservedObject private var wallpaper = WallpaperController.shared
     @AppStorage(MenuBarIcon.key) private var icon: MenuBarIcon = .standard
 
@@ -136,7 +135,7 @@ struct DotStudioMenuLabel: View {
             .accessibilityValue(live ? "Live wallpaper playing" : "")
             .onAppear {
                 let open = { openWindow(id: DotStudioApp.mainWindowID) }
-                AppPresence.shared.register(openMainWindow: open, openSettings: { openSettings() })
+                AppPresence.shared.register(openMainWindow: open)
                 WallpaperController.shared.registerOpenMainWindow(open)
             }
     }

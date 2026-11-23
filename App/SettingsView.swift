@@ -6,66 +6,123 @@
 import SwiftUI
 import ServiceManagement
 
+/// The Settings window's panes, in sidebar order — grouped like System Settings.
+enum SettingsPane: String, CaseIterable, Identifiable {
+    case general, screensaver, wallpaper, power, music, liveData, ai, updates
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .general: return "General"
+        case .screensaver: return "Screensaver"
+        case .wallpaper: return "Live Wallpaper"
+        case .power: return "Power Saving"
+        case .music: return "Music"
+        case .liveData: return "Weather & Signals"
+        case .ai: return "AI"
+        case .updates: return "Updates"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .general: return "gearshape.fill"
+        case .screensaver: return "sparkles.tv.fill"
+        case .wallpaper: return "photo.on.rectangle.angled"
+        case .power: return "bolt.fill"
+        case .music: return "music.note"
+        case .liveData: return "cloud.sun.fill"
+        case .ai: return "sparkle"
+        case .updates: return "arrow.down.circle.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .general: return .gray
+        case .screensaver: return .indigo
+        case .wallpaper: return .teal
+        case .power: return .green
+        case .music: return .pink
+        case .liveData: return .orange
+        case .ai: return .purple
+        case .updates: return .blue
+        }
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var updates: UpdateController
     @Environment(\.layout) private var layout
 
-    /// The Form grows with the text (its row labels do), from this width at the default size.
-    @ScaledLength(relativeTo: .body) private var formWidth: CGFloat = SettingsMetrics.width
     @ScaledLength(relativeTo: .caption) private var valueWidth: CGFloat = SettingsMetrics.valueWidth
-    @ScaledLength(relativeTo: .body) private var segmentWidth: CGFloat = SettingsMetrics.segmentWidth
     @ScaledLength(relativeTo: .title2) private var iconBox: CGFloat = SettingsMetrics.iconBox
+    @ScaledLength(relativeTo: .body) private var sidebarWidth: CGFloat = SettingsMetrics.sidebarWidth
 
-    /// Offscreen UI shots (Shots.swift) render Settings at its natural height, so the review
-    /// matrix shows every section; the real window opens at `SettingsMetrics.openHeight`.
-    private static let isRenderingShots = ProcessInfo.processInfo.environment["DOTSTUDIO_UI_SHOTS"] != nil
+    private var pane: SettingsPane { model.settingsPane ?? .general }
 
-    /// The MCP popover's "More in Settings…" scrolls to the AI section.
-    @ObservedObject private var ai = AIConnect.shared
-    @State private var revealedAI = 0
-
+    /// A page of the main window: the panes in a sidebar, the chosen one beside it, and Back
+    /// (toolbar, or Esc) to the gallery.
     var body: some View {
-        ScrollViewReader { proxy in
-            form
-                .onAppear { revealAI(proxy) }
-                .onChange(of: ai.revealRequest) { _, _ in revealAI(proxy) }
+        HStack(spacing: 0) {
+            // The panes, System Settings style: a tinted icon tile and the name; the chosen one
+            // on a soft accent highlight (drawn here, so it reads the same focused or not).
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(SettingsPane.allCases) { p in
+                        SettingsSidebarRow(pane: p, selected: p == pane) { model.settingsPane = p }
+                    }
+                }
+                .padding(.horizontal, Space.xs)
+                .padding(.vertical, Space.s)
+            }
+            .frame(width: sidebarWidth)
+            .background(.background.secondary)
+            Divider()
+            detail(pane)
         }
-    }
-
-    private func revealAI(_ proxy: ScrollViewProxy) {
-        guard ai.revealRequest != revealedAI else { return }
-        revealedAI = ai.revealRequest
-        // after the window has laid out (it may be opening just now)
-        DispatchQueue.main.async { withAnimation { proxy.scrollTo(AISettingsSection.anchor, anchor: .top) } }
-    }
-
-    private var form: some View {
-        Form {
-            GeneralSettingsSection()
-            MusicSettingsSlot()        // the Music section (MusicSlots.swift)
-            WeatherSettingsSection()   // live weather for the sea scenes (WeatherSettingsSection.swift)
-            SignalsSettingsSection()   // live values When rules react to (SignalsSettingsSection.swift)
-            setupSection
-            WallpaperSettingsSection()
-            AISettingsSection()        // assistants via dotstudio-mcp (AISettingsSection.swift)
-            transitionsSection
-            performanceSection
-            updatesSection
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button { model.settingsPane = nil } label: {
+                    Label("Back to Gallery", systemImage: "chevron.backward")
+                }
+                .help("Back to the gallery (Esc)")
+            }
         }
-        .formStyle(.grouped)
-        .textRole(.body)          // row labels follow the text size (macOS never scales them itself)
-        .formControlSize()        // stock sizes at standard text; a step up per text bump after
-        .frame(minWidth: SettingsMetrics.width, idealWidth: formWidth, maxWidth: formWidth)
-        // All six sections run ~1250 pt — taller than a 13" display. Open shorter and let the
-        // Form scroll; the window can still be dragged taller.
-        .frame(minHeight: SettingsMetrics.minHeight,
-               idealHeight: Self.isRenderingShots ? nil : SettingsMetrics.openHeight,
-               maxHeight: .infinity)
+        .background {
+            Button("Back") { model.settingsPane = nil }
+                .keyboardShortcut(.cancelAction)
+                .opacity(0).allowsHitTesting(false)
+        }
         .onAppear {
             model.refreshSetupStatus()
             updates.refreshStatus()
         }
+    }
+
+    private func detail(_ p: SettingsPane) -> some View {
+        Form {
+            switch p {
+            case .general: GeneralSettingsSection()
+            case .screensaver:
+                setupSection
+                performanceSection
+                transitionsSection
+            case .wallpaper: WallpaperSettingsSection(part: .wallpaper)
+            case .power: WallpaperSettingsSection(part: .power)
+            case .music: MusicSettingsSlot()        // MusicSlots.swift
+            case .liveData:
+                WeatherSettingsSection()            // live weather for the sea scenes
+                SignalsSettingsSection()            // live values When rules react to
+            case .ai: AISettingsSection()           // assistants via dotstudio-mcp
+            case .updates: updatesSection
+            }
+        }
+        .formStyle(.grouped)
+        .textRole(.body)          // row labels follow the text size (macOS never scales them itself)
+        .formControlSize()        // stock sizes at standard text; a step up per text bump after
+        .id(p)                    // each pane scrolls from its top
     }
 
     // MARK: Setup
@@ -98,14 +155,13 @@ struct SettingsView: View {
 
     private var transitionsSection: some View {
         Section {
-            // As wide as the segmented pickers, so the value column has one leading edge.
-            SettingsValueRow("Crossfade", valueWidth: segmentWidth) {
+            DemoSettingRow(title: "Crossfade", detail: crossfadeDetail,
+                           demo: .crossfade(seconds: model.rotation.transitionSeconds)) {
                 HStack(spacing: layout.controlGap) {
                     Slider(value: Binding(get: { model.rotation.transitionSeconds },
                                           set: { v in model.updateRotation { $0.transitionSeconds = v } }),
                            in: 0...3)
-                        .labelsHidden()   // outside a LabeledContent a Form keeps a label column for it
-                        // labelsHidden drops the slider's name for VoiceOver too: give it back.
+                        .labelsHidden()
                         .accessibilityLabel("Crossfade")
                         .accessibilityValue(model.rotation.transitionSeconds < 0.05
                                             ? "Off" : String(format: "%.1f seconds", model.rotation.transitionSeconds))
@@ -119,7 +175,7 @@ struct SettingsView: View {
         } header: {
             SettingsHeader("Transitions")
         } footer: {
-            SettingsNote("Blend between styles as the playlist changes, and at sunrise and sunset.")
+            SettingsNote("Used when the playlist moves to the next style, and at sunrise and sunset.")
         }
     }
 
@@ -127,16 +183,17 @@ struct SettingsView: View {
 
     private var performanceSection: some View {
         Section {
-            SettingsValueRow("Quality", valueWidth: segmentWidth) {
+            DemoSettingRow(title: "Quality", detail: screensaverQualityDetail,
+                           demo: .screensaverQuality(model.library.renderScale ?? 1.0)) {
                 ScaledSegmentedPicker(title: "Quality", selection: qualityBinding,
                                       options: [("Full", 1.0), ("Balanced", 0.75), ("Efficient", 0.5)],
                                       fills: true)
             }
         } header: {
             // The screensaver's render scale — distinct from Live Wallpaper › Quality.
-            SettingsHeader("Screensaver Performance")
+            SettingsHeader("Performance")
         } footer: {
-            SettingsNote("Balanced and Efficient render at reduced resolution — far less GPU memory and battery on Retina displays, same chunky look. On battery the frame rate also caps automatically.")
+            SettingsNote("On battery the screensaver's frame rate also caps automatically.")
         }
     }
 
@@ -235,11 +292,56 @@ struct SettingsView: View {
         }
     }
 
+    private var crossfadeDetail: String {
+        let v = model.rotation.transitionSeconds
+        return v < 0.05 ? "Off — styles change with a cut." : String(format: "Styles blend into each other over %.1f seconds.", v)
+    }
+
+    private var screensaverQualityDetail: String {
+        switch model.library.renderScale ?? 1.0 {
+        case 0.75...0.99: return "Three-quarter resolution — looks the same, costs less."
+        case ..<0.75: return "Half resolution — chunkier, lightest on battery."
+        default: return "Sharpest, at your display's full resolution."
+        }
+    }
+
     // MARK: Bindings
 
     private var qualityBinding: Binding<Double> {
         Binding(get: { model.library.renderScale ?? 1.0 },
                 set: { model.library.renderScale = $0 >= 1.0 ? nil : $0; model.save() })
+    }
+}
+
+/// One pane in the Settings sidebar.
+private struct SettingsSidebarRow: View {
+    let pane: SettingsPane
+    let selected: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Space.xs) {
+                Image(systemName: pane.symbol)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 22, height: 22)
+                    .background(pane.tint.gradient, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                Text(pane.title)
+                    .textRole(selected ? .bodyEmphasis : .body)
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, Space.xs)
+            .padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
+                .fill(selected ? Color.accentColor.opacity(0.18) : hovering ? Color.primary.opacity(0.06) : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -264,9 +366,18 @@ struct GeneralSettingsSection: View {
     var body: some View {
         Section {
             if nudge.pending != nil { LoginNudgeBanner(topPadding: 0) }
-            Toggle("Keep running in the menu bar", isOn: $presence.menuBarMode)
-                .formSwitchSize()
-            LabeledContent("Menu bar icon") {
+            DemoSettingRow(title: "Keep running in the menu bar",
+                           detail: presence.menuBarMode
+                               ? "Closing the window leaves DotStudio in the menu bar, so your wallpaper keeps playing."
+                               : "Closing the window quits DotStudio.",
+                           demo: .menuBarMode(keepsRunning: presence.menuBarMode), inlineControl: true) {
+                Toggle("Keep running in the menu bar", isOn: $presence.menuBarMode)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .formSwitchSize()
+            }
+            DemoSettingRow(title: "Menu bar icon", detail: "\(menuBarIcon.name) — fills in while a live wallpaper plays.",
+                           demo: .menuBarIcon(menuBarIcon.symbol(live: false))) {
                 Picker("Menu bar icon", selection: $menuBarIcon) {
                     ForEach(MenuBarIcon.allCases) { i in
                         Image(systemName: i.symbol(live: false))
@@ -335,11 +446,10 @@ struct GeneralSettingsSection: View {
 /// Settings' own metrics, at the default text size — local constants derived from the
 /// Layout.swift scale. Views scale them with `@ScaledLength`.
 enum SettingsMetrics {
-    /// The Form's width (and the window's minimum).
-    static let width: CGFloat = 460
-    /// The window's opening height; the Form scrolls past it.
-    static let openHeight = Space.grid(180)       // 720
-    static let minHeight = Space.grid(100)        // 400
+    /// The Settings page's sidebar.
+    static let sidebarWidth = Space.grid(54)      // 216
+    /// A single section on its own (offscreen previews): wide enough for a demo beside its text.
+    static let width: CGFloat = 640
     /// Every segmented picker is this wide, so their leading edges line up in the value
     /// column (fits "Balanced · 30 fps | Smooth · display rate").
     static let segmentWidth = Space.grid(76)      // 304

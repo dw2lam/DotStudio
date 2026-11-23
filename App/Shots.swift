@@ -584,31 +584,36 @@ enum UIShots {
         }, view: main))
         s.append(Screen(name: "setup-nudge-music", frame: .window,
                         prepare: { _ in LoginNudge.shared.setDemo(.music) }, view: main))
-        s.append(Screen(name: "setup-nudge-settings", frame: .fit(width: 460, minHeight: 160),
+        s.append(Screen(name: "setup-nudge-settings", frame: .fit(width: 640, minHeight: 160),
                         prepare: { _ in LoginNudge.shared.setDemo(.wallpaper) },
                         view: { _ in AnyView(SettingsSectionPreview { GeneralSettingsSection() }) }))
         // The Screensaver card's setup strip with its "Show Me How" link into the guide
         s.append(Screen(name: "setup-card-notchosen", frame: .window,
                         prepare: { $0.setup(.notChosen) }, view: main))
-        s.append(Screen(name: "setup-settings-approval", frame: .fit(width: 460, minHeight: 160),
+        s.append(Screen(name: "setup-settings-approval", frame: .fit(width: 640, minHeight: 160),
                         prepare: { _ in LoginItem.demoStatus = .requiresApproval },
                         view: { _ in AnyView(SettingsSectionPreview { GeneralSettingsSection() }) }))
 
         // Settings: every section (General, Screensaver, Live Wallpaper, Transitions, Performance, Updates)
-        s.append(Screen(name: "settings", frame: .fit(width: 460, minHeight: 600),
-                        prepare: { st in WallpaperController.shared.update { $0.presetID = st.wallpaper } },
-                        view: { _ in AnyView(SettingsView()) }))
+        // Settings is a page of the main window: each pane in it
+        for pane in SettingsPane.allCases {
+            s.append(Screen(name: "settings-pane-\(pane.rawValue)", frame: .window,
+                            prepare: { st in
+                                WallpaperController.shared.update { $0.presetID = st.wallpaper }
+                                st.model.settingsPane = pane
+                            }, view: main))
+        }
         // Settings › General on its own, in both menu-bar modes (the footer changes with it)
-        s.append(Screen(name: "settings-general", frame: .fit(width: 460, minHeight: 160),
+        s.append(Screen(name: "settings-general", frame: .fit(width: 640, minHeight: 160),
                         view: { _ in AnyView(SettingsSectionPreview { GeneralSettingsSection() }) }))
-        s.append(Screen(name: "settings-general-off", frame: .fit(width: 460, minHeight: 160),
+        s.append(Screen(name: "settings-general-off", frame: .fit(width: 640, minHeight: 160),
                         prepare: { _ in AppPresence.shared.menuBarMode = false },
                         view: { _ in AnyView(SettingsSectionPreview { GeneralSettingsSection() }) }))
         // Settings › Music: nothing playing, playing (controls), permission needed (all Corner,
         // the default), Show music Off (not watching), and Full Screen (its own options)
         for (scenario, tag) in [(MusicDemo.Scenario.idle, ""), (.playing, "-playing"), (.denied, "-denied"),
                                 (.off, "-off"), (.playing, "-full")] {
-            s.append(Screen(name: "settings-music\(tag)", frame: .fit(width: 460, minHeight: 300), prepare: { st in
+            s.append(Screen(name: "settings-music\(tag)", frame: .fit(width: 640, minHeight: 300), prepare: { st in
                 MusicDemo.apply(scenario)
                 var m = MusicSpec()
                 if scenario == .off { m.setDisplay(.off) }
@@ -617,29 +622,29 @@ enum UIShots {
             }, view: { _ in AnyView(SettingsSectionPreview { MusicSettingsSlot() }) }))
         }
         // …with menu-bar mode off: closing the window quits, and the note says so
-        s.append(Screen(name: "settings-music-menubar-off", frame: .fit(width: 460, minHeight: 300), prepare: { _ in
+        s.append(Screen(name: "settings-music-menubar-off", frame: .fit(width: 640, minHeight: 300), prepare: { _ in
             MusicDemo.apply(.playing)
             AppPresence.shared.menuBarMode = false
         }, view: { _ in AnyView(SettingsSectionPreview { MusicSettingsSlot() }) }))
         // Settings › Live Wallpaper matching the screensaver (no style picker)
-        s.append(Screen(name: "settings-wallpaper-match", frame: .fit(width: 460, minHeight: 300), prepare: { _ in
+        s.append(Screen(name: "settings-wallpaper-match", frame: .fit(width: 640, minHeight: 300), prepare: { _ in
             WallpaperController.shared.update { $0.enabled = true; $0.followsScreensaver = true }
         }, view: { _ in AnyView(SettingsSectionPreview { WallpaperSettingsSection() }) }))
         // The animated desktops beside the wallpaper's power settings, each across one loop
-        s.append(Screen(name: "settings-wallpaper-demos", frame: .fit(width: 1000, minHeight: 300), prepare: { _ in },
+        s.append(Screen(name: "settings-wallpaper-demos", frame: .fit(width: 1100, minHeight: 300), prepare: { _ in },
                         view: { _ in AnyView(WallpaperDemoSheet()) }))
         // Settings › Weather › Location: automatic (the IP lookup's city), set by the user, and
         // with Live weather off (the row stays: the sun and Universe use it); then the Change…
         // popover with search results (a fixture: nothing is fetched), before typing, and none found
-        s.append(Screen(name: "settings-weather-location-auto", frame: .fit(width: 460, minHeight: 200), prepare: { st in
+        s.append(Screen(name: "settings-weather-location-auto", frame: .fit(width: 640, minHeight: 200), prepare: { st in
             st.model.library.setAutomaticLocation()
             st.model.library.autoPlace = NamedPlace(name: "San Francisco, California", lat: 37.77, lon: -122.42)
             st.model.library.locationLat = 37.77; st.model.library.locationLon = -122.42
         }, view: { _ in AnyView(SettingsSectionPreview { WeatherSettingsSection() }) }))
-        s.append(Screen(name: "settings-weather-location-manual", frame: .fit(width: 460, minHeight: 200), prepare: { st in
+        s.append(Screen(name: "settings-weather-location-manual", frame: .fit(width: 640, minHeight: 200), prepare: { st in
             st.model.library.setManualLocation(LocationDemo.toronto.place)
         }, view: { _ in AnyView(SettingsSectionPreview { WeatherSettingsSection() }) }))
-        s.append(Screen(name: "settings-weather-location-off", frame: .fit(width: 460, minHeight: 160), prepare: { st in
+        s.append(Screen(name: "settings-weather-location-off", frame: .fit(width: 640, minHeight: 160), prepare: { st in
             WeatherService.shared.enabled = false
             st.model.library.setManualLocation(LocationDemo.toronto.place)
         }, view: { _ in AnyView(SettingsSectionPreview { WeatherSettingsSection() }) }))
@@ -660,10 +665,10 @@ enum UIShots {
 
         // Settings › Signals: none of the user's yet; then four (an AI one, a file, a key that
         // needs re-entry, a failing one) and the editor sheet with a test's outline
-        s.append(Screen(name: "settings-signals-empty", frame: .fit(width: 460, minHeight: 160),
+        s.append(Screen(name: "settings-signals-empty", frame: .fit(width: 640, minHeight: 160),
                         prepare: { st in SignalsDemo.apply(st.model, signals: false, hero: st.hero, other: st.night) },
                         view: { _ in AnyView(SettingsSectionPreview { SignalsSettingsSection() }) }))
-        s.append(Screen(name: "settings-signals", frame: .fit(width: 460, minHeight: 300),
+        s.append(Screen(name: "settings-signals", frame: .fit(width: 640, minHeight: 300),
                         prepare: { st in SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.night) },
                         view: { _ in AnyView(SettingsSectionPreview { SignalsSettingsSection() }) }))
         s.append(Screen(name: "settings-signals-editor", frame: .fixed(CGSize(width: 520, height: 760)),

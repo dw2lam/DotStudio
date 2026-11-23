@@ -105,7 +105,18 @@ struct WallpaperSettingsSection: View {
     @ScaledLength(relativeTo: .body) private var popUpMaxWidth: CGFloat = SettingsMetrics.popUpMaxWidth
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    /// The Live Wallpaper pane (what plays) or the Power Saving pane (how it saves power).
+    enum Part { case wallpaper, power }
+    var part: Part = .wallpaper
+
     var body: some View {
+        switch part {
+        case .wallpaper: wallpaperSection
+        case .power: powerSections
+        }
+    }
+
+    private var wallpaperSection: some View {
         Section {
             Toggle("Use a style as your desktop wallpaper", isOn: Binding(
                 get: { wallpaper.isActive },
@@ -141,20 +152,30 @@ struct WallpaperSettingsSection: View {
                     fills: true)
             }
             // A still of the wallpaper as the desktop picture macOS shows when locked (LockScreenPicture).
-            Toggle("Use as lock & login screen picture", isOn: Binding(
-                get: { wallpaper.settings.lockScreen },
-                set: { wallpaper.setLockScreen($0) }))
-                .formSwitchSize()
-                .help("macOS shows a still of the wallpaper on the lock and login screens. It updates when your Mac locks; turning it off restores your previous picture.")
+            DemoSettingRow(title: "Lock & login screen picture",
+                           detail: wallpaper.settings.lockScreen
+                               ? "A still of your wallpaper shows when your Mac locks."
+                               : "The lock screen keeps your own picture.",
+                           demo: .lockScreen(on: wallpaper.settings.lockScreen), inlineControl: true) {
+                Toggle("Use as lock & login screen picture", isOn: Binding(
+                    get: { wallpaper.settings.lockScreen },
+                    set: { wallpaper.setLockScreen($0) }))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .formSwitchSize()
+            }
         } header: {
             SettingsHeader("Live Wallpaper")
         } footer: {
             SettingsNote("Plays while DotStudio is open — closing the window keeps it running from the menu bar. Same as Screensaver plays exactly what the screensaver shows, in step.")
         }
 
-        // Power saving, the way a laptop is used: what plays plugged in, what plays on
-        // battery, and in both what happens while another app is focused. Each row acts out
-        // its current choice in a little animated desktop (WallpaperDemos.swift).
+    }
+
+    // Power saving, the way a laptop is used: what plays plugged in, what plays on battery,
+    // and in both what happens while another app is focused. Each row acts out its current
+    // choice in a little animated Mac (WallpaperDemos.swift).
+    @ViewBuilder private var powerSections: some View {
         Section {
             DemoSettingRow(title: "Frame Rate", detail: frameRateDetail,
                            demo: .frameRate(wallpaper.settings.frameRate)) {

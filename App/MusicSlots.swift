@@ -137,7 +137,8 @@ struct MusicSettingsSection: View {
                 MusicSettingsNowPlaying(now: now)
             }
             // "Show music", then only the options of the mode picked.
-            SettingsValueRow("Show music", valueWidth: segmentWidth) {
+            DemoSettingRow(title: "Show music", detail: showMusicDetail(spec.displayMode),
+                           demo: .music(spec.displayMode)) {
                 ScaledSegmentedPicker(title: "Show music", selection: binding(\.displayMode) { $0.setDisplay($1) },
                                       options: MusicSpec.Display.allCases.map { ($0.label, $0) }, fills: true)
             }
@@ -195,6 +196,14 @@ struct MusicSettingsSection: View {
             }
         }
         .onAppear { now.refreshAutomation() }
+    }
+
+    private func showMusicDetail(_ mode: MusicSpec.Display) -> String {
+        switch mode {
+        case .off: return "The screensaver never shows what's playing."
+        case .corner: return "A small card with the song sits in a corner of the screensaver."
+        case .fullScreen: return "The song and its cover fill the screen while it plays."
+        }
     }
 
     /// A binding to one music setting: reads the resolved value, writes the stored field.

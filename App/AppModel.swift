@@ -48,6 +48,19 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// The Settings page showing in the main window (nil = the gallery or editor). Settings
+    /// lives in the main window rather than a window of its own, so it's reachable when
+    /// DotStudio is full screen.
+    @Published var settingsPane: SettingsPane? {
+        didSet { if settingsPane != oldValue { Breadcrumbs.note(settingsPane.map { "settings \($0.rawValue)" } ?? "close settings") } }
+    }
+
+    /// Show Settings in the main window (the editor closes: its edits are already saved).
+    func openSettings(_ pane: SettingsPane = .general) {
+        editingID = nil
+        settingsPane = pane
+    }
+
     /// A style's name for the crash reporter's breadcrumbs (kind too: names are the user's).
     func crumbName(_ id: UUID?) -> String {
         guard let id else { return "none" }

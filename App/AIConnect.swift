@@ -189,7 +189,6 @@ struct MCPToolbarButton: View {
 struct MCPPopover: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.layout) private var layout
-    @Environment(\.openSettings) private var openSettings
     @ObservedObject private var ai = AIConnect.shared
     @ObservedObject private var weather = WeatherService.shared
     var close: () -> Void = {}
@@ -273,8 +272,7 @@ struct MCPPopover: View {
             Divider()
             Button(scaled: "What can it do? More in Settings…") {
                 close()
-                ai.revealRequest += 1
-                openSettings()
+                AppPresence.shared.showSettings(.ai)
             }
         }
         .padding(layout.cardPadding)

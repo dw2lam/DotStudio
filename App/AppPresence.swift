@@ -114,7 +114,6 @@ final class AppPresence: NSObject, ObservableObject {
 
     fileprivate weak var model: AppModel?
     private var openMainWindowAction: (() -> Void)?
-    private var openSettingsAction: (() -> Void)?
     private var wantsMainWindow = false
     private var launchDecided = false
     private var launched = false
@@ -252,10 +251,9 @@ final class AppPresence: NSObject, ObservableObject {
 
     /// SwiftUI's openWindow / openSettings, captured from a view's environment (the main
     /// window's root and the menu-bar label both register; either works).
-    func register(openMainWindow: @escaping () -> Void, openSettings: (() -> Void)? = nil) {
+    func register(openMainWindow: @escaping () -> Void) {
         guard !inert else { return }
         openMainWindowAction = openMainWindow
-        if let openSettings { openSettingsAction = openSettings }
         if wantsMainWindow {
             wantsMainWindow = false
             DispatchQueue.main.async { [weak self] in self?.showMainWindow() }
@@ -286,22 +284,11 @@ final class AppPresence: NSObject, ObservableObject {
         }
     }
 
-    /// Settings… from the menu bar (⌘, inside the app goes through SwiftUI directly).
-    func showSettings() {
-        closeNotice()
-        becomeRegular(activate: true)
-        whenUnhidden { [weak self] in
-            if let w = Self.settingsWindow(), Self.isOpen(w) {
-                if w.isMiniaturized { w.deminiaturize(nil) }
-                w.makeKeyAndOrderFront(nil)
-            } else if let open = self?.openSettingsAction {   // SwiftUI keeps a closed Settings window; let it reopen it
-                open()
-            } else {
-                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-            }
-            self?.bringToFront { Self.settingsWindow() }
-            self?.settleSoon()
-        }
+    /// Settings… (menu bar, ⌘,, the AI popover): the main window, on its Settings page —
+    /// Settings lives in the main window so it's reachable in full screen.
+    func showSettings(_ pane: SettingsPane = .general) {
+        model?.openSettings(pane)
+        showMainWindow()
     }
 
     /// Check for Updates… from the menu bar: Sparkle's windows need a regular, active app.

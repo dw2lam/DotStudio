@@ -136,18 +136,18 @@ struct DotStudioApp: App {
                 Divider()
                 Button("Report a Problem…") { CrashReportPanel.shared.reportProblem() }
             }
+            // Settings is a page of the main window (so it works in full screen), not a window.
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") { AppPresence.shared.showSettings() }
+                    .keyboardShortcut(",")
+            }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { updates.primaryAction() }
                     .disabled(!updates.canCheck)
             }
         }
 
-        Settings {
-            SettingsView()
-                .environmentObject(model)
-                .environmentObject(updates)
-                .adaptiveLayout()   // Settings is its own window: its own width class (Layout.swift)
-        }
+
 
         // Whenever menu-bar mode is on, or a live wallpaper plays (MenuBarMenu.swift).
         MenuBarExtra(isInserted: Binding(get: { presence.showsMenuBarItem }, set: { _ in })) {

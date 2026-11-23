@@ -36,15 +36,15 @@ struct LibraryView: View {
                         filter: $filter, query: $query, searchFocused: $searchFocused)
         }
         .toolbar {
-            if model.editingID == nil {
+            if model.editingID == nil && model.settingsPane == nil {
                 ToolbarItemGroup(placement: .primaryAction) {
                     UpdateReadyButton()
                     newMenu
                     MCPToolbarButton()      // connect an AI assistant (AIConnect.swift)
-                    SettingsLink {
+                    Button { model.openSettings() } label: {
                         Label("Settings", systemImage: "gearshape")
                     }
-                    .help("Transitions, performance, setup, updates (⌘,)")
+                    .help("Settings (⌘,)")
                 }
             }
         }

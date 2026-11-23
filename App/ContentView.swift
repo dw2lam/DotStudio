@@ -10,7 +10,6 @@ struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.openSettings) private var openSettings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var hero
 
@@ -23,16 +22,23 @@ struct ContentView: View {
     var body: some View {
         let _ = Perf.body("ContentView")
         let editing = editing
+        let settings = model.settingsPane != nil
         ZStack {
             // The gallery stays alive under the editor (scroll position, hover state) and
             // recedes slightly while the editor is up front.
             LibraryView()
-                .opacity(editing == nil ? 1 : 0)
-                .scaleEffect(editing == nil || reduceMotion ? 1 : 0.985)
-                .allowsHitTesting(editing == nil)
-                .accessibilityHidden(editing != nil)
+                .opacity(editing == nil && !settings ? 1 : 0)
+                .scaleEffect(editing == nil && !settings || reduceMotion ? 1 : 0.985)
+                .allowsHitTesting(editing == nil && !settings)
+                .accessibilityHidden(editing != nil || settings)
 
-            if let editing {
+            // Settings is a page of this window (not a window of its own), so it's there in
+            // full screen too.
+            if settings {
+                SettingsView()
+                    .transition(.opacity)
+                    .zIndex(2)
+            } else if let editing {
                 EditorView(id: editing.id)
                     .transition(.opacity)
                     .zIndex(1)
@@ -44,8 +50,9 @@ struct ContentView: View {
         .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
         .environment(\.heroNamespace, reduceMotion ? nil : hero)
         .animation(Motion.pick(Motion.hero, reduceMotion: reduceMotion), value: model.editingID)
-        .navigationTitle(editing?.name ?? "DotStudio")
-        .navigationSubtitle(editing.map { $0.isScene ? "Scene" : "Look" } ?? "")
+        .animation(Motion.pick(Motion.hero, reduceMotion: reduceMotion), value: settings)
+        .navigationTitle(settings ? "Settings" : editing?.name ?? "DotStudio")
+        .navigationSubtitle(settings ? model.settingsPane?.title ?? "" : editing.map { $0.isScene ? "Scene" : "Look" } ?? "")
         .frame(minWidth: 880, minHeight: 600)
         .onReceive(NotificationCenter.default.publisher(for: CrashReporter.safeModeChanged)) { _ in
             model.objectWillChange.send()   // live previews come back (safe mode ended)
@@ -69,7 +76,7 @@ struct ContentView: View {
             AppPresence.shared.decideLaunch()
             // Lets the Dock icon / menu bar reopen this window after it was closed.
             let open = { openWindow(id: DotStudioApp.mainWindowID) }
-            AppPresence.shared.register(openMainWindow: open, openSettings: { openSettings() })
+            AppPresence.shared.register(openMainWindow: open)
             WallpaperController.shared.registerOpenMainWindow(open)
             if DemoHooks.isActive { DemoHooks.apply(to: model) } else { presentOnboardingIfNeeded() }
         }
