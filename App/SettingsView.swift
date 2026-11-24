@@ -301,6 +301,8 @@ struct SettingsView: View {
 /// The menu bar icon as a row of big icon buttons (it fills in while a live wallpaper plays).
 private struct MenuBarIconChoice: View {
     @Binding var selection: MenuBarIcon
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovered: MenuBarIcon?
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
@@ -318,10 +320,13 @@ private struct MenuBarIconChoice: View {
                             .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
                                 .fill(i == selection ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.05)))
                             .overlay(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
-                                .strokeBorder(i == selection ? Color.accentColor : .clear, lineWidth: 2))
+                                .strokeBorder(i == selection ? Color.accentColor : Color.primary.opacity(hovered == i ? 0.15 : 0),
+                                              lineWidth: i == selection ? 2 : 1))
+                            .scaleEffect(hovered == i && i != selection ? 1.05 : 1)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .onHover { hovered = $0 ? i : (hovered == i ? nil : hovered) }
                     .help(i.name)
                     .accessibilityLabel(i.name)
                     .accessibilityAddTraits(i == selection ? [.isButton, .isSelected] : .isButton)
@@ -329,6 +334,8 @@ private struct MenuBarIconChoice: View {
             }
         }
         .padding(.vertical, Space.xs)
+        .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: selection)
+        .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: hovered)
     }
 }
 

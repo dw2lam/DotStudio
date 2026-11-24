@@ -128,6 +128,8 @@ enum SceneThemes {
 struct SceneThemeStrip: View {
     @Binding var effect: EffectInstance
     @Environment(\.layout) private var layout
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovered: String?
 
     var body: some View {
         let themes = SceneThemes.themes(for: effect)
@@ -138,12 +140,17 @@ struct SceneThemeStrip: View {
                     let current = SceneThemes.current(themes, effect)
                     ForEach(themes) { t in
                         let on = t.id == current
-                        Button { SceneThemes.apply(t, to: &effect) } label: {
+                        Button {
+                            withAnimation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion)) { SceneThemes.apply(t, to: &effect) }
+                        } label: {
                             VStack(spacing: 3) {
                                 swatch(t)
                                     .frame(width: 34, height: 34)
-                                    .overlay(Circle().strokeBorder(on ? Color.accentColor : Color.primary.opacity(0.15),
+                                    .overlay(Circle().strokeBorder(on ? Color.accentColor : Color.primary.opacity(hovered == t.id ? 0.3 : 0.15),
                                                                    lineWidth: on ? 2.5 : 1))
+                                    .scaleEffect(hovered == t.id && !on ? 1.08 : 1)
+                                    .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: hovered)
+                                    .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: on)
                                 Text(t.name).textRole(.caption)
                                     .foregroundStyle(on ? .primary : .secondary)
                                     .lineLimit(1).fixedSize()
@@ -151,6 +158,7 @@ struct SceneThemeStrip: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .onHover { hovered = $0 ? t.id : (hovered == t.id ? nil : hovered) }
                         .help("\(t.name) theme")
                         .accessibilityLabel("\(t.name) theme")
                         .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)

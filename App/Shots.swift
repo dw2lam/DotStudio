@@ -659,7 +659,7 @@ enum UIShots {
             WallpaperController.shared.update { $0.enabled = true; $0.followsScreensaver = true }
         }, view: { _ in AnyView(SettingsSectionPreview { WallpaperSettingsSection() }) }))
         // The animated desktops beside the wallpaper's power settings, each across one loop
-        s.append(Screen(name: "settings-wallpaper-demos", frame: .fit(width: 1100, minHeight: 300), prepare: { _ in },
+        s.append(Screen(name: "settings-wallpaper-demos", frame: .fit(width: 1480, minHeight: 300), prepare: { _ in },
                         view: { _ in AnyView(WallpaperDemoSheet()) }))
         // Settings › Weather › Location: automatic (the IP lookup's city), set by the user, and
         // with Live weather off (the row stays: the sun and Universe use it); then the Change…

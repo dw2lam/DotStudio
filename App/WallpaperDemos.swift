@@ -15,7 +15,7 @@
 import SwiftUI
 
 struct WallpaperDemo: View {
-    enum Scene: Equatable {
+    enum Scene: Hashable {
         /// The wallpaper's Quality: pixel size on the desktop.
         case quality(WallpaperSettings.Quality)
         /// The screensaver's Quality (render scale 1 / 0.75 / 0.5), full screen.
@@ -55,27 +55,50 @@ struct WallpaperDemo: View {
     /// The frame a still tile shows: mid-story (window in front, paused badge, menu bar icon).
     static let stillMoment: Double = 600 + 3.0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// When it last started playing: the story picks up from the still frame it was showing
+    /// (stillMoment), so starting never jumps.
+    @State private var startedAt = Date()
 
     /// Drawn at `base` (all the stories' coordinates) and scaled up to `size`.
     static let base = CGSize(width: 176, height: 110)
     /// One run of each story (window in, click, close…).
     private static let loop: Double = 6
 
+    private var live: Bool { animates && !reduceMotion && at == nil }
+
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion || at != nil || !animates)) { ctx in
-            let t = at ?? (reduceMotion || !animates ? Self.stillMoment : ctx.date.timeIntervalSinceReferenceDate)
-            Canvas(rendersAsynchronously: false) { g, size in
-                var g = g
-                g.scaleBy(x: size.width / Self.base.width, y: size.height / Self.base.height)
-                draw(&g, CGRect(origin: .zero, size: Self.base), t)
+        // Live: at the display's own rate (120 Hz on ProMotion), so motion glides. Still and
+        // live, and one choice's scene and the next, crossfade rather than cut.
+        ZStack {
+            if live {
+                TimelineView(.animation) { ctx in
+                    canvas(Self.stillMoment + max(0, ctx.date.timeIntervalSince(startedAt)))
+                }
+                .transition(.opacity)
+            } else {
+                canvas(at ?? Self.stillMoment)
+                    .transition(.opacity)
             }
         }
+        .id(scene)
+        .transition(.opacity)
+        .animation(Motion.pick(.easeInOut(duration: 0.35 * Motion.slow), reduceMotion: reduceMotion), value: live)
+        .animation(Motion.pick(.easeInOut(duration: 0.35 * Motion.slow), reduceMotion: reduceMotion), value: scene)
+        .onChange(of: live) { _, on in if on { startedAt = Date() } }
         .aspectRatio(Self.base.width / Self.base.height, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: Radius.s, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
             .strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.75))
         .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
         .accessibilityHidden(true)
+    }
+
+    private func canvas(_ t: Double) -> some View {
+        Canvas(rendersAsynchronously: false) { g, size in
+            var g = g
+            g.scaleBy(x: size.width / Self.base.width, y: size.height / Self.base.height)
+            draw(&g, CGRect(origin: .zero, size: Self.base), t)
+        }
     }
 
     // MARK: - Stories
@@ -113,18 +136,20 @@ struct WallpaperDemo: View {
             let held = mode == .pause && w.focused
             let slowed = mode == .efficient && w.focused
             if slowed { beach(&g, r, t: stepped(now, 5), cell: 2.5) }
-            else { beach(&g, r, t: held ? now - phase + 2.4 : now) }
+            else { beach(&g, r, t: held ? now - phase + 2.2 : now) }
             desktopChrome(&g, r, frontApp: w.focused ? 1 : 0)
             appWindow(&g, r, slide: w.slide, focused: w.focused)
             pointer(&g, r, at: w.cursor, clicking: w.clicking)
-            if held { pauseBadge(&g, r) }
-            if slowed { badge(&g, r, symbol: "tortoise.fill") }
+            if mode == .pause { pauseBadge(&g, r, opacity: w.focusK) }
+            if mode == .efficient { badge(&g, r, symbol: "tortoise.fill", opacity: w.focusK) }
         case .fpsMode(let mode, let top):
             let w = WindowStory(phase: phase)
             // Dynamic: the load climbs while the window works, a beat after it opens
             let load = mode == .dynamic ? (phase < 1.9 ? 0.15 : phase < 2.4 ? 0.15 + ease((phase - 1.9) / 0.5) * 0.7
                                            : phase < 4.2 ? 0.85 : 0.85 - ease((phase - 4.2) / 0.5) * 0.7) : 0
             let down = mode == .dynamic ? load > 0.5 : mode == .reactive ? w.focused : false
+            // the rate label eases between its two values as the mode steps down and back
+            let downK = mode == .dynamic ? ease((load - 0.4) / 0.2) : mode == .reactive ? w.focusK : 0
             beach(&g, r, t: down ? stepped(now, 12) : now)
             desktopChrome(&g, r, frontApp: w.focused ? 1 : 0)
             appWindow(&g, r, slide: w.slide, focused: w.focused)
@@ -156,11 +181,18 @@ struct WallpaperDemo: View {
                 }
             }
             if mode != .dynamic { pointer(&g, r, at: w.cursor, clicking: w.clicking) }
-            let label = "\(Int(down ? WallpaperBudget.stepDown(Double(top), 1) : Double(top))) fps"
             let pill = CGRect(x: 6, y: Self.menuBarHeight + 5, width: 30, height: 11)
-            g.fill(Path(roundedRect: pill, cornerRadius: 4), with: .color((down ? Color.orange : .black).opacity(0.6)))
-            g.draw(Text(label).font(.system(size: 6.5, weight: .bold, design: .rounded)).foregroundStyle(.white),
-                   at: CGPoint(x: pill.midX, y: pill.midY))
+            g.fill(Path(roundedRect: pill, cornerRadius: 4), with: .color(.black.opacity(0.6 * (1 - downK))))
+            g.fill(Path(roundedRect: pill, cornerRadius: 4), with: .color(.orange.opacity(0.75 * downK)))
+            let lower = Int(WallpaperBudget.stepDown(Double(top), 1))
+            let font = Font.system(size: 6.5, weight: .bold, design: .rounded)
+            var clip = g
+            clip.clip(to: Path(roundedRect: pill, cornerRadius: 4))
+            // the old figure rolls up and out as the new one rolls in
+            clip.draw(Text("\(top) fps").font(font).foregroundStyle(.white.opacity(1 - downK)),
+                      at: CGPoint(x: pill.midX, y: pill.midY - 6 * downK))
+            clip.draw(Text("\(lower) fps").font(font).foregroundStyle(.white.opacity(downK)),
+                      at: CGPoint(x: pill.midX, y: pill.midY + 6 * (1 - downK)))
         case .covered:
             // a full-screen app grows over the desktop, then leaves
             let k = phase < 1.5 ? 0 : phase < 2.1 ? ease((phase - 1.5) / 0.6) : phase < 4.6 ? 1 : 1 - ease((phase - 4.6) / 0.6)
@@ -179,7 +211,7 @@ struct WallpaperDemo: View {
                            with: .color(.black.opacity(0.12 * k)))
                 }
             }
-            if k > 0.98 { pauseBadge(&g, r) }
+            pauseBadge(&g, r, opacity: ease((k - 0.85) / 0.15))
         case .lowPower:
             beach(&g, r, t: 3)
             desktopChrome(&g, r)
@@ -227,8 +259,11 @@ struct WallpaperDemo: View {
     /// → the desktop is clicked → window leaves.
     private struct WindowStory {
         let slide: Double, focused: Bool, cursor: CGPoint, clicking: Bool
+        /// `focused`, eased over a quarter second each way (badges fade rather than pop).
+        let focusK: Double
         init(phase p: Double) {
             func ease(_ x: Double) -> Double { let c = min(max(x, 0), 1); return c * c * (3 - 2 * c) }
+            focusK = p < 4.2 ? ease((p - 2.2) / 0.25) : 1 - ease((p - 4.2) / 0.25)
             slide = p < 1.2 ? 0 : p < 1.7 ? ease((p - 1.2) / 0.5) : p < 5.3 ? 1 : 1 - ease((p - 5.3) / 0.5)
             focused = p >= 2.2 && p < 4.2
             clicking = (p >= 2.0 && p < 2.3) || (p >= 4.0 && p < 4.3)
@@ -487,7 +522,10 @@ struct WallpaperDemo: View {
                  with: .color(.accentColor), lineWidth: 1.4)
     }
 
-    private func pauseBadge(_ g: inout GraphicsContext, _ r: CGRect) {
+    private func pauseBadge(_ g: inout GraphicsContext, _ r: CGRect, opacity: Double = 1) {
+        guard opacity > 0.001 else { return }
+        var g = g
+        g.opacity = opacity
         let rect = CGRect(x: 6, y: Self.menuBarHeight + 5, width: 16, height: 16)
         g.fill(Path(ellipseIn: rect), with: .color(.black.opacity(0.55)))
         for dx in [-2.2, 2.2] {
@@ -497,7 +535,10 @@ struct WallpaperDemo: View {
     }
 
     /// Plugged in / on battery, top right under the menu bar.
-    private func badge(_ g: inout GraphicsContext, _ r: CGRect, symbol name: String) {
+    private func badge(_ g: inout GraphicsContext, _ r: CGRect, symbol name: String, opacity: Double = 1) {
+        guard opacity > 0.001 else { return }
+        var g = g
+        g.opacity = opacity
         let rect = CGRect(x: r.width - 22, y: Self.menuBarHeight + 5, width: 16, height: 11)
         g.fill(Path(roundedRect: rect.insetBy(dx: -2, dy: -2), cornerRadius: 4), with: .color(.black.opacity(0.45)))
         symbol(&g, name, in: rect, color: .white)
@@ -620,7 +661,7 @@ struct OptionCards<Value: Hashable>: View {
 
     private func choose(_ i: Int) {
         guard options.indices.contains(i), options[i].value != selection else { return }
-        withAnimation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.85)) { selection = options[i].value }
+        withAnimation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion)) { selection = options[i].value }
     }
 
     var body: some View {
@@ -661,6 +702,8 @@ struct OptionCards<Value: Hashable>: View {
             }
         }
         .padding(.vertical, Space.xs)
+        // a change from elsewhere (a preset, another window) slides the ring too
+        .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: index)
         .accessibilityElement(children: .contain)
     }
 }
@@ -673,6 +716,7 @@ private struct OptionCard: View {
     let ring: Namespace.ID
     let action: () -> Void
     @State private var hovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button(action: action) {
@@ -698,6 +742,8 @@ private struct OptionCard: View {
         }
         .buttonStyle(.plain)
         .disabled(fixed)
+        .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: hovering)
+        .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: active)
         .onHover { hovering = $0 && !active }
         .accessibilityLabel(label)
         .accessibilityAddTraits(active ? [.isButton, .isSelected] : .isButton)
@@ -744,7 +790,7 @@ struct WallpaperDemoSheet: View {
         ("Menu bar: keeps running", .menuBarMode(keepsRunning: true)), ("Menu bar: quits", .menuBarMode(keepsRunning: false)),
         ("Menu bar icon", .menuBarIcon("circle.grid.3x3.fill")),
     ]
-    private let moments: [Double] = [0.5, 2.1, 3.0, 4.1, 5.0]
+    private let moments: [Double] = [0.5, 2.1, 2.3, 3.0, 4.1, 4.3, 5.0]
 
     var body: some View {
         Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 8) {

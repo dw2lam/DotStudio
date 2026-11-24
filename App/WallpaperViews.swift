@@ -396,6 +396,8 @@ enum PowerPreset: String, CaseIterable, Identifiable {
 private struct PowerPresetPicker: View {
     let current: PowerPreset?
     let choose: (PowerPreset) -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovered: PowerPreset?
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
@@ -418,18 +420,24 @@ private struct PowerPresetPicker: View {
                         .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
                             .fill(current == p ? p.tint.opacity(0.12) : Color.primary.opacity(0.04)))
                         .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
-                            .strokeBorder(current == p ? p.tint : Color.primary.opacity(0.08), lineWidth: current == p ? 2.5 : 1))
+                            .strokeBorder(current == p ? p.tint : Color.primary.opacity(hovered == p ? 0.2 : 0.08),
+                                          lineWidth: current == p ? 2.5 : 1))
+                        .scaleEffect(hovered == p && current != p ? 1.015 : 1)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .onHover { hovered = $0 ? p : (hovered == p ? nil : hovered) }
                     .accessibilityAddTraits(current == p ? [.isButton, .isSelected] : .isButton)
                 }
             }
             Text(current == nil ? "Custom — you've changed settings below. Pick a preset to start over."
                                 : "Sets everything below. Change anything to make it your own.")
                 .textRole(.callout).foregroundStyle(.secondary)
+                .contentTransition(.opacity)
         }
         .padding(.vertical, Space.xs)
+        .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: current)
+        .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: hovered)
     }
 }
 
@@ -438,6 +446,7 @@ private struct PowerPresetPicker: View {
 private struct FrameRateRow: View {
     @Binding var fps: Int
     static let stops = [15, 24, 30, 60, 120]
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var index: Int { Self.stops.firstIndex(of: fps) ?? Self.stops.firstIndex { $0 >= fps } ?? 2 }
 
@@ -458,6 +467,7 @@ private struct FrameRateRow: View {
             VStack(alignment: .leading, spacing: Space.s) {
                 HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
                     Text("\(Self.stops[index])").font(.system(size: 28, weight: .semibold, design: .rounded)).monospacedDigit()
+                        .contentTransition(reduceMotion ? .identity : .numericText(value: Double(Self.stops[index])))
                     Text("fps").textRole(.bodyEmphasis).foregroundStyle(.secondary)
                 }
                 Slider(value: Binding(get: { Double(index) }, set: { fps = Self.stops[Int($0.rounded())] }),
@@ -473,8 +483,11 @@ private struct FrameRateRow: View {
                     }
                 }
                 Text(explain).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .id(index)
+                    .transition(.opacity)
             }
         }
         .padding(.vertical, Space.xs)
+        .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: index)
     }
 }
