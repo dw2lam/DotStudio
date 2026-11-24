@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.6.8 — Frame rate, your way
 
 ### New
 - **Frame rate, per power source.** Plugged in and On Battery each have their own frame rate,
