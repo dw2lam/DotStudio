@@ -15,6 +15,10 @@
 //    • Pausing  — no draws and no wake-ups at all while nobody can see it (covered,
 //                 locked, display or system asleep, screensaver running), or when
 //                 paused from the menu bar.
+//    • Adaptive — per power source, Frame Rate Mode (FPSMode): Forced keeps the set rate;
+//                 Dynamic steps down the divisor ladder (120 → 60 → 40) while the Mac's
+//                 CPU or GPU is busy; Reactive steps down while you're typing or clicking in
+//                 another app and comes back when you stop (ActivitySampler, LoadGovernor).
 //    • Stilling — Low Power Mode, a hot Mac (and battery, set to Still) hold a frame —
 //                 drawn first if there isn't one yet, so it still sets the desktop; a clock
 //                 still turns over once a minute so it never lies.
@@ -24,6 +28,7 @@
 //                 drives each display, with coalescable clock-timer wake-ups.
 
 import AppKit
+import IOKit
 import IOKit.ps
 
 // MARK: - Settings
@@ -89,6 +94,20 @@ struct WallpaperSettings: Codable, Equatable {
         }
     }
 
+    /// How the frame rate behaves on one power source (Settings › Power Saving).
+    enum FPSMode: String, Codable, CaseIterable, Identifiable {
+        /// Always the frame rate set above.
+        case forced
+        /// Follows how hard the Mac is working (CPU and GPU): a step down while it's moderately
+        /// busy (120 → 60), two while it's very busy (→ 40), back up when it settles.
+        case dynamic
+        /// Follows you: a step down while you type, click or scroll in another app (two if the
+        /// Mac is also very busy), full rate again a few seconds after you stop.
+        case reactive
+        var id: String { rawValue }
+        var title: String { rawValue.capitalized }
+    }
+
     var enabled = false
     var presetID: UUID?
     var frameRate: FrameRate = .balanced
@@ -98,6 +117,13 @@ struct WallpaperSettings: Codable, Equatable {
     /// Another app in front, plugged in / on battery: keep playing unless the user picks Pause.
     var otherAppPluggedIn: OtherAppMode = .keepPlaying
     var otherAppOnBattery: OtherAppMode = .keepPlaying
+    /// Frame Rate Mode, plugged in / on battery: Forced (the set rate) unless the user picks
+    /// Dynamic or Reactive.
+    var fpsModePluggedIn: FPSMode = .forced
+    var fpsModeOnBattery: FPSMode = .forced
+    func fpsMode(onBattery: Bool) -> FPSMode { onBattery ? fpsModeOnBattery : fpsModePluggedIn }
+    /// Dynamic or Reactive on either power source: the activity sampler has to run.
+    var adaptsFrameRate: Bool { fpsModePluggedIn != .forced || fpsModeOnBattery != .forced }
     /// "Match Screensaver": show whatever the screensaver would (Playback.effectivePreset —
     /// rotation, night style) on the shared wall-clock time base, instead
     /// of `presetID`. See WallpaperController.setFollowsScreensaver(_:).
@@ -118,7 +144,7 @@ struct WallpaperSettings: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case enabled, presetID, frameRate, quality, batteryMode, followsScreensaver
-        case otherAppPluggedIn, otherAppOnBattery
+        case otherAppPluggedIn, otherAppOnBattery, fpsModePluggedIn, fpsModeOnBattery
         case lockScreen, savedDesktopPictures, displayStyles
         /// The 1.4 on/off "Freeze on battery": read when `batteryMode` is missing (on → Still,
         /// off → Efficient), and still written (on ⇔ Still) so an older build reading this
@@ -142,6 +168,8 @@ struct WallpaperSettings: Codable, Equatable {
         followsScreensaver = (try? c.decode(Bool.self, forKey: .followsScreensaver)) ?? false
         otherAppPluggedIn = (try? c.decode(OtherAppMode.self, forKey: .otherAppPluggedIn)) ?? .keepPlaying
         otherAppOnBattery = (try? c.decode(OtherAppMode.self, forKey: .otherAppOnBattery)) ?? .keepPlaying
+        fpsModePluggedIn = (try? c.decode(FPSMode.self, forKey: .fpsModePluggedIn)) ?? .forced
+        fpsModeOnBattery = (try? c.decode(FPSMode.self, forKey: .fpsModeOnBattery)) ?? .forced
         lockScreen = (try? c.decode(Bool.self, forKey: .lockScreen)) ?? false
         savedDesktopPictures = (try? c.decode([String: SavedDesktopPicture].self, forKey: .savedDesktopPictures)) ?? [:]
         displayStyles = (try? c.decode([String: DisplayPin].self, forKey: .displayStyles)) ?? [:]
@@ -158,6 +186,8 @@ struct WallpaperSettings: Codable, Equatable {
         try c.encode(followsScreensaver, forKey: .followsScreensaver)
         try c.encode(otherAppPluggedIn, forKey: .otherAppPluggedIn)
         try c.encode(otherAppOnBattery, forKey: .otherAppOnBattery)
+        try c.encode(fpsModePluggedIn, forKey: .fpsModePluggedIn)
+        try c.encode(fpsModeOnBattery, forKey: .fpsModeOnBattery)
         try c.encode(lockScreen, forKey: .lockScreen)
         if !savedDesktopPictures.isEmpty { try c.encode(savedDesktopPictures, forKey: .savedDesktopPictures) }
         if !displayStyles.isEmpty { try c.encode(displayStyles, forKey: .displayStyles) }
@@ -271,12 +301,17 @@ final class WallpaperPowerMonitor {
         /// A regular app other than DotStudio or Finder is frontmost (the desktop may still
         /// show around its windows; a full-screen app or covered desktop pauses regardless).
         var otherAppFront = false
+        /// How busy the Mac's CPU and GPU are (LoadGovernor) — sampled only while a Frame Rate
+        /// Mode is Dynamic or Reactive, else always quiet.
+        var load: ActivityLevel = .quiet
+        /// Typing, clicking or scrolling in another app in the last few seconds (Reactive).
+        var userActive = false
     }
 
     private(set) var state = State()
     var onChange: ((State) -> Void)?
 
-    /// DEV: DOTSTUDIO_WALLPAPER_FORCE=battery,lowpower,thermal,otherapp forces those conditions
+    /// DEV: DOTSTUDIO_WALLPAPER_FORCE=battery,lowpower,thermal,otherapp,moderate,busy,active forces those conditions
     /// on, to verify the policy on a Mac that can't be unplugged or heated on demand;
     /// `ac` forces mains power (to measure the plugged-in default on a laptop on battery).
     private let forced: Set<String> = Set(
@@ -350,6 +385,7 @@ final class WallpaperPowerMonitor {
     }
 
     func stop() {
+        samplesActivity = false
         for (center, t) in tokens { center.removeObserver(t) }
         tokens.removeAll()
         if let src = powerSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .defaultMode) }
@@ -364,6 +400,39 @@ final class WallpaperPowerMonitor {
         guard s != state else { return }
         state = s
         onChange?(s)
+    }
+
+    // MARK: Activity (Dynamic / Reactive)
+
+    /// Sample load and input once a second — only while a Frame Rate Mode needs it (the
+    /// controller turns it on and off with the setting). Off, `load` and `userActive` rest.
+    var samplesActivity = false {
+        didSet {
+            guard samplesActivity != oldValue else { return }
+            sampleTimer?.invalidate(); sampleTimer = nil
+            sampler = ActivitySampler()
+            governor = LoadGovernor()
+            if samplesActivity {
+                let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.sample() }
+                t.tolerance = 0.3
+                RunLoop.main.add(t, forMode: .common)
+                sampleTimer = t
+                sample()
+            } else {
+                update { $0.load = .quiet; $0.userActive = false }
+            }
+        }
+    }
+    private var sampleTimer: Timer?
+    private var sampler = ActivitySampler()
+    private var governor = LoadGovernor()
+
+    private func sample() {
+        let reading = sampler.read()
+        var load = governor.feed(cpu: reading.cpu, gpu: reading.gpu, now: Date())
+        if forced.contains("busy") { load = .busy } else if forced.contains("moderate") { load = max(load, .moderate) }
+        let active = forced.contains("active") || (reading.idleSeconds < ActivitySampler.activeWindow && state.otherAppFront)
+        update { $0.load = load; $0.userActive = active }
     }
 
     private func readLowPower() -> Bool {
@@ -544,8 +613,15 @@ enum WallpaperBudget {
     /// Efficient's rate and resolution, plugged in or not.
     /// `universal`: Power Saving's one frame rate (Library.frameRate) — replaces the style's own
     /// and Balanced / Smooth; battery and Slow Down still cap it.
+    /// `level`: Frame Rate Mode's steps down the ladder (WallpaperBudget.level) — 0 for Forced.
     static func fps(_ settings: WallpaperSettings, presetFPS: Int, onBattery: Bool, slowed: Bool = false,
-                    universal: Int? = nil) -> Double {
+                    universal: Int? = nil, level: ActivityLevel = .quiet) -> Double {
+        stepDown(ceilingFPS(settings, presetFPS: presetFPS, onBattery: onBattery, slowed: slowed, universal: universal),
+                 level.rawValue)
+    }
+
+    private static func ceilingFPS(_ settings: WallpaperSettings, presetFPS: Int, onBattery: Bool, slowed: Bool,
+                                   universal: Int?) -> Double {
         if let u = universal, u > 0 {
             var f = Double(u)
             if onBattery { f = min(f, settings.batteryMode == .efficient ? efficientFPS : batteryMaxFPS) }
@@ -558,6 +634,39 @@ enum WallpaperBudget {
                 : onBattery ? batteryMaxFPS : 30
         if presetFPS > 0 { fps = min(fps, Double(presetFPS)) }
         return fps
+    }
+
+    /// The rates Dynamic and Reactive step through: every exact divisor of 120 Hz from 120 down
+    /// to 15 (on 60 Hz, divisorRate lands each on 60 / 30 / 20 / 15). 90 isn't one — on a
+    /// 120 Hz screen it would hold frames for 1, 1, 2 refreshes, a visible judder — so a
+    /// step down from 120 is 60, two is 40.
+    static let ladder: [Double] = [120, 60, 40, 30, 24, 20, 15]
+
+    /// `f` moved `steps` rungs down the ladder (never below 15, never above `f`); a rate under
+    /// 15 (a clock's 1 fps) stays as it is.
+    static func stepDown(_ f: Double, _ steps: Int) -> Double {
+        guard steps > 0, let i = ladder.firstIndex(where: { $0 <= f + 0.01 }) else { return f }
+        // off the ladder (a style's own 50): the rung under it is already one step down
+        let on = abs(ladder[i] - f) < 0.01
+        return min(f, ladder[min(i + steps - (on ? 0 : 1), ladder.count - 1)])
+    }
+
+    /// How far this power source's Frame Rate Mode steps down right now: Forced never;
+    /// Dynamic by the Mac's load; Reactive one step while you're using another app (two if the
+    /// Mac is also very busy), none while you're not.
+    static func level(_ settings: WallpaperSettings, _ s: WallpaperPowerMonitor.State) -> ActivityLevel {
+        switch settings.fpsMode(onBattery: s.onBattery) {
+        case .forced: return .quiet
+        case .dynamic: return s.load
+        case .reactive: return s.userActive ? max(.moderate, s.load) : .quiet
+        }
+    }
+
+    /// A note for the menu and the Wallpaper card while Dynamic or Reactive has stepped down.
+    static func adaptiveStatus(_ settings: WallpaperSettings, _ s: WallpaperPowerMonitor.State) -> String? {
+        guard level(settings, s) != .quiet else { return nil }
+        return settings.fpsMode(onBattery: s.onBattery) == .reactive ? "Reactive — you're using another app"
+                                                                    : "Dynamic — your Mac is busy"
     }
 
     /// Multiplier on Quality's pixels per point. Below 1 only for Efficient on battery, and only
@@ -611,5 +720,113 @@ extension EffectKind {
         default:
             return true
         }
+    }
+}
+
+// MARK: - Activity (Frame Rate Mode)
+
+/// How busy things are, as steps down the frame-rate ladder.
+enum ActivityLevel: Int, Comparable, CustomStringConvertible {
+    case quiet, moderate, busy
+    static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
+    var description: String { ["quiet", "moderate", "busy"][rawValue] }
+}
+
+/// One reading a second: CPU busy fraction across all cores (since the last reading), the
+/// busiest GPU's utilisation (IOAccelerator's PerformanceStatistics — no permission needed),
+/// and seconds since the last keyboard, mouse or scroll input anywhere in the session.
+struct ActivitySampler {
+    /// Input within this many seconds counts as "using your Mac" (Reactive).
+    static let activeWindow: Double = 3
+
+    private var lastTicks: (busy: UInt64, total: UInt64)?
+
+    mutating func read() -> (cpu: Double, gpu: Double, idleSeconds: Double) {
+        (cpuBusy(), Self.gpuBusy(), Self.idleSeconds())
+    }
+
+    private mutating func cpuBusy() -> Double {
+        var info = host_cpu_load_info()
+        var count = mach_msg_type_number_t(MemoryLayout<host_cpu_load_info>.stride / MemoryLayout<integer_t>.stride)
+        let kr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, $0, &count)
+            }
+        }
+        guard kr == KERN_SUCCESS else { return 0 }
+        let t = info.cpu_ticks
+        let user = UInt64(t.0), system = UInt64(t.1), idle = UInt64(t.2), nice = UInt64(t.3)
+        let busy = user + system + nice, total = busy + idle
+        defer { lastTicks = (busy, total) }
+        guard let last = lastTicks, total > last.total else { return 0 }
+        return Double(busy &- last.busy) / Double(total - last.total)
+    }
+
+    private static func gpuBusy() -> Double {
+        var iterator: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOAccelerator"), &iterator) == KERN_SUCCESS
+        else { return 0 }
+        defer { IOObjectRelease(iterator) }
+        var best = 0.0
+        while case let service = IOIteratorNext(iterator), service != 0 {
+            defer { IOObjectRelease(service) }
+            guard let stats = IORegistryEntryCreateCFProperty(service, "PerformanceStatistics" as CFString,
+                                                              kCFAllocatorDefault, 0)?.takeRetainedValue() as? [String: Any],
+                  let pct = (stats["Device Utilization %"] as? NSNumber)?.doubleValue else { continue }
+            best = max(best, pct / 100)
+        }
+        return best
+    }
+
+    private static func idleSeconds() -> Double {
+        let kinds: [CGEventType] = [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel,
+                                    .mouseMoved, .leftMouseDragged]
+        return kinds.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? .infinity
+    }
+}
+
+/// Turns the once-a-second load readings into a steady level for Dynamic: quick to step down
+/// (two readings over a threshold), slow to come back (five readings clearly under it), and
+/// stubborn if it keeps bouncing — the wallpaper's own GPU work falls when it steps down, which
+/// alone could make it step straight back up and down again. A level it had to return to
+/// within 20 s of leaving is held for a minute.
+struct LoadGovernor {
+    /// Moderate from 30 % CPU or 45 % GPU; busy from 60 % CPU or 75 % GPU.
+    static let moderate = (cpu: 0.30, gpu: 0.45)
+    static let busy = (cpu: 0.60, gpu: 0.75)
+    /// How far under a threshold a reading must be to step back up.
+    static let margin = 0.10
+
+    private(set) var level: ActivityLevel = .quiet
+    private var cpu = 0.0, gpu = 0.0, primed = false
+    private var over = 0, under = 0
+    private var lastEased: Date?
+    private var holdUntil = Date.distantPast
+
+    mutating func feed(cpu c: Double, gpu g: Double, now: Date) -> ActivityLevel {
+        // smoothed, so a one-second spike (an app launching) doesn't count
+        if primed { cpu += (c - cpu) * 0.5; gpu += (g - gpu) * 0.5 } else { cpu = c; gpu = g; primed = true }
+        let up = Self.target(cpu, gpu, slack: 0), down = Self.target(cpu, gpu, slack: Self.margin)
+        if up > level {
+            under = 0; over += 1
+            if over >= 2 {
+                if let e = lastEased, now.timeIntervalSince(e) < 20 { holdUntil = now.addingTimeInterval(60) }
+                level = up; over = 0
+            }
+        } else if down < level {
+            over = 0; under += 1
+            if under >= 5, now >= holdUntil { level = down; under = 0; lastEased = now }
+        } else {
+            over = 0; under = 0
+        }
+        return level
+    }
+
+    /// The level these readings call for; `slack` lowers the thresholds (stepping back up has
+    /// to clear them by that much).
+    static func target(_ cpu: Double, _ gpu: Double, slack: Double) -> ActivityLevel {
+        if cpu >= busy.cpu - slack || gpu >= busy.gpu - slack { return .busy }
+        if cpu >= moderate.cpu - slack || gpu >= moderate.gpu - slack { return .moderate }
+        return .quiet
     }
 }

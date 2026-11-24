@@ -345,6 +345,7 @@ final class WallpaperController: ObservableObject {
             syncLockPicture("settings", after: s.lockScreen != old.lockScreen || !s.enabled ? 0 : 1)
         }
         guard s.enabled, !hosts.isEmpty else { return }
+        power.samplesActivity = s.adaptsFrameRate     // Dynamic / Reactive need load and input readings
         if s.followsScreensaver != old.followsScreensaver {
             applyTimeBase()
             scheduleSlotTimer()
@@ -389,13 +390,17 @@ final class WallpaperController: ObservableObject {
             running = true
             power.onChange = { [weak self] state in
                 guard let self else { return }
-                self.log("power \(state)")
+                // (load and input change every few seconds under Dynamic / Reactive: the state
+                // line in reevaluate logs what they do to the frame rate)
+                var quiet = state; quiet.load = .quiet; quiet.userActive = false
+                if quiet != self.lastLoggedPower { self.lastLoggedPower = quiet; self.log("power \(state)") }
                 let locking = state.screenLocked && !self.wasLocked
                 self.wasLocked = state.screenLocked
                 self.reevaluate()
                 if locking { self.syncLockPicture("lock") }
             }
             power.start()
+            power.samplesActivity = settings.adaptsFrameRate
             wasLocked = power.state.screenLocked
             observe()
             log("start style=\(currentPreset?.name ?? "?") fps=\(settings.frameRate.rawValue) quality=\(settings.quality.rawValue)")
@@ -749,7 +754,8 @@ final class WallpaperController: ObservableObject {
     private func targetFPS(_ preset: Preset?) -> Double {
         WallpaperBudget.fps(settings, presetFPS: preset?.fps ?? 0, onBattery: power.state.onBattery,
                             slowed: WallpaperBudget.slowed(settings, power.state),
-                            universal: model?.library.frameRate)
+                            universal: model?.library.frameRate,
+                            level: WallpaperBudget.level(settings, power.state))
     }
 
     /// How long a desktop must stay covered before the wallpaper pauses: Space switches and
@@ -778,7 +784,10 @@ final class WallpaperController: ObservableObject {
         if let hard { status = hard }
         else if visible.isEmpty { status = "Paused — desktop covered" }
         else if let still { status = still }
-        else { status = WallpaperBudget.batteryStatus(settings, onBattery: onBattery, slowed: slowed) }
+        else {
+            status = WallpaperBudget.batteryStatus(settings, onBattery: onBattery, slowed: slowed)
+                ?? WallpaperBudget.adaptiveStatus(settings, power.state)
+        }
         if status != statusText { statusText = status }
 
         // Efficient on battery draws fewer pixels (moving styles only): resize those displays'
@@ -836,6 +845,7 @@ final class WallpaperController: ObservableObject {
     private var lockGeneration = 0
     /// The power monitor's last lock state (a lock refreshes the picture once, as it starts).
     private var wasLocked = false
+    private var lastLoggedPower: WallpaperPowerMonitor.State?
     /// Offscreen renders and demos never touch the real desktop picture.
     private static let lockPictureAllowed = !DemoHooks.isActive && !OffscreenCapture.isActive
         && ProcessInfo.processInfo.environment["DOTSTUDIO_SHOTS"] == nil

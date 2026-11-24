@@ -28,6 +28,9 @@ struct WallpaperDemo: View {
         case battery(WallpaperSettings.BatteryMode)
         /// A window comes forward; with `pauses` the wallpaper holds until the desktop is clicked.
         case otherApp(WallpaperSettings.OtherAppMode)
+        /// Frame Rate Mode: Forced stays at 120 while you work; Dynamic drops to 60 while a load
+        /// graph runs high; Reactive drops to 60 while you type in a window.
+        case fpsMode(WallpaperSettings.FPSMode, top: Int = 120)
         /// A full-screen app comes up over the desktop: the wallpaper always pauses.
         case covered
         /// Low Power Mode on (or a hot Mac): the wallpaper holds a still frame.
@@ -116,6 +119,48 @@ struct WallpaperDemo: View {
             pointer(&g, r, at: w.cursor, clicking: w.clicking)
             if held { pauseBadge(&g, r) }
             if slowed { badge(&g, r, symbol: "tortoise.fill") }
+        case .fpsMode(let mode, let top):
+            let w = WindowStory(phase: phase)
+            // Dynamic: the load climbs while the window works, a beat after it opens
+            let load = mode == .dynamic ? (phase < 1.9 ? 0.15 : phase < 2.4 ? 0.15 + ease((phase - 1.9) / 0.5) * 0.7
+                                           : phase < 4.2 ? 0.85 : 0.85 - ease((phase - 4.2) / 0.5) * 0.7) : 0
+            let down = mode == .dynamic ? load > 0.5 : mode == .reactive ? w.focused : false
+            beach(&g, r, t: down ? stepped(now, 12) : now)
+            desktopChrome(&g, r, frontApp: w.focused ? 1 : 0)
+            appWindow(&g, r, slide: w.slide, focused: w.focused)
+            if w.slide > 0 {
+                let ww = r.width * 0.56, wh = r.height * 0.56, restX = r.maxX - ww - 8
+                let f = CGRect(x: restX + (1 - w.slide) * (r.maxX - restX + 6), y: r.height * 0.2, width: ww, height: wh)
+                if mode == .dynamic {
+                    // a CPU graph: bars scrolling left, as tall as the load
+                    let n = 14, bw = (f.width - 12) / CGFloat(n)
+                    for i in 0..<n {
+                        let age = Double(n - 1 - i) * 0.12
+                        let p = max(0, phase - age)
+                        let l = p < 1.9 ? 0.15 : p < 2.4 ? 0.15 + ease((p - 1.9) / 0.5) * 0.7
+                              : p < 4.2 ? 0.85 : 0.85 - ease((p - 4.2) / 0.5) * 0.7
+                        let h = (f.height - 18) * l * (0.85 + 0.15 * sin(Double(i) * 2.1 + now * 3))
+                        g.fill(Path(CGRect(x: f.minX + 6 + CGFloat(i) * bw, y: f.maxY - 5 - h, width: bw - 1, height: h)),
+                               with: .color((l > 0.5 ? Color.orange : Color.green).opacity(0.8)))
+                    }
+                } else {
+                    // lines of text: Reactive types them while focused; Forced the same, unmoved
+                    let typed = w.focused ? min(1, (phase - 2.2) / 1.8) : phase >= 4.2 ? 1 : 0
+                    for i in 0..<4 {
+                        let k = max(0, min(1, typed * 4 - Double(i)))
+                        guard k > 0 else { continue }
+                        g.fill(Path(roundedRect: CGRect(x: f.minX + 6, y: f.minY + 14 + CGFloat(i) * 8,
+                                                        width: (f.width - 16) * (i == 3 ? 0.5 : 1) * k, height: 3),
+                                    cornerRadius: 1.5), with: .color(.black.opacity(0.2)))
+                    }
+                }
+            }
+            if mode != .dynamic { pointer(&g, r, at: w.cursor, clicking: w.clicking) }
+            let label = "\(Int(down ? WallpaperBudget.stepDown(Double(top), 1) : Double(top))) fps"
+            let pill = CGRect(x: 6, y: Self.menuBarHeight + 5, width: 30, height: 11)
+            g.fill(Path(roundedRect: pill, cornerRadius: 4), with: .color((down ? Color.orange : .black).opacity(0.6)))
+            g.draw(Text(label).font(.system(size: 6.5, weight: .bold, design: .rounded)).foregroundStyle(.white),
+                   at: CGPoint(x: pill.midX, y: pill.midY))
         case .covered:
             // a full-screen app grows over the desktop, then leaves
             let k = phase < 1.5 ? 0 : phase < 2.1 ? ease((phase - 1.5) / 0.6) : phase < 4.6 ? 1 : 1 - ease((phase - 4.6) / 0.6)
@@ -691,7 +736,9 @@ struct WallpaperDemoSheet: View {
     private let scenes: [(String, WallpaperDemo.Scene)] = [
         ("Quality Full", .quality(.full)), ("Quality Efficient", .quality(.efficient)),
         ("Battery Pause", .battery(.still)), ("Other app: pause", .otherApp(.pause)),
-        ("Other app: slow down", .otherApp(.efficient)), ("Full screen", .covered), ("Low Power", .lowPower),
+        ("Other app: slow down", .otherApp(.efficient)),
+        ("FPS Forced", .fpsMode(.forced)), ("FPS Dynamic", .fpsMode(.dynamic)), ("FPS Reactive", .fpsMode(.reactive)),
+        ("Full screen", .covered), ("Low Power", .lowPower),
         ("Lock screen", .lockScreen(on: true)), ("Crossfade 1.5 s", .crossfade(seconds: 1.5)),
         ("Music corner", .music(.corner)), ("Music full", .music(.fullScreen)),
         ("Menu bar: keeps running", .menuBarMode(keepsRunning: true)), ("Menu bar: quits", .menuBarMode(keepsRunning: false)),

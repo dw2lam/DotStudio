@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **Frame rate mode** in Power Saving, set separately for plugged in and on battery:
+  - **Forced** always plays at your frame rate (as before, and still the default).
+  - **Dynamic** eases off while your Mac's CPU or GPU is busy (120 → 60, or 40 when very busy)
+    and comes back when it settles.
+  - **Reactive** eases off while you type, click or scroll in another app, and comes back a few
+    seconds after you stop.
+- The Battery Saver preset now uses Dynamic.
+
 ## 1.6.7 — Field and Butterflies
 
 ### New

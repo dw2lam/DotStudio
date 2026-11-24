@@ -515,6 +515,11 @@ got = settings_of(tc.call("get_settings", {"keys": ["wallpaper.otherAppOnBattery
 check(wall(T)["otherAppOnBattery"] == "pause" and got["wallpaper.otherAppOnBattery"]["value"] == "pause"
       and got["wallpaper.otherAppPluggedIn"]["value"] == "keepPlaying", "  → written, and read back (plugged in keeps playing)")
 err(upd({"wallpaper.otherAppPluggedIn": "stop"}), "  → an unknown mode is refused")
+ok(upd({"wallpaper.fpsModePluggedIn": "dynamic"}), "wallpaper: Dynamic frame rate plugged in")
+got = settings_of(tc.call("get_settings", {"keys": ["wallpaper.fpsModePluggedIn", "wallpaper.fpsModeOnBattery"]}))
+check(wall(T)["fpsModePluggedIn"] == "dynamic" and got["wallpaper.fpsModePluggedIn"]["value"] == "dynamic"
+      and got["wallpaper.fpsModeOnBattery"]["value"] == "forced", "  → written, and read back (battery stays Forced)")
+err(upd({"wallpaper.fpsModeOnBattery": "turbo"}), "  → an unknown frame rate mode is refused")
 ok(upd({"wallpaper.sameAsScreensaver": True}), "wallpaper: same as screensaver")
 check(wall(T)["followsScreensaver"] is True and library(T).get("syncTimeBase") is True, "  → follows, and the saver's shared time base")
 ok(upd({"wallpaper.sameAsScreensaver": False, "wallpaper.style": "Golden Hour"}), "wallpaper: own style by name")

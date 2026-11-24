@@ -199,6 +199,12 @@ enum AppSettings {
         SettingDef(key: "wallpaper.otherAppOnBattery", label: "Another App Focused (on battery)", place: "Settings ▸ On Battery",
                    meaning: "On battery, while an app other than DotStudio or the Finder is in front: keepPlaying, efficient (slow down: 20 fps, lower resolution), or pause (hold the frame).",
                    type: .choice(["keepPlaying", "efficient", "pause"]), store: .wallpaper),
+        SettingDef(key: "wallpaper.fpsModePluggedIn", label: "Frame Rate Mode (plugged in)", place: "Settings ▸ Power Saving ▸ When Plugged In",
+                   meaning: "Plugged in: forced (always the set frame rate), dynamic (steps down the divisor ladder 120 → 60 → 40 while the Mac's CPU or GPU is busy, back up when it settles), or reactive (one step down while the user types, clicks or scrolls in another app, back a few seconds after they stop).",
+                   type: .choice(["forced", "dynamic", "reactive"]), store: .wallpaper),
+        SettingDef(key: "wallpaper.fpsModeOnBattery", label: "Frame Rate Mode (on battery)", place: "Settings ▸ Power Saving ▸ On Battery",
+                   meaning: "On battery: forced, dynamic or reactive, as for plugged in — stepping down from the battery's own cap (30, or 20 when Efficient).",
+                   type: .choice(["forced", "dynamic", "reactive"]), store: .wallpaper),
         SettingDef(key: "wallpaper.lockScreenPicture", label: "Use as lock & login screen picture", place: "Settings ▸ Live Wallpaper",
                    meaning: "A still of the wallpaper becomes the desktop picture macOS shows on the lock and login screens; off puts the user's own picture back.",
                    type: .bool, store: .wallpaper, gated: true),
@@ -352,6 +358,10 @@ enum AppSettings {
         for k in ["otherAppPluggedIn", "otherAppOnBattery"] {
             let v = w[k]?.stringValue ?? ""
             o["wallpaper." + k] = .string(["efficient", "pause"].contains(v) ? v : "keepPlaying")
+        }
+        for k in ["fpsModePluggedIn", "fpsModeOnBattery"] {
+            let v = w[k]?.stringValue ?? ""
+            o["wallpaper." + k] = .string(["dynamic", "reactive"].contains(v) ? v : "forced")
         }
         o["wallpaper.lockScreenPicture"] = .bool(w["lockScreen"]?.boolValue ?? false)
         var wpins: [String: JSONValue] = [:]
@@ -662,6 +672,8 @@ enum AppSettings {
             s.wallpaper["freezeOnBattery"] = .bool(v.stringValue == "still")   // what a 1.4 build reads
         case "wallpaper.otherAppPluggedIn": s.wallpaper["otherAppPluggedIn"] = v
         case "wallpaper.otherAppOnBattery": s.wallpaper["otherAppOnBattery"] = v
+        case "wallpaper.fpsModePluggedIn": s.wallpaper["fpsModePluggedIn"] = v
+        case "wallpaper.fpsModeOnBattery": s.wallpaper["fpsModeOnBattery"] = v
         case "wallpaper.lockScreenPicture": s.wallpaper["lockScreen"] = v
         case "source.kind": lib.source.kind = SourceKind(rawValue: v.stringValue ?? "") ?? .collection
         case "source.photos":

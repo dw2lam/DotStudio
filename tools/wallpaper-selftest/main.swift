@@ -103,6 +103,59 @@ do {
     let old = try! JSONDecoder().decode(WallpaperSettings.self, from: Data(#"{"enabled":true,"batteryMode":"full"}"#.utf8))
     check(old.otherAppPluggedIn == .keepPlaying && old.otherAppOnBattery == .keepPlaying && old.batteryMode == .full,
           "a 1.6.4 wallpaper.json: keeps playing, battery mode kept")
+    // Frame Rate Mode: Forced keeps the rate; Dynamic follows load; Reactive follows input
+    do {
+        var m = WallpaperSettings()
+        var a = WallpaperPowerMonitor.State()
+        a.load = .busy; a.userActive = true
+        check(WallpaperBudget.level(m, a) == .quiet, "Forced: never steps down, busy or not")
+        check(WallpaperBudget.adaptiveStatus(m, a) == nil, "Forced: no status")
+        m.fpsModePluggedIn = .dynamic
+        a.load = .moderate; a.userActive = false
+        check(WallpaperBudget.fps(m, presetFPS: 30, onBattery: false, universal: 120, level: WallpaperBudget.level(m, a)) == 60,
+              "Dynamic, moderate load: 120 → 60")
+        a.load = .busy
+        check(WallpaperBudget.fps(m, presetFPS: 30, onBattery: false, universal: 120, level: WallpaperBudget.level(m, a)) == 40,
+              "Dynamic, busy: 120 → 40")
+        check(WallpaperBudget.adaptiveStatus(m, a) == "Dynamic — your Mac is busy", "Dynamic: status")
+        a.load = .quiet
+        check(WallpaperBudget.fps(m, presetFPS: 30, onBattery: false, universal: 120, level: WallpaperBudget.level(m, a)) == 120,
+              "Dynamic, quiet: full 120")
+        a.onBattery = true; a.load = .busy
+        check(WallpaperBudget.level(m, a) == .quiet, "Dynamic set only plugged in: on battery stays Forced")
+        m.fpsModeOnBattery = .reactive
+        a.load = .quiet; a.userActive = true
+        check(WallpaperBudget.fps(m, presetFPS: 30, onBattery: true, universal: 60, level: WallpaperBudget.level(m, a)) == 15,
+              "Reactive on battery Efficient (20 cap): one step down → 15")
+        a.userActive = false; a.load = .busy
+        check(WallpaperBudget.level(m, a) == .quiet, "Reactive, idle user, busy Mac: full rate (it follows you)")
+        a.userActive = true
+        check(WallpaperBudget.level(m, a) == .busy, "Reactive, active user + busy Mac: two steps")
+        check(WallpaperBudget.stepDown(1, 2) == 1 && WallpaperBudget.stepDown(30, 1) == 24 && WallpaperBudget.stepDown(15, 2) == 15,
+              "ladder: a clock's 1 fps untouched, 30 → 24, never under 15")
+        check(WallpaperBudget.stepDown(90, 1) == 60, "ladder: a rate between rungs steps to the next rung")
+        let rt = try! JSONDecoder().decode(WallpaperSettings.self, from: JSONEncoder().encode(m))
+        check(rt.fpsModePluggedIn == .dynamic && rt.fpsModeOnBattery == .reactive, "frame rate modes survive wallpaper.json")
+        check(old.fpsModePluggedIn == .forced && old.fpsModeOnBattery == .forced, "a 1.6.7 wallpaper.json: Forced")
+        // the governor: quick down, slow up, holds when it bounces
+        var gov = LoadGovernor()
+        let t0 = Date()
+        check(gov.feed(cpu: 0.9, gpu: 0, now: t0) == .quiet, "governor: one spike isn't enough")
+        check(gov.feed(cpu: 0.9, gpu: 0, now: t0 + 1) == .busy, "governor: two busy readings step down")
+        var lv = ActivityLevel.busy
+        for i in 2..<12 { lv = gov.feed(cpu: 0.05, gpu: 0.05, now: t0 + Double(i)) }
+        check(lv == .quiet, "governor: settles back to quiet after a few calm readings")
+        _ = gov.feed(cpu: 0.9, gpu: 0.9, now: t0 + 12)
+        _ = gov.feed(cpu: 0.9, gpu: 0.9, now: t0 + 13)
+        for i in 14..<40 { lv = gov.feed(cpu: 0.05, gpu: 0.05, now: t0 + Double(i)) }
+        check(lv == .busy, "governor: bounced back within 20 s — held busy for a minute")
+        for i in 80..<90 { lv = gov.feed(cpu: 0.05, gpu: 0.05, now: t0 + Double(i)) }
+        check(lv == .quiet, "governor: released after the hold")
+        var smp = ActivitySampler()
+        _ = smp.read()
+        let r2 = smp.read()
+        check((0...1).contains(r2.cpu) && (0...1).contains(r2.gpu) && r2.idleSeconds >= 0, "sampler: readings in range")
+    }
     st.thermalHot = true
     check(WallpaperBudget.stillReason(WallpaperSettings(), st) == "Still — Mac is running hot", "hot Mac holds")
     // Low Power Mode holds a still (drawn first) instead of pausing: a wallpaper turned on in

@@ -189,10 +189,11 @@ struct WallpaperSettingsSection: View {
         } header: {
             powerHeader("Frame Rate", symbol: "speedometer")
         } footer: {
-            SettingsNote("One frame rate for the screensaver and the live wallpaper. On battery it's capped at 30 (20 when Efficient); Low Power Mode draws 15.")
+            SettingsNote("One frame rate for the screensaver and the live wallpaper. On battery it's capped at 30 (20 when Efficient); Low Power Mode draws 15. Frame rate mode below lets the wallpaper ease off from it when you're plugged in or on battery.")
         }
 
         Section {
+            fpsModeRow(\.fpsModePluggedIn, onBattery: false)
             otherAppRow(\.otherAppPluggedIn)
         } header: {
             powerHeader("When Plugged In", symbol: "powerplug")
@@ -205,6 +206,7 @@ struct WallpaperSettingsSection: View {
                         },
                         selection: Binding(get: { wallpaper.settings.batteryMode },
                                            set: { v in wallpaper.update { $0.batteryMode = v } }))
+            fpsModeRow(\.fpsModeOnBattery, onBattery: true)
             otherAppRow(\.otherAppOnBattery)
         } header: {
             powerHeader("On Battery", symbol: "battery.75percent")
@@ -228,6 +230,31 @@ struct WallpaperSettingsSection: View {
         case .efficient: return "20 fps at lower resolution — about a quarter of the work."
         case .still: return "holds one frame until you plug in."
         }
+    }
+
+    /// Frame Rate Mode per power source: Forced, Dynamic (the Mac's load) or Reactive (your
+    /// input) — WallpaperSettings.FPSMode, WallpaperBudget.level.
+    private func fpsModeRow(_ key: WritableKeyPath<WallpaperSettings, WallpaperSettings.FPSMode>, onBattery: Bool) -> some View {
+        // this power source's real rates: its top, one step down, two
+        let top = WallpaperBudget.fps(wallpaper.settings, presetFPS: 0, onBattery: onBattery,
+                                      universal: model.library.frameRate ?? (wallpaper.settings.frameRate == .smooth ? 120 : 30))
+        let one = WallpaperBudget.stepDown(top, 1), two = WallpaperBudget.stepDown(top, 2)
+        func n(_ f: Double) -> String { "\(Int(f))" }
+        let busy = two < one ? "\(n(top)) → \(n(one)), or \(n(two)) when very busy" : "\(n(top)) → \(n(one))"
+        return OptionCards(title: "Frame rate mode",
+                    options: WallpaperSettings.FPSMode.allCases.map { m in
+                        .init(label: m.title, value: m, scene: .fpsMode(m, top: Int(top)), explain: {
+                            switch m {
+                            case .forced: return "always plays at \(n(top)) fps."
+                            case .dynamic: return one < top ? "steps down while your Mac's CPU or GPU is busy (\(busy) fps) and back up when it settles."
+                                                            : "would step down while your Mac is busy, but \(n(top)) fps is already the lowest rate."
+                            case .reactive: return one < top ? "steps down while you type, click or scroll in another app (\(n(top)) → \(n(one)) fps) and comes back a few seconds after you stop."
+                                                             : "would step down while you use another app, but \(n(top)) fps is already the lowest rate."
+                            }
+                        }())
+                    },
+                    selection: Binding(get: { wallpaper.settings[keyPath: key] },
+                                       set: { v in wallpaper.update { $0[keyPath: key] = v } }))
     }
 
     /// Another app in front (not full screen): keep playing, slow down, or pause — per power
@@ -321,7 +348,7 @@ enum PowerPreset: String, CaseIterable, Identifiable {
         switch self {
         case .quality: return "60 fps, full resolution, always playing."
         case .balanced: return "30 fps, lighter on battery. The default."
-        case .saver: return "24 fps, lower resolution; pauses whenever you're busy."
+        case .saver: return "24 fps, lower resolution, eases off when your Mac is busy; pauses whenever you're busy."
         }
     }
 
@@ -331,11 +358,13 @@ enum PowerPreset: String, CaseIterable, Identifiable {
     private var battery: WallpaperSettings.BatteryMode { self == .quality ? .full : self == .balanced ? .efficient : .still }
     private var pluggedIn: WallpaperSettings.OtherAppMode { self == .saver ? .efficient : .keepPlaying }
     private var onBattery: WallpaperSettings.OtherAppMode { self == .saver ? .pause : .keepPlaying }
+    private var fpsMode: WallpaperSettings.FPSMode { self == .saver ? .dynamic : .forced }
 
     static func matching(_ w: WallpaperSettings, _ lib: Library) -> PowerPreset? {
         allCases.first { p in
             (lib.frameRate ?? (w.frameRate == .smooth ? 120 : 30)) == p.fps && w.quality == p.quality && lib.renderScale == p.screensaverScale
                 && w.batteryMode == p.battery && w.otherAppPluggedIn == p.pluggedIn && w.otherAppOnBattery == p.onBattery
+                && w.fpsModePluggedIn == p.fpsMode && w.fpsModeOnBattery == p.fpsMode
         }
     }
 
@@ -349,6 +378,8 @@ enum PowerPreset: String, CaseIterable, Identifiable {
             $0.batteryMode = battery
             $0.otherAppPluggedIn = pluggedIn
             $0.otherAppOnBattery = onBattery
+            $0.fpsModePluggedIn = fpsMode
+            $0.fpsModeOnBattery = fpsMode
         }
     }
 

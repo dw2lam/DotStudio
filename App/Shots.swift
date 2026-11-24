@@ -625,11 +625,11 @@ enum UIShots {
         // Settings: every section (General, Screensaver, Live Wallpaper, Transitions, Performance, Updates)
         // Settings is a sheet on the main window (sheets don't render offscreen): each pane at a typical size
         for pane in SettingsPane.allCases {
-            s.append(Screen(name: "settings-pane-\(pane.rawValue)", frame: .fit(width: 860, minHeight: pane == .power ? 2100 : 640),
+            s.append(Screen(name: "settings-pane-\(pane.rawValue)", frame: .fit(width: 860, minHeight: pane == .power ? 2700 : 640),
                             prepare: { st in
                                 WallpaperController.shared.update { $0.presetID = st.wallpaper }
                                 st.model.settingsPane = pane
-                            }, view: { _ in AnyView(SettingsView().frame(width: 860, height: pane == .power ? 2100 : 640)) }))
+                            }, view: { _ in AnyView(SettingsView().frame(width: 860, height: pane == .power ? 2700 : 640)) }))
         }
         // Settings › General on its own, in both menu-bar modes (the footer changes with it)
         s.append(Screen(name: "settings-general", frame: .fit(width: 640, minHeight: 160),
