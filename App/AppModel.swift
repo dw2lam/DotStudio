@@ -293,6 +293,18 @@ final class AppModel: ObservableObject {
             retirement = report
             lib.seenBuiltIns = (lib.seenBuiltIns ?? []) + [DefaultPresets.retirementMarker]
         }
+        // 1.6.8, once per library: Power Saving's frame rate is now a limit, and each style
+        // plays at its own rate under it. Where a frame rate was set, it replaced every style's
+        // own — so they all become Auto (play at the limit): nothing plays any differently. Where
+        // none was set (each style's own rate played), the limit opens at 120.
+        if !(lib.seenBuiltIns ?? []).contains(DefaultPresets.fpsLimitMarker) {
+            if lib.frameRate != nil {
+                for i in lib.presets.indices { lib.presets[i].fpsAuto = true }
+            } else {
+                lib.frameRate = 120
+            }
+            lib.seenBuiltIns = (lib.seenBuiltIns ?? []) + [DefaultPresets.fpsLimitMarker]
+        }
         // 1.4.5, once per library: Tidewater (Golden Hour with Follow the Sun on) folds into
         // Golden Hour. Its moves join the report, so the wallpaper's pick follows them too.
         if !(lib.seenBuiltIns ?? []).contains(DefaultPresets.tidewaterMarker) {

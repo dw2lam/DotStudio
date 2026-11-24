@@ -46,7 +46,7 @@ final class ScreensaverPreviewController: ObservableObject {
         mtk.delegate = r
         r.reduceMotion = MusicOverlayLayer.systemReduceMotion
         r.apply(preset, source: source)
-        mtk.preferredFramesPerSecond = preset.fps
+        mtk.preferredFramesPerSecond = preset.fpsAuto ? 120 : preset.fps
         renderer = r
 
         let container = NSView(frame: CGRect(origin: .zero, size: frame.size))

@@ -168,12 +168,10 @@ struct WallpaperSettingsSection: View {
 
     }
 
-    // Power saving, the way a laptop is used: what plays plugged in, what plays on battery,
-    // and in both what happens while another app is focused. Each row acts out its current
-    // choice in a little animated Mac (WallpaperDemos.swift).
     // Power saving the way Wallpaper Engine lays it out: a preset on top that sets everything,
-    // then one frame rate for everything, then each situation as a row of option cards with a
-    // slider under them.
+    // then each power source in its own section (a coloured header tells them apart) with its
+    // frame rate — a limit, and for Dynamic / Reactive the lowest it eases to, dragged on one
+    // range — and its situations as rows of option cards.
     @ViewBuilder private var powerSections: some View {
         Section {
             PowerPresetPicker(current: PowerPreset.matching(wallpaper.settings, model.library)) { preset in
@@ -184,19 +182,16 @@ struct WallpaperSettingsSection: View {
         }
 
         Section {
-            FrameRateRow(fps: Binding(get: { model.library.frameRate ?? (wallpaper.settings.frameRate == .smooth ? 120 : 30) },
-                                      set: { v in PowerPreset.setFrameRate(v, wallpaper: wallpaper, model: model) }))
-        } header: {
-            powerHeader("Frame Rate", symbol: "speedometer")
-        } footer: {
-            SettingsNote("One frame rate for the screensaver and the live wallpaper. On battery it's capped at 30 (20 when Efficient); Low Power Mode draws 15. Frame rate mode below lets the wallpaper ease off from it when you're plugged in or on battery.")
-        }
-
-        Section {
-            fpsModeRow(\.fpsModePluggedIn, onBattery: false)
+            FrameRateControl(source: .pluggedIn,
+                             mode: setting(\.fpsModePluggedIn),
+                             limit: Binding(get: { model.library.frameRate ?? 120 },
+                                            set: { v in PowerPreset.setFrameRate(v, wallpaper: wallpaper, model: model) }),
+                             floor: setting(\.fpsFloorPluggedIn))
             otherAppRow(\.otherAppPluggedIn)
         } header: {
-            powerHeader("When Plugged In", symbol: "powerplug")
+            PowerSourceHeader(source: .pluggedIn, summary: sourceSummary(onBattery: false))
+        } footer: {
+            SettingsNote("The plugged-in limit is the screensaver's too. Each style plays at its own frame rate (Customize › Frame rate) up to the limit — Auto plays at the limit.")
         }
 
         Section {
@@ -206,10 +201,19 @@ struct WallpaperSettingsSection: View {
                         },
                         selection: Binding(get: { wallpaper.settings.batteryMode },
                                            set: { v in wallpaper.update { $0.batteryMode = v } }))
-            fpsModeRow(\.fpsModeOnBattery, onBattery: true)
+            if wallpaper.settings.batteryMode != .still {
+                FrameRateControl(source: .battery,
+                                 mode: setting(\.fpsModeOnBattery),
+                                 limit: Binding(get: { wallpaper.settings.batteryTopFPS },
+                                                set: { v in wallpaper.update { $0.batteryFPS = v } }),
+                                 floor: setting(\.fpsFloorOnBattery))
+                    .transition(.opacity)
+            }
             otherAppRow(\.otherAppOnBattery)
         } header: {
-            powerHeader("On Battery", symbol: "battery.75percent")
+            PowerSourceHeader(source: .battery, summary: sourceSummary(onBattery: true))
+        } footer: {
+            SettingsNote("The screensaver keeps its own battery saving: at most 24 fps at lower resolution.")
         }
 
         Section {
@@ -224,37 +228,28 @@ struct WallpaperSettingsSection: View {
         }
     }
 
-    private static func batteryExplain(_ m: WallpaperSettings.BatteryMode) -> String {
-        switch m {
-        case .full: return "plays as when plugged in, up to 30 fps."
-        case .efficient: return "20 fps at lower resolution — about a quarter of the work."
-        case .still: return "holds one frame until you plug in."
-        }
+    /// A wallpaper setting as a binding (writes go through WallpaperController.update).
+    private func setting<T>(_ key: WritableKeyPath<WallpaperSettings, T>) -> Binding<T> {
+        Binding(get: { wallpaper.settings[keyPath: key] }, set: { v in wallpaper.update { $0[keyPath: key] = v } })
     }
 
-    /// Frame Rate Mode per power source: Forced, Dynamic (the Mac's load) or Reactive (your
-    /// input) — WallpaperSettings.FPSMode, WallpaperBudget.level.
-    private func fpsModeRow(_ key: WritableKeyPath<WallpaperSettings, WallpaperSettings.FPSMode>, onBattery: Bool) -> some View {
-        // this power source's real rates: its top, one step down, two
-        let top = WallpaperBudget.fps(wallpaper.settings, presetFPS: 0, onBattery: onBattery,
-                                      universal: model.library.frameRate ?? (wallpaper.settings.frameRate == .smooth ? 120 : 30))
-        let one = WallpaperBudget.stepDown(top, 1), two = WallpaperBudget.stepDown(top, 2)
-        func n(_ f: Double) -> String { "\(Int(f))" }
-        let busy = two < one ? "\(n(top)) → \(n(one)), or \(n(two)) when very busy" : "\(n(top)) → \(n(one))"
-        return OptionCards(title: "Frame rate mode",
-                    options: WallpaperSettings.FPSMode.allCases.map { m in
-                        .init(label: m.title, value: m, scene: .fpsMode(m, top: Int(top)), explain: {
-                            switch m {
-                            case .forced: return "always plays at \(n(top)) fps."
-                            case .dynamic: return one < top ? "steps down while your Mac's CPU or GPU is busy (\(busy) fps) and back up when it settles."
-                                                            : "would step down while your Mac is busy, but \(n(top)) fps is already the lowest rate."
-                            case .reactive: return one < top ? "steps down while you type, click or scroll in another app (\(n(top)) → \(n(one)) fps) and comes back a few seconds after you stop."
-                                                             : "would step down while you use another app, but \(n(top)) fps is already the lowest rate."
-                            }
-                        }())
-                    },
-                    selection: Binding(get: { wallpaper.settings[keyPath: key] },
-                                       set: { v in wallpaper.update { $0[keyPath: key] = v } }))
+    /// The header's one line: "Up to 120 fps · Dynamic" (on battery, "Paused" when it is).
+    private func sourceSummary(onBattery: Bool) -> String {
+        let w = wallpaper.settings
+        if onBattery && w.batteryMode == .still { return "Paused" }
+        let limit = onBattery ? w.batteryTopFPS : (model.library.frameRate ?? 120)
+        let mode = w.fpsMode(onBattery: onBattery)
+        let low = Int(WallpaperBudget.adapt(Double(limit), level: .busy, floor: w.fpsFloor(onBattery: onBattery).map(Double.init)))
+        let rate = mode == .forced || low >= limit ? "\(limit) fps" : "\(low)–\(limit) fps"
+        return "\(rate) · \(mode.title)" + (onBattery && w.batteryMode == .efficient ? " · lower resolution" : "")
+    }
+
+    private static func batteryExplain(_ m: WallpaperSettings.BatteryMode) -> String {
+        switch m {
+        case .full: return "plays at full resolution, at the frame rate below."
+        case .efficient: return "draws at lower resolution — about a third of the pixels — at the frame rate below."
+        case .still: return "holds one frame until you plug in."
+        }
     }
 
     /// Another app in front (not full screen): keep playing, slow down, or pause — per power
@@ -346,25 +341,28 @@ enum PowerPreset: String, CaseIterable, Identifiable {
     }
     var summary: String {
         switch self {
-        case .quality: return "60 fps, full resolution, always playing."
-        case .balanced: return "30 fps, lighter on battery. The default."
-        case .saver: return "24 fps, lower resolution, eases off when your Mac is busy; pauses whenever you're busy."
+        case .quality: return "120 fps at full resolution, always; 60 on battery."
+        case .balanced: return "Up to 120 fps, easing off while your Mac is busy; 30 on battery."
+        case .saver: return "Up to 60 fps, easing off while you work; pauses on battery."
         }
     }
 
-    private var fps: Int { self == .quality ? 60 : self == .balanced ? 30 : 24 }
+    private var fps: Int { self == .saver ? 60 : 120 }
+    private var mode: WallpaperSettings.FPSMode { self == .quality ? .forced : self == .balanced ? .dynamic : .reactive }
+    private var batteryFPS: Int { self == .quality ? 60 : self == .balanced ? 30 : 15 }
+    private var batteryMode: WallpaperSettings.FPSMode { self == .quality ? .forced : .dynamic }
     private var quality: WallpaperSettings.Quality { self == .quality ? .full : self == .balanced ? .balanced : .efficient }
     private var screensaverScale: Double? { self == .saver ? 0.5 : nil }
     private var battery: WallpaperSettings.BatteryMode { self == .quality ? .full : self == .balanced ? .efficient : .still }
     private var pluggedIn: WallpaperSettings.OtherAppMode { self == .saver ? .efficient : .keepPlaying }
     private var onBattery: WallpaperSettings.OtherAppMode { self == .saver ? .pause : .keepPlaying }
-    private var fpsMode: WallpaperSettings.FPSMode { self == .saver ? .dynamic : .forced }
 
     static func matching(_ w: WallpaperSettings, _ lib: Library) -> PowerPreset? {
         allCases.first { p in
-            (lib.frameRate ?? (w.frameRate == .smooth ? 120 : 30)) == p.fps && w.quality == p.quality && lib.renderScale == p.screensaverScale
+            (lib.frameRate ?? 120) == p.fps && w.fpsModePluggedIn == p.mode && w.fpsFloorPluggedIn == nil
+                && w.batteryTopFPS == p.batteryFPS && w.fpsModeOnBattery == p.batteryMode && w.fpsFloorOnBattery == nil
+                && w.quality == p.quality && lib.renderScale == p.screensaverScale
                 && w.batteryMode == p.battery && w.otherAppPluggedIn == p.pluggedIn && w.otherAppOnBattery == p.onBattery
-                && w.fpsModePluggedIn == p.fpsMode && w.fpsModeOnBattery == p.fpsMode
         }
     }
 
@@ -375,16 +373,19 @@ enum PowerPreset: String, CaseIterable, Identifiable {
         wallpaper.update {
             $0.quality = quality
             $0.frameRate = fps > 30 ? .smooth : .balanced
+            $0.fpsModePluggedIn = mode
+            $0.fpsFloorPluggedIn = nil
             $0.batteryMode = battery
+            $0.batteryFPS = batteryFPS
+            $0.fpsModeOnBattery = batteryMode
+            $0.fpsFloorOnBattery = nil
             $0.otherAppPluggedIn = pluggedIn
             $0.otherAppOnBattery = onBattery
-            $0.fpsModePluggedIn = fpsMode
-            $0.fpsModeOnBattery = fpsMode
         }
     }
 
-    /// The one frame rate (Library.frameRate), and the wallpaper's own setting in step with it
-    /// (so a build without the shared rate keeps about the same).
+    /// The plugged-in limit (Library.frameRate — the screensaver's too), and the wallpaper's
+    /// old setting in step with it (so a build without the shared rate keeps about the same).
     @MainActor static func setFrameRate(_ v: Int, wallpaper: WallpaperController, model: AppModel) {
         model.library.frameRate = v
         model.save()
@@ -441,53 +442,230 @@ private struct PowerPresetPicker: View {
     }
 }
 
-/// One frame rate for everything: a big picture playing at the chosen rate (exaggerated so the
-/// steps read), the value in large type, and a slider with a stop per rate.
-private struct FrameRateRow: View {
-    @Binding var fps: Int
-    static let stops = [15, 24, 30, 60, 120]
+/// Which power source a section is about: its symbol and colour, so the two read apart.
+enum PowerSource {
+    case pluggedIn, battery
+    var title: String { self == .pluggedIn ? "When Plugged In" : "On Battery" }
+    var symbol: String { self == .pluggedIn ? "powerplug.fill" : "battery.75percent" }
+    var tint: Color { self == .pluggedIn ? .green : .orange }
+}
+
+/// A power source's section header: its symbol on a tile in its colour, the name, and a line
+/// saying what it's set to now ("40–120 fps · Dynamic").
+struct PowerSourceHeader: View {
+    let source: PowerSource
+    let summary: String
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var index: Int { Self.stops.firstIndex(of: fps) ?? Self.stops.firstIndex { $0 >= fps } ?? 2 }
+    var body: some View {
+        HStack(spacing: Space.s) {
+            Image(systemName: source.symbol)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 26, height: 26)
+                .background(source.tint.gradient, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            VStack(alignment: .leading, spacing: 0) {
+                Text(source.title).textRole(.headline).foregroundStyle(.primary)
+                Text(summary).textRole(.callout).foregroundStyle(.secondary)
+                    .contentTransition(.numericText())
+                    .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: summary)
+            }
+        }
+        .padding(.vertical, Space.xxs)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// A power source's frame rate: Forced / Dynamic / Reactive, and one range to drag — the limit
+/// on the right handle; for Dynamic and Reactive the lowest it eases to on the left, with the
+/// span between filled. The figure above says the range and how far it can drop, as a share.
+struct FrameRateControl: View {
+    let source: PowerSource
+    @Binding var mode: WallpaperSettings.FPSMode
+    @Binding var limit: Int
+    /// nil: the default, two rungs under the limit (it follows the limit until dragged).
+    @Binding var floor: Int?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    static let stops = WallpaperBudget.ladder.reversed().map { Int($0) }     // 15 … 120
+
+    private var adaptive: Bool { mode != .forced }
+    private var upper: Int { Self.index(limit) }
+    private var lower: Int {
+        let f = floor ?? Int(WallpaperBudget.defaultFloor(Double(limit)))
+        return min(Self.index(f), max(upper - 1, 0))
+    }
+    private var low: Int { Self.stops[lower] }
+    private var mid: Int { Int(WallpaperBudget.adapt(Double(limit), level: .moderate, floor: Double(low))) }
+
+    static func index(_ fps: Int) -> Int { stops.lastIndex { $0 <= fps } ?? 0 }
 
     private var explain: String {
-        switch Self.stops[index] {
-        case 15: return "Lightest. Slow scenes still look calm; fast motion steps."
-        case 24: return "Film rate — gentle on battery."
-        case 30: return "Smooth for most styles, half the work of 60."
-        case 60: return "Fluid motion. Uses about twice the power of 30."
-        default: return "Your display's full rate on ProMotion. Uses the most power."
+        switch mode {
+        case .forced:
+            return "Always \(limit) fps — or less, if a style asks for less."
+        case .dynamic:
+            return mid > low ? "\(limit) fps while your Mac is quiet, \(mid) while it's busy, \(low) when it's very busy."
+                             : "\(limit) fps while your Mac is quiet, \(low) while it's busy."
+        case .reactive:
+            return "\(limit) fps while you're watching, \(mid) while you work in another app\(mid > low ? ", \(low) if your Mac is also very busy" : "")."
         }
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: Space.l) {
-            WallpaperDemo(scene: .fps(Self.stops[index]))
-                .frame(width: 200)
-            VStack(alignment: .leading, spacing: Space.s) {
-                HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
-                    Text("\(Self.stops[index])").font(.system(size: 28, weight: .semibold, design: .rounded)).monospacedDigit()
-                        .contentTransition(reduceMotion ? .identity : .numericText(value: Double(Self.stops[index])))
-                    Text("fps").textRole(.bodyEmphasis).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: Space.s) {
+            HStack(alignment: .center) {
+                Text("Frame rate").textRole(.bodyEmphasis)
+                Spacer(minLength: Space.m)
+                Picker("Frame rate mode", selection: $mode.animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion))) {
+                    ForEach(WallpaperSettings.FPSMode.allCases) { Text($0.title).tag($0) }
                 }
-                Slider(value: Binding(get: { Double(index) }, set: { fps = Self.stops[Int($0.rounded())] }),
-                       in: 0...Double(Self.stops.count - 1), step: 1)
-                    .labelsHidden()
-                    .accessibilityLabel("Frame rate")
-                    .accessibilityValue("\(Self.stops[index]) frames per second")
-                HStack {
-                    ForEach(Self.stops.indices, id: \.self) { i in
-                        Text("\(Self.stops[i])").textRole(.callout)
-                            .foregroundStyle(i == index ? Color.accentColor : .secondary)
-                        if i < Self.stops.count - 1 { Spacer(minLength: 0) }
-                    }
-                }
-                Text(explain).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    .id(index)
-                    .transition(.opacity)
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
             }
+            HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
+                Text(adaptive ? "\(low)–\(limit)" : "\(limit)")
+                    .font(.system(size: 28, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .contentTransition(.numericText())
+                Text("fps").textRole(.bodyEmphasis).foregroundStyle(.secondary)
+                Spacer(minLength: Space.s)
+                if adaptive {
+                    Text("eases down to \(Int((Double(low) / Double(limit) * 100).rounded()))%")
+                        .textRole(.callout).foregroundStyle(.secondary)
+                        .contentTransition(.numericText())
+                        .transition(.opacity)
+                }
+            }
+            RateRangeSlider(count: Self.stops.count, labels: Self.stops.map(String.init), tint: source.tint,
+                            upper: Binding(get: { upper }, set: { i in
+                                limit = Self.stops[i]
+                                // an explicit floor never sits at or above the limit
+                                if let f = floor, Self.index(f) >= i { floor = i > 0 ? Self.stops[i - 1] : nil }
+                            }),
+                            lower: adaptive ? Binding(get: { lower }, set: { floor = Self.stops[$0] }) : nil)
+                .accessibilityLabel("\(source.title) frame rate")
+            Text(explain).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .contentTransition(.opacity)
         }
         .padding(.vertical, Space.xs)
-        .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: index)
+        .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: limit)
+        .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: floor)
+        .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: mode)
     }
+}
+
+/// A stepped slider with one or two handles (`lower` nil: one). Stops are evenly spaced, the
+/// span between the handles (or up to the one) is filled in `tint`, and each stop's label sits
+/// under it. Drag a handle, or click the track to move the nearer one; arrow keys / VoiceOver
+/// adjust each handle. A trackpad tick marks each stop passed.
+struct RateRangeSlider: View {
+    let count: Int
+    let labels: [String]
+    let tint: Color
+    @Binding var upper: Int
+    var lower: Binding<Int>?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var dragging: Handle?
+    enum Handle { case lower, upper }
+
+    private let knob: CGFloat = 20
+    private let track: CGFloat = 5
+
+    var body: some View {
+        VStack(spacing: Space.xs) {
+            GeometryReader { geo in
+                let w = geo.size.width - knob
+                let x = { (i: Int) -> CGFloat in knob / 2 + w * CGFloat(i) / CGFloat(max(count - 1, 1)) }
+                let lo = lower?.wrappedValue
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.1))
+                        .frame(height: track)
+                        .padding(.horizontal, knob / 2)
+                    ForEach(0..<count, id: \.self) { i in
+                        Circle().fill(Color.primary.opacity(0.25)).frame(width: 3, height: 3)
+                            .position(x: x(i), y: knob / 2)
+                    }
+                    let from = x(lo ?? 0), to = x(upper)
+                    Capsule().fill(tint.gradient)
+                        .frame(width: max(to - from, track), height: track)
+                        .offset(x: from - (lo == nil ? knob / 2 : 0))
+                        .padding(.leading, lo == nil ? knob / 2 : 0)
+                    if let lo { thumb(.lower).position(x: x(lo), y: knob / 2) }
+                    thumb(.upper).position(x: x(upper), y: knob / 2)
+                }
+                .frame(height: knob)
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0)
+                    .onChanged { g in
+                        let i = Int(((g.location.x - knob / 2) / max(w, 1) * CGFloat(count - 1)).rounded())
+                        let idx = min(max(i, 0), count - 1)
+                        if dragging == nil {
+                            // the handle nearer the press (ties: the one that can move that way)
+                            if let lo, abs(idx - lo) < abs(idx - upper) || (idx < lo) { dragging = .lower }
+                            else { dragging = .upper }
+                        }
+                        move(dragging!, to: idx)
+                    }
+                    .onEnded { _ in dragging = nil })
+            }
+            .frame(height: knob)
+            GeometryReader { geo in
+                let w = geo.size.width - knob
+                ForEach(0..<count, id: \.self) { i in
+                    let on = i == upper || i == lower?.wrappedValue
+                    let inside = i <= upper && i >= (lower?.wrappedValue ?? i)
+                    Text(labels[i]).textRole(.callout)
+                        .foregroundStyle(on ? AnyShapeStyle(tint) : inside && lower != nil ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                        .fontWeight(on ? .semibold : .regular)
+                        .fixedSize()
+                        .position(x: knob / 2 + w * CGFloat(i) / CGFloat(max(count - 1, 1)), y: 8)
+                }
+            }
+            .frame(height: 16)
+        }
+        .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: upper)
+        .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: lower?.wrappedValue)
+        .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: lower == nil)
+    }
+
+    private func thumb(_ h: Handle) -> some View {
+        Circle()
+            .fill(Color.white)
+            .overlay(Circle().strokeBorder(Color.black.opacity(0.12), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.25), radius: dragging == h ? 4 : 2, y: 1)
+            .frame(width: knob, height: knob)
+            .scaleEffect(dragging == h ? 1.12 : 1)
+            .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: dragging)
+            .accessibilityElement()
+            .accessibilityLabel(h == .upper ? (lower == nil ? "Frame rate" : "Highest") : "Lowest")
+            .accessibilityValue("\(labels[h == .upper ? upper : (lower?.wrappedValue ?? 0)]) frames per second")
+            .accessibilityAdjustableAction { dir in
+                let cur = h == .upper ? upper : (lower?.wrappedValue ?? 0)
+                move(h, to: dir == .increment ? cur + 1 : cur - 1)
+            }
+            .transition(.scale.combined(with: .opacity))
+    }
+
+    /// Move a handle, keeping lower < upper: the limit pushes the floor down ahead of it; the
+    /// floor stops one under the limit.
+    private func move(_ h: Handle, to i: Int) {
+        switch h {
+        case .upper:
+            let lowest = lower == nil ? 0 : 1
+            let v = min(max(i, lowest), count - 1)
+            guard v != upper else { return }
+            upper = v
+            tick()
+        case .lower:
+            guard let lower else { return }
+            let v = min(max(i, 0), upper - 1)
+            guard v != lower.wrappedValue else { return }
+            lower.wrappedValue = v
+            tick()
+        }
+    }
+
+    private func tick() { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
 }

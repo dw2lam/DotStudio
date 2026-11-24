@@ -3,13 +3,26 @@
 ## Unreleased
 
 ### New
-- **Frame rate mode** in Power Saving, set separately for plugged in and on battery:
-  - **Forced** always plays at your frame rate (as before, and still the default).
-  - **Dynamic** eases off while your Mac's CPU or GPU is busy (120 → 60, or 40 when very busy)
-    and comes back when it settles.
-  - **Reactive** eases off while you type, click or scroll in another app, and comes back a few
+- **Frame rate, per power source.** Plugged in and On Battery each have their own frame rate,
+  set on one draggable range — on battery up to 120 fps too.
+- **Forced, Dynamic and Reactive:**
+  - **Forced** always plays at the limit.
+  - **Dynamic** eases off while your Mac's CPU or GPU is busy and comes back when it settles.
+  - **Reactive** eases off while you type, click or scroll in another app and comes back a few
     seconds after you stop.
-- The Battery Saver preset now uses Dynamic.
+  - For Dynamic and Reactive, drag the range's left handle to set the lowest they ease down to.
+- **Smoother Settings:** previews play at your display's full rate and fade between states;
+  pickers animate on hover and selection.
+
+### Changed
+- **Power Saving sets the limit; each style picks its rate under it.** A style's Frame rate
+  (Customize) can be Auto — the limit — or its own rate, which the limit caps. The editor says
+  what it really plays at, plugged in and on battery. Styles in a library that had a Power
+  Saving frame rate become Auto, so nothing plays any differently.
+- Battery's Efficient playback now means lower resolution; its frame rate is the one you set.
+- Plugged In and On Battery have coloured headers that say what each is set to.
+- Presets updated: Best Quality (120, 60 on battery), Balanced (up to 120, Dynamic; 30 on
+  battery), Battery Saver (up to 60, Reactive; pauses on battery).
 
 ## 1.6.7 — Field and Butterflies
 

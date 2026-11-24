@@ -133,7 +133,16 @@ struct Preset: Codable, Identifiable, Equatable, Hashable {
     var id: UUID = UUID()
     var name: String
     var effects: [EffectInstance] = []
+    /// The style's own frame rate — never above Power Saving's limit for the power source.
     var fps: Int = 30
+    /// Frame rate Auto: play at Power Saving's limit (`fps` is then only what an older build
+    /// reads). See `playFPS(limit:)`.
+    var fpsAuto = false
+
+    /// The rate this style plays at under `limit`: the limit for Auto, else its own, capped.
+    func playFPS(limit: Int) -> Int { fpsAuto ? limit : Swift.min(fps, limit) }
+    /// For WallpaperBudget / the saver: the style's own rate, 0 for Auto.
+    var ownFPS: Int { fpsAuto ? 0 : fps }
 
     /// Legacy per-style source — only decoded so old libraries can migrate.
     var source: SourceSpec?
@@ -244,7 +253,7 @@ struct UnknownPreset: Equatable {
 /// (a newer DotStudio adds kinds; an unknown one used to make the whole library undecodable).
 /// Every other field decodes exactly as the synthesized Codable did.
 extension Preset {
-    private enum CodingKeys: String, CodingKey { case id, name, effects, fps, source }
+    private enum CodingKeys: String, CodingKey { case id, name, effects, fps, fpsAuto, source }
     private enum KindKey: String, CodingKey { case kind }
 
     init(from decoder: Decoder) throws {
@@ -264,6 +273,7 @@ extension Preset {
             index += 1
         }
         fps = try c.decode(Int.self, forKey: .fps)
+        fpsAuto = (try? c.decodeIfPresent(Bool.self, forKey: .fpsAuto)) ?? false
         source = try c.decodeIfPresent(SourceSpec.self, forKey: .source)
     }
 
@@ -285,6 +295,7 @@ extension Preset {
             index += 1
         }
         try c.encode(fps, forKey: .fps)
+        if fpsAuto { try c.encode(true, forKey: .fpsAuto) }
         try c.encodeIfPresent(source, forKey: .source)
     }
 

@@ -135,6 +135,9 @@ extension AIBridgeHost {
                 w.update { $0.fpsModePluggedIn = WallpaperSettings.FPSMode(rawValue: v.stringValue ?? "") ?? .forced }
             case "wallpaper.fpsModeOnBattery":
                 w.update { $0.fpsModeOnBattery = WallpaperSettings.FPSMode(rawValue: v.stringValue ?? "") ?? .forced }
+            case "wallpaper.batteryFrameRate": w.update { $0.batteryFPS = v.stringValue.flatMap { Int($0) } }
+            case "wallpaper.lowestFrameRatePluggedIn": w.update { $0.fpsFloorPluggedIn = v.stringValue.flatMap { Int($0) } }
+            case "wallpaper.lowestFrameRateOnBattery": w.update { $0.fpsFloorOnBattery = v.stringValue.flatMap { Int($0) } }
             case "wallpaper.lockScreenPicture": w.setLockScreen(v.boolValue ?? false)
             case "updates.checkAutomatically", "updates.installAutomatically":
                 guard let u = UpdateController.current else { problems.append("the updater isn't ready yet"); continue }

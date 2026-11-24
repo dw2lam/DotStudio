@@ -121,8 +121,8 @@ enum AppSettings {
                    meaning: "Seconds to blend between styles as the playlist changes and at sunrise/sunset; below 0.05 is Off.",
                    type: .number(min: 0, max: 3), store: .library),
         SettingDef(key: "power.frameRate", label: "Frame rate", place: "Settings ▸ Power Saving",
-                   meaning: "One frame rate for the screensaver and the live wallpaper: 15, 24, 30, 60 or 120 fps; style = each style's own rate. Battery, Low Power Mode and Slow Down still cap it lower.",
-                   type: .choice(["style", "15", "24", "30", "60", "120"]), store: .library),
+                   meaning: "The plugged-in frame rate LIMIT for the screensaver and the live wallpaper (15–120 fps). Each style plays at its own rate (or Auto = the limit) up to it. On battery the wallpaper has its own limit (wallpaper.batteryFrameRate). style (legacy) = 120.",
+                   type: .choice(["style", "15", "20", "24", "30", "40", "60", "120"]), store: .library),
         SettingDef(key: "screensaver.quality", label: "Quality", place: "Settings ▸ Screensaver Performance",
                    meaning: "The screensaver's render resolution: full (native Retina), balanced (0.75×), efficient (0.5×) — less GPU memory and battery, same look. On battery it also caps its frame rate by itself.",
                    type: .choice(["full", "balanced", "efficient"]), store: .library),
@@ -205,6 +205,15 @@ enum AppSettings {
         SettingDef(key: "wallpaper.fpsModeOnBattery", label: "Frame Rate Mode (on battery)", place: "Settings ▸ Power Saving ▸ On Battery",
                    meaning: "On battery: forced, dynamic or reactive, as for plugged in — stepping down from the battery's own cap (30, or 20 when Efficient).",
                    type: .choice(["forced", "dynamic", "reactive"]), store: .wallpaper),
+        SettingDef(key: "wallpaper.batteryFrameRate", label: "Frame rate (on battery)", place: "Settings ▸ Power Saving ▸ On Battery",
+                   meaning: "The live wallpaper's frame rate limit on battery, 15–120 fps; auto = 20 with Efficient playback, else 30. Styles play at their own rate up to it.",
+                   type: .choice(["auto", "15", "20", "24", "30", "40", "60", "120"]), store: .wallpaper),
+        SettingDef(key: "wallpaper.lowestFrameRatePluggedIn", label: "Lowest frame rate (plugged in)", place: "Settings ▸ Power Saving ▸ When Plugged In",
+                   meaning: "Dynamic / Reactive: the lowest rate they ease down to plugged in (below the limit); auto = two steps under the limit (120 → 40).",
+                   type: .choice(["auto", "15", "20", "24", "30", "40", "60", "120"]), store: .wallpaper),
+        SettingDef(key: "wallpaper.lowestFrameRateOnBattery", label: "Lowest frame rate (on battery)", place: "Settings ▸ Power Saving ▸ On Battery",
+                   meaning: "Dynamic / Reactive: the lowest rate they ease down to on battery; auto = two steps under the battery limit.",
+                   type: .choice(["auto", "15", "20", "24", "30", "40", "60", "120"]), store: .wallpaper),
         SettingDef(key: "wallpaper.lockScreenPicture", label: "Use as lock & login screen picture", place: "Settings ▸ Live Wallpaper",
                    meaning: "A still of the wallpaper becomes the desktop picture macOS shows on the lock and login screens; off puts the user's own picture back.",
                    type: .bool, store: .wallpaper, gated: true),
@@ -324,7 +333,7 @@ enum AppSettings {
         o["screensaver.shuffle"] = .bool(rot.shuffle)
         o["screensaver.crossfadeSeconds"] = .number(rot.transitionSeconds)
         o["screensaver.quality"] = .string(qualityName(lib.renderScale))
-        o["power.frameRate"] = .string(lib.frameRate.map(String.init) ?? "style")
+        o["power.frameRate"] = .string(String(lib.frameRate ?? 120))
         let lineup = lib.screensaverLineup
         o["screensaver.playlist"] = .array(lineup.playlist.map(name))
         o["screensaver.night"] = lineup.night.map(name) ?? .null
@@ -359,6 +368,13 @@ enum AppSettings {
             let v = w[k]?.stringValue ?? ""
             o["wallpaper." + k] = .string(["efficient", "pause"].contains(v) ? v : "keepPlaying")
         }
+        func rate(_ k: String) -> JSONValue {
+            guard let n = w[k]?.doubleValue, n >= 1 else { return .string("auto") }
+            return .string(String(Int(n)))
+        }
+        o["wallpaper.batteryFrameRate"] = rate("batteryFPS")
+        o["wallpaper.lowestFrameRatePluggedIn"] = rate("fpsFloorPluggedIn")
+        o["wallpaper.lowestFrameRateOnBattery"] = rate("fpsFloorOnBattery")
         for k in ["fpsModePluggedIn", "fpsModeOnBattery"] {
             let v = w[k]?.stringValue ?? ""
             o["wallpaper." + k] = .string(["dynamic", "reactive"].contains(v) ? v : "forced")
@@ -627,7 +643,7 @@ enum AppSettings {
         case "screensaver.shuffle": rotation { $0.shuffle = v.boolValue ?? false }
         case "screensaver.crossfadeSeconds": rotation { $0.transitionSeconds = v.doubleValue ?? 1.5 }
         case "screensaver.quality": lib.renderScale = renderScale(v.stringValue)
-        case "power.frameRate": lib.frameRate = v.stringValue.flatMap { Int($0) }
+        case "power.frameRate": lib.frameRate = v.stringValue.flatMap { Int($0) } ?? 120
         case "music.show": music { $0.setDisplay(MusicSpec.Display(rawValue: v.stringValue ?? "") ?? .corner) }
         case "music.corner": music { $0.cardCorner = MusicSpec.Corner(rawValue: v.stringValue ?? "") }
         case "music.size": music { $0.cardSize = MusicSpec.CardSize(rawValue: v.stringValue ?? "") }
@@ -674,6 +690,10 @@ enum AppSettings {
         case "wallpaper.otherAppOnBattery": s.wallpaper["otherAppOnBattery"] = v
         case "wallpaper.fpsModePluggedIn": s.wallpaper["fpsModePluggedIn"] = v
         case "wallpaper.fpsModeOnBattery": s.wallpaper["fpsModeOnBattery"] = v
+        case "wallpaper.batteryFrameRate", "wallpaper.lowestFrameRatePluggedIn", "wallpaper.lowestFrameRateOnBattery":
+            let field = ["wallpaper.batteryFrameRate": "batteryFPS", "wallpaper.lowestFrameRatePluggedIn": "fpsFloorPluggedIn",
+                         "wallpaper.lowestFrameRateOnBattery": "fpsFloorOnBattery"][c.def.key]!
+            if let n = v.stringValue.flatMap({ Int($0) }) { s.wallpaper[field] = .integer(Int64(n)) } else { s.wallpaper[field] = nil }
         case "wallpaper.lockScreenPicture": s.wallpaper["lockScreen"] = v
         case "source.kind": lib.source.kind = SourceKind(rawValue: v.stringValue ?? "") ?? .collection
         case "source.photos":

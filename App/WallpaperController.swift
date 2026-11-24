@@ -752,7 +752,7 @@ final class WallpaperController: ObservableObject {
     /// Frames per second asked of a display's link (WallpaperBudget.fps: 30, Smooth's display
     /// rate, 30 / 20 on battery; less only if its style itself asks for fewer).
     private func targetFPS(_ preset: Preset?) -> Double {
-        WallpaperBudget.fps(settings, presetFPS: preset?.fps ?? 0, onBattery: power.state.onBattery,
+        WallpaperBudget.fps(settings, presetFPS: preset?.ownFPS ?? 0, onBattery: power.state.onBattery,
                             slowed: WallpaperBudget.slowed(settings, power.state),
                             universal: model?.library.frameRate,
                             level: WallpaperBudget.level(settings, power.state))

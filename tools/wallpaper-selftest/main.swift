@@ -62,11 +62,12 @@ do {
     check(WallpaperBudget.batteryStatus(s, onBattery: true) == "Efficient — on battery", "status: Efficient — on battery")
     check(WallpaperBudget.batteryStatus(s, onBattery: false) == nil, "status on AC: none")
     s.frameRate = .smooth
-    check(WallpaperBudget.fps(s, presetFPS: 30, onBattery: false) == 120, "AC Smooth: display rate")
+    check(WallpaperBudget.fps(s, presetFPS: 0, onBattery: false) == 120, "AC Smooth, style Auto: display rate")
+    check(WallpaperBudget.fps(s, presetFPS: 30, onBattery: false) == 30, "AC Smooth, a 30 fps style: its own 30 (the limit is a cap)")
     s.batteryMode = .full
     check(WallpaperBudget.fps(s, presetFPS: 30, onBattery: true) == 30, "battery Full + Smooth: 30 fps")
     check(WallpaperBudget.renderScale(s, onBattery: true, profile: .motion) == 1, "battery Full: full resolution")
-    check(WallpaperBudget.batteryStatus(s, onBattery: true) == "30 fps — on battery", "status: 30 fps — on battery")
+    check(WallpaperBudget.batteryStatus(s, onBattery: true) == nil, "status, battery Full: none (the limit is the user's)")
     s.batteryMode = .still
     var st = WallpaperPowerMonitor.State()
     st.onBattery = true
@@ -112,14 +113,14 @@ do {
         check(WallpaperBudget.adaptiveStatus(m, a) == nil, "Forced: no status")
         m.fpsModePluggedIn = .dynamic
         a.load = .moderate; a.userActive = false
-        check(WallpaperBudget.fps(m, presetFPS: 30, onBattery: false, universal: 120, level: WallpaperBudget.level(m, a)) == 60,
+        check(WallpaperBudget.fps(m, presetFPS: 0, onBattery: false, universal: 120, level: WallpaperBudget.level(m, a)) == 60,
               "Dynamic, moderate load: 120 → 60")
         a.load = .busy
-        check(WallpaperBudget.fps(m, presetFPS: 30, onBattery: false, universal: 120, level: WallpaperBudget.level(m, a)) == 40,
+        check(WallpaperBudget.fps(m, presetFPS: 0, onBattery: false, universal: 120, level: WallpaperBudget.level(m, a)) == 40,
               "Dynamic, busy: 120 → 40")
         check(WallpaperBudget.adaptiveStatus(m, a) == "Dynamic — your Mac is busy", "Dynamic: status")
         a.load = .quiet
-        check(WallpaperBudget.fps(m, presetFPS: 30, onBattery: false, universal: 120, level: WallpaperBudget.level(m, a)) == 120,
+        check(WallpaperBudget.fps(m, presetFPS: 0, onBattery: false, universal: 120, level: WallpaperBudget.level(m, a)) == 120,
               "Dynamic, quiet: full 120")
         a.onBattery = true; a.load = .busy
         check(WallpaperBudget.level(m, a) == .quiet, "Dynamic set only plugged in: on battery stays Forced")
@@ -134,6 +135,31 @@ do {
         check(WallpaperBudget.stepDown(1, 2) == 1 && WallpaperBudget.stepDown(30, 1) == 24 && WallpaperBudget.stepDown(15, 2) == 15,
               "ladder: a clock's 1 fps untouched, 30 → 24, never under 15")
         check(WallpaperBudget.stepDown(90, 1) == 60, "ladder: a rate between rungs steps to the next rung")
+        // Limits and floors (1.6.8): battery has its own limit; a style plays under it
+        var lim = WallpaperSettings()
+        check(WallpaperBudget.fps(lim, presetFPS: 0, onBattery: true, universal: 120) == 20, "battery limit unset, Efficient: 20 (as before)")
+        lim.batteryFPS = 60
+        check(WallpaperBudget.fps(lim, presetFPS: 0, onBattery: true, universal: 30) == 60, "battery limit 60: Auto plays 60, whatever the plugged-in limit")
+        check(WallpaperBudget.fps(lim, presetFPS: 24, onBattery: true, universal: 120) == 24, "battery limit 60, a 24 fps style: 24")
+        check(WallpaperBudget.fps(lim, presetFPS: 120, onBattery: true, universal: 120) == 60, "battery limit 60, a 120 fps style: capped at 60")
+        lim.fpsModeOnBattery = .dynamic; lim.fpsFloorOnBattery = 30
+        var bst = WallpaperPowerMonitor.State(); bst.onBattery = true; bst.load = .busy
+        check(WallpaperBudget.fps(lim, presetFPS: 0, onBattery: true, universal: 120, level: WallpaperBudget.level(lim, bst)) == 30,
+              "battery Dynamic, busy, floor 30: 30")
+        bst.load = .moderate
+        check(WallpaperBudget.fps(lim, presetFPS: 0, onBattery: true, universal: 120, level: WallpaperBudget.level(lim, bst)) == 40,
+              "battery Dynamic, moderate: one rung down (60 → 40)")
+        lim.fpsFloorOnBattery = 60
+        check(WallpaperBudget.fps(lim, presetFPS: 0, onBattery: true, universal: 120, level: WallpaperBudget.level(lim, bst)) == 60,
+              "a floor at the limit: never eases")
+        var auto = Preset(name: "x"); auto.fps = 30; auto.fpsAuto = true
+        check(auto.playFPS(limit: 120) == 120 && auto.ownFPS == 0, "style Auto: plays at the limit")
+        auto.fpsAuto = false
+        check(auto.playFPS(limit: 120) == 30 && auto.playFPS(limit: 24) == 24, "style 30: its own, capped by the limit")
+        let pr = try! JSONDecoder().decode(Preset.self, from: JSONEncoder().encode({ var p = auto; p.fpsAuto = true; return p }()))
+        check(pr.fpsAuto && pr.fps == 30, "Auto survives library.json (fps kept for older builds)")
+        let rtl = try! JSONDecoder().decode(WallpaperSettings.self, from: JSONEncoder().encode(lim))
+        check(rtl.batteryFPS == 60 && rtl.fpsFloorOnBattery == 60 && rtl.fpsFloorPluggedIn == nil, "limits and floors survive wallpaper.json")
         let rt = try! JSONDecoder().decode(WallpaperSettings.self, from: JSONEncoder().encode(m))
         check(rt.fpsModePluggedIn == .dynamic && rt.fpsModeOnBattery == .reactive, "frame rate modes survive wallpaper.json")
         check(old.fpsModePluggedIn == .forced && old.fpsModeOnBattery == .forced, "a 1.6.7 wallpaper.json: Forced")

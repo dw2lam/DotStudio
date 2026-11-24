@@ -456,10 +456,10 @@ lib = library(T)
 check(lib["rotation"]["intervalMinutes"] == 15 and lib["rotation"]["shuffle"] is True and lib["rotation"]["transitionSeconds"] == 2.5
       and lib["renderScale"] == 0.5, "  → library.json rotation + renderScale")
 ok(upd({"screensaver.quality": "full"}), "screensaver: quality back to full")
-ok(upd({"power.frameRate": "24"}), "power: one frame rate for everything")
+ok(upd({"power.frameRate": "24"}), "power: the plugged-in limit")
 check(library(T)["frameRate"] == 24, "  → library.json frameRate 24")
-ok(upd({"power.frameRate": "style"}), "power: back to each style's own")
-check("frameRate" not in library(T), "  → frameRate gone")
+ok(upd({"power.frameRate": "style"}), "power: legacy 'style' (each style's own rate) = the 120 limit")
+check(library(T)["frameRate"] == 120, "  → frameRate 120: every style plays at its own rate")
 check("renderScale" not in library(T), "  → full is stored as absent, as the app does")
 res = upd({"music.show": "fullScreen", "music.layout": "stage", "music.behind": "screensaver", "music.corner": "topRight",
            "music.size": "large", "music.onWallpaper": True, "music.keepPausedSongMinutes": 15, "music.source": "spotify"})
@@ -520,6 +520,12 @@ got = settings_of(tc.call("get_settings", {"keys": ["wallpaper.fpsModePluggedIn"
 check(wall(T)["fpsModePluggedIn"] == "dynamic" and got["wallpaper.fpsModePluggedIn"]["value"] == "dynamic"
       and got["wallpaper.fpsModeOnBattery"]["value"] == "forced", "  → written, and read back (battery stays Forced)")
 err(upd({"wallpaper.fpsModeOnBattery": "turbo"}), "  → an unknown frame rate mode is refused")
+ok(upd({"wallpaper.batteryFrameRate": "60", "wallpaper.lowestFrameRateOnBattery": "30"}), "wallpaper: battery limit 60, lowest 30")
+got = settings_of(tc.call("get_settings", {"keys": ["wallpaper.batteryFrameRate", "wallpaper.lowestFrameRateOnBattery", "wallpaper.lowestFrameRatePluggedIn"]}))
+check(wall(T)["batteryFPS"] == 60 and wall(T)["fpsFloorOnBattery"] == 30 and got["wallpaper.batteryFrameRate"]["value"] == "60"
+      and got["wallpaper.lowestFrameRatePluggedIn"]["value"] == "auto", "  → written, and read back (plugged-in lowest stays auto)")
+ok(upd({"wallpaper.batteryFrameRate": "auto"}), "wallpaper: battery limit back to auto")
+check("batteryFPS" not in wall(T), "  → the field is removed")
 ok(upd({"wallpaper.sameAsScreensaver": True}), "wallpaper: same as screensaver")
 check(wall(T)["followsScreensaver"] is True and library(T).get("syncTimeBase") is True, "  → follows, and the saver's shared time base")
 ok(upd({"wallpaper.sameAsScreensaver": False, "wallpaper.style": "Golden Hour"}), "wallpaper: own style by name")

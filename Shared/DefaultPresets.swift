@@ -221,6 +221,9 @@ enum DefaultPresets {
     /// From 1.4.5 there's one, Golden Hour; Follow the Sun is its setting. Recorded in
     /// `seenBuiltIns` once a library has been through foldTidewater.
     static let tidewaterMarker = "folded-tidewater-1.4.5"
+    /// 1.6.8: Power Saving's frame rate became a limit each style plays under (it used to
+    /// replace every style's own). Once per library — AppModel.migrate.
+    static let fpsLimitMarker = "fps-limit-1.6.8"
 
     /// 1.4.5, once per library: an UNTOUCHED Tidewater leaves (an edited one stays, renders as
     /// before). If it was in use — the active style, the day/night schedule, the rotation, or

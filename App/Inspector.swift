@@ -394,16 +394,16 @@ struct EffectStackView: View {
 
             VStack(alignment: .leading, spacing: layout.labelGap) {
                 InspectorRow(label: "Frame rate") {
-                    InspectorMenu(title: "Frame rate", selection: $preset.fps,
-                                  options: fpsOptions.map { ("\($0) fps", $0) })
+                    InspectorMenu(title: "Frame rate", selection: fpsChoice,
+                                  options: [("Auto", 0)] + fpsOptions.map { ("\($0) fps", $0) })
                 }
-                // One sentence per line, each short enough for the narrowest inspector at
-                // the default size, so the caption breaks on the sentence, not mid-phrase.
-                Text(preset.fps > 60
-                     ? "120 fps needs a ProMotion display.\nIt uses more GPU and battery."
-                     : "Lower frame rates save battery.\nMost styles look the same at 30 fps.")
+                // What it really plays at: its own rate (Auto: the limit) under Power Saving's
+                // limit for each power source. One short sentence per line.
+                Text(fpsCaption)
                     .textRole(.caption).foregroundStyle(.secondary)
                     .wrapping()
+                    .contentTransition(.opacity)
+                    .animation(Motion.brief, value: fpsCaption)
             }
             .padding(.leading, eyeColumn + layout.iconGap)
             .listRowInsets(rowInsets(vertical: layout.labelGap))
@@ -440,8 +440,27 @@ struct EffectStackView: View {
         return EdgeInsets(top: vertical, leading: side, bottom: vertical, trailing: side)
     }
 
+    /// The menu's value: 0 for Auto, else the style's own rate.
+    private var fpsChoice: Binding<Int> {
+        Binding(get: { preset.fpsAuto ? 0 : preset.fps },
+                set: { v in
+                    if v == 0 { preset.fpsAuto = true } else { preset.fpsAuto = false; preset.fps = v }
+                })
+    }
+
+    /// "Plays at 60 fps plugged in, 30 on battery." — with why, when Power Saving holds it back.
+    private var fpsCaption: String {
+        let plugged = model.library.frameRate ?? 120
+        let battery = WallpaperController.shared.settings.batteryTopFPS
+        let a = preset.playFPS(limit: plugged), b = preset.playFPS(limit: battery)
+        let plays = a == b ? "Plays at \(a) fps." : "Plays at \(a) fps plugged in,\n\(b) on battery."
+        if preset.fpsAuto { return plays + "\nAuto follows Power Saving." }
+        if preset.fps > plugged { return plays + "\nPower Saving limits it to \(plugged)." }
+        return plays + "\nPower Saving sets the limit."
+    }
+
     private var fpsOptions: [Int] {
-        var opts = [15, 24, 30, 60, 120]
+        var opts = WallpaperBudget.ladder.map { Int($0) }.reversed().map { $0 }
         if !opts.contains(preset.fps) { opts.append(preset.fps); opts.sort() }
         return opts
     }

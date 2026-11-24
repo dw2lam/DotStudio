@@ -28,7 +28,10 @@ struct MetalPreview: NSViewRepresentable {
     /// tiles and the editor. Legacy Now Playing styles always show their foreground.
     var showsMusic = false
 
-    private var fps: Int { min(preset.fps, maxFPS ?? preset.fps) }
+    private var fps: Int {
+        let own = preset.fpsAuto ? 60 : preset.fps   // Auto: a preview needn't chase the limit
+        return min(own, maxFPS ?? own)
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(store: store) }
 

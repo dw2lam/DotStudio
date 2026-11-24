@@ -122,6 +122,16 @@ struct WallpaperSettings: Codable, Equatable {
     var fpsModePluggedIn: FPSMode = .forced
     var fpsModeOnBattery: FPSMode = .forced
     func fpsMode(onBattery: Bool) -> FPSMode { onBattery ? fpsModeOnBattery : fpsModePluggedIn }
+    /// On battery, the frame rate limit (Settings › Power Saving › On Battery); nil = what it
+    /// was before it could be set — 20 for Efficient, 30 otherwise. (Plugged in, the limit is
+    /// Library.frameRate, shared with the screensaver.)
+    var batteryFPS: Int?
+    var batteryTopFPS: Int { batteryFPS ?? (batteryMode == .efficient ? 20 : 30) }
+    /// Dynamic / Reactive: the lowest they step down to, plugged in / on battery; nil = two
+    /// rungs under the limit (WallpaperBudget.defaultFloor).
+    var fpsFloorPluggedIn: Int?
+    var fpsFloorOnBattery: Int?
+    func fpsFloor(onBattery: Bool) -> Int? { onBattery ? fpsFloorOnBattery : fpsFloorPluggedIn }
     /// Dynamic or Reactive on either power source: the activity sampler has to run.
     var adaptsFrameRate: Bool { fpsModePluggedIn != .forced || fpsModeOnBattery != .forced }
     /// "Match Screensaver": show whatever the screensaver would (Playback.effectivePreset —
@@ -145,6 +155,7 @@ struct WallpaperSettings: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case enabled, presetID, frameRate, quality, batteryMode, followsScreensaver
         case otherAppPluggedIn, otherAppOnBattery, fpsModePluggedIn, fpsModeOnBattery
+        case batteryFPS, fpsFloorPluggedIn, fpsFloorOnBattery
         case lockScreen, savedDesktopPictures, displayStyles
         /// The 1.4 on/off "Freeze on battery": read when `batteryMode` is missing (on → Still,
         /// off → Efficient), and still written (on ⇔ Still) so an older build reading this
@@ -170,6 +181,10 @@ struct WallpaperSettings: Codable, Equatable {
         otherAppOnBattery = (try? c.decode(OtherAppMode.self, forKey: .otherAppOnBattery)) ?? .keepPlaying
         fpsModePluggedIn = (try? c.decode(FPSMode.self, forKey: .fpsModePluggedIn)) ?? .forced
         fpsModeOnBattery = (try? c.decode(FPSMode.self, forKey: .fpsModeOnBattery)) ?? .forced
+        func rate(_ k: CodingKeys) -> Int? { (try? c.decode(Int.self, forKey: k)).flatMap { (1...240).contains($0) ? $0 : nil } }
+        batteryFPS = rate(.batteryFPS)
+        fpsFloorPluggedIn = rate(.fpsFloorPluggedIn)
+        fpsFloorOnBattery = rate(.fpsFloorOnBattery)
         lockScreen = (try? c.decode(Bool.self, forKey: .lockScreen)) ?? false
         savedDesktopPictures = (try? c.decode([String: SavedDesktopPicture].self, forKey: .savedDesktopPictures)) ?? [:]
         displayStyles = (try? c.decode([String: DisplayPin].self, forKey: .displayStyles)) ?? [:]
@@ -188,6 +203,9 @@ struct WallpaperSettings: Codable, Equatable {
         try c.encode(otherAppOnBattery, forKey: .otherAppOnBattery)
         try c.encode(fpsModePluggedIn, forKey: .fpsModePluggedIn)
         try c.encode(fpsModeOnBattery, forKey: .fpsModeOnBattery)
+        try c.encodeIfPresent(batteryFPS, forKey: .batteryFPS)
+        try c.encodeIfPresent(fpsFloorPluggedIn, forKey: .fpsFloorPluggedIn)
+        try c.encodeIfPresent(fpsFloorOnBattery, forKey: .fpsFloorOnBattery)
         try c.encode(lockScreen, forKey: .lockScreen)
         if !savedDesktopPictures.isEmpty { try c.encode(savedDesktopPictures, forKey: .savedDesktopPictures) }
         if !displayStyles.isEmpty { try c.encode(displayStyles, forKey: .displayStyles) }
@@ -606,37 +624,41 @@ enum WallpaperBudget {
     /// Full on battery: never above this, whatever Frame Rate says.
     static let batteryMaxFPS = 30.0
 
-    /// Frames per second asked of the display links: Balanced 30, Smooth each display's own
-    /// refresh (120 on ProMotion, 60 on most externals — divisorRate clamps it); on battery 30
-    /// (Full) or 20 (Efficient). Less only if the style itself asks for fewer.
-    /// `slowed`: another app is in front and set to Slow Down (WallpaperBudget.slowed) —
-    /// Efficient's rate and resolution, plugged in or not.
-    /// `universal`: Power Saving's one frame rate (Library.frameRate) — replaces the style's own
-    /// and Balanced / Smooth; battery and Slow Down still cap it.
-    /// `level`: Frame Rate Mode's steps down the ladder (WallpaperBudget.level) — 0 for Forced.
+    /// Frames per second asked of the display links (each then lands on an exact divisor of its
+    /// refresh — divisorRate). Power Saving sets the limit; the style picks a rate under it:
+    /// - the limit: plugged in, Power Saving's frame rate (Library.frameRate, `universal`; an
+    ///   unset one is 120); on battery,
+    ///   On Battery's (WallpaperSettings.batteryTopFPS);
+    /// - `presetFPS`: the style's own rate, 0 for Auto (= the limit) — never above the limit;
+    /// - `slowed` (another app in front, set to Slow Down): no more than Efficient's 20;
+    /// - `level`: Dynamic / Reactive stepping down toward the floor (`adapt`).
     static func fps(_ settings: WallpaperSettings, presetFPS: Int, onBattery: Bool, slowed: Bool = false,
                     universal: Int? = nil, level: ActivityLevel = .quiet) -> Double {
-        stepDown(ceilingFPS(settings, presetFPS: presetFPS, onBattery: onBattery, slowed: slowed, universal: universal),
-                 level.rawValue)
+        var f = limitFPS(settings, onBattery: onBattery, universal: universal)
+        if presetFPS > 0 { f = min(f, Double(presetFPS)) }
+        if slowed { f = min(f, efficientFPS) }
+        return adapt(f, level: level, floor: settings.fpsFloor(onBattery: onBattery).map(Double.init))
     }
 
-    private static func ceilingFPS(_ settings: WallpaperSettings, presetFPS: Int, onBattery: Bool, slowed: Bool,
-                                   universal: Int?) -> Double {
-        if let u = universal, u > 0 {
-            var f = Double(u)
-            if onBattery { f = min(f, settings.batteryMode == .efficient ? efficientFPS : batteryMaxFPS) }
-            if slowed { f = min(f, efficientFPS) }
-            return f
-        }
-        if slowed { return presetFPS > 0 ? min(efficientFPS, Double(presetFPS)) : efficientFPS }
-        if !onBattery, settings.frameRate == .smooth { return 120 }
-        var fps = onBattery && settings.batteryMode == .efficient ? efficientFPS
-                : onBattery ? batteryMaxFPS : 30
-        if presetFPS > 0 { fps = min(fps, Double(presetFPS)) }
-        return fps
+    /// This power source's frame rate limit (Power Saving).
+    static func limitFPS(_ settings: WallpaperSettings, onBattery: Bool, universal: Int?) -> Double {
+        if onBattery { return Double(settings.batteryTopFPS) }
+        if let u = universal, u > 0 { return Double(u) }
+        return 120      // unset (a new library): the same 120 Power Saving shows and the saver uses
     }
 
-    /// The rates Dynamic and Reactive step through: every exact divisor of 120 Hz from 120 down
+    /// The rate Dynamic / Reactive land on at `level`: quiet, the top; moderate, one rung down
+    /// (not under the floor); busy, the floor. The floor defaults to two rungs down.
+    static func adapt(_ top: Double, level: ActivityLevel, floor: Double?) -> Double {
+        guard level != .quiet else { return top }
+        let low = min(top, floor ?? defaultFloor(top))
+        return level == .busy ? low : max(low, stepDown(top, 1))
+    }
+
+    /// Dynamic / Reactive's lowest rate when the user hasn't set one: two rungs under the top.
+    static func defaultFloor(_ top: Double) -> Double { stepDown(top, 2) }
+
+    /// The rates a limit can be set to, and Dynamic and Reactive step through: every exact divisor of 120 Hz from 120 down
     /// to 15 (on 60 Hz, divisorRate lands each on 60 / 30 / 20 / 15). 90 isn't one — on a
     /// 120 Hz screen it would hold frames for 1, 1, 2 refreshes, a visible judder — so a
     /// step down from 120 is 60, two is 40.
@@ -653,7 +675,7 @@ enum WallpaperBudget {
 
     /// How far this power source's Frame Rate Mode steps down right now: Forced never;
     /// Dynamic by the Mac's load; Reactive one step while you're using another app (two if the
-    /// Mac is also very busy), none while you're not.
+    /// Mac is also very busy — to the floor), none while you're not.
     static func level(_ settings: WallpaperSettings, _ s: WallpaperPowerMonitor.State) -> ActivityLevel {
         switch settings.fpsMode(onBattery: s.onBattery) {
         case .forced: return .quiet
@@ -700,7 +722,7 @@ enum WallpaperBudget {
         guard onBattery else { return nil }
         switch settings.batteryMode {
         case .efficient: return "Efficient — on battery"
-        case .full: return settings.frameRate == .smooth ? "30 fps — on battery" : nil
+        case .full: return nil
         case .still: return nil      // stillReason says it
         }
     }
