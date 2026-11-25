@@ -37,7 +37,12 @@ struct StyleTile: View, Equatable {
     let model: AppModel
     @Environment(\.heroNamespace) private var hero
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.console) private var console
     let preset: Preset
+    /// Console's pad number ("07"): the style's place in the gallery as shown unfiltered
+    /// (Scenes, then Looks), from 1, so it keeps its number while a filter is on. 0 in
+    /// Classic, which never prints it, so it never makes a Classic tile unequal.
+    let number: Int
     let badges: TileBadges
     let lineup: ScreensaverLineup
     let selected: Bool
@@ -60,9 +65,10 @@ struct StyleTile: View, Equatable {
     /// Deselected, its ring still fading out (SelectionRing removes itself when done).
     @State private var ringFading = false
 
-    init(model: AppModel, preset: Preset, badges: TileBadges, lineup: ScreensaverLineup) {
+    init(model: AppModel, preset: Preset, number: Int = 0, badges: TileBadges, lineup: ScreensaverLineup) {
         self.model = model
         self.preset = preset
+        self.number = number
         self.badges = badges
         self.lineup = lineup
         selected = model.selectedID == preset.id
@@ -76,7 +82,7 @@ struct StyleTile: View, Equatable {
     }
 
     static func == (a: StyleTile, b: StyleTile) -> Bool {
-        a.model === b.model && a.preset == b.preset && a.badges == b.badges && a.lineup == b.lineup
+        a.model === b.model && a.preset == b.preset && a.number == b.number && a.badges == b.badges && a.lineup == b.lineup
             && a.selected == b.selected && a.isOpen == b.isOpen && a.editorOpen == b.editorOpen
             && a.source == b.source && a.music == b.music && a.location == b.location
     }
@@ -85,39 +91,14 @@ struct StyleTile: View, Equatable {
 
     var body: some View {
         let _ = Perf.body("StyleTile")
-        VStack(alignment: .leading, spacing: TileLabel.gapAbove) {
-            ZStack {
-                // While this style is open in the editor, its image lives there.
-                if !isOpen {
-                    thumbnail
-                        .heroGeometry(preset.id, in: hero)
-                        .transition(.opacity)
-                }
-                overlays
-            }
-            .aspectRatio(16.0 / 10.0, contentMode: .fit)
-            .background {   // DEV harness only (ClickProbe)
-                if TileProbe.enabled {
-                    TileProbeReporter(id: preset.id, select: select, open: open,
-                                      hover: { h in pointerInside = h; setHover(h) })
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: Self.radius, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: Self.radius, style: .continuous)
-                .strokeBorder(.white.opacity(0.10), lineWidth: 1))
-            .overlay { selectionRing }
-            // A shadow only on the lifted tile: one resting shadow per tile was an offscreen
-            // pass per tile for every frame of a scroll.
-            .shadow(color: .black.opacity(hovering ? 0.25 : 0), radius: hovering ? 16 : 0, y: hovering ? 8 : 0)
-            .scaleEffect(hovering && !reduceMotion ? 1.025 : 1)
-            .offset(y: hovering && !reduceMotion ? -2 : 0)
-
-            TileLabel(title: preset.name, summary: summary, traits: LiveTraits.of(preset))
+        Group {
+            if console { pad } else { classic }
         }
         .contentShape(Rectangle())
         .motion(Motion.snappy, value: hovering)
         .onChange(of: selected) { _, now in
-            if !now { ringFading = true }
+            // (A pad has no ring to fade: flagging one would play a ghost fade-out back in Classic.)
+            if !now && !console { ringFading = true }
             wasSelected = now
         }
         .onHover { h in
@@ -145,6 +126,131 @@ struct StyleTile: View, Equatable {
             Button("Delete", role: .destructive) { Motion.run { model.delete(preset.id) } }
         } message: {
             Text("This can't be undone.")
+        }
+    }
+
+    /// The picture with its hover / selection behaviour (both looks share it).
+    private func picture(radius: CGFloat) -> some View {
+        ZStack {
+            // While this style is open in the editor, its image lives there.
+            if !isOpen {
+                thumbnail
+                    .heroGeometry(preset.id, in: hero)
+                    .transition(.opacity)
+            }
+            overlays
+        }
+        .aspectRatio(16.0 / 10.0, contentMode: .fit)
+        .background {   // DEV harness only (ClickProbe)
+            if TileProbe.enabled {
+                TileProbeReporter(id: preset.id, select: select, open: open,
+                                  hover: { h in pointerInside = h; setHover(h) })
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+    }
+
+    /// Console (issue #6): a pad — the picture inset in a flat panel, its number and name
+    /// printed under it (a Look's effects on their own line below), then lights for where it
+    /// plays. The selected pad's number and edge print in signal; hovering lifts the panel a
+    /// little. Selecting switches instantly, as Classic does on the SwiftUI side: a SwiftUI
+    /// spring here would re-run the window's view graph every frame of it (see SelectionRing).
+    /// A pad fills its grid row's height, so a row's panels end on one line whatever they print.
+    private var pad: some View {
+        let traits = LiveTraits.of(preset)
+        return VStack(alignment: .leading, spacing: Space.xs) {
+            picture(radius: Radius.s)
+                .overlay(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
+                    .strokeBorder(ConsoleInk.hairline, lineWidth: 1))
+            VStack(alignment: .leading, spacing: Space.xxs) {
+                HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
+                    if number > 0 {
+                        Text(String(format: "%02d", number))
+                            .textRole(.padNumber)
+                            .foregroundStyle(selected ? ConsoleInk.signalInk : ConsoleInk.legend)
+                    }
+                    Text(preset.name)
+                        .textRole(.padName)
+                        .foregroundStyle(ConsoleInk.ink)
+                        .truncating(preset.name)
+                    Spacer(minLength: Space.xxs)
+                    HStack(spacing: Space.xs) {
+                        if traits.weather { Text("WX").help("Live weather — shows your real weather as it changes") }
+                        if traits.sky { Text("SKY").help("Live sky — its light follows the real sun") }
+                        if traits.dayNight { Text("D/N").help("Day & night — switches at sunrise and sunset") }
+                    }
+                    .textRole(.legend)
+                    .foregroundStyle(ConsoleInk.legend)
+                    .fixedSize()
+                }
+                if let summary {
+                    Text(summary)
+                        .textRole(.legend)
+                        .foregroundStyle(ConsoleInk.legend)
+                        .truncating(summary)
+                }
+            }
+            PadLightRow { lights }
+        }
+        .padding(Space.xs)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
+            .fill(ConsoleInk.panel.opacity(hovering ? 1 : 0.85)))
+        .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
+            .strokeBorder(selected ? ConsoleInk.signalInk : ConsoleInk.hairline, lineWidth: selected ? 2 : 1))
+        .shadow(color: .black.opacity(hovering ? 0.12 : 0), radius: hovering ? 6 : 0, y: hovering ? 3 : 0)
+        .offset(y: hovering && !reduceMotion ? -1.5 : 0)
+    }
+
+    /// A pad's lights say what Classic's badges say (TileBadgeCluster, same conditions). A
+    /// light is lit only while the style is on screen there now; an unlit one says where it
+    /// waits — in the rotating playlist, for a When rule, for the night. A pad with nothing to
+    /// say prints nothing (no row of "off" legends).
+    @ViewBuilder private var lights: some View {
+        if let rule = badges.rule, badges.showsRule {
+            // A When rule plays it in the lineup's place; of several, the one on screen is lit.
+            ConsoleLED(on: badges.playingNow, label: "When")
+                .help(badges.playingNow ? "Playing now for the When rule \u{201C}\(rule.name)\u{201D}"
+                                        : "Plays for the When rule \u{201C}\(rule.name)\u{201D}")
+        } else if badges.onScreensaver && badges.showsLineup {
+            if !lineup.rotates || badges.playingNow || badges.pinnedScreensaver {
+                // The one screensaver style, the playlist's pick now, or a display's own style.
+                ConsoleLED(on: true, label: "Saver")
+                    .help(!lineup.rotates ? "Plays as your screensaver\(badges.screensaverDisplay.map { " on \($0)" } ?? "")"
+                          : badges.playingNow ? "In the screensaver playlist — on screen now"
+                          : "Plays as the screensaver\(badges.screensaverDisplay.map { " on \($0)" } ?? " on some displays")")
+            } else {
+                ConsoleLED(on: false, label: "Playlist")
+                    .help("In the screensaver playlist — not on screen now")
+            }
+        } else if badges.pinnedScreensaver {
+            ConsoleLED(on: true, label: "Saver")
+                .help("Plays as the screensaver\(badges.screensaverDisplay.map { " on \($0)" } ?? " on some displays")")
+        }
+        if badges.night && badges.showsLineup {
+            // Lit while it's the one on screen (at night).
+            ConsoleLED(on: badges.playingNow, color: ConsoleInk.knobs[0], label: "Night")
+                .help(badges.playingNow ? "Plays at night — on screen now" : "Plays at night")
+        }
+        if (badges.wallpaper && !badges.sharedWallpaperOffScreen) || badges.pinnedWallpaper {
+            ConsoleLED(on: true, color: ConsoleInk.knobs[1], label: "Wall")
+                .help("Playing as your wallpaper\(badges.wallpaperDisplay.map { " on \($0)" } ?? "")")
+        }
+    }
+
+    private var classic: some View {
+        VStack(alignment: .leading, spacing: TileLabel.gapAbove) {
+            picture(radius: Self.radius)
+            .overlay(RoundedRectangle(cornerRadius: Self.radius, style: .continuous)
+                .strokeBorder(.white.opacity(0.10), lineWidth: 1))
+            .overlay { selectionRing }
+            // A shadow only on the lifted tile: one resting shadow per tile was an offscreen
+            // pass per tile for every frame of a scroll.
+            .shadow(color: .black.opacity(hovering ? 0.25 : 0), radius: hovering ? 16 : 0, y: hovering ? 8 : 0)
+            .scaleEffect(hovering && !reduceMotion ? 1.025 : 1)
+            .offset(y: hovering && !reduceMotion ? -2 : 0)
+
+            TileLabel(title: preset.name, summary: summary, traits: LiveTraits.of(preset))
         }
     }
 
@@ -195,12 +301,12 @@ struct StyleTile: View, Equatable {
     private var overlays: some View {
         VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 0) {
-                TileBadgeCluster(badges: badges, rotates: lineup.rotates)
+                if !console { TileBadgeCluster(badges: badges, rotates: lineup.rotates) }
                 Spacer(minLength: 0)
                 // Customize, right on the tile (issue #2): on the selected tile, and on hover —
                 // the editor (colours, effects, speed) is otherwise a double-click or a menu away.
                 if selected || hovering {
-                    CustomizeButton(name: preset.name, action: open)
+                    CustomizeButton(name: preset.name, flat: console, action: open)
                         .transition(.opacity)
                 }
             }
@@ -551,14 +657,29 @@ struct TileBadgeCluster: View {
 /// opening it in the editor (issue #2: the editor was a double-click or a menu away).
 struct CustomizeButton: View {
     let name: String
+    /// Console's flat key instead of the dark badge (the gallery's pads; the Screensaver and
+    /// Wallpaper cards are still Classic).
+    var flat = false
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            GlassBadge(text: "Customize", symbol: "slider.horizontal.3", tint: Color.black.opacity(0.55))
-                .contentShape(Capsule())
+        Group {
+            if flat {
+                Button(action: action) {
+                    HStack(spacing: Space.xxs) {
+                        Image(systemName: "slider.horizontal.3")
+                        Text("Customize")
+                    }
+                }
+                .buttonStyle(ConsoleKeyStyle(size: .compact))
+            } else {
+                Button(action: action) {
+                    GlassBadge(text: "Customize", symbol: "slider.horizontal.3", tint: Color.black.opacity(0.55))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
         }
-        .buttonStyle(.plain)
         .help("Customize “\(name)” — colours, effects and more")
         .accessibilityLabel("Customize \(name)")
     }
@@ -600,6 +721,8 @@ private extension TileBadges {
 
 private struct TileActionBar: View {
     @EnvironmentObject var model: AppModel
+    /// Console: flat keys on a panel (no glass, no accent blue).
+    @Environment(\.console) private var console
     @ObservedObject private var wallpaper = WallpaperSlot.shared
     @ObservedObject private var roster = DisplayRoster.shared
     let preset: Preset
@@ -624,7 +747,7 @@ private struct TileActionBar: View {
         // text sizes) "Set as" folds away, then everything folds into "Set as…".
         ViewThatFits(in: .horizontal) {
             bar {
-                Text("Set as").textRole(.badge).foregroundStyle(.secondary).padding(.leading, Space.xs)
+                setAsLabel.padding(.leading, Space.xs)
                 destinationButtons
                 moreMenu(includeDestinations: false)
             }
@@ -633,41 +756,70 @@ private struct TileActionBar: View {
         }
     }
 
-    private func bar<C: View>(@ViewBuilder _ content: () -> C) -> some View {
-        HStack(spacing: Space.xxs) { content() }
-            .padding(Space.xxs)
-            .glassSurface(.regular, in: Capsule())
-            .fixedSize()
+    @ViewBuilder private var setAsLabel: some View {
+        if console {
+            Text("Set as").textRole(.legend).foregroundStyle(ConsoleInk.legend)
+        } else {
+            Text("Set as").textRole(.badge).foregroundStyle(.secondary)
+        }
     }
 
+    private func bar<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        let row = HStack(spacing: Space.xxs) { content() }
+            .padding(Space.xxs)
+        return Group {
+            if console {
+                row.consolePanel(cornerRadius: Radius.s)
+            } else {
+                row.glassSurface(.regular, in: Capsule())
+            }
+        }
+        .fixedSize()
+    }
+
+    // Console's keys print the pad's own legends (SAVER, WALL — the lights they turn on), in
+    // the pad's colours: the mono caps of "Screensaver" would fold the bar on most pads.
     @ViewBuilder private var destinationButtons: some View {
         DestinationButton(title: "Screensaver", symbol: "play.rectangle", on: isPlayingAlone,
-                          help: isPlayingAlone ? "Playing as your screensaver" : "Set as Screensaver — play only this style") {
+                          help: isPlayingAlone ? "Playing as your screensaver" : "Set as Screensaver — play only this style",
+                          legend: "Saver") {
             if !isPlayingAlone { Motion.run { model.playAsScreensaver(preset.id) } }
         }
 
         if wallpaper.isAvailable {
             DestinationButton(title: "Wallpaper", symbol: "photo.on.rectangle", on: badges.wallpaper,
-                              help: badges.wallpaper ? "Playing as your wallpaper — click to stop it" : "Set as Wallpaper") {
+                              help: badges.wallpaper ? "Playing as your wallpaper — click to stop it" : "Set as Wallpaper",
+                              light: ConsoleInk.knobs[1], legend: "Wall") {
                 Motion.run { wallpaper.toggle(preset.id) }
             }
         }
     }
 
     /// The narrowest bar: one "Set as…" button with every action in its menu.
-    private var setAsMenu: some View {
-        Button { popUpMore(includeDestinations: true) } label: {
-            HStack(spacing: Space.xxs) {
-                Text("Set as\u{2026}")
-                Image(systemName: "chevron.down").imageScale(.small)
+    @ViewBuilder private var setAsMenu: some View {
+        if console {
+            Button { popUpMore(includeDestinations: true) } label: {
+                HStack(spacing: Space.xxs) {
+                    Text("Set as\u{2026}")
+                    Image(systemName: "chevron.down").imageScale(.small)
+                }
             }
-            .textRole(.badge)
-            .padding(.horizontal, Space.xs)
-            .frame(minHeight: 26)
-            .contentShape(Capsule())
+            .buttonStyle(ConsoleKeyStyle())
+            .help("Set as Screensaver, Wallpaper or both, and more")
+        } else {
+            Button { popUpMore(includeDestinations: true) } label: {
+                HStack(spacing: Space.xxs) {
+                    Text("Set as\u{2026}")
+                    Image(systemName: "chevron.down").imageScale(.small)
+                }
+                .textRole(.badge)
+                .padding(.horizontal, Space.xs)
+                .frame(minHeight: 26)
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Set as Screensaver, Wallpaper or both, and more")
         }
-        .buttonStyle(.plain)
-        .help("Set as Screensaver, Wallpaper or both, and more")
     }
 
     /// "…": a SwiftUI button that pops up an AppKit menu. Not a SwiftUI `Menu`: that is an
@@ -675,10 +827,16 @@ private struct TileActionBar: View {
     /// AppKit control being created and dropped mid-layout is what crashed on macOS 26
     /// (see ColorWellsRow).
     private func moreMenu(includeDestinations: Bool, includeStyle: Bool = true) -> some View {
-        Button { popUpMore(includeDestinations: includeDestinations, includeStyle: includeStyle) } label: {
+        let button = Button { popUpMore(includeDestinations: includeDestinations, includeStyle: includeStyle) } label: {
             Image(systemName: "ellipsis")
         }
-        .buttonStyle(ScaledIconButtonStyle())
+        return Group {
+            if console {
+                button.buttonStyle(ConsoleKeyStyle(size: .square))
+            } else {
+                button.buttonStyle(ScaledIconButtonStyle())
+            }
+        }
         .fixedSize()
         .help("More")
         .accessibilityLabel("More")
@@ -737,18 +895,42 @@ private struct TileActionBar: View {
 }
 
 /// One destination in the hover bar: icon + word, in the accent colour with a checkmark
-/// while this style plays there.
+/// while this style plays there. Console: a flat key with its own light, latched (sunk into
+/// the well, light lit) while this style plays there.
 private struct DestinationButton: View {
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.console) private var console
     @ScaledLength(relativeTo: .body) private var height: CGFloat = 26
     let title: String
     let symbol: String
     let on: Bool
     let help: String
+    /// Console: the key's light colour (the pad's light for the same destination).
+    var light: Color = ConsoleInk.signal
+    /// Console: the key's printed legend, when shorter than `title` (VoiceOver hears `help`).
+    var legend: String? = nil
     let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
+        if console { key } else { classic }
+    }
+
+    private var key: some View {
+        Button(action: action) {
+            HStack(spacing: Space.xxs + 1) {
+                // The key's state light; the latched face and the selected trait say it too.
+                ConsoleLED(on: on, color: light).accessibilityHidden(true)
+                Text(legend ?? title)
+            }
+        }
+        .buttonStyle(ConsoleKeyStyle(latched: on))
+        .help(help)
+        .accessibilityLabel(help)
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+
+    private var classic: some View {
         Button(action: action) {
             HStack(spacing: Space.xxs + 1) {
                 Image(systemName: on ? "checkmark" : symbol)
@@ -791,6 +973,72 @@ private struct ScaledIconButton: View {
             .animation(Motion.snappy, value: configuration.isPressed)
             .animation(Motion.snappy, value: hovering)
             .onHover { hovering = $0 }
+    }
+}
+
+// MARK: - Console keys and lights
+
+/// Console (issue #6): a small flat key, the filter keys' look: panel face, hairline edge,
+/// mono caps legend in ink. Pressed — or latched on — it sinks into the well; under the
+/// pointer its edge darkens (the face stays opaque: keys sit over pictures).
+struct ConsoleKeyStyle: ButtonStyle {
+    enum Size {
+        /// The hover bar's keys (26 pt at the default text size).
+        case regular
+        /// An icon-only key, as wide as it is tall.
+        case square
+        /// A key on a picture ("Customize"), badge-sized (20 pt).
+        case compact
+    }
+    var size: Size = .regular
+    var latched = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        ConsoleKeyFace(configuration: configuration, size: size, latched: latched)
+    }
+}
+
+private struct ConsoleKeyFace: View {
+    let configuration: ButtonStyleConfiguration
+    let size: ConsoleKeyStyle.Size
+    let latched: Bool
+    @Environment(\.isEnabled) private var isEnabled
+    @ScaledLength(relativeTo: .body) private var regularHeight: CGFloat = 26
+    @ScaledLength(relativeTo: .caption) private var compactHeight: CGFloat = 20
+    @State private var hovering = false
+
+    var body: some View {
+        let height = size == .compact ? compactHeight : regularHeight
+        let shape = RoundedRectangle(cornerRadius: Radius.xs, style: .continuous)
+        configuration.label
+            .textRole(.legend)
+            .lineLimit(1)
+            .foregroundStyle(ConsoleInk.ink)
+            .padding(.horizontal, size == .square ? 0 : size == .compact ? Space.xs : Space.xs + 2)
+            .frame(minWidth: size == .square ? height : nil, minHeight: height)
+            .fixedSize()
+            .background(shape.fill(latched || configuration.isPressed ? ConsoleInk.well : ConsoleInk.panel))
+            .overlay(shape.strokeBorder(hovering && isEnabled ? ConsoleInk.legend : ConsoleInk.hairline, lineWidth: 1))
+            .contentShape(shape)
+            .onHover { hovering = $0 }
+    }
+}
+
+/// Console: a pad's row of lights (and the New tiles' empty one). With nothing lit it keeps
+/// one light's height, so pads with and without lights are the same size; at large text
+/// sizes the lights wrap rather than clip.
+struct PadLightRow<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            // The line's height, whatever is (or isn't) lit.
+            ConsoleLED(on: false, label: "Saver")
+                .hidden()
+                .accessibilityHidden(true)
+            FlowLayout(spacing: Space.s, lineSpacing: Space.xxs) { content }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

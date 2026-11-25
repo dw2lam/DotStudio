@@ -93,6 +93,7 @@ private struct GalleryPage: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
     let state: GalleryState
     @Binding var filter: GalleryFilter
     @Binding var query: String
@@ -108,7 +109,10 @@ private struct GalleryPage: View {
 
     private func gallery(_ state: GalleryState) -> some View {
         let matcher = StyleMatcher(filter: filter, query: query, playing: state.playingIDs)
-        let sections = sections(matcher)
+        let ordered = displayOrder()
+        let sections = sections(matcher, ordered: ordered)
+        // Console numbers its pads; Classic tiles all get 0 (never printed, never a change).
+        let numbers = console ? padNumbers(ordered) : [:]
         return ScrollViewReader { proxy in
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
@@ -118,7 +122,7 @@ private struct GalleryPage: View {
                     .padding(.bottom, layout.sectionGap - FilterBar.verticalInset)
 
                 Section {
-                    grid(sections, state: state, matcher: matcher)
+                    grid(sections, state: state, matcher: matcher, numbers: numbers)
                         .pageColumn(layout)
                         .padding(.top, layout.sectionGap - FilterBar.verticalInset)
                         .padding(.bottom, Space.xxl)
@@ -161,14 +165,25 @@ private struct GalleryPage: View {
         var id: Kind { kind }
     }
 
-    private func sections(_ matcher: StyleMatcher) -> [GallerySection] {
-        // Live styles lead each section: live weather (Golden Hour first), live sky, then clocks.
+    /// Every style in gallery order: live styles lead (live weather, Golden Hour first, then
+    /// live sky, then clocks), library order within a rank.
+    private func displayOrder() -> [Preset] {
         let lib = model.library.presets
         let ranks = Dictionary(uniqueKeysWithValues: lib.map { ($0.id, LiveTraits.of($0).rank) })
-        let all = lib.enumerated().sorted { a, b in
+        return lib.enumerated().sorted { a, b in
             let ra = ranks[a.element.id] ?? 3, rb = ranks[b.element.id] ?? 3
             return ra != rb ? ra < rb : a.offset < b.offset    // stable: library order within a rank
         }.map(\.element)
+    }
+
+    /// Console's pad numbers: each style's place in the unfiltered gallery — Scenes, then
+    /// Looks — from 1, so the grid reads 01, 02, 03… and a style keeps its number under a filter.
+    private func padNumbers(_ ordered: [Preset]) -> [UUID: Int] {
+        let shown = ordered.filter(\.isScene) + ordered.filter { !$0.isScene }
+        return Dictionary(shown.enumerated().map { ($0.element.id, $0.offset + 1) }) { first, _ in first }
+    }
+
+    private func sections(_ matcher: StyleMatcher, ordered all: [Preset]) -> [GallerySection] {
         guard matcher.isFiltering else {
             return [
                 GallerySection(kind: .scenes, title: "Scenes", subtitle: "",
@@ -196,8 +211,14 @@ private struct GalleryPage: View {
         return out
     }
 
+    /// Between grid rows. Console's pads are closed boxes (their labels inside), so rows sit
+    /// one column gutter apart — a square grid; Classic tiles hang their label under the
+    /// picture and take a step more (layout.gridRowGap).
+    private var rowGap: CGFloat { console ? layout.gridColumnGap : layout.gridRowGap }
+
     @ViewBuilder
-    private func grid(_ sections: [GallerySection], state: GalleryState, matcher: StyleMatcher) -> some View {
+    private func grid(_ sections: [GallerySection], state: GalleryState, matcher: StyleMatcher,
+                      numbers: [UUID: Int]) -> some View {
         if sections.allSatisfy({ $0.presets.isEmpty }) && matcher.isFiltering {
             EmptyResults(filter: filter, query: query) {
                 Motion.run { query = ""; filter = .all }
@@ -206,12 +227,12 @@ private struct GalleryPage: View {
         } else {
             // One grid for every section, so a tile glides to its new place when the filter
             // changes. Columns are added as the window widens (layout.tileColumns).
-            LazyVGrid(columns: layout.tileColumns, alignment: .leading, spacing: layout.gridRowGap) {
+            LazyVGrid(columns: layout.tileColumns, alignment: .leading, spacing: rowGap) {
                 ForEach(Array(sections.enumerated()), id: \.element.id) { i, section in
                     Section {
                         ForEach(section.presets) { preset in
-                            StyleTile(model: model, preset: preset, badges: state.badges(for: preset.id),
-                                      lineup: state.lineup)
+                            StyleTile(model: model, preset: preset, number: numbers[preset.id] ?? 0,
+                                      badges: state.badges(for: preset.id), lineup: state.lineup)
                                 .equatable()
                                 .id(preset.id)
                                 .transition(.lift(reduceMotion: reduceMotion))
@@ -223,11 +244,11 @@ private struct GalleryPage: View {
                         }
                     } header: {
                         SectionHeader(section: section)
-                            // The grid puts gridRowGap around every row, header rows too. Re-space
+                            // The grid puts its row gap around every row, header rows too. Re-space
                             // the header so it sits sectionGap below the previous tiles and only
                             // itemGap above its own (closer to what it titles than to what it ends).
-                            .padding(.top, i == 0 ? 0 : max(layout.sectionGap - layout.gridRowGap, 0))
-                            .padding(.bottom, layout.itemGap - layout.gridRowGap)
+                            .padding(.top, i == 0 ? 0 : max(layout.sectionGap - rowGap, 0))
+                            .padding(.bottom, layout.itemGap - rowGap)
                     }
                 }
             }
@@ -460,6 +481,7 @@ private struct ChipEdgeFade: Equatable {
 
 private struct FilterChip: View {
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
     @ScaledLength(relativeTo: .callout) private var height: CGFloat = GalleryControl.height
     let filter: GalleryFilter
     let count: Int?
@@ -468,6 +490,43 @@ private struct FilterChip: View {
     @State private var hovering = false
 
     var body: some View {
+        if console { key } else { chip }
+    }
+
+    /// Console (issue #6): a small labelled key — mono caps on a flat key, an LED lit when
+    /// it's the selected filter, the count printed beside it. VoiceOver hears the filter and
+    /// its count (the LED repeats the selected trait, so it stays silent).
+    private var key: some View {
+        Button(action: action) {
+            HStack(spacing: layout.labelGap) {
+                ConsoleLED(on: selected).accessibilityHidden(true)
+                Text(filter.title).textRole(.padName)
+                    .foregroundStyle(ConsoleInk.ink)
+                if let count {
+                    Text("\(count)").textRole(.legend)
+                        .foregroundStyle(ConsoleInk.legend)
+                        .contentTransition(.numericText())
+                }
+            }
+            .lineLimit(1)
+            .padding(.horizontal, layout.controlGap)
+            .frame(minHeight: height)
+            .fixedSize()
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
+            .fill(selected ? ConsoleInk.well : ConsoleInk.panel.opacity(hovering ? 1 : 0.8)))
+        .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(ConsoleInk.hairline))
+        .offset(y: selected ? 0.5 : 0)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .animation(.easeOut(duration: 0.12), value: selected)
+        .accessibilityLabel(count.map { "\(filter.title), \($0)" } ?? filter.title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private var chip: some View {
         Button(action: action) {
             HStack(spacing: layout.labelGap) {
                 Text(filter.title)
@@ -561,12 +620,53 @@ struct NewTile: View {
 }
 
 struct NewTileFace: View {
+    @Environment(\.console) private var console
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ScaledLength(relativeTo: .body) private var circle: CGFloat = 40
     let title: String
     let symbol: String
     var hovering: Bool
 
     var body: some View {
+        if console { pad } else { classic }
+    }
+
+    /// Console (issue #6): an empty pad, built like StyleTile's — the same panel, radii and
+    /// inset — with a dashed well the picture's size, a "+" in it, the title as a printed
+    /// legend and the pads' (empty) light row, so it lines up with the pads beside it. Under
+    /// the pointer it lifts like a pad, its well and "+" in signal.
+    private var pad: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
+                .fill(ConsoleInk.well.opacity(hovering ? 0.8 : 0.5))
+                .overlay(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
+                    .strokeBorder(hovering ? ConsoleInk.signalInk : ConsoleInk.legend.opacity(0.6),
+                                  style: StrokeStyle(lineWidth: 1, dash: [4, 4])))
+                .overlay(Image(systemName: "plus")
+                    .scaledFont { .scaled(points: 16, $0, weight: .semibold) }
+                    .foregroundStyle(hovering ? ConsoleInk.signalInk : ConsoleInk.legend))
+                .aspectRatio(16.0 / 10.0, contentMode: .fit)
+            Text(title)
+                .textRole(.padName)
+                .foregroundStyle(hovering ? ConsoleInk.ink : ConsoleInk.legend)
+                .truncating(title)
+            PadLightRow { EmptyView() }
+        }
+        .padding(Space.xs)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
+            .fill(ConsoleInk.panel.opacity(hovering ? 1 : 0.85)))
+        .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
+            .strokeBorder(ConsoleInk.hairline, lineWidth: 1))
+        .shadow(color: .black.opacity(hovering ? 0.12 : 0), radius: hovering ? 6 : 0, y: hovering ? 3 : 0)
+        .offset(y: hovering && !reduceMotion ? -1.5 : 0)
+        .contentShape(Rectangle())
+        .motion(Motion.snappy, value: hovering)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+    }
+
+    private var classic: some View {
         VStack(alignment: .leading, spacing: TileLabel.gapAbove) {
             RoundedRectangle(cornerRadius: Radius.tile, style: .continuous)
                 .strokeBorder(style: StrokeStyle(lineWidth: 1.25, dash: [5, 5]))

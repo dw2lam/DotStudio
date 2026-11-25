@@ -61,7 +61,8 @@ struct LiveTraits: Equatable {
         switch e.kind {
         case .oceanHorizon, .shallows, .pleats, .dichroic, .sandGarden: return (e.params["live"] ?? 0) > 0.5
         case .windowLight: return (e.params["follow"] ?? 1) > 0.5
-        case .meadow, .universe: return true
+        case .meadow: return (e.params["live"] ?? 1) > 0.5     // Time of Day: Live, not a fixed hour (Tall Grass)
+        case .universe: return true
         default: return false
         }
     }

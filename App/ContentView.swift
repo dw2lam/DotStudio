@@ -9,12 +9,17 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
+    /// Settings › General › Appearance (Console.swift; issue #6).
+    @AppStorage(Appearance.key) private var appearance: Appearance = .classic
     @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var hero
 
     /// Offscreen UI renders (Shots.swift) must never present the sheet or touch the flag.
     private static let isRenderingShots = ProcessInfo.processInfo.environment["DOTSTUDIO_UI_SHOTS"] != nil
+
+    /// What the window draws: never the saved choice in a headless run (Appearance.effective).
+    private var isConsole: Bool { Appearance.effective(saved: appearance) == .console }
 
     /// The style open in the editor, if it still exists.
     private var editing: Preset? { model.editingID.flatMap(model.preset) }
@@ -39,8 +44,10 @@ struct ContentView: View {
         }
         .adaptiveLayout()   // width class + text size → \.layout for every view inside (Layout.swift)
         .stillContext(model)   // what every StyleThumb needs, so none of them observes the model
-        // The window's own colour: no colour-washed backdrop behind the page.
-        .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
+        // The window's own colour (Console: the chassis): no colour-washed backdrop.
+        .background((isConsole ? ConsoleInk.chassis : Color(nsColor: .windowBackgroundColor)).ignoresSafeArea())
+        .environment(\.console, isConsole)
+        .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: isConsole)
         .environment(\.heroNamespace, reduceMotion ? nil : hero)
         .animation(Motion.pick(Motion.hero, reduceMotion: reduceMotion), value: model.editingID)
         .navigationTitle(editing?.name ?? "DotStudio")
@@ -53,6 +60,7 @@ struct ContentView: View {
                                                        set: { if !$0 { model.settingsPane = nil } })) {
                     SettingsView()
                         .environmentObject(model)
+                        .environment(\.console, isConsole)
                         // About a stock Settings window (NotchTune's 780×560 ideal), a little
                         // wider for the pictures; never bigger than the window.
                         .frame(width: min(max(geo.size.width * 0.7, 760), 900, geo.size.width - 40),
@@ -108,6 +116,27 @@ struct ContentView: View {
         guard !hasCompletedOnboarding, !Self.isRenderingShots, !DemoHooks.isActive,
               !model.showOnboarding, model.storeAlert == nil else { return }
         model.showOnboarding = true
+    }
+}
+
+extension Appearance {
+    /// A headless run: offscreen UI renders and gallery renders (Shots.swift), the click probe
+    /// (ClickProbe.swift) and the perf probe (PerfProbe.swift). They run the Debug build, which
+    /// shares the real app's bundle ID and so its UserDefaults — the owner's saved Appearance —
+    /// and DOTSTUDIO_STORE_DIR doesn't move @AppStorage. (A dev instance with only a store dir
+    /// is not headless: its own picker still works.)
+    static let isHeadlessRun: Bool = {
+        let env = ProcessInfo.processInfo.environment
+        return TileProbe.enabled
+            || ["DOTSTUDIO_UI_SHOTS", "DOTSTUDIO_SHOTS", "DOTSTUDIO_PERF_PROBE"].contains { env[$0] != nil }
+    }()
+
+    /// The appearance to draw, given the saved choice (Settings › General › Appearance):
+    /// DOTSTUDIO_APPEARANCE when set; else Classic in a headless run, so renders and probe
+    /// baselines stay comparable whatever the owner is trying out; else the saved choice.
+    /// ContentView (and through it the Settings sheet) and the UIShots root all read it.
+    static func effective(saved: Appearance) -> Appearance {
+        forced ?? (isHeadlessRun ? .classic : saved)
     }
 }
 

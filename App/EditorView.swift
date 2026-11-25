@@ -9,6 +9,7 @@ struct EditorView: View {
     @Environment(\.heroNamespace) private var hero
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
     let id: UUID
     @State private var tab: Tab = .effects
     @State private var confirmDelete = false
@@ -33,7 +34,7 @@ struct EditorView: View {
             inspector(binding, name: preset.name)
                 .frame(width: layout.inspectorWidth)
                 .frame(maxHeight: .infinity)
-                .glassCard(cornerRadius: Radius.card)
+                .modifier(InspectorSurface(console: console))
                 .transition(reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
         }
         .padding(layout.pagePadding)
@@ -76,13 +77,20 @@ struct EditorView: View {
                         .transition(.opacity)
                 }
             }
+            .overlay(alignment: .topLeading) {
+                // Console: what the knob in your hand is changing, in its colour
+                if console { ConsoleTouchTag() }
+            }
             .aspectRatio(screenAspect, contentMode: .fit)
             .background(Color.black)
             .clipShape(RoundedRectangle(cornerRadius: Radius.l, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: Radius.l, style: .continuous).strokeBorder(.white.opacity(0.12)))
-            // Layered shadow: a tight contact shadow plus a wide, soft lift.
-            .shadow(color: .black.opacity(0.18), radius: 3, y: 2)
-            .shadow(color: .black.opacity(0.30), radius: 34, y: 18)
+            .overlay(RoundedRectangle(cornerRadius: Radius.l, style: .continuous)
+                .strokeBorder(console ? ConsoleInk.hairline : Color.white.opacity(0.12)))
+            // Layered shadow: a tight contact shadow plus a wide, soft lift. Console sits flat
+            // on the chassis: its hairline and a 1-pt contact shadow, no lift. (Values, not an
+            // if/else: a different view tree would restart the live Metal preview.)
+            .shadow(color: .black.opacity(console ? 0.12 : 0.18), radius: console ? 1 : 3, y: console ? 1 : 2)
+            .shadow(color: .black.opacity(console ? 0 : 0.30), radius: console ? 0 : 34, y: console ? 0 : 18)
             .onTapGesture(count: 2) {
                 ScreensaverPreviewController.shared.present(
                     preset: preset, source: model.library.source, store: model.store)
@@ -200,6 +208,7 @@ extension TextRole {
 /// second centred line when the preview column is too narrow, instead of truncating.
 /// Every title is role-sized (`ScaledControlLabel`), so the editor's main actions grow with
 /// the text like everything around them; `.adaptiveControlSize` steps the bezels.
+/// Console draws them as flat keys instead (`DestinationKeyFace`), with the same actions.
 private struct DestinationBar: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var wallpaper = WallpaperSlot.shared
@@ -220,14 +229,15 @@ private struct DestinationBar: View {
                     DestinationPill(title: "Your Screensaver", systemImage: "checkmark.circle.fill")
                 } else {
                     Button { Motion.run { model.playAsScreensaver(id) } } label: {
-                        ScaledControlLabel(title: "Play as Screensaver", systemImage: "play.fill")
+                        DestinationLabel(title: "Play as Screensaver", systemImage: "play.fill")
                     }
-                    .glassButton(.prominent)
+                    .modifier(DestinationButtonStyle(kind: .prominent))
                     .help("Play as Screensaver — make this the only style your screensaver shows")
                     Button { Motion.run { model.togglePlaylist(id) } } label: {
-                        ScaledControlLabel(title: playlistLabel, systemImage: inPlaylist ? "checkmark" : "plus")
+                        DestinationLabel(title: playlistLabel, systemImage: inPlaylist ? "checkmark" : "plus",
+                                         lit: inPlaylist)
                     }
-                    .glassButton()
+                    .modifier(DestinationButtonStyle())
                     .help(inPlaylist ? "In Playlist — click to remove it from the screensaver playlist"
                                      : "Add to Screensaver — rotate this with the other styles in the playlist")
                 }
@@ -251,13 +261,13 @@ private struct DestinationBar: View {
         let synced = controller.isActive && controller.followsScreensaver
         let isOurs = !synced && wallpaper.styleID == id
         if synced {
-            GlassMenuPill(title: "Wallpaper: Same as Screensaver", systemImage: "link") {
+            GlassMenuPill(title: "Wallpaper: Same as Screensaver", systemImage: "link", lit: true) {
                 wallpaperMenu(synced: true, isOurs: false)
             }
             .help("The wallpaper plays whatever the screensaver shows — set this style instead, or stop it")
         } else {
             let title = isOurs ? "Stop Wallpaper" : "Set as Wallpaper"
-            GlassMenuPill(title: title, systemImage: "photo.artframe",
+            GlassMenuPill(title: title, systemImage: "photo.artframe", lit: isOurs,
                           primary: { Motion.run { wallpaper.toggle(id) } }) {
                 wallpaperMenu(synced: false, isOurs: isOurs)
             }
@@ -283,14 +293,24 @@ private struct DestinationBar: View {
 /// Sized like `DestinationPill` (an invisible glass button with the same label), and drawn
 /// plain over it, so the title is role-sized like its neighbours' — a stock pull-down's
 /// title is AppKit's and never follows the text size.
+/// Console: a flat key (`DestinationKeyFace`), its LED lit when `lit`.
 private struct GlassMenuPill<Items: View>: View {
     let title: String
     let systemImage: String
+    /// Console: this style is on the wallpaper (or the wallpaper follows the screensaver).
+    var lit = false
     var primary: (() -> Void)? = nil
     @ViewBuilder var items: Items
+    @Environment(\.console) private var console
     @ScaledLength(relativeTo: .body) private var chevronWidth: CGFloat = Space.grid(7)   // 28
+    @ScaledLength(relativeTo: .body) private var keyInset: CGFloat = DestinationKeyMetrics.inset
+    @ScaledLength(relativeTo: .body) private var keyLineInset: CGFloat = Space.xxs
 
     var body: some View {
+        if console { consoleKey } else { glass }
+    }
+
+    private var glass: some View {
         Button {} label: {
             HStack(spacing: 0) { label; Color.clear.frame(width: chevronWidth, height: 1) }
         }
@@ -353,17 +373,81 @@ private struct GlassMenuPill<Items: View>: View {
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
     }
+
+    // MARK: Console
+
+    /// The same split key (title runs `primary`, the chevron opens the menu) or menu key, as
+    /// a flat Console key. Sized by the key itself, like its neighbours.
+    private var consoleKey: some View {
+        DestinationKeyFace(padded: false) {
+            if let primary {
+                HStack(spacing: 0) {
+                    Button(action: primary) {
+                        DestinationKeyLegend(title: title, lit: lit)
+                            .padding(.leading, keyInset)
+                            .padding(.trailing, keyInset / 2)
+                            .padding(.vertical, keyLineInset)
+                            .frame(maxHeight: .infinity)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(title)
+                    Rectangle()
+                        .fill(ConsoleInk.hairline)
+                        .frame(width: 1)
+                        .padding(.vertical, Space.xs)
+                        .accessibilityHidden(true)
+                    menu { consoleChevron }
+                        .accessibilityLabel("More wallpaper options")
+                }
+            } else {
+                menu {
+                    HStack(spacing: 0) {
+                        DestinationKeyLegend(title: title, lit: lit)
+                            .padding(.leading, keyInset)
+                            .padding(.vertical, keyLineInset)
+                        consoleChevron
+                    }
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                }
+                .accessibilityLabel(title)
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var consoleChevron: some View {
+        Image(systemName: "chevron.down")
+            .textRole(.captionEmphasis)
+            .foregroundStyle(ConsoleInk.legend)
+            .frame(width: chevronWidth)
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+    }
 }
 
 /// A status capsule among the destination buttons ("Your Screensaver", "At Night"). It is
 /// sized by an invisible glass button with the same label, so at every control size and
 /// text size a pill is exactly as tall, padded and round as the buttons beside it; the
 /// visible capsule is plain (non-interactive) glass with a medium-weight title.
+/// Console: a flat key with its LED lit — a state, not a control.
 private struct DestinationPill: View {
     let title: String
     let systemImage: String
+    @Environment(\.console) private var console
 
     var body: some View {
+        if console {
+            DestinationKeyFace { DestinationKeyLegend(title: title, lit: true) }
+                .help(title)
+                .accessibilityElement(children: .combine)
+        } else {
+            glass
+        }
+    }
+
+    private var glass: some View {
         Button {} label: { label }
             .glassButton()
             .hidden()
@@ -379,5 +463,157 @@ private struct DestinationPill: View {
     private var label: some View {
         ScaledControlLabel(title: title, systemImage: systemImage, role: .bodyEmphasis)
             .lineLimit(1)
+    }
+}
+
+// MARK: - Destination buttons: glass (Classic) or Console keys
+
+/// A destination button's title: role-sized with its symbol (Classic), or a Console key's
+/// legend — with an LED instead of the symbol where the button has an on state (`lit`).
+private struct DestinationLabel: View {
+    let title: String
+    let systemImage: String
+    var lit: Bool? = nil
+    @Environment(\.console) private var console
+
+    var body: some View {
+        if console {
+            DestinationKeyLegend(title: title, systemImage: lit == nil ? systemImage : nil, lit: lit)
+        } else {
+            ScaledControlLabel(title: title, systemImage: systemImage)
+        }
+    }
+}
+
+/// A destination button's style: glass (Classic) or a flat Console key.
+private struct DestinationButtonStyle: ViewModifier {
+    var kind: GlassButtonKind = .normal
+    @Environment(\.console) private var console
+
+    func body(content: Content) -> some View {
+        if console { content.buttonStyle(DestinationKeyStyle(prominent: kind == .prominent)) }
+        else { content.glassButton(kind) }
+    }
+}
+
+/// Console (issue #6) key metrics at the default text size; they scale with the text.
+private enum DestinationKeyMetrics {
+    /// A key's height: a large stock control's.
+    static let height: CGFloat = Space.grid(7)   // 28
+    /// Its legend's inset from the key's ends.
+    static let inset: CGFloat = Space.s           // 12
+}
+
+private extension TextRole {
+    /// A Console key's legend under the editor preview: small mono caps (11 pt).
+    static let destinationKey = TextRole(style: .subheadline, weight: .semibold, design: .monospaced,
+                                         tracking: 0.5, uppercase: true)
+}
+
+/// Console: a flat key on the chassis — the panel colour (the recessed well while pressed;
+/// graphite ink for the main action), a hairline edge, no glass and no shadow. Every key is
+/// this tall at a given text size, so a row of them lines up.
+private struct DestinationKeyFace<Content: View>: View {
+    var prominent = false
+    var pressed = false
+    /// Insets the content from the key's edges (a split key insets its own parts, so the
+    /// whole face stays clickable).
+    var padded = true
+    @ViewBuilder var content: Content
+    @ScaledLength(relativeTo: .body) private var height: CGFloat = DestinationKeyMetrics.height
+    @ScaledLength(relativeTo: .body) private var inset: CGFloat = DestinationKeyMetrics.inset
+    /// Above and below a two-line legend (a one-line one sits inside `height` anyway).
+    @ScaledLength(relativeTo: .body) private var lineInset: CGFloat = Space.xxs
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
+        content
+            .padding(.horizontal, padded ? inset : 0)
+            .padding(.vertical, padded ? lineInset : 0)
+            .frame(minHeight: height)
+            .foregroundStyle(prominent ? ConsoleInk.chassis : ConsoleInk.ink)
+            .background(shape.fill(prominent ? ConsoleInk.ink.opacity(pressed ? 0.8 : 1)
+                                             : pressed ? ConsoleInk.well : ConsoleInk.panel))
+            .overlay(shape.strokeBorder(ConsoleInk.hairline, lineWidth: 1))
+            .contentShape(shape)
+    }
+}
+
+private struct DestinationKeyStyle: ButtonStyle {
+    var prominent = false
+    func makeBody(configuration: Configuration) -> some View {
+        DestinationKeyFace(prominent: prominent, pressed: configuration.isPressed) { configuration.label }
+    }
+}
+
+/// A Console key's legend: mono caps, after its LED (lit in the signal colour when on) or,
+/// for a plain action, its symbol. The words carry the state ("In Playlist", "Stop
+/// Wallpaper"), so the LED is never the only signal, and VoiceOver reads just the words.
+private struct DestinationKeyLegend: View {
+    let title: String
+    var systemImage: String? = nil
+    var lit: Bool? = nil
+    @Environment(\.layout) private var layout
+
+    var body: some View {
+        HStack(spacing: layout.iconGap) {
+            if let lit {
+                ConsoleLED(on: lit)
+            } else if let systemImage {
+                Image(systemName: systemImage)
+            }
+            // Mono caps run wide: in a narrow column (big text) a legend takes a second line
+            // before it ever truncates (the key's tooltip has it in full).
+            Text(title)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .textRole(.destinationKey)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+    }
+}
+
+/// The inspector's card: glass (Classic) or a flat panel (Console).
+private struct InspectorSurface: ViewModifier {
+    let console: Bool
+    func body(content: Content) -> some View {
+        if console { content.consolePanel(cornerRadius: Radius.card) }
+        else { content.glassCard(cornerRadius: Radius.card) }
+    }
+}
+
+/// Console: while a knob is turned, a tag in its colour over the preview says what is
+/// changing and to what ("● GRAIN 42%"), with the preview's edge lit in the same colour.
+/// Its own view, so only it redraws as the value moves.
+private struct ConsoleTouchTag: View {
+    @ObservedObject private var touch = ConsoleTouch.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ScaledLength(relativeTo: .caption2) private var dot: CGFloat = 8
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if let t = touch.current {
+                let c = ConsoleInk.knobs[t.colorIndex % ConsoleInk.knobs.count]
+                RoundedRectangle(cornerRadius: Radius.l, style: .continuous)
+                    .strokeBorder(c.opacity(0.9), lineWidth: 2)
+                    .allowsHitTesting(false)
+                HStack(spacing: Space.xs) {
+                    Circle().fill(c).frame(width: dot, height: dot)
+                    Text(t.label).textRole(.legend).foregroundStyle(.white.opacity(0.85))
+                    Text(t.value).textRole(.readout).foregroundStyle(.white)
+                        .contentTransition(.numericText())
+                }
+                .padding(.horizontal, Space.s).padding(.vertical, Space.xxs + 2)
+                .background(Capsule().fill(.black.opacity(0.6)))
+                .overlay(Capsule().strokeBorder(c.opacity(0.8), lineWidth: 1))
+                .padding(Space.s)
+                .transition(.opacity)
+                .accessibilityHidden(true)   // the knob itself speaks its value
+            }
+        }
+        .animation(Motion.pick(Motion.brief, reduceMotion: reduceMotion), value: touch.current?.label)
+        .allowsHitTesting(false)
     }
 }

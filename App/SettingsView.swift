@@ -354,6 +354,7 @@ struct GeneralSettingsSection: View {
     @State private var loginStatus = LoginItem.status()
     @State private var loginError: String?
     @AppStorage(MenuBarIcon.key) private var menuBarIcon: MenuBarIcon = .standard
+    @AppStorage(Appearance.key) private var appearance: Appearance = .classic
 
     private var opensAtLogin: Bool { loginStatus != .off }
 
@@ -363,6 +364,13 @@ struct GeneralSettingsSection: View {
             Toggle("Keep running in the menu bar", isOn: $presence.menuBarMode)
                 .formSwitchSize()
             MenuBarIconChoice(selection: $menuBarIcon)
+            // Issue #6: an experiment, tried for real before anything is kept.
+            // Shows what is drawn (Appearance.effective: DOTSTUDIO_APPEARANCE, or Classic in a
+            // headless run), so a render never shows a choice the window doesn't wear.
+            Picker("Appearance", selection: Binding(get: { Appearance.effective(saved: appearance) },
+                                                    set: { appearance = $0 })) {
+                ForEach(Appearance.allCases) { Text($0.title).tag($0) }
+            }
             Toggle("Open DotStudio at login", isOn: Binding(get: { opensAtLogin }, set: setOpenAtLogin))
                 .formSwitchSize()
             if loginStatus == .requiresApproval {

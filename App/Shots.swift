@@ -60,6 +60,8 @@ import SwiftUI
 ///   DOTSTUDIO_UI_STRESS=1 | both          stress data only | normal + stress (default: normal)
 ///   DOTSTUDIO_UI_APPEARANCE=light|dark|both   default: light, plus dark at 1440x900 (or the
 ///                                         natural size) with default text
+///   DOTSTUDIO_APPEARANCE=console          the Console look (issue #6); default Classic — a
+///                                         render never reads the saved Settings choice
 ///   DOTSTUDIO_UI_SETTLE=0.6               seconds each render settles before capture
 ///   DOTSTUDIO_UI_CHROME=1                 main-window screens in a titled window, captured with
 ///                                         its title bar and toolbar (New, MCP, Settings…)
@@ -983,11 +985,17 @@ enum UIShots {
             self.settle = settle
         }
 
+        private static let console = Appearance.effective(saved: .classic) == .console
+
         private func root(_ view: AnyView, width: CGFloat, height: CGFloat?, typeSize: DynamicTypeSize) -> some View {
             view
                 .frame(width: width, height: height)
                 .adaptiveLayout()
                 .environment(\.dynamicTypeSize, typeSize)
+                // Classic unless DOTSTUDIO_APPEARANCE says otherwise: a render never reads the
+                // owner's saved choice (Appearance.effective — the same rule ContentView uses).
+                .environment(\.console, Self.console)
+                .background(Self.console ? ConsoleInk.chassis : .clear)
                 .environmentObject(model)
                 .environmentObject(updates)
         }

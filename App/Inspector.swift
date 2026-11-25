@@ -386,7 +386,7 @@ struct EffectStackView: View {
             // Motion: a new group, a section gap below Add Effect. (Uneven spacing goes in
             // padding: the List centres a row's content between its vertical insets.)
             Text("Motion")
-                .textRole(.inspectorSection)
+                .modifier(InspectorSectionHeading())
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, max(layout.sectionGap - 2 * layout.labelGap, 0))
                 .listRowInsets(rowInsets(vertical: layout.labelGap))
@@ -429,7 +429,7 @@ struct EffectStackView: View {
     /// "Effects" (or "Scene & Layers"). How to reorder is in its tooltip, not on screen.
     private var effectsHeader: some View {
         Text(preset.isScene ? "Scene & Layers" : "Effects")
-            .textRole(.inspectorSection)
+            .modifier(InspectorSectionHeading())
             .frame(maxWidth: .infinity, alignment: .leading)
             .help(preset.effects.count > 1 ? "Drag effects to reorder them — the top one runs first" : "")
     }
@@ -496,8 +496,16 @@ struct EffectRow: View {
     /// shared media folder).
     var model: AppModel? = nil
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
     @ScaledLength(relativeTo: .body) private var eyeColumn: CGFloat = InspectorMetrics.eyeColumn
     @ScaledLength(relativeTo: .body) private var glyphColumn: CGFloat = InspectorMetrics.glyphColumn
+
+    /// Console (issue #6): the first effect's first four continuous settings, as the channel
+    /// strip's coloured knobs (the effect's own order puts the most important first).
+    private var strip: [ParamSpec] {
+        guard console, isFirst else { return [] }
+        return Array(effect.paramSpecs.filter { $0.options == nil && !$0.isToggle && $0.max > $0.min }.prefix(4))
+    }
 
     var body: some View {
         let _ = Perf.body("EffectRow")
@@ -513,7 +521,11 @@ struct EffectRow: View {
                         SceneThemeStrip(effect: $effect)
                     }
                     // (a Custom Scene's params and colours are its package manifest's)
-                    ForEach(effect.paramSpecs) { spec in
+                    let knobs = strip
+                    if !knobs.isEmpty {
+                        ConsoleChannelStrip(specs: knobs, value: paramBinding)
+                    }
+                    ForEach(effect.paramSpecs.filter { s in !knobs.contains { $0.key == s.key } }) { spec in
                         ParamRow(spec: spec, value: paramBinding(spec))
                     }
                     if effect.kind.usesColors, !wells.isEmpty {
@@ -950,7 +962,11 @@ struct ParamRow: View {
 
     private var formatted: String { format(value) }
 
-    private func format(_ v: Double) -> String {
+    private func format(_ v: Double) -> String { Self.format(spec, v) }
+
+    /// A value as the inspector shows it: degrees for angles, whole numbers for wide ranges,
+    /// a percentage for 0…1, else two decimals.
+    static func format(_ spec: ParamSpec, _ v: Double) -> String {
         let key = spec.key.lowercased()
         if key == "angle" || spec.label.lowercased().contains("angle") {
             return String(format: "%.0f°", v * 180 / .pi)
@@ -1331,4 +1347,111 @@ private struct SourceEditorContent: View {
 
 extension Array {
     subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
+}
+
+// MARK: - Console channel strip
+
+/// Console (issue #6): a channel strip — up to four settings as colour-capped knobs side by
+/// side (blue, green, white, orange) on a recessed panel. Each is a real control: it turns
+/// the setting it names. With big text (or too little width) they go two by two
+/// (`KnobStripLayout`); nothing is ever drawn smaller to make them fit.
+struct ConsoleChannelStrip: View {
+    let specs: [ParamSpec]
+    let value: (ParamSpec) -> Binding<Double>
+    @Environment(\.layout) private var layout
+
+    var body: some View {
+        KnobStripLayout(twoUp: layout.prefersStacking, rowSpacing: layout.itemGap) {
+            ForEach(Array(specs.enumerated()), id: \.element.key) { i, spec in
+                ConsoleKnob(label: spec.label, value: value(spec), range: spec.min...spec.max,
+                            step: spec.step, defaultValue: spec.def, colorIndex: i,
+                            format: { ParamRow.format(spec, $0) })
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, layout.itemGap)
+        .padding(.horizontal, Space.xxs)
+        .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(ConsoleInk.well.opacity(0.55)))
+        .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).strokeBorder(ConsoleInk.hairline))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Main settings")
+    }
+}
+
+/// The channel strip's arrangement: one row of equal columns while every column is at least
+/// as wide as a knob can't do without at the chosen text size (its dial and readout; the
+/// legend wraps), else two columns (2 × 2), else one. `twoUp` (accessibility sizes, where
+/// the inspector's rows stack: `layout.prefersStacking`) starts at two columns, so the
+/// legends get the room. Each knob is centred in its column.
+///
+/// Measured inside one layout, so the knobs — each with its own state, focus and scroll
+/// monitor — keep their identity when it flips; a ViewThatFits would build them again in the
+/// middle of the inspector list's layout (the pattern ColorWellsRow documents as a crash).
+private struct KnobStripLayout: Layout {
+    var twoUp: Bool
+    var rowSpacing: CGFloat
+
+    /// The width no knob can go below (a zero-width proposal: the parts that don't wrap).
+    private func minimumWidth(_ subviews: Subviews) -> CGFloat {
+        subviews.map { $0.sizeThatFits(ProposedViewSize(width: 0, height: nil)).width }.max() ?? 0
+    }
+
+    private func columns(_ width: CGFloat?, _ subviews: Subviews) -> Int {
+        let n = subviews.count
+        let tries = (twoUp ? [2, 1] : [n, 2, 1]).map { min($0, n) }
+        guard let width, width.isFinite else { return max(tries[0], 1) }
+        let need = minimumWidth(subviews)
+        return tries.first { $0 > 0 && CGFloat($0) * need <= width + 0.5 } ?? 1
+    }
+
+    /// Per row: the subview indices and the row's height when each is offered `column`.
+    private func rows(_ subviews: Subviews, columns: Int, column: CGFloat?) -> [(items: Range<Int>, height: CGFloat)] {
+        stride(from: 0, to: subviews.count, by: max(columns, 1)).map { start in
+            let items = start..<min(start + columns, subviews.count)
+            let h = items.map { subviews[$0].sizeThatFits(ProposedViewSize(width: column, height: nil)).height }.max() ?? 0
+            return (items, h)
+        }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard !subviews.isEmpty else { return .zero }
+        let cols = columns(proposal.width, subviews)
+        let column: CGFloat
+        if let w = proposal.width, w.isFinite {
+            column = w / CGFloat(cols)
+        } else {
+            column = subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0
+        }
+        let rs = rows(subviews, columns: cols, column: column)
+        let height = rs.map(\.height).reduce(0, +) + CGFloat(max(rs.count - 1, 0)) * rowSpacing
+        return CGSize(width: column * CGFloat(cols), height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard !subviews.isEmpty else { return }
+        let cols = columns(bounds.width, subviews)
+        let column = bounds.width / CGFloat(cols)
+        var y = bounds.minY
+        for row in rows(subviews, columns: cols, column: column) {
+            for (c, i) in row.items.enumerated() {
+                subviews[i].place(at: CGPoint(x: bounds.minX + column * (CGFloat(c) + 0.5), y: y),
+                                  anchor: .top, proposal: ProposedViewSize(width: column, height: nil))
+            }
+            y += row.height + rowSpacing
+        }
+    }
+}
+
+/// An inspector section's title ("Effects", "Scene & Layers", "Motion"): the inset-list
+/// header (Classic), or a printed legend — tiny mono caps in the legend ink (Console).
+private struct InspectorSectionHeading: ViewModifier {
+    @Environment(\.console) private var console
+
+    func body(content: Content) -> some View {
+        if console {
+            content.textRole(.legend).foregroundStyle(ConsoleInk.legend)
+        } else {
+            content.textRole(.inspectorSection)
+        }
+    }
 }
