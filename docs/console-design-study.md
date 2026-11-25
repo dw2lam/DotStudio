@@ -39,8 +39,10 @@ colour, one object, plain big statements. Nothing: monochrome + one accent, dot-
   in the app, heavy condensed system numerals on a white LCD tile (no bundled font).
 - **Fields:** black `#000`, light grey `#e3e3e1`, off-white paper `#efeee9`. Ink `#1a1a1a`,
   secondary `#6b6b68`. Link/accent: signal orange `#f2551d` (text on light: `#a33609`).
-- **Knob caps (our palette, not theirs):** blue `#2e6bf0`, green `#1fa35b`, white `#f7f6f2`,
-  orange `#f2551d` — knurled sides, a pointer line, no glossy gradient.
+- **Knob caps:** ~~blue / green / white / orange~~ — withdrawn 2026-11-25: that is exactly one
+  TE synth's encoder palette, their most recognisable marker. Keep the principle (one colour per
+  control, echoed on screen) with our own colours: channel colours below, plain paper caps on the
+  power knobs, and editor colours still to be chosen (not that set, not a grey ramp plus red).
 - **Our pictograms:** drawn ourselves in 1.5 px line: a 2×2 pad grid (styles), a knob (editor),
   a sun arc (live sky), a cloud with rain strokes (weather), a box (download), an open booklet
   (guide), a screen with a moon (screensaver), a desktop with windows (wallpaper).
@@ -93,3 +95,51 @@ colour, one object, plain big statements. Nothing: monochrome + one accent, dot-
 Only real controls; no decorative knobs or fake meters; legends only where they help; keyboard,
 VoiceOver (knobs are sliders), Dynamic Type, Reduce Motion, Light/Dark; WCAG AA; Classic stays
 the default and unchanged; no sounds.
+
+## 6. Interaction language (round 2, 2026-11-25)
+
+From three studies of the products' manuals, guides and software (scratchpad
+`te-interaction/`: audio gear, screen instruments, software + Mac haptics). Prototype:
+scratchpad `app-mock/tuner.html` + `tuner.mp4`. **Pending owner approval.**
+
+**What changed and why**
+- The tape eject/insert is gone. Their own tape product picks a tape with one turn and one tap;
+  the medium is what a thing *is*, never a slow way to choose.
+- **Tune, then take.** A radio band runs the full width: one station per style, bands printed
+  over their spans (scenes · clocks · looks), a needle in the selected channel's colour, a readout
+  with a lock LED and a signal meter. Pressing a pad motor-seeks the needle there (accelerate,
+  cruise, brake; a small settle wobble); scrolling turns it by hand. Between stations the
+  channel's own monitor shows interference (grain, tearing, the two neighbours ghosting); on a
+  station it locks and the name types itself in. That is the preview, shown as **cue** (blinking
+  LED). Press the cued pad again (or ↩) to **take** it: the monitor gives a little, a burst of
+  signal, the channel LED writes (flashes orange) while the real screen changes over. Esc returns
+  to what is live.
+- **Channels, not decks.** Two channel keys (screensaver, wallpaper) select where the tuner points;
+  each channel has its own colour (screensaver violet `#7a68ff`, wallpaper yellow `#ffbd14`),
+  echoed on the needle, the pad LEDs and the band markers. Signal orange `#f2551d` = writing.
+- **The reel** is the wallpaper's transport: it turns at the speed the wallpaper really runs
+  (frame rate over the limit); click to pause (the picture runs down like a tape stop), click again
+  to start (a little wow).
+- **Power** = one knob per source with detents on the frame-rate ladder; the battery knob clicks
+  to *off* past 15 (pause on battery). A thin orange ghost pointer shows the rate Dynamic/Reactive
+  is really running. A three-position switch per source for forced · dynamic · reactive. The LCD
+  shows the rate *now*; a change speaks for a second, then it goes home. No composite strings.
+- **LED grammar:** solid = a state; blinking = cued / needs you; pulsing = in progress; orange =
+  writing. Unlit LEDs stay quiet.
+- **Layout:** one chassis, two seams; a 24 px module everywhere; the three upper sections share a
+  key row baseline; 13 × 3 pads (38 styles + a ghost "new style" key).
+
+**Haptics** (NSHapticFeedbackManager; only plays while a finger is on a Force Touch trackpad,
+so every one has a visual twin):
+
+| Moment | Pattern | Visual twin |
+|---|---|---|
+| needle passes a station under the finger (scroll / drag) | `.alignment`, ≥ 40 ms apart, dropped when faster | the pad's number flashes |
+| crossing into another band | `.levelChange` | the band name inverts |
+| knob reaches a ladder rung | `.alignment` | the pointer jumps a rung, the LCD speaks |
+| knob clicks to off / hits an end stop | `.levelChange` | LED out / 1–2 px shake |
+| take | `.levelChange` | monitor gives, burst, LED writes |
+| reel pause / start | `.levelChange` | tape stop / wow |
+| keys, menus, hover | none (the trackpad click is already physical) | key travel |
+
+Optional UI sound stays off by default (System Sound Services, obeys the system setting).
