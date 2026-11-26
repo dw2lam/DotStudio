@@ -11,6 +11,7 @@ struct LocationRow: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var weather = WeatherService.shared
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
     @ScaledLength(relativeTo: .title2) private var iconBox: CGFloat = SettingsMetrics.iconBox
     @State private var picking = false
 
@@ -40,6 +41,7 @@ struct LocationRow: View {
                                    pick: { model.setLocation($0); picking = false },
                                    automatic: { model.setLocation(nil); picking = false },
                                    close: { picking = false })
+                        .environment(\.console, console)
                         .adaptiveLayout()   // the popover is its own root
                 }
         }
@@ -58,6 +60,7 @@ struct LocationRow: View {
 /// back to the internet connection's location.
 struct LocationPicker: View {
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
     @StateObject private var search: PlaceSearchModel
     @FocusState private var fieldFocused: Bool
     @Environment(\.dismiss) private var dismiss
@@ -93,11 +96,10 @@ struct LocationPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: layout.controlGap) {
-                Text("Set Your Location").textRole(.headline).wrapping()
+                Text("Set Your Location").textRole(console ? .consoleHeadline : .headline).wrapping()
                     .accessibilityAddTraits(.isHeader)
                 TextField("Search", text: $search.query, prompt: Text("City or town"))
-                    .textFieldStyle(.roundedBorder)
-                    .textRole(.body)
+                    .modifier(SearchFieldLook(focused: fieldFocused))
                     .focused($fieldFocused)
                     // Keys while typing: ↑ ↓ move through the results, Return picks the
                     // highlighted one, Escape closes (in a text field it would otherwise only
@@ -110,30 +112,50 @@ struct LocationPicker: View {
                     .accessibilityHint(items.isEmpty ? "" : "Up and down arrows choose a result; Return uses it")
             }
             .padding(layout.cardPadding)
-            Divider()
+            rule
             results
-            Divider()
+            rule
             VStack(alignment: .leading, spacing: layout.controlGap) {
                 if current != nil {
-                    Button(scaled: "Use My Internet Connection", action: automatic)
-                        .help("Go back to the approximate location from your internet connection")
+                    if console {
+                        Button(action: automatic) { Text("Use My Internet Connection").textRole(.consoleKey) }
+                            .buttonStyle(.keycap)
+                            .help("Go back to the approximate location from your internet connection")
+                    } else {
+                        Button(scaled: "Use My Internet Connection", action: automatic)
+                            .help("Go back to the approximate location from your internet connection")
+                    }
+                } else if console {
+                    // Console: the state as a lit LED and its legend
+                    ConsoleLED(on: true, color: ConsoleInk.green, label: "Using your internet connection")
                 } else {
                     Label("Using your internet connection", systemImage: "checkmark")
                         .textRole(.body)
                         .foregroundStyle(.secondary)
                 }
                 Text("That location is approximate, from your IP address. Places by Open-Meteo (GeoNames).")
-                    .textRole(.caption).foregroundStyle(.secondary).wrapping()
+                    .textRole(caption).foregroundStyle(secondary).wrapping()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(layout.cardPadding)
         }
         .frame(width: width)
+        .modifier(PickerSurface())
         // Ready to type (a reopened picker keeps nothing, so this is always an empty field).
         .onAppear { if search.query.isEmpty { fieldFocused = true } }
         // New results: Return picks the first again.
         .onChange(of: items.map(\.id)) { highlighted = 0 }
     }
+
+    /// Between the parts: a divider (Classic) or a hairline (Console).
+    @ViewBuilder private var rule: some View {
+        if console { ConsoleHairline() } else { Divider() }
+    }
+
+    /// Small text: the caption (Classic) or the hub's small body (Console).
+    private var caption: TextRole { console ? .consoleBodySmall : .caption }
+    /// Secondary text: `.secondary` (Classic) or the legend grey (Console).
+    private var secondary: AnyShapeStyle { console ? AnyShapeStyle(ConsoleInk.legend) : AnyShapeStyle(.secondary) }
 
     private func move(_ by: Int) -> KeyPress.Result {
         guard !items.isEmpty else { return .ignored }
@@ -149,15 +171,21 @@ struct LocationPicker: View {
         case .searching:
             HStack(spacing: layout.controlGap) {
                 ProgressView().controlSize(.small)
-                Text("Searching\u{2026}").textRole(.caption).foregroundStyle(.secondary)
+                Text("Searching\u{2026}").textRole(caption).foregroundStyle(secondary)
             }
             .padding(layout.cardPadding)
         case .noMatch:
             message("No places match \u{201C}\(search.query.trimmingCharacters(in: .whitespaces))\u{201D}.")
         case .failed(let why):
             VStack(alignment: .leading, spacing: layout.controlGap) {
-                Text("Couldn't search: \(why)").textRole(.caption).foregroundStyle(.orange).wrapping()
-                Button(scaled: "Retry") { search.retry() }
+                Text("Couldn't search: \(why)").textRole(caption)
+                    .foregroundStyle(console ? ConsoleInk.signalInk : .orange).wrapping()
+                if console {
+                    Button { search.retry() } label: { Text("Retry").textRole(.consoleKey) }
+                        .buttonStyle(.keycap)
+                } else {
+                    Button(scaled: "Retry") { search.retry() }
+                }
             }
             .padding(layout.cardPadding)
         case .results(let items):
@@ -178,7 +206,7 @@ struct LocationPicker: View {
     }
 
     private func message(_ text: String) -> some View {
-        Text(text).textRole(.caption).foregroundStyle(.secondary).wrapping()
+        Text(text).textRole(caption).foregroundStyle(secondary).wrapping()
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(layout.cardPadding)
     }
@@ -188,14 +216,14 @@ struct LocationPicker: View {
         return Button { pick(r.place) } label: {
             HStack(alignment: .center, spacing: layout.controlGap) {
                 VStack(alignment: .leading, spacing: layout.labelGap / 2) {
-                    Text(r.name).textRole(.bodyEmphasis).wrapping()
+                    Text(r.name).textRole(console ? .consoleTitle : .bodyEmphasis).wrapping()
                     if !r.detail.isEmpty {
-                        Text(r.detail).textRole(.caption).foregroundStyle(.secondary).wrapping()
+                        Text(r.detail).textRole(caption).foregroundStyle(secondary).wrapping()
                     }
                 }
                 Spacer(minLength: 0)
                 if isCurrent {
-                    Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                    Image(systemName: "checkmark").foregroundStyle(console ? ConsoleInk.signalInk : Color.accentColor)
                         .accessibilityLabel("In use")
                 }
             }
@@ -203,7 +231,7 @@ struct LocationPicker: View {
             .padding(.vertical, layout.controlGap)
             .contentShape(Rectangle())
         }
-        .buttonStyle(PlaceRowStyle(highlighted: index == highlighted))
+        .buttonStyle(PlaceRowStyle(highlighted: index == highlighted, console: console))
         // The pointer moves the highlight too: one highlighted row, whichever moved it last.
         .onHover { if $0 && Date().timeIntervalSince(keyMovedAt) > 0.5 { highlighted = index } }
         .help("Use \(r.place.name)")
@@ -214,11 +242,60 @@ struct LocationPicker: View {
 
 /// A list row: highlighted (the one Return picks — the keyboard's or the pointer's), darker
 /// while pressed.
+/// Console: the highlighted row on the high surface with an orange bar at its leading edge,
+/// the key face while pressed.
 private struct PlaceRowStyle: ButtonStyle {
     let highlighted: Bool
+    var console = false
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background(Color.primary.opacity(configuration.isPressed ? 0.12 : highlighted ? 0.07 : 0))
+        if console {
+            configuration.label
+                .background(configuration.isPressed ? ConsoleInk.keyFace
+                             : highlighted ? ConsoleInk.surfaceHigh.opacity(0.7) : .clear)
+                .overlay(alignment: .leading) {
+                    if highlighted { Rectangle().fill(ConsoleInk.signal).frame(width: 2) }
+                }
+        } else {
+            configuration.label
+                .background(Color.primary.opacity(configuration.isPressed ? 0.12 : highlighted ? 0.07 : 0))
+        }
+    }
+}
+
+/// Console: the picker on the panel colour, its ink the hub's. Classic: as the popover draws it.
+private struct PickerSurface: ViewModifier {
+    @Environment(\.console) private var console
+
+    func body(content: Content) -> some View {
+        if console {
+            content
+                .background(ConsoleInk.panel)
+                .foregroundStyle(ConsoleInk.ink, ConsoleInk.legend)
+        } else {
+            content
+        }
+    }
+}
+
+/// The search field: the stock rounded field (Classic), or plain text in a recessed well with
+/// an orange edge while typing (Console, as the inspector's fields).
+private struct SearchFieldLook: ViewModifier {
+    @Environment(\.console) private var console
+    let focused: Bool
+
+    func body(content: Content) -> some View {
+        if console {
+            content
+                .textFieldStyle(.plain)
+                .textRole(.consoleBody)
+                .padding(.horizontal, Space.xs)
+                .padding(.vertical, Space.xxs + 1)
+                .consoleWell(focused: focused)
+        } else {
+            content
+                .textFieldStyle(.roundedBorder)
+                .textRole(.body)
+        }
     }
 }

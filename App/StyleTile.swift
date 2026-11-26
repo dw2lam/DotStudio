@@ -952,21 +952,41 @@ struct HubTag: View {
     let text: String
     var symbol: String? = nil
     var tone: Tone = .plain
+    /// When its row is too narrow for the words, it shows only its symbol (the words in the
+    /// tooltip and to VoiceOver) instead of keeping its own width. Pure SwiftUI text and
+    /// shapes, so choosing by fit is safe here (no AppKit control inside).
+    var truncates = false
 
     var body: some View {
+        if truncates, let symbol {
+            ViewThatFits(in: .horizontal) {
+                tag(words: true).fixedSize()
+                tag(words: false).fixedSize()
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(text)
+            }
+            .help(text)
+        } else {
+            tag(words: true).fixedSize()
+        }
+    }
+
+    private func tag(words: Bool) -> some View {
         let shape = RoundedRectangle(cornerRadius: 2, style: .continuous)
-        HStack(spacing: 3) {
+        return HStack(spacing: words ? 3 : 0) {
             if let symbol {
                 Image(systemName: symbol).scaledFont { .scaled(points: 8.5, $0, weight: .bold) }
             }
+            // (without the words: a zero-width copy keeps the tag the height of a worded one)
             Text(text).textRole(.legend).lineLimit(1)
+                .frame(width: words ? nil : 0)
+                .opacity(words ? 1 : 0)
         }
         .foregroundStyle(tone == .plain ? ConsoleInk.ink : ConsoleInk.onSignal)
         .padding(.horizontal, 5)
         .padding(.vertical, 2)
         .background(shape.fill(tone == .signal ? ConsoleInk.signal : tone == .blue ? ConsoleInk.blue : ConsoleInk.keyFace))
         .overlay(shape.strokeBorder(tone == .plain ? ConsoleInk.hairline : .clear, lineWidth: 1))
-        .fixedSize()
     }
 }
 

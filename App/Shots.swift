@@ -486,7 +486,9 @@ enum UIShots {
             AnyView(AddEffectPicker(source: st.model.library.source, thumbnailer: st.model.thumbnailer,
                                     include: { $0.isScene }, prompt: "Search scenes") { _ in })
         }))
-        s.append(Screen(name: "mcp-popover", frame: .fit(width: 340), view: { _ in   // (a popover draws its own material)
+        // Console's MCP popover is two columns (~720 pt); Classic's one (340 pt)
+        let mcpWidth: CGFloat = Appearance.effective(saved: .classic) == .console ? 720 : 340
+        s.append(Screen(name: "mcp-popover", frame: .fit(width: mcpWidth), view: { _ in   // (a popover draws its own material)
             AnyView(MCPPopover().background(Color(nsColor: .windowBackgroundColor))) }))
         s.append(Screen(name: "playlist-editor", frame: .fixed(CGSize(width: 420, height: 460)),
                         prepare: { $0.lineup($0.playlist) }, view: { _ in AnyView(PlaylistEditor()) }))
@@ -1225,16 +1227,17 @@ private struct ChoiceColumn: View {
     }
 }
 
-/// One Settings section in the grouped Form Settings uses, at the Settings window's width.
+/// One Settings section in the Form Settings uses (settingsForm: Classic's grouped Form, or
+/// Console's ruled sections on the pane's panel colour), at the Settings window's width.
 private struct SettingsSectionPreview<Content: View>: View {
+    @Environment(\.console) private var console
     @ViewBuilder var content: () -> Content
 
     var body: some View {
         Form { content() }
-            .formStyle(.grouped)
-            .textRole(.body)
-            .formControlSize()
+            .settingsForm()
             .scrollDisabled(true)
+            .background(console ? ConsoleInk.panel : .clear)
     }
 }
 

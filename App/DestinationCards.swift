@@ -675,41 +675,68 @@ struct ScreensaverCard: View {
             .onTapGesture(count: 2) { if let p = playing { model.edit(p.id) } }
             .help(playing.map { "\($0.name) — double-click to edit" } ?? "")
 
-            // Customize (the style playing now) top right.
-            if let p = playing {
-                CustomizeButton(name: p.name, flat: console) { model.edit(p.id) }
-                    .padding(Space.xs)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            if console {
+                consoleHeroKeys
+            } else {
+                classicHeroKeys
             }
-            // When / Night / Day top left; Preview (what it previews, right on it) bottom right.
-            VStack(alignment: .leading, spacing: 0) {
-                if let rule = model.activeRule {
-                    // A When rule plays now: it outranks the night style and the playlist.
-                    if console {
-                        HubTag(text: "When: " + RuleText.short(rule, in: model.library),
-                               symbol: RuleText.symbol(rule, in: model.library))
-                    } else {
-                        GlassBadge(text: "When: " + RuleText.short(rule, in: model.library),
-                                   symbol: RuleText.symbol(rule, in: model.library))
-                    }
-                } else if lineup.night != nil {
-                    if console {
-                        HubTag(text: model.isNightNow ? "Night" : "Day",
-                               symbol: model.isNightNow ? "moon.fill" : "sun.max.fill")
-                    } else {
-                        GlassBadge(text: model.isNightNow ? "Night" : "Day",
-                                   symbol: model.isNightNow ? "moon.fill" : "sun.max.fill")
-                    }
-                }
-                Spacer(minLength: 0)
-                HStack {
-                    Spacer(minLength: 0)
-                    previewButton
-                }
-            }
-            .padding(Space.xs)
         }
         .motion(Motion.smooth, value: playing?.id)
+    }
+
+    /// Console: When / Night / Day and Customize share the top row — the tag shortens (its
+    /// full text in the tooltip) before it would run under the key in a narrow deck — and
+    /// Preview sits bottom right.
+    private var consoleHeroKeys: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: Space.xs) {
+                if let rule = model.activeRule {
+                    HubTag(text: "When: " + RuleText.short(rule, in: model.library),
+                           symbol: RuleText.symbol(rule, in: model.library), truncates: true)
+                } else if lineup.night != nil {
+                    HubTag(text: model.isNightNow ? "Night" : "Day",
+                           symbol: model.isNightNow ? "moon.fill" : "sun.max.fill", truncates: true)
+                }
+                Spacer(minLength: 0)
+                if let p = playing {
+                    CustomizeButton(name: p.name, flat: true) { model.edit(p.id) }
+                        .layoutPriority(1)
+                }
+            }
+            Spacer(minLength: 0)
+            HStack {
+                Spacer(minLength: 0)
+                previewButton
+            }
+        }
+        .padding(Space.xs)
+    }
+
+    /// Classic: Customize top right; When / Night / Day top left; Preview (what it previews,
+    /// right on it) bottom right.
+    @ViewBuilder private var classicHeroKeys: some View {
+        // Customize (the style playing now) top right.
+        if let p = playing {
+            CustomizeButton(name: p.name, flat: false) { model.edit(p.id) }
+                .padding(Space.xs)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+        }
+        VStack(alignment: .leading, spacing: 0) {
+            if let rule = model.activeRule {
+                // A When rule plays now: it outranks the night style and the playlist.
+                GlassBadge(text: "When: " + RuleText.short(rule, in: model.library),
+                           symbol: RuleText.symbol(rule, in: model.library))
+            } else if lineup.night != nil {
+                GlassBadge(text: model.isNightNow ? "Night" : "Day",
+                           symbol: model.isNightNow ? "moon.fill" : "sun.max.fill")
+            }
+            Spacer(minLength: 0)
+            HStack {
+                Spacer(minLength: 0)
+                previewButton
+            }
+        }
+        .padding(Space.xs)
     }
 
     @ViewBuilder private var previewButton: some View {
@@ -796,6 +823,7 @@ struct ScreensaverCard: View {
         .accessibilityValue(lineup.rotates ? "\(styles), changes every \(every)" : styles)
         .popover(isPresented: $editingPlaylist, arrowEdge: .bottom) {
             PlaylistEditor()
+                .environment(\.console, console)
                 .adaptiveLayout()   // the popover is its own root
         }
     }
@@ -907,8 +935,62 @@ private struct NowPlayingLine: View {
     @ObservedObject private var now = MusicNow.shared
     @ScaledLength(relativeTo: .callout) private var musicArt: CGFloat = 20
 
+    @Environment(\.console) private var console
+    @ScaledLength(relativeTo: .caption) private var consoleKey: CGFloat = 20
+
     var body: some View {
         let _ = Perf.body("NowPlayingLine")
+        if console { consoleLine } else { classicLine }
+    }
+
+    /// Console: the cover, the song in the body face (the artist in the legend grey), and the
+    /// transport as small keys in a recessed well — the PLAYBACK row's idiom — or the
+    /// Automation fix-it as an orange key.
+    private var consoleLine: some View {
+        HStack(spacing: Space.xs) {
+            MusicArtThumb(image: now.artwork, palette: now.state.palette ?? [], side: musicArt)
+            (Text(now.title).foregroundColor(ConsoleInk.ink)
+                + Text(now.artist.isEmpty ? "" : " \u{2014} \(now.artist)").foregroundColor(ConsoleInk.legend))
+                .textRole(.consoleBodySmall)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(now.trackLine)
+            if now.needsAutomationFix, let source = now.source {
+                Button { now.allowControl(source) } label: { HubKeyLabel(text: "Allow\u{2026}") }
+                    .buttonStyle(.keycap(.signal, padding: EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8)))
+                    .fixedSize()
+                    .padding(.vertical, Space.xxs)
+                    .help("Allow DotStudio to control \(source.displayName) — opens System Settings › Privacy & Security › Automation (turn on \(source.automationName) under DotStudio)")
+            } else {
+                HStack(spacing: 2) {
+                    transportKey(now.isPlaying ? "pause.fill" : "play.fill", now.isPlaying ? "Pause" : "Play") { now.playPause() }
+                    transportKey("forward.fill", "Next") { now.next() }
+                }
+                .padding([.top, .horizontal], 2)
+                .consoleWell(cornerRadius: HubMetrics.wellRadius)
+                .fixedSize()
+                .padding(.vertical, Space.xxs)
+                .disabled(!now.canControl)
+            }
+        }
+        .modifier(PanelKey.Frame())
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Now playing: \(now.trackLine)")
+    }
+
+    private func transportKey(_ symbol: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .scaledFont { .scaled(points: 9, $0, weight: .bold) }
+                .frame(width: consoleKey, height: consoleKey)
+        }
+        .buttonStyle(.keycap(cornerRadius: 2, padding: EdgeInsets()))
+        .accessibilityLabel(label)
+        .help(now.canControl ? label : "Allow DotStudio to control \(now.sourceName) to use the controls (Settings › Music)")
+    }
+
+    private var classicLine: some View {
         HStack(spacing: layout.controlGap) {
             MusicArtThumb(image: now.artwork, palette: now.state.palette ?? [], side: musicArt)
             (Text(now.title).fontWeight(.medium)
@@ -1734,6 +1816,7 @@ struct SetupStrip: View {
 struct PlaylistEditor: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
     @ScaledLength(relativeTo: .caption) private var checkSize: CGFloat = 15
     @State private var query = ""
 
@@ -1746,16 +1829,16 @@ struct PlaylistEditor: View {
             // Title and caption close together; the field an item step below them.
             VStack(alignment: .leading, spacing: layout.itemGap) {
                 VStack(alignment: .leading, spacing: layout.labelGap) {
-                    Text("Screensaver Playlist").textRole(.headline).wrapping()
+                    Text("Screensaver Playlist").textRole(console ? .consoleHeadline : .headline).wrapping()
                     Text(lineup.rotates ? "\(lineup.playlist.count) styles take turns." : "One style plays. Tick more to rotate.")
-                        .textRole(.caption)
-                        .foregroundStyle(.secondary)
+                        .textRole(console ? .consoleBodySmall : .caption)
+                        .foregroundStyle(console ? AnyShapeStyle(ConsoleInk.legend) : AnyShapeStyle(.secondary))
                         .wrapping()
                 }
                 SearchField(text: $query, prompt: "Filter styles")
             }
             .padding(layout.cardPadding)
-            Divider()
+            if console { Rectangle().fill(ConsoleInk.hairline).frame(height: 1) } else { Divider() }
             ScrollView {
                 LazyVGrid(columns: layout.columns(minimum: 112, spacing: Space.s), alignment: .leading,
                           spacing: layout.itemGap) {
@@ -1765,23 +1848,28 @@ struct PlaylistEditor: View {
                             Motion.run { on ? model.removeFromPlaylist(p.id) : model.addToPlaylist(p.id) }
                         } label: {
                             VStack(alignment: .leading, spacing: Space.xxs) {
-                                StyleThumb(preset: p)
-                                    .aspectRatio(16.0 / 10.0, contentMode: .fit)
-                                    .clipShape(RoundedRectangle(cornerRadius: Radius.s, style: .continuous))
-                                    .overlay(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
-                                        .strokeBorder(on ? Color.accentColor : .primary.opacity(0.1), lineWidth: on ? 2.5 : 1))
-                                    .overlay(alignment: .topTrailing) {
-                                        Image(systemName: on ? "checkmark.circle.fill" : "circle")
-                                            .symbolRenderingMode(.palette)
-                                            .foregroundStyle(.white, on ? Color.accentColor : .black.opacity(0.35))
-                                            .font(.system(size: checkSize))
-                                            .shadow(radius: 2)
-                                            .padding(Space.xxs)
-                                    }
+                                if console {
+                                    consoleThumb(p, on: on)
+                                } else {
+                                    StyleThumb(preset: p)
+                                        .aspectRatio(16.0 / 10.0, contentMode: .fit)
+                                        .clipShape(RoundedRectangle(cornerRadius: Radius.s, style: .continuous))
+                                        .overlay(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
+                                            .strokeBorder(on ? Color.accentColor : .primary.opacity(0.1), lineWidth: on ? 2.5 : 1))
+                                        .overlay(alignment: .topTrailing) {
+                                            Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                                                .symbolRenderingMode(.palette)
+                                                .foregroundStyle(.white, on ? Color.accentColor : .black.opacity(0.35))
+                                                .font(.system(size: checkSize))
+                                                .shadow(radius: 2)
+                                                .padding(Space.xxs)
+                                        }
+                                }
                                 // Two lines, always reserved, so the grid's rows line up.
                                 Text(p.name)
-                                    .textRole(.caption)
-                                    .foregroundStyle(on ? .primary : .secondary)
+                                    .textRole(console ? .consoleBodySmall : .caption)
+                                    .foregroundStyle(console ? AnyShapeStyle(on ? ConsoleInk.ink : ConsoleInk.legend)
+                                                             : AnyShapeStyle(on ? .primary : .secondary))
                                     .truncating(p.name, lines: 2, reservesSpace: true)
                             }
                             .contentShape(Rectangle())
@@ -1798,6 +1886,25 @@ struct PlaylistEditor: View {
         .frame(minWidth: width.lowerBound, idealWidth: min(max(layout.scaled(420), width.lowerBound), width.upperBound),
                maxWidth: width.upperBound,
                minHeight: layout.scaled(320), idealHeight: layout.scaled(460), maxHeight: .infinity)
+        .background(console ? ConsoleInk.panel : .clear)
+    }
+
+    /// Console: the still in a well-edged screen (4 pt corners), an orange edge and a lit LED
+    /// in the corner when it's in the playlist, a dark one when it isn't.
+    private func consoleThumb(_ p: Preset, on: Bool) -> some View {
+        let shape = RoundedRectangle(cornerRadius: HubMetrics.wellRadius, style: .continuous)
+        return StyleThumb(preset: p)
+            .aspectRatio(16.0 / 10.0, contentMode: .fit)
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(on ? ConsoleInk.signal : ConsoleInk.hairline, lineWidth: on ? 2 : 1))
+            .overlay(alignment: .topTrailing) {
+                Image(systemName: on ? "checkmark.square.fill" : "square")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(on ? ConsoleInk.onSignal : .white, on ? ConsoleInk.signal : .black.opacity(0.35))
+                    .font(.system(size: checkSize, weight: .semibold))
+                    .shadow(color: .black.opacity(0.3), radius: 1.5)
+                    .padding(Space.xxs)
+            }
     }
 }
 
@@ -2037,8 +2144,9 @@ struct WallpaperCard: View {
     }
 }
 
-/// A tiny drawn desktop: menu bar, dock, a soft gradient — the "off" state. Console: drawn
-/// in the well's own greys, a dark screen with a hairline menu bar and dock.
+/// A tiny drawn desktop: menu bar, dock, a soft gradient — the "off" state. Console: a
+/// powered-off display — a dark screen (in Light Mode too: a screen that's off is dark, never
+/// a white box), a faint menu bar and dock, a soft glare across the glass.
 private struct DesktopGlyph: View {
     @Environment(\.console) private var console
 
@@ -2046,19 +2154,27 @@ private struct DesktopGlyph: View {
         if console { consoleGlyph } else { classicGlyph }
     }
 
+    /// Fixed greys, not the adaptive tokens: the screen is dark in both modes.
+    private static func grey(_ v: Double, _ a: Double = 1) -> Color { Color(.sRGB, red: v, green: v, blue: v + 0.012, opacity: a) }
+
     private var consoleGlyph: some View {
         ZStack {
-            ConsoleInk.well
+            Self.grey(0.055)   // #0E0E11, the dark well
+            LinearGradient(stops: [.init(color: .white.opacity(0.07), location: 0),
+                                   .init(color: .white.opacity(0.02), location: 0.45),
+                                   .init(color: .clear, location: 0.46)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
             VStack(spacing: 0) {
-                Rectangle().fill(ConsoleInk.hairline).frame(height: 6)
+                Rectangle().fill(Self.grey(0.165)).frame(height: 6)            // #2A2A2D
                 Spacer()
-                RoundedRectangle(cornerRadius: 3, style: .continuous).fill(ConsoleInk.hairline)
+                RoundedRectangle(cornerRadius: 3, style: .continuous).fill(Self.grey(0.165))
                     .frame(width: 88, height: 10).padding(.bottom, Space.xs)
             }
             Image(systemName: "sparkles")
                 .scaledFont { .scaled(points: 20, $0, weight: .light) }
-                .foregroundStyle(ConsoleInk.legend)
+                .foregroundStyle(Self.grey(0.47))                              // #78767A, the outline grey
         }
+        .accessibilityHidden(true)
     }
 
     private var classicGlyph: some View {

@@ -51,6 +51,7 @@ struct LibraryView: View {
                 }
             }
         }
+        .modifier(HubToolbarBackground(console: console))
         .background {
             // ⌘F jumps to search; Esc in the field clears it.
             Button("Find") { searchFocused = true }
@@ -86,7 +87,7 @@ struct LibraryView: View {
         // With the window's title hidden nothing pushes the keys right: a flexible space does.
         HubToolbarSpace()
         ToolbarItem(placement: .primaryAction) {
-            UpdateReadyButton()
+            HubUpdateKey()
         }
         .hubBareToolbarItem()
         ToolbarItem(placement: .primaryAction) {
@@ -921,11 +922,55 @@ private extension View {
     }
 }
 
-/// A flexible toolbar space (macOS 26; before it, the toolbar's own layout).
+/// The flexible space between the wordmark and the keys, so the keys sit flush right with the
+/// window's title hidden. macOS 26: a ToolbarSpacer. Before it: a Spacer as a primary-action
+/// item (a macOS toolbar turns a bare Spacer into its flexible space), declared first among
+/// the primary actions so it always lands between the wordmark and the keys — whether or not
+/// that toolbar already puts its own flexible space there (two just share the gap).
 private struct HubToolbarSpace: ToolbarContent {
     var body: some ToolbarContent {
         if #available(macOS 26, *) {
             ToolbarSpacer(.flexible)
+        } else {
+            ToolbarItem(placement: .primaryAction) { Spacer() }
+        }
+    }
+}
+
+/// Before macOS 26 (no per-item glass there, so `hubBareToolbarItem` has nothing to hide): the
+/// unified title bar draws its own grey material behind the header strip. Console paints it the
+/// chassis instead, so the strip reads as one surface with the window. macOS 26 keeps its own
+/// scroll-edge treatment.
+private struct HubToolbarBackground: ViewModifier {
+    let console: Bool
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26, *) {
+            content
+        } else if console {
+            content
+                .toolbarBackground(ConsoleInk.chassis, for: .windowToolbar)
+                .toolbarBackground(.visible, for: .windowToolbar)
+        } else {
+            content
+        }
+    }
+}
+
+/// Console: "Update to 1.6.9" as an orange key in the header (the stock capsule button is
+/// Classic's). Only while an update is downloaded and waiting, like UpdateReadyButton.
+private struct HubUpdateKey: View {
+    @EnvironmentObject var updates: UpdateController
+
+    var body: some View {
+        if case .readyToInstall(let v) = updates.state {
+            Button { updates.primaryAction() } label: {
+                HubKeyLabel(text: "Update to \(v)", symbol: "arrow.down.circle.fill")
+                    .padding(.vertical, 2)
+            }
+            .buttonStyle(.keycap(.signal))
+            .help("DotStudio \(v) is downloaded — click to restart and finish updating (or it installs when you quit)")
+            .accessibilityLabel("Update to \(v)")
         }
     }
 }
