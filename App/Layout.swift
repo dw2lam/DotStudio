@@ -358,11 +358,17 @@ struct TextRole: Equatable {
     var tracking: CGFloat = 0
     var uppercase = false
     var monospacedDigits = false
+    /// A bundled face by PostScript name (Console: "InstrumentSans-SemiBold", …) instead of the
+    /// system font; its weight is the face's own (`weight`/`design` are ignored). Sized like
+    /// any role: `points` or the style's size, scaled with the text size.
+    var face: String? = nil
 
     /// The font at a given text size.
     func font(_ size: DynamicTypeSize) -> Font {
         var f: Font
-        if let points {
+        if let face {
+            f = .custom(face, fixedSize: TypeScale.scaled(points ?? TypeScale.pointSize(style), size))
+        } else if let points {
             f = .scaled(points: points, size, weight: weight ?? .regular, design: design)
         } else {
             f = .scaled(style, size, weight: weight, design: design)

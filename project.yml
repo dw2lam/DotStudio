@@ -101,6 +101,8 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleDisplayName: DotStudio
+        # The Console appearance's bundled OFL faces (App/Fonts → Contents/Resources).
+        ATSApplicationFontsPath: "."
         LSApplicationCategoryType: "public.app-category.graphics-design"
         # Dual-GPU (Intel) Macs: the app follows automatic graphics switching rather
         # than the legacy rule that pins non-opting apps to the discrete GPU. (The

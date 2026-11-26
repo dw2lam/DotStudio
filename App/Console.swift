@@ -1,6 +1,9 @@
 //  Console.swift — the "Console" appearance (issue #6, experimental): DotStudio as a small,
-//  precise instrument. Inspired by hardware mixers and synths, never copied: our own colours,
-//  shapes and type (the system's SF Mono for legends — no third-party fonts).
+//  precise instrument. Since 2026-11-26 it follows the owner's own Google Stitch redesign: a
+//  warm off-white / graphite body, keys with travel (a 4 pt skirt that disappears when pressed),
+//  recessed wells, one orange signal, and three bundled SIL OFL faces (App/Fonts, registered
+//  through ATSApplicationFontsPath): Wix Madefor Display for titles, Instrument Sans for text,
+//  Source Code Pro for legends and readouts.
 //
 //  What it is made of:
 //    • Appearance  — Settings › General › Appearance: Classic (default) / Console. Read with
@@ -56,23 +59,51 @@ enum ConsoleInk {
                 blue: CGFloat(hex & 0xFF) / 255, alpha: alpha)
     }
 
-    /// The body: warm light grey / graphite.
-    static let chassis = dynamic(rgb(0xE4E2DD), rgb(0x1C1D1F))
-    /// A raised panel on it (pads, the channel strip).
-    static let panel = dynamic(rgb(0xEEECE8), rgb(0x25272A))
-    /// A recessed well (a screen, a key's face when pressed).
-    static let well = dynamic(rgb(0xD6D3CD), rgb(0x141516))
-    /// Hairline edges.
-    static let hairline = dynamic(rgb(0x000000, 0.12), rgb(0xFFFFFF, 0.10))
-    /// Main text.
-    static let ink = dynamic(rgb(0x1A1A1A), rgb(0xEDEBE6))
-    /// Legends: tiny printed labels. Dark enough for WCAG AA at caption size on the panel.
-    static let legend = dynamic(rgb(0x5E5B55), rgb(0xA9A69F))
-    /// The one signal colour: live / active / selected.
-    static let signal = dynamic(rgb(0xF2551D), rgb(0xFF6A2B))
-    /// The signal colour as TEXT or a thin edge on the light panel/chassis: dark enough for
-    /// WCAG AA (≥ 4.5:1 text, ≥ 3:1 edges) — the bright signal is for fills and lights.
-    static let signalInk = dynamic(rgb(0xA33609), rgb(0xFF7A3D))
+    // The Stitch palette (2026-11-26, the owner's Google Stitch redesign): a warm off-white /
+    // graphite body, surfaces stepped by depth, one orange signal, a blue for "playing behind
+    // your windows", green and amber for status. Names follow depth, not use.
+
+    /// The body (window background): #EAEAE5 / #131316.
+    static let chassis = dynamic(rgb(0xEAEAE5), rgb(0x131316))
+    /// A raised panel on it (the deck around each screen, tiles, the inspector): #F3F3EE / #1B1B1E.
+    static let panel = dynamic(rgb(0xF3F3EE), rgb(0x1B1B1E))
+    /// A recessed well (search field, a screen's surround, sliders' tracks): #FFFFFF / #0E0E11.
+    static let well = dynamic(rgb(0xFFFFFF), rgb(0x0E0E11))
+    /// A key's face: #D8D8D1 / #2A2A2D.
+    static let keyFace = dynamic(rgb(0xD8D8D1), rgb(0x2A2A2D))
+    /// A key's skirt (the 4 pt side you see under its face until it's pressed).
+    static let keySkirt = dynamic(rgb(0xB8B8B0), rgb(0x070709))
+    /// The middle surface (sidebar, inset groups): #E2E2DC / #1F1F22.
+    static let surface = dynamic(rgb(0xE2E2DC), rgb(0x1F1F22))
+    /// The highest surface (a hovered row, a tag's fill): #CECEC6 / #353438.
+    static let surfaceHigh = dynamic(rgb(0xCECEC6), rgb(0x353438))
+    /// Hairline edges (outline-variant): #C8C8C0 / #353438.
+    static let hairline = dynamic(rgb(0xC8C8C0), rgb(0x353438))
+    /// A stronger edge (outline): #7A7A7E / #78767A.
+    static let outline = dynamic(rgb(0x7A7A7E), rgb(0x78767A))
+    /// Main text: #141416 / #E4E1E6.
+    static let ink = dynamic(rgb(0x141416), rgb(0xE4E1E6))
+    /// Legends: tiny printed labels (on-surface-variant): #525257 / #ACAAAE.
+    static let legend = dynamic(rgb(0x525257), rgb(0xACAAAE))
+    /// The one signal colour: live / active / selected. #FF7300 in both.
+    static let signal = dynamic(rgb(0xFF7300), rgb(0xFF7300))
+    /// The signal's skirt (an orange key's side): #B34B00 / #8C3D00.
+    static let signalSkirt = dynamic(rgb(0xB34B00), rgb(0x8C3D00))
+    /// Text ON a signal (orange) key: near-black, like the design (#1F0B00).
+    static let onSignal = Color(nsColor: rgb(0x1F0B00))
+    /// The signal colour as TEXT or a thin edge on the light body: dark enough for WCAG AA
+    /// (#B34B00 ≈ 4.6:1 on #EAEAE5) — the bright signal is for fills and lights.
+    static let signalInk = dynamic(rgb(0xB34B00), rgb(0xFFB780))
+    /// The wallpaper's blue (its channel light, the Play key): #0088E8 / #0095F8.
+    static let blue = dynamic(rgb(0x0088E8), rgb(0x0095F8))
+    /// The blue key's skirt.
+    static let blueSkirt = dynamic(rgb(0x005599), rgb(0x003A66))
+    /// Blue as text/edge on the body: #005FA1 / #9FCAFF.
+    static let blueInk = dynamic(rgb(0x005FA1), rgb(0x9FCAFF))
+    /// Status green (a range that's on, a source that's fine): #00D26A.
+    static let green = Color(nsColor: rgb(0x00D26A))
+    /// Status amber (live weather, a warning): #FFB800.
+    static let amber = Color(nsColor: rgb(0xFFB800))
 
     /// The four knob colours, in order (the editor's first four parameters).
     static let knobs: [Color] = [
@@ -94,25 +125,211 @@ enum ConsoleInk {
 
 // MARK: - Type
 
+/// The bundled faces, by PostScript name (App/Fonts).
+enum ConsoleFace {
+    static let display = "WixMadeforDisplay-SemiBold"
+    static let displayMedium = "WixMadeforDisplay-Medium"
+    static let text = "InstrumentSans-Regular"
+    static let textMedium = "InstrumentSans-Medium"
+    static let textSemibold = "InstrumentSans-SemiBold"
+    static let mono = "SourceCodePro-Medium"
+    static let monoSemibold = "SourceCodePro-SemiBold"
+    static let monoBold = "SourceCodePro-Bold"
+}
+
 extension TextRole {
-    /// Tiny printed legends: mono caps, tracked.
-    static let legend = TextRole(style: .caption2, weight: .semibold, design: .monospaced, tracking: 0.6, uppercase: true)
+    // The Stitch type scale (sizes at the default text size; all scale with it).
+    /// A screen's big title ("Commute" on the Screensaver deck; the editor's style name): 18 pt display.
+    static let consoleHeadline = TextRole(style: .title3, points: 18, face: ConsoleFace.display)
+    /// A page header ("Scenes"): 24 pt display.
+    static let consoleSection = TextRole(style: .title2, points: 24, face: ConsoleFace.display)
+    /// A name on a tile, a sidebar row, a card's title: 14 pt Instrument Sans semibold.
+    static let consoleTitle = TextRole(style: .body, points: 14, face: ConsoleFace.textSemibold)
+    /// Body text: 13 pt Instrument Sans.
+    static let consoleBody = TextRole(style: .body, points: 13, face: ConsoleFace.text)
+    /// Small body (a deck's one-line "what it is", hints): 12 pt.
+    static let consoleBodySmall = TextRole(style: .callout, points: 12, face: ConsoleFace.text)
+    /// A key's legend / a row's value: 11 pt mono, tracked.
+    static let consoleKey = TextRole(style: .caption, points: 11, tracking: 0.5, uppercase: true, face: ConsoleFace.monoSemibold)
+    /// A row's value in mono, not uppercased ("1 style", "Same on all"): 11.5 pt.
+    static let consoleValue = TextRole(style: .caption, points: 11.5, monospacedDigits: true, face: ConsoleFace.mono)
+
+    /// Tiny printed legends: 10 pt mono caps, tracked 0.8.
+    static let legend = TextRole(style: .caption2, points: 10, tracking: 0.8, uppercase: true, face: ConsoleFace.monoSemibold)
     /// A pad's number ("07").
-    static let padNumber = TextRole(style: .caption, weight: .bold, design: .monospaced, monospacedDigits: true)
-    /// Numeric readouts over knobs and on screens.
-    static let readout = TextRole(style: .callout, weight: .medium, design: .monospaced, monospacedDigits: true)
-    /// A pad's name: small mono caps.
-    static let padName = TextRole(style: .caption, weight: .semibold, design: .monospaced, tracking: 0.4, uppercase: true)
+    static let padNumber = TextRole(style: .caption, points: 10.5, monospacedDigits: true, face: ConsoleFace.monoSemibold)
+    /// Numeric readouts (slider values, fps).
+    static let readout = TextRole(style: .callout, points: 11.5, monospacedDigits: true, face: ConsoleFace.mono)
+    /// A big numeric readout ("40–120" fps): 24 pt display.
+    static let readoutLarge = TextRole(style: .title2, points: 24, face: ConsoleFace.displayMedium)
+    /// A pad's name: Instrument Sans semibold, as the design (not mono caps).
+    static let padName = TextRole(style: .body, points: 14, face: ConsoleFace.textSemibold)
 }
 
 // MARK: - Surfaces
 
 extension View {
-    /// A flat Console panel: panel colour, a hairline edge, no glass and no big shadow.
-    func consolePanel(cornerRadius: CGFloat = Radius.m) -> some View {
+    /// A Console panel (a deck, a tile, the inspector): panel colour, a hairline edge, 8 pt
+    /// corners, no glass and no big shadow.
+    func consolePanel(cornerRadius: CGFloat = 8) -> some View {
         background(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).fill(ConsoleInk.panel))
             .overlay(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .strokeBorder(ConsoleInk.hairline, lineWidth: 1))
+    }
+
+    /// A recessed well (search field, slider track, a screen's surround): the well colour with
+    /// an inner shadow from the top and a 1 pt light lip under it, a hairline edge.
+    func consoleWell(cornerRadius: CGFloat = 4, focused: Bool = false) -> some View {
+        modifier(ConsoleWell(cornerRadius: cornerRadius, focused: focused))
+    }
+}
+
+private struct ConsoleWell: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+    let cornerRadius: CGFloat
+    let focused: Bool
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let dark = scheme == .dark
+        content
+            .background(shape.fill(ConsoleInk.well
+                .shadow(.inner(color: .black.opacity(dark ? 0.8 : 0.16), radius: dark ? 3.5 : 2.5, y: dark ? 3 : 2))))
+            .overlay(shape.strokeBorder(focused ? ConsoleInk.signal : ConsoleInk.hairline, lineWidth: 1))
+            // the lip: a hair of light under the well's bottom edge
+            .background(shape.offset(y: 1).fill(Color.white.opacity(dark ? 0.06 : 0.8)))
+    }
+}
+
+// MARK: - Keys
+
+/// A Console keycap (the Stitch key): a face with a 4 pt skirt under it that the face sinks into when pressed
+/// (80 ms, ease-out), a soft drop shadow, a top highlight, and a haptic tick on press.
+///  • `.plain`  — the grey key (icon keys, filter keys, Customize).
+///  • `.signal` — the orange key (Preview, Done, the selected filter, a latched choice).
+///  • `.blue`   — the wallpaper's blue (Play while the wallpaper plays).
+/// `latched` draws a key that's held down (a selected segment): sunk, skirt hidden.
+struct ConsoleKeycapStyle: ButtonStyle {
+    enum Tint { case plain, signal, blue }
+    var tint: Tint = .plain
+    var latched = false
+    var cornerRadius: CGFloat = 4
+    /// Inner padding; nil = the label sets its own size (icon keys use a fixed frame).
+    var padding: EdgeInsets? = EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
+
+    func makeBody(configuration: Configuration) -> some View {
+        ConsoleKeycapBody(configuration: configuration, tint: tint, latched: latched,
+                       cornerRadius: cornerRadius, padding: padding)
+    }
+}
+
+private struct ConsoleKeycapBody: View {
+    let configuration: ButtonStyleConfiguration
+    let tint: ConsoleKeycapStyle.Tint
+    let latched: Bool
+    let cornerRadius: CGFloat
+    let padding: EdgeInsets?
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovering = false
+
+    static let travel: CGFloat = 3
+    static let skirt: CGFloat = 4
+
+    var body: some View {
+        let down = configuration.isPressed || latched
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let dark = scheme == .dark
+        let face: Color = tint == .signal ? ConsoleInk.signal : tint == .blue ? ConsoleInk.blue : ConsoleInk.keyFace
+        let skirt: Color = tint == .signal ? ConsoleInk.signalSkirt : tint == .blue ? ConsoleInk.blueSkirt : ConsoleInk.keySkirt
+        let ink: Color = tint == .signal ? ConsoleInk.onSignal : tint == .blue ? .white
+            : (hovering && enabled ? ConsoleInk.signalInk : ConsoleInk.ink)
+        let topLight = tint == .plain ? (dark ? 0.07 : 0.75) : 0.14
+        let lift = down ? 0 : (tint == .plain ? (dark ? 0.6 : 0.12) : 0.3)
+        let glow: Color = tint == .signal ? ConsoleInk.signal : tint == .blue ? ConsoleInk.blue : .black
+
+        configuration.label
+            .foregroundStyle(ink)
+            .padding(padding ?? EdgeInsets())
+            .background {
+                shape.fill(face)
+                    .overlay(shape.fill(LinearGradient(colors: [.white.opacity(topLight), .black.opacity(tint == .plain ? (dark ? 0.16 : 0.06) : 0)],
+                                                       startPoint: .top, endPoint: .bottom)))
+                    // pressed: a shadow inside the face from the top
+                    .overlay(shape.fill(Color.clear.shadow(.inner(color: .black.opacity(down ? (dark ? 0.55 : 0.2) : 0), radius: 1.5, y: 2))))
+                    // the top highlight
+                    .overlay(alignment: .top) {
+                        shape.strokeBorder(LinearGradient(colors: [.white.opacity(down ? 0 : (tint == .plain ? (dark ? 0.18 : 0.95) : 0.45)), .clear],
+                                                          startPoint: .top, endPoint: .center), lineWidth: 1)
+                    }
+            }
+            .overlay(shape.strokeBorder(tint == .plain ? (hovering && enabled ? ConsoleInk.signal : ConsoleInk.hairline) : .clear, lineWidth: 1))
+            .offset(y: down ? Self.travel : 0)
+            // the skirt, then the drop shadow under everything
+            .background {
+                shape.fill(skirt)
+                    .offset(y: down ? 1 : Self.skirt)
+                    .shadow(color: glow.opacity(lift * (tint == .plain ? 1 : 0.9)), radius: 6, y: down ? 1 : 6)
+            }
+            .padding(.bottom, Self.skirt)          // reserve the skirt's room so keys don't overlap rows
+            .opacity(enabled ? 1 : 0.45)
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.08), value: down)
+            .onChange(of: configuration.isPressed) { _, pressed in
+                if pressed { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
+            }
+    }
+}
+
+extension ButtonStyle where Self == ConsoleKeycapStyle {
+    /// A grey Console key.
+    static var keycap: ConsoleKeycapStyle { ConsoleKeycapStyle() }
+    /// A Console key: tint, latched, corner radius, padding.
+    static func keycap(_ tint: ConsoleKeycapStyle.Tint = .plain, latched: Bool = false, cornerRadius: CGFloat = 4,
+                           padding: EdgeInsets? = EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)) -> ConsoleKeycapStyle {
+        ConsoleKeycapStyle(tint: tint, latched: latched, cornerRadius: cornerRadius, padding: padding)
+    }
+    /// A square icon key (32 × 32, like the header's + / AI / settings keys).
+    static var iconKeycap: ConsoleKeycapStyle { ConsoleKeycapStyle(padding: EdgeInsets()) }
+}
+
+// MARK: - Small parts
+
+/// A small tag: mono caps on a high surface with a hairline (the "SCENE" beside a name, the
+/// header's status readout).
+struct ConsoleTag: View {
+    let text: String
+    /// A filled tag (orange "SCREENSAVER" on a tile); nil = the plain grey tag.
+    var fill: Color? = nil
+    var body: some View {
+        Text(text).textRole(.legend)
+            .foregroundStyle(fill == nil ? ConsoleInk.legend : ConsoleInk.onSignal)
+            .padding(.horizontal, 5).padding(.vertical, 2)
+            .background(RoundedRectangle(cornerRadius: 2, style: .continuous).fill(fill ?? ConsoleInk.keyFace))
+            .overlay(RoundedRectangle(cornerRadius: 2, style: .continuous).strokeBorder(fill == nil ? ConsoleInk.hairline : .clear))
+    }
+}
+
+/// A legend row: mono-caps legend (with an optional SF Symbol) on the left, its value or control
+/// on the right, a hairline under it — the decks' Playlist / Night / … rows and the inspector's.
+struct ConsoleRow<Value: View>: View {
+    let legend: String
+    var symbol: String? = nil
+    var divider = true
+    @ViewBuilder let value: () -> Value
+    var body: some View {
+        HStack(spacing: 8) {
+            if let symbol {
+                Image(systemName: symbol).font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(ConsoleInk.legend).frame(width: 14)
+            }
+            Text(legend).textRole(.legend).foregroundStyle(ConsoleInk.legend)
+            Spacer(minLength: 8)
+            value()
+        }
+        .padding(.vertical, 5)
+        .overlay(alignment: .bottom) { if divider { Rectangle().fill(ConsoleInk.hairline).frame(height: 1) } }
     }
 }
 
