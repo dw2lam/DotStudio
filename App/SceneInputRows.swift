@@ -11,18 +11,26 @@ struct SceneInputsSection: View {
     @Binding var effect: EffectInstance
     var model: AppModel?
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
 
     var body: some View {
         let inputs = effect.inputSpecs
         if !inputs.isEmpty {
-            VStack(alignment: .leading, spacing: layout.inspectorRowGap) {
-                Text("Live inputs")
-                    .textRole(.caption).foregroundStyle(.secondary)
-                    .accessibilityAddTraits(.isHeader)
+            VStack(alignment: .leading, spacing: console ? 0 : layout.inspectorRowGap) {
+                Group {
+                    if console {
+                        // Console: a legend over its rows, like THEME / MOTION
+                        Text("Live inputs").textRole(.legend).foregroundStyle(ConsoleInk.legend)
+                            .padding(.top, Space.s).padding(.bottom, Space.xxs)
+                    } else {
+                        Text("Live inputs").textRole(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .accessibilityAddTraits(.isHeader)
                 // (one clock for every row: the values refresh each second while they show)
                 TimelineView(.periodic(from: .now, by: 1)) { ctx in
                     let shown = shownValues(inputs, now: ctx.date)
-                    VStack(alignment: .leading, spacing: layout.inspectorRowGap) {
+                    VStack(alignment: .leading, spacing: console ? 0 : layout.inspectorRowGap) {
                         ForEach(Array(inputs.enumerated()), id: \.element.key) { i, input in
                             SceneInputRow(input: input, signal: binding(input.key), signals: userSignals,
                                           value: Double(shown.value[i]), live: Double(shown.live[i]))
@@ -59,14 +67,17 @@ struct SceneInputRow: View {
     let value: Double
     let live: Double
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
 
     var body: some View {
+        let stale = signal.isEmpty || live < 0.5
         InspectorRow(label: input.label) {
-            HStack(spacing: layout.controlGap) {
+            HStack(spacing: console ? Space.xxs : layout.controlGap) {
                 SignalPickerMenu(title: input.label, selection: $signal, signals: signals, suggest: input.suggest)
                 Text(valueText)
-                    .textRole(.value)
-                    .foregroundStyle(signal.isEmpty || live < 0.5 ? .tertiary : .secondary)
+                    .textRole(console ? .consoleValue : .value)
+                    .foregroundStyle(console ? AnyShapeStyle(stale ? ConsoleInk.legend : ConsoleInk.ink)
+                                             : AnyShapeStyle(stale ? HierarchicalShapeStyle.tertiary : .secondary))
                     .lineLimit(1)
                     .fixedSize()
                     .help(help)
@@ -95,6 +106,7 @@ struct SignalPickerMenu: View {
     let signals: [Signal]
     var suggest: String?
     @ScaledLength(relativeTo: .body) private var height: CGFloat = InspectorMetrics.segmentHeight
+    @Environment(\.console) private var console
 
     private var builtIns: [BuiltInSignal] { BuiltInSignals.all.filter { $0.type != .string } }
     private var mine: [Signal] { signals.filter { $0.valueType != .string } }
@@ -128,6 +140,22 @@ struct SignalPickerMenu: View {
             .pickerStyle(.inline)
             .labelsHidden()
         } label: {
+            if console {
+                ConsoleMenuKeyLabel(text: current, dim: selection.isEmpty)
+            } else {
+                classicLabel(current, shape: shape)
+            }
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .frame(maxWidth: .infinity)
+        .help("\(title) follows: \(current)")
+        .accessibilityLabel("\(title) signal")
+        .accessibilityValue(current)
+    }
+
+    private func classicLabel(_ current: String, shape: RoundedRectangle) -> some View {
             HStack(spacing: Space.xs) {
                 Text(current)
                     .textRole(.body)
@@ -145,14 +173,6 @@ struct SignalPickerMenu: View {
             .frame(maxWidth: .infinity, minHeight: height)
             .background(shape.fill(Color.primary.opacity(0.078)))
             .contentShape(shape)
-        }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .frame(maxWidth: .infinity)
-        .help("\(title) follows: \(current)")
-        .accessibilityLabel("\(title) signal")
-        .accessibilityValue(current)
     }
 
     /// The Suggested entry is the same built-in: store its plain id.

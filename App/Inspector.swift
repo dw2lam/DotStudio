@@ -91,13 +91,19 @@ struct SegmentedChoice<Value: Hashable>: View {
     @Binding var selection: Value
     let options: [(title: String, value: Value)]
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.console) private var console
 
     var body: some View {
         // Always the drawn control. Measuring the stock one against it (a ViewThatFits that
         // could swap an AppKit segmented control in and out as the width settled) is the
         // pattern that crashed on macOS 26 inside the inspector's list — see ColorWellsRow.
-        RoleSegments(title: title, selection: $selection, options: options)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        if console {
+            ConsoleSegments(title: title, selection: $selection, options: options)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            RoleSegments(title: title, selection: $selection, options: options)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 
@@ -230,11 +236,23 @@ struct InspectorRow<Control: View>: View {
     @ScaledLength(relativeTo: .callout) private var labelColumn: CGFloat = InspectorMetrics.labelColumn
     let label: String
     var alignment: VerticalAlignment = .center
+    /// Console: the legend above a full-width control at every size (segment keys).
+    var consoleStacked = false
     @ViewBuilder var control: Control
 
+    @Environment(\.console) private var console
+
     var body: some View {
+        if console {
+            ConsoleInspectorRow(label: label, stacked: consoleStacked) { control }
+        } else {
+            classic
+        }
+    }
+
+    private var classic: some View {
         let stacked = layout.prefersStacking
-        AdaptiveStack(rowAlignment: alignment, columnAlignment: .leading,
+        return AdaptiveStack(rowAlignment: alignment, columnAlignment: .leading,
                       spacing: stacked ? layout.labelGap : layout.controlGap) {
             Text(label)
                 .textRole(.callout)
@@ -263,7 +281,26 @@ struct ColorWellsRow<Accessory: View>: View {
     let wells: [Well]
     @ViewBuilder var accessory: Accessory
 
+    @Environment(\.console) private var console
+
     var body: some View {
+        if console {
+            // Console: the design's small swatches with their names, opening the colour panel
+            // (no AppKit colour well in the list at all).
+            InspectorRow(label: label) {
+                FlowLayout(spacing: layout.controlGap, lineSpacing: layout.labelGap) {
+                    ForEach(wells.indices, id: \.self) { i in
+                        ConsoleColorWell(title: wells[i].title, color: wells[i].color)
+                    }
+                    accessory
+                }
+            }
+        } else {
+            classic
+        }
+    }
+
+    private var classic: some View {
         InspectorRow(label: label, alignment: .wellCenter) {
             // Row or column by the text size (AdaptiveStack), never by measuring: the wells are
             // AppKit color wells, and a ViewThatFits flipping between two copies of them inside
@@ -306,6 +343,7 @@ struct EffectStackView: View {
     @ObservedObject var model: AppModel
     @Environment(\.layout) private var layout
     @ScaledLength(relativeTo: .body) private var eyeColumn: CGFloat = InspectorMetrics.eyeColumn
+    @Environment(\.console) private var console
     /// The open effects. Starts with the first one open (its main knobs right there) — set
     /// here, before the List exists, never from its onAppear: opening a row as the List
     /// appears changes row heights in the middle of the window's layout, and the table's
@@ -349,9 +387,11 @@ struct EffectStackView: View {
                           onDuplicate: { duplicate(effect.id) },
                           onRemove: { remove(effect.id) },
                           model: model)
-                    .listRowInsets(rowInsets(vertical: layout.labelGap))
+                    .listRowInsets(rowInsets(vertical: console ? Space.xs - 2 : layout.labelGap))
                     // The separator under each effect spans the content edges, edge A to
-                    // edge A, like the header divider above the list.
+                    // edge A, like the header divider above the list. (Console: none — each
+                    // layer is its own key-like row, its settings ruled by hairlines.)
+                    .listRowSeparator(console ? .hidden : .automatic)
                     .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
                     .alignmentGuide(.listRowSeparatorTrailing) { $0[.trailing] }
             }
@@ -360,15 +400,10 @@ struct EffectStackView: View {
             VStack(alignment: .leading, spacing: layout.itemGap) {
                 if preset.effects.isEmpty {
                     Text("No effects yet — this style shows the source as-is.")
-                        .textRole(.caption).foregroundStyle(.secondary)
+                        .modifier(InspectorNote())
                         .wrapping()
                 }
-                Button { showAdd = true } label: {
-                    ScaledControlLabel(title: "Add Effect", systemImage: "plus")
-                        .frame(maxWidth: .infinity)
-                }
-                .adaptiveControlSize(.large)
-                .help("Add an effect to the top of this style's stack")
+                addEffectButton
                 .popover(isPresented: $showAdd, arrowEdge: .leading) {
                     AddEffectPicker(source: model.library.source, thumbnailer: model.thumbnailer,
                                     include: { !$0.isScene }) { kind in
@@ -385,27 +420,34 @@ struct EffectStackView: View {
 
             // Motion: a new group, a section gap below Add Effect. (Uneven spacing goes in
             // padding: the List centres a row's content between its vertical insets.)
+            // Console: a hairline across the panel, then the legend, as the design rules it.
             Text("Motion")
                 .modifier(InspectorSectionHeading())
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, max(layout.sectionGap - 2 * layout.labelGap, 0))
+                .padding(.top, console ? Space.xs : max(layout.sectionGap - 2 * layout.labelGap, 0))
+                .overlay(alignment: .top) {
+                    if console { Rectangle().fill(ConsoleInk.hairline).frame(height: 1) }
+                }
+                .padding(.top, console ? Space.xs : 0)
                 .listRowInsets(rowInsets(vertical: layout.labelGap))
                 .listRowSeparator(.hidden)
 
             VStack(alignment: .leading, spacing: layout.labelGap) {
-                InspectorRow(label: "Frame rate") {
-                    InspectorMenu(title: "Frame rate", selection: fpsChoice,
-                                  options: [("Auto", 0)] + fpsOptions.map { ("\($0) fps", $0) })
+                if console {
+                    ConsoleInspectorRow(label: "Frame rate", divider: false) { frameRateMenu }
+                } else {
+                    InspectorRow(label: "Frame rate") { frameRateMenu }
                 }
                 // What it really plays at: its own rate (Auto: the limit) under Power Saving's
-                // limit for each power source. One short sentence per line.
-                Text(fpsCaption)
-                    .textRole(.caption).foregroundStyle(.secondary)
+                // limit for each power source. One short sentence per line (Console: one
+                // flowing sentence, as the design sets it — the same words).
+                Text(console ? fpsCaption.replacingOccurrences(of: "\n", with: " ") : fpsCaption)
+                    .modifier(InspectorNote())
                     .wrapping()
                     .contentTransition(.opacity)
                     .animation(Motion.brief, value: fpsCaption)
             }
-            .padding(.leading, eyeColumn + layout.iconGap)
+            .padding(.leading, console ? 0 : eyeColumn + layout.iconGap)
             .listRowInsets(rowInsets(vertical: layout.labelGap))
             .listRowSeparator(.hidden)
         }
@@ -427,11 +469,55 @@ struct EffectStackView: View {
     }
 
     /// "Effects" (or "Scene & Layers"). How to reorder is in its tooltip, not on screen.
+    /// Console: with the design's orange LED at the end, lit while this style is on air (the
+    /// screensaver plays it, or the wallpaper) — its tooltip and VoiceOver say which.
     private var effectsHeader: some View {
-        Text(preset.isScene ? "Scene & Layers" : "Effects")
-            .modifier(InspectorSectionHeading())
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .help(preset.effects.count > 1 ? "Drag effects to reorder them — the top one runs first" : "")
+        HStack(spacing: Space.xs) {
+            Text(preset.isScene ? "Scene & Layers" : "Effects")
+                .modifier(InspectorSectionHeading())
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if console {
+                ConsoleLED(on: onAir != nil)
+                    .help(onAir ?? "Not playing anywhere yet")
+            }
+        }
+        .help(preset.effects.count > 1 ? "Drag effects to reorder them — the top one runs first" : "")
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(console ? (onAir ?? "") : "")
+    }
+
+    /// Console: where this style plays now, in words, or nil.
+    private var onAir: String? {
+        let lineup = model.screensaverLineup
+        var places: [String] = []
+        if lineup.playlist.contains(preset.id) { places.append("the screensaver") }
+        if lineup.night == preset.id { places.append("the screensaver at night") }
+        if WallpaperSlot.shared.styleID == preset.id { places.append("the wallpaper") }
+        return places.isEmpty ? nil : "Playing on " + places.joined(separator: " and ")
+    }
+
+    private var frameRateMenu: some View {
+        InspectorMenu(title: "Frame rate", selection: fpsChoice,
+                      options: [("Auto", 0)] + fpsOptions.map { ("\($0) fps", $0) })
+    }
+
+    @ViewBuilder private var addEffectButton: some View {
+        if console {
+            Button { showAdd = true } label: {
+                Label("Add Effect", systemImage: "plus")
+                    .textRole(.consoleKeyLarge)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.keycap(padding: EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)))
+            .help("Add an effect to the top of this style's stack")
+        } else {
+            Button { showAdd = true } label: {
+                ScaledControlLabel(title: "Add Effect", systemImage: "plus")
+                    .frame(maxWidth: .infinity)
+            }
+            .adaptiveControlSize(.large)
+            .help("Add an effect to the top of this style's stack")
+        }
     }
 
     /// Row insets that put list content on the panel's content edge (`cardPadding`).
@@ -500,19 +586,12 @@ struct EffectRow: View {
     @ScaledLength(relativeTo: .body) private var eyeColumn: CGFloat = InspectorMetrics.eyeColumn
     @ScaledLength(relativeTo: .body) private var glyphColumn: CGFloat = InspectorMetrics.glyphColumn
 
-    /// Console (issue #6): the first effect's first four continuous settings, as the channel
-    /// strip's coloured knobs (the effect's own order puts the most important first).
-    private var strip: [ParamSpec] {
-        guard console, isFirst else { return [] }
-        return Array(effect.paramSpecs.filter { $0.options == nil && !$0.isToggle && $0.max > $0.min }.prefix(4))
-    }
-
     var body: some View {
         let _ = Perf.body("EffectRow")
-        VStack(alignment: .leading, spacing: layout.controlGap) {
-            header
+        VStack(alignment: .leading, spacing: console ? Space.s : layout.controlGap) {
+            if console { consoleHeader } else { header }
             if isExpanded {
-                VStack(alignment: .leading, spacing: layout.inspectorRowGap) {
+                VStack(alignment: .leading, spacing: console ? Space.s : layout.inspectorRowGap) {
                     if effect.kind == .custom {
                         CustomSceneStatusRow(effect: effect)
                     }
@@ -521,26 +600,28 @@ struct EffectRow: View {
                         SceneThemeStrip(effect: $effect)
                     }
                     // (a Custom Scene's params and colours are its package manifest's)
-                    let knobs = strip
-                    if !knobs.isEmpty {
-                        ConsoleChannelStrip(specs: knobs, value: paramBinding)
+                    // Console: one ruled group — a hairline over the first row and under each.
+                    VStack(alignment: .leading, spacing: console ? 0 : layout.inspectorRowGap) {
+                        ForEach(effect.paramSpecs) { spec in
+                            ParamRow(spec: spec, value: paramBinding(spec))
+                        }
+                        if effect.kind.usesColors, !wells.isEmpty {
+                            ColorWellsRow(wells: wells)
+                        }
+                        if effect.kind == .custom {
+                            // a package's live inputs: which signal drives each (SceneInputRows.swift)
+                            SceneInputsSection(effect: $effect, model: model)
+                        }
+                        if effect.kind == .bounce || effect.kind == .waddle, let model {
+                            BounceLogoSection(effect: $effect, model: model)
+                        }
                     }
-                    ForEach(effect.paramSpecs.filter { s in !knobs.contains { $0.key == s.key } }) { spec in
-                        ParamRow(spec: spec, value: paramBinding(spec))
-                    }
-                    if effect.kind.usesColors, !wells.isEmpty {
-                        ColorWellsRow(wells: wells)
-                    }
-                    if effect.kind == .custom {
-                        // a package's live inputs: which signal drives each (SceneInputRows.swift)
-                        SceneInputsSection(effect: $effect, model: model)
-                    }
-                    if effect.kind == .bounce || effect.kind == .waddle, let model {
-                        BounceLogoSection(effect: $effect, model: model)
+                    .overlay(alignment: .top) {
+                        if console && hasRows { Rectangle().fill(ConsoleInk.hairline).frame(height: 1) }
                     }
                 }
-                .padding(.leading, eyeColumn + layout.iconGap)
-                .padding(.vertical, layout.labelGap)
+                .padding(.leading, console ? 0 : eyeColumn + layout.iconGap)
+                .padding(.vertical, console ? 0 : layout.labelGap)
                 .disabled(!effect.enabled)
                 .opacity(effect.enabled ? 1 : 0.45)
             }
@@ -622,6 +703,84 @@ struct EffectRow: View {
         }
     }
 
+    /// Whether the ruled group under the layer has any row in it.
+    private var hasRows: Bool {
+        !effect.paramSpecs.isEmpty || (effect.kind.usesColors && !wells.isEmpty)
+            || (effect.kind == .custom && !effect.inputSpecs.isEmpty)
+            || ((effect.kind == .bounce || effect.kind == .waddle) && model != nil)
+    }
+
+    /// Console: the design's layer row — eye, name, SCENE tag, ••• and the chevron, on a
+    /// raised surface with a hairline edge. The same controls and menu as Classic's header.
+    private var consoleHeader: some View {
+        let name = effect.displayNameText
+        let shape = RoundedRectangle(cornerRadius: 4, style: .continuous)
+        return HStack(spacing: Space.xs) {
+            Button { effect.enabled.toggle() } label: {
+                Image(systemName: effect.enabled ? "eye" : "eye.slash")
+                    .textRole(.consoleBody)
+                    .foregroundStyle(effect.enabled ? ConsoleInk.ink : ConsoleInk.legend)
+                    .frame(width: eyeColumn)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(effect.enabled ? "Hide this effect" : "Show this effect")
+            .accessibilityLabel(effect.enabled ? "Hide \(name)" : "Show \(name)")
+
+            HStack(alignment: .center, spacing: Space.xs) {
+                Text(name)
+                    .textRole(.consoleTitle)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .foregroundStyle(effect.enabled ? ConsoleInk.ink : ConsoleInk.legend)
+                    .help("\(name) — \(effect.blurbText)")
+                if effect.kind.isScene {
+                    ConsoleTag(text: effect.kind == .custom ? "Custom" : "Scene").fixedSize()
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture { toggleExpanded() }
+
+            Menu {
+                Button("Reset to Defaults") { reset() }
+                    .disabled(isDefault)
+                Button("Duplicate") { onDuplicate() }
+                Divider()
+                Button("Remove", role: .destructive) { onRemove() }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .textRole(.consoleBodySmall)
+                    .foregroundStyle(ConsoleInk.legend)
+                    .frame(width: glyphColumn, height: glyphColumn)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Reset, duplicate or remove \(name)")
+            .accessibilityLabel("\(name) options")
+
+            Button { toggleExpanded() } label: {
+                Image(systemName: "chevron.down")
+                    .textRole(.consoleBodySmall)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(ConsoleInk.legend)
+                    .rotationEffect(.degrees(isExpanded ? 0 : -90))
+                    .frame(width: glyphColumn)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(isExpanded ? "Hide \(name)'s settings" : "Show \(name)'s settings")
+            .accessibilityLabel(isExpanded ? "Collapse \(name)" : "Expand \(name)")
+        }
+        .padding(.horizontal, Space.xs)
+        .padding(.vertical, Space.xxs + 1)
+        .background(shape.fill(ConsoleInk.surface))
+        .overlay(shape.strokeBorder(ConsoleInk.hairline, lineWidth: 1))
+    }
+
     private func toggleExpanded() {
         withAnimation(.easeOut(duration: 0.15)) { isExpanded.toggle() }
     }
@@ -680,13 +839,13 @@ struct CustomSceneStatusRow: View {
             VStack(alignment: .leading, spacing: layout.labelGap) {
                 if let m = effect.customManifest {
                     Text([m.author.map { "by \($0)" }, "\(m.engine.id) engine"].compactMap { $0 }.joined(separator: " · "))
-                        .textRole(.caption).foregroundStyle(.secondary)
+                        .modifier(InspectorNote())
                 }
                 switch status {
                 case .ready:
                     EmptyView()
                 case .compiling:
-                    Label("Compiling…", systemImage: "hourglass").textRole(.caption).foregroundStyle(.secondary)
+                    Label("Compiling…", systemImage: "hourglass").modifier(InspectorNote())
                 case .missing:
                     Label("This scene's package isn't installed — showing a plain gradient.", systemImage: "exclamationmark.triangle")
                         .textRole(.caption).foregroundStyle(.orange)
@@ -721,8 +880,12 @@ struct BounceLogoSection: View {
     @ObservedObject var model: AppModel
     @Environment(\.layout) private var layout
     @ScaledLength(relativeTo: .callout) private var thumbHeight: CGFloat = 64
+    @Environment(\.console) private var console
     @State private var choosing = false
     @State private var thumb: NSImage?
+
+    /// Between rows (Console: rows carry their own rules and padding).
+    private var rowGap: CGFloat { console ? 0 : layout.inspectorRowGap }
 
     private var kind: BounceLogoKind {
         let k = effect.logoKind ?? .builtIn
@@ -732,8 +895,8 @@ struct BounceLogoSection: View {
     private var character: Bool { effect.kind == .waddle }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: layout.inspectorRowGap) {
-            InspectorRow(label: character ? "Character" : "Logo") {
+        VStack(alignment: .leading, spacing: rowGap) {
+            InspectorRow(label: character ? "Character" : "Logo", consoleStacked: true) {
                 SegmentedChoice(title: character ? "Character" : "Logo",
                                 selection: Binding(get: { kind }, set: { effect.logoKind = $0 == .builtIn ? nil : $0 }),
                                 options: character ? [("Penguin", .builtIn), ("Image", .image)]
@@ -746,8 +909,7 @@ struct BounceLogoSection: View {
                 InspectorRow(label: "Text") {
                     TextField("Your name", text: Binding(get: { effect.logoText ?? "" },
                                                          set: { effect.logoText = $0.isEmpty ? nil : String($0.prefix(48)) }))
-                        .textFieldStyle(.roundedBorder)
-                        .textRole(.body)
+                        .modifier(InspectorTextFieldStyle())
                         .accessibilityLabel("Logo text")
                 }
                 if (effect.logoText ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
@@ -769,7 +931,7 @@ struct BounceLogoSection: View {
 
     private var imageControls: some View {
         let has = effect.logoFile != nil
-        return VStack(alignment: .leading, spacing: layout.inspectorRowGap) {
+        return VStack(alignment: .leading, spacing: rowGap) {
             InspectorRow(label: "Image") {
                 // The thumbnail beside its buttons; at large text sizes the buttons go under
                 // it instead. Chosen by the text size, not by measuring (no ViewThatFits): the
@@ -797,7 +959,7 @@ struct BounceLogoSection: View {
     private func thumbnail(_ has: Bool) -> some View {
         let shape = RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
         return ZStack {
-            shape.fill(Color.primary.opacity(0.06))
+            if console { Color.clear.consoleWell(cornerRadius: 4) } else { shape.fill(Color.primary.opacity(0.06)) }
             if let thumb {
                 Image(nsImage: thumb)
                     .resizable()
@@ -810,34 +972,27 @@ struct BounceLogoSection: View {
             }
         }
         .frame(width: thumbHeight * 1.4, height: thumbHeight)
-        .overlay(shape.strokeBorder(Color.primary.opacity(0.1)))
+        .overlay(shape.strokeBorder(console ? Color.clear : Color.primary.opacity(0.1)))
         .accessibilityLabel(has ? (character ? "Character image" : "Logo image")
                                 : (character ? "No character image" : "No logo image"))
     }
 
     @ViewBuilder private func imageButtons(_ has: Bool) -> some View {
-        Button { choosing = true } label: {
-            ScaledControlLabel(title: has ? "Replace…" : "Choose Image…", role: .inspectorSmallControl)
-        }
-        .help(character ? "Choose a character image (PNG with transparency works best, or JPEG, HEIC, SVG, PDF)"
-                        : "Choose a logo image (PNG with transparency works best, or JPEG, HEIC, SVG, PDF)")
-        .adaptiveControlSize(.small)
-        .fixedSize()
+        InspectorSmallButton(title: has ? "Replace…" : "Choose Image…") { choosing = true }
+            .help(character ? "Choose a character image (PNG with transparency works best, or JPEG, HEIC, SVG, PDF)"
+                            : "Choose a logo image (PNG with transparency works best, or JPEG, HEIC, SVG, PDF)")
         if has {
-            Button { effect.logoFile = nil } label: {
-                ScaledControlLabel(title: "Remove", role: .inspectorSmallControl)
-            }
-            .help(character ? "Remove the image (the penguin plays until you choose another)"
-                            : "Remove the image (the DotStudio mark bounces until you choose another)")
-            .adaptiveControlSize(.small)
-            .fixedSize()
+            InspectorSmallButton(title: "Remove") { effect.logoFile = nil }
+                .help(character ? "Remove the image (the penguin plays until you choose another)"
+                                : "Remove the image (the DotStudio mark bounces until you choose another)")
         }
     }
 
     private func note(_ text: String) -> some View {
         Text(text)
-            .textRole(.caption).foregroundStyle(.secondary)
+            .modifier(InspectorNote())
             .wrapping()
+            .padding(.vertical, console ? Space.xxs + 1 : 0)
     }
 
     /// The chosen image, small, off the main thread.
@@ -866,11 +1021,20 @@ struct InspectorMenu<Value: Hashable>: View {
     @Binding var selection: Value
     let options: [(title: String, value: Value)]
     @ScaledLength(relativeTo: .body) private var height: CGFloat = InspectorMetrics.segmentHeight
+    @Environment(\.console) private var console
 
     var body: some View {
+        if console {
+            ConsolePopupKey(title: title, selection: $selection, options: options)
+        } else {
+            classic
+        }
+    }
+
+    private var classic: some View {
         let current = options.first { $0.value == selection }?.title ?? ""
         let shape = RoundedRectangle(cornerRadius: height / 2, style: .continuous)
-        Menu {
+        return Menu {
             Picker(title, selection: $selection) {
                 ForEach(options.indices, id: \.self) { i in Text(options[i].title).tag(options[i].value) }
             }
@@ -911,9 +1075,39 @@ struct ParamRow: View {
     @Binding var value: Double
     @Environment(\.layout) private var layout
     @ScaledLength(relativeTo: .caption) private var valueColumn: CGFloat = InspectorMetrics.valueColumn
+    @Environment(\.console) private var console
 
     var body: some View {
         let _ = Perf.body("ParamRow")
+        if console {
+            consoleRow
+        } else {
+            classic
+        }
+    }
+
+    /// Console: the design's row — a pop-up key, an inset switch (at the row's end) or a fader.
+    private var consoleRow: some View {
+        InspectorRow(label: spec.label) {
+            if let options = spec.options {
+                InspectorMenu(title: spec.label,
+                              selection: Binding(get: { Int(value.rounded()) }, set: { value = Double($0) }),
+                              options: options.enumerated().map { ($0.element, $0.offset) })
+            } else if spec.isToggle {
+                ConsoleSwitch(label: spec.label, isOn: Binding(get: { value > 0.5 }, set: { value = $0 ? 1 : 0 }))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            } else {
+                ConsoleSlider(label: spec.label, value: $value, range: spec.min...spec.max, step: spec.step,
+                              defaultValue: spec.def, format: format)
+            }
+        }
+        .contextMenu {
+            Button("Reset \(spec.label) to \(format(spec.def))") { value = spec.def }
+                .disabled(abs(value - spec.def) <= 1e-6)
+        }
+    }
+
+    private var classic: some View {
         InspectorRow(label: spec.label) {
             if let options = spec.options {
                 InspectorMenu(title: spec.label,
@@ -1025,7 +1219,16 @@ private struct AddEffectGrid: View {
     let onPick: (EffectKind) -> Void
     @Environment(\.layout) private var layout
     @ScaledLength(relativeTo: .caption) private var iconColumn: CGFloat = 16
+    @Environment(\.console) private var console
     @State private var query = ""
+
+    /// The selection's colour: the accent (Classic) or the signal orange (Console).
+    private var accent: Color { console ? ConsoleInk.signal : Color.accentColor }
+    /// A cell's name: the caption (Classic) or the design's small body (Console).
+    private var nameRole: TextRole { console ? .consoleBodySmall : .caption }
+    private var selectedNameRole: TextRole {
+        console ? TextRole(style: .callout, points: 12, face: ConsoleFace.textSemibold) : .captionEmphasis
+    }
 
     /// Narrowest a picker cell gets (at the default text size) before the grid drops a
     /// column: three columns in the 430-pt popover, and still two in the onboarding canvas
@@ -1050,10 +1253,13 @@ private struct AddEffectGrid: View {
     var body: some View {
         VStack(spacing: 0) {
             TextField(prompt, text: $query)
-                .textFieldStyle(.roundedBorder)
-                .textRole(.body)
+                .modifier(InspectorTextFieldStyle())
                 .padding(layout.cardPadding)
-            Divider()
+            if console {
+                Rectangle().fill(ConsoleInk.hairline).frame(height: 1)
+            } else {
+                Divider()
+            }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: layout.sectionGap) {
@@ -1065,8 +1271,7 @@ private struct AddEffectGrid: View {
                                     Text(cat.rawValue)
                                         .truncating(cat.rawValue)
                                 }
-                                .textRole(.captionEmphasis)
-                                .foregroundStyle(.secondary)
+                                .modifier(PickerHeading())
                                 .accessibilityElement(children: .combine)
                                 // A small grid: cells an item gap apart both ways, so a
                                 // category's rows sit clearly closer than the categories
@@ -1110,22 +1315,22 @@ private struct AddEffectGrid: View {
         return VStack(alignment: .leading, spacing: layout.labelGap) {
             swatch(kind)
                 .overlay(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
-                    .strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 2.5))
+                    .strokeBorder(isSelected ? accent : .clear, lineWidth: 2.5))
                 .overlay(alignment: .topTrailing) {
                     if isSelected {
                         Image(systemName: "checkmark.circle.fill")
                             .textRole(.body)
                             .symbolRenderingMode(.palette)
-                            .foregroundStyle(.white, Color.accentColor)
+                            .foregroundStyle(.white, accent)
                             .padding(Space.xxs)
                     }
                 }
             // The semibold copy (hidden) sets the size for every cell, so selecting one
             // doesn't widen its name into a truncation.
             ZStack(alignment: .topLeading) {
-                Text(name).textRole(.captionEmphasis).lineLimit(2).hidden()
-                Text(name).textRole(isSelected ? .captionEmphasis : .caption)
-                    .foregroundStyle(.primary)
+                Text(name).textRole(selectedNameRole).lineLimit(2).hidden()
+                Text(name).textRole(isSelected ? selectedNameRole : nameRole)
+                    .foregroundStyle(console ? AnyShapeStyle(ConsoleInk.ink) : AnyShapeStyle(.primary))
                     .lineLimit(2)
             }
             .fixedSize(horizontal: false, vertical: true)
@@ -1143,7 +1348,21 @@ private struct AddEffectGrid: View {
         }
         .aspectRatio(16.0 / 10.0, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: Radius.s, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Radius.s, style: .continuous).strokeBorder(.primary.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
+            .strokeBorder(console ? AnyShapeStyle(ConsoleInk.hairline) : AnyShapeStyle(.primary.opacity(0.12))))
+    }
+}
+
+/// A category's heading in the effect picker: caption semibold (Classic) or a printed
+/// legend (Console).
+private struct PickerHeading: ViewModifier {
+    @Environment(\.console) private var console
+    func body(content: Content) -> some View {
+        if console {
+            content.textRole(.legend).foregroundStyle(ConsoleInk.legend)
+        } else {
+            content.textRole(.captionEmphasis).foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -1177,11 +1396,16 @@ private struct SourceEditorContent: View {
     @ScaledLength(relativeTo: .callout) private var dropMinHeight: CGFloat = 112
     @State private var importing = false
     @State private var dropTargeted = false
+    @Environment(\.console) private var console
+    /// The drop highlight: the accent (Classic) or the signal orange (Console).
+    private var accent: Color { console ? ConsoleInk.signal : Color.accentColor }
+    /// Between parameter rows (Console: rows carry their own rules and padding).
+    private var rowGap: CGFloat { console ? 0 : layout.inspectorRowGap }
 
     var body: some View {
         VStack(alignment: .leading, spacing: layout.itemGap) {
             Text("Every Look restyles this. Scenes don't use it.")
-                .textRole(.caption).foregroundStyle(.secondary)
+                .modifier(InspectorNote())
                 .wrapping()
 
             SegmentedChoice(title: "Kind", selection: $source.kind,
@@ -1218,35 +1442,30 @@ private struct SourceEditorContent: View {
                     .overlay(SourceSwatch(source: source))
                     .clipShape(RoundedRectangle(cornerRadius: Radius.s, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
-                        .strokeBorder(dropTargeted ? Color.accentColor : .clear, lineWidth: 2))
+                        .strokeBorder(dropTargeted ? accent : .clear, lineWidth: 2))
                     .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
                         loadDroppedImages(providers) { urls in model.importSlideshowPhotos(urls) }
                         return true
                     }
                 Text(own ? "Your photos · \(source.mediaFilenames?.count ?? 0)"
                          : "Built-in photos · curated, public domain")
-                    .textRole(.caption).foregroundStyle(.secondary)
+                    .modifier(InspectorNote())
                     .wrapping()
             }
-            VStack(alignment: .leading, spacing: layout.inspectorRowGap) {
+            VStack(alignment: .leading, spacing: rowGap) {
                 ParamRow(spec: ParamSpec("hold", "Seconds Each", 6, 120, def: SourceSpec.defaultSlideSeconds),
                          value: Binding(get: { source.slideInterval }, set: { source.slideSeconds = $0 }))
                 ParamRow(spec: ParamSpec("motion", "Pan & Zoom", 0, 1, def: SourceSpec.defaultMotion),
                          value: Binding(get: { source.motionAmount }, set: { source.motion = $0 }))
             }
             FlowLayout(spacing: layout.controlGap, lineSpacing: layout.controlGap) {
-                Button { importing = true } label: {
-                    ScaledControlLabel(title: choose, role: .inspectorSmallControl)
-                }
-                .help(choose)
+                InspectorSmallButton(title: choose, fixed: false) { importing = true }
+                    .help(choose)
                 if own {
-                    Button { model.useBuiltInPhotos() } label: {
-                        ScaledControlLabel(title: "Use Built-in Photos", role: .inspectorSmallControl)
-                    }
-                    .help("Use Built-in Photos")
+                    InspectorSmallButton(title: "Use Built-in Photos", fixed: false) { model.useBuiltInPhotos() }
+                        .help("Use Built-in Photos")
                 }
             }
-            .adaptiveControlSize(.small)
         }
     }
 
@@ -1267,13 +1486,14 @@ private struct SourceEditorContent: View {
     }
 
     private var gradientControls: some View {
-        VStack(alignment: .leading, spacing: layout.inspectorRowGap) {
+        VStack(alignment: .leading, spacing: rowGap) {
             ColorWellsRow(wells: [.init(title: "From", color: colorBinding(\.colorA)),
                                   .init(title: "To", color: colorBinding(\.colorB))]) {
                 Button {
                     let a = source.colorA; source.colorA = source.colorB; source.colorB = a
                 } label: {
                     Image(systemName: "arrow.left.arrow.right").textRole(.callout)
+                        .modifier(ConsoleLegendInk())
                 }
                 .buttonStyle(.borderless)
                 .help("Swap colors")
@@ -1295,7 +1515,7 @@ private struct SourceEditorContent: View {
                             .clipShape(RoundedRectangle(cornerRadius: Radius.concentric(Radius.m, inset: Space.s),
                                                         style: .continuous))
                         Text(filename)
-                            .textRole(.caption).foregroundStyle(.secondary)
+                            .modifier(InspectorNote())
                             .multilineTextAlignment(.center)
                             .truncating(filename, lines: 2, mode: .middle)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1304,16 +1524,16 @@ private struct SourceEditorContent: View {
                             .scaledFont { .scaled(.title, $0) }
                             .foregroundStyle(.secondary)
                         Text("Drop a \(source.kind == .video ? "video" : "photo") here, or click to choose")
-                            .textRole(.callout).foregroundStyle(.secondary)
+                            .modifier(InspectorNote())
                             .wrapping(.center)
                     }
                 }
                 .frame(maxWidth: .infinity, minHeight: dropMinHeight)
                 .padding(Space.s)
-                .background(zone.fill(Color.primary.opacity(dropTargeted ? 0.08 : 0.03)))
+                .background(zone.fill(console ? ConsoleInk.well : Color.primary.opacity(dropTargeted ? 0.08 : 0.03)))
                 .overlay(zone
                     .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
-                    .foregroundStyle(dropTargeted ? Color.accentColor : Color.secondary.opacity(0.5)))
+                    .foregroundStyle(dropTargeted ? accent : (console ? ConsoleInk.outline : Color.secondary.opacity(0.5))))
                 .contentShape(zone)
             }
             .buttonStyle(.plain)
@@ -1327,7 +1547,7 @@ private struct SourceEditorContent: View {
                 return true
             }
 
-            InspectorRow(label: "Scaling") {
+            InspectorRow(label: "Scaling", consoleStacked: true) {
                 SegmentedChoice(title: "Scaling", selection: $source.fillMode,
                                 options: [("Fill", 1), ("Fit", 0), ("Stretch", 2)])
             }
@@ -1347,99 +1567,6 @@ private struct SourceEditorContent: View {
 
 extension Array {
     subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
-}
-
-// MARK: - Console channel strip
-
-/// Console (issue #6): a channel strip — up to four settings as colour-capped knobs side by
-/// side (blue, green, white, orange) on a recessed panel. Each is a real control: it turns
-/// the setting it names. With big text (or too little width) they go two by two
-/// (`KnobStripLayout`); nothing is ever drawn smaller to make them fit.
-struct ConsoleChannelStrip: View {
-    let specs: [ParamSpec]
-    let value: (ParamSpec) -> Binding<Double>
-    @Environment(\.layout) private var layout
-
-    var body: some View {
-        KnobStripLayout(twoUp: layout.prefersStacking, rowSpacing: layout.itemGap) {
-            ForEach(Array(specs.enumerated()), id: \.element.key) { i, spec in
-                ConsoleKnob(label: spec.label, value: value(spec), range: spec.min...spec.max,
-                            step: spec.step, defaultValue: spec.def, colorIndex: i,
-                            format: { ParamRow.format(spec, $0) })
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, layout.itemGap)
-        .padding(.horizontal, Space.xxs)
-        .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(ConsoleInk.well.opacity(0.55)))
-        .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).strokeBorder(ConsoleInk.hairline))
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Main settings")
-    }
-}
-
-/// The channel strip's arrangement: one row of equal columns while every column is at least
-/// as wide as a knob can't do without at the chosen text size (its dial and readout; the
-/// legend wraps), else two columns (2 × 2), else one. `twoUp` (accessibility sizes, where
-/// the inspector's rows stack: `layout.prefersStacking`) starts at two columns, so the
-/// legends get the room. Each knob is centred in its column.
-///
-/// Measured inside one layout, so the knobs — each with its own state, focus and scroll
-/// monitor — keep their identity when it flips; a ViewThatFits would build them again in the
-/// middle of the inspector list's layout (the pattern ColorWellsRow documents as a crash).
-private struct KnobStripLayout: Layout {
-    var twoUp: Bool
-    var rowSpacing: CGFloat
-
-    /// The width no knob can go below (a zero-width proposal: the parts that don't wrap).
-    private func minimumWidth(_ subviews: Subviews) -> CGFloat {
-        subviews.map { $0.sizeThatFits(ProposedViewSize(width: 0, height: nil)).width }.max() ?? 0
-    }
-
-    private func columns(_ width: CGFloat?, _ subviews: Subviews) -> Int {
-        let n = subviews.count
-        let tries = (twoUp ? [2, 1] : [n, 2, 1]).map { min($0, n) }
-        guard let width, width.isFinite else { return max(tries[0], 1) }
-        let need = minimumWidth(subviews)
-        return tries.first { $0 > 0 && CGFloat($0) * need <= width + 0.5 } ?? 1
-    }
-
-    /// Per row: the subview indices and the row's height when each is offered `column`.
-    private func rows(_ subviews: Subviews, columns: Int, column: CGFloat?) -> [(items: Range<Int>, height: CGFloat)] {
-        stride(from: 0, to: subviews.count, by: max(columns, 1)).map { start in
-            let items = start..<min(start + columns, subviews.count)
-            let h = items.map { subviews[$0].sizeThatFits(ProposedViewSize(width: column, height: nil)).height }.max() ?? 0
-            return (items, h)
-        }
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        guard !subviews.isEmpty else { return .zero }
-        let cols = columns(proposal.width, subviews)
-        let column: CGFloat
-        if let w = proposal.width, w.isFinite {
-            column = w / CGFloat(cols)
-        } else {
-            column = subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0
-        }
-        let rs = rows(subviews, columns: cols, column: column)
-        let height = rs.map(\.height).reduce(0, +) + CGFloat(max(rs.count - 1, 0)) * rowSpacing
-        return CGSize(width: column * CGFloat(cols), height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        guard !subviews.isEmpty else { return }
-        let cols = columns(bounds.width, subviews)
-        let column = bounds.width / CGFloat(cols)
-        var y = bounds.minY
-        for row in rows(subviews, columns: cols, column: column) {
-            for (c, i) in row.items.enumerated() {
-                subviews[i].place(at: CGPoint(x: bounds.minX + column * (CGFloat(c) + 0.5), y: y),
-                                  anchor: .top, proposal: ProposedViewSize(width: column, height: nil))
-            }
-            y += row.height + rowSpacing
-        }
-    }
 }
 
 /// An inspector section's title ("Effects", "Scene & Layers", "Motion"): the inset-list
