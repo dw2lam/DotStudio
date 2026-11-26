@@ -675,41 +675,68 @@ struct ScreensaverCard: View {
             .onTapGesture(count: 2) { if let p = playing { model.edit(p.id) } }
             .help(playing.map { "\($0.name) — double-click to edit" } ?? "")
 
-            // Customize (the style playing now) top right.
-            if let p = playing {
-                CustomizeButton(name: p.name, flat: console) { model.edit(p.id) }
-                    .padding(Space.xs)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            if console {
+                consoleHeroKeys
+            } else {
+                classicHeroKeys
             }
-            // When / Night / Day top left; Preview (what it previews, right on it) bottom right.
-            VStack(alignment: .leading, spacing: 0) {
-                if let rule = model.activeRule {
-                    // A When rule plays now: it outranks the night style and the playlist.
-                    if console {
-                        HubTag(text: "When: " + RuleText.short(rule, in: model.library),
-                               symbol: RuleText.symbol(rule, in: model.library))
-                    } else {
-                        GlassBadge(text: "When: " + RuleText.short(rule, in: model.library),
-                                   symbol: RuleText.symbol(rule, in: model.library))
-                    }
-                } else if lineup.night != nil {
-                    if console {
-                        HubTag(text: model.isNightNow ? "Night" : "Day",
-                               symbol: model.isNightNow ? "moon.fill" : "sun.max.fill")
-                    } else {
-                        GlassBadge(text: model.isNightNow ? "Night" : "Day",
-                                   symbol: model.isNightNow ? "moon.fill" : "sun.max.fill")
-                    }
-                }
-                Spacer(minLength: 0)
-                HStack {
-                    Spacer(minLength: 0)
-                    previewButton
-                }
-            }
-            .padding(Space.xs)
         }
         .motion(Motion.smooth, value: playing?.id)
+    }
+
+    /// Console: When / Night / Day and Customize share the top row — the tag shortens (its
+    /// full text in the tooltip) before it would run under the key in a narrow deck — and
+    /// Preview sits bottom right.
+    private var consoleHeroKeys: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: Space.xs) {
+                if let rule = model.activeRule {
+                    HubTag(text: "When: " + RuleText.short(rule, in: model.library),
+                           symbol: RuleText.symbol(rule, in: model.library), truncates: true)
+                } else if lineup.night != nil {
+                    HubTag(text: model.isNightNow ? "Night" : "Day",
+                           symbol: model.isNightNow ? "moon.fill" : "sun.max.fill", truncates: true)
+                }
+                Spacer(minLength: 0)
+                if let p = playing {
+                    CustomizeButton(name: p.name, flat: true) { model.edit(p.id) }
+                        .layoutPriority(1)
+                }
+            }
+            Spacer(minLength: 0)
+            HStack {
+                Spacer(minLength: 0)
+                previewButton
+            }
+        }
+        .padding(Space.xs)
+    }
+
+    /// Classic: Customize top right; When / Night / Day top left; Preview (what it previews,
+    /// right on it) bottom right.
+    @ViewBuilder private var classicHeroKeys: some View {
+        // Customize (the style playing now) top right.
+        if let p = playing {
+            CustomizeButton(name: p.name, flat: false) { model.edit(p.id) }
+                .padding(Space.xs)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+        }
+        VStack(alignment: .leading, spacing: 0) {
+            if let rule = model.activeRule {
+                // A When rule plays now: it outranks the night style and the playlist.
+                GlassBadge(text: "When: " + RuleText.short(rule, in: model.library),
+                           symbol: RuleText.symbol(rule, in: model.library))
+            } else if lineup.night != nil {
+                GlassBadge(text: model.isNightNow ? "Night" : "Day",
+                           symbol: model.isNightNow ? "moon.fill" : "sun.max.fill")
+            }
+            Spacer(minLength: 0)
+            HStack {
+                Spacer(minLength: 0)
+                previewButton
+            }
+        }
+        .padding(Space.xs)
     }
 
     @ViewBuilder private var previewButton: some View {
