@@ -28,10 +28,10 @@ struct WeatherSettingsSection: View {
                         TimelineView(.periodic(from: .now, by: 60)) { context in
                             VStack(alignment: .leading, spacing: layout.labelGap) {
                                 Text(headline(now: context.date))
-                                    .textRole(.bodyEmphasis)
+                                    .settingsText(.bodyEmphasis)
                                     .wrapping()
                                 Text(detail(now: context.date))
-                                    .textRole(.caption)
+                                    .settingsText(.caption)
                                     .foregroundStyle(.secondary)
                                     .wrapping()
                             }
@@ -51,7 +51,8 @@ struct WeatherSettingsSection: View {
                 SettingsNote("Ocean Horizon and Shallows styles with Weather set to Live show the sky outside — cloud, fog, rain, snow and storms — and ease from one to the next. DotStudio asks Open-Meteo for the current weather at your location, rounded to about 10 km, every 20 minutes while one of those styles is in your library.")
                 SettingsNote("Your location also places the real sun, moon and stars in scenes that follow the sun, and the marker on Universe's Earth. On a VPN the automatic one can be far off — Change… sets yours.")
                 Link(WeatherState.attribution, destination: URL(string: "https://open-meteo.com/")!)
-                    .textRole(.caption)
+                    .settingsText(.caption)
+                    .settingsLink()
             }
         }
     }

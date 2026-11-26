@@ -74,6 +74,8 @@ struct SettingsView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var updates: UpdateController
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
+    @ScaledLength(relativeTo: .body) private var consoleSidebarWidth: CGFloat = 220
 
     @ScaledLength(relativeTo: .caption) private var valueWidth: CGFloat = SettingsMetrics.valueWidth
     @ScaledLength(relativeTo: .body) private var segmentWidth: CGFloat = SettingsMetrics.segmentWidth
@@ -85,6 +87,52 @@ struct SettingsView: View {
     /// a sidebar list grouped into sections, the chosen pane's grouped Form beside it, and Done
     /// in the toolbar (or Esc).
     var body: some View {
+        Group {
+            if console { consoleBody } else { classicBody }
+        }
+        .onAppear {
+            model.refreshSetupStatus()
+            updates.refreshStatus()
+        }
+    }
+
+    // MARK: Console
+
+    /// Console (the owner's Stitch design): the sidebar on the surface colour with mono-caps
+    /// group legends and the chosen pane as an orange key; the pane on the panel; Done as an
+    /// orange key in a bar along the bottom (Esc too). Still the same sheet.
+    private var consoleBody: some View {
+        HStack(spacing: 0) {
+            ConsoleSettingsSidebar(selection: pane) { model.settingsPane = $0 }
+                // grows with the text, to a point (names wrap onto a second line past it)
+                .frame(width: min(consoleSidebarWidth, 264))
+                .frame(maxHeight: .infinity, alignment: .top)
+                .background(ConsoleInk.surface)
+            ConsoleHairline(vertical: true)
+            VStack(spacing: 0) {
+                detail(pane)
+                ConsoleHairline()
+                HStack {
+                    Spacer()
+                    Button { model.settingsPane = nil } label: {
+                        Text("Done").textRole(.consoleKey)
+                    }
+                    .buttonStyle(.keycap(.signal, padding: EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16)))
+                    .keyboardShortcut(.cancelAction)
+                }
+                .padding(.horizontal, Space.l)
+                .padding(.vertical, Space.s)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(ConsoleInk.panel)
+        }
+        .background(ConsoleInk.panel)
+        .foregroundStyle(ConsoleInk.ink, ConsoleInk.legend)
+    }
+
+    // MARK: Classic
+
+    private var classicBody: some View {
         NavigationSplitView {
             List(selection: Binding(get: { model.settingsPane }, set: { if let p = $0 { model.settingsPane = p } })) {
                 ForEach(SettingsPane.Group.allCases, id: \.self) { group in
@@ -112,10 +160,6 @@ struct SettingsView: View {
                     }
                 }
         }
-        .onAppear {
-            model.refreshSetupStatus()
-            updates.refreshStatus()
-        }
     }
 
     private func detail(_ p: SettingsPane) -> some View {
@@ -136,9 +180,7 @@ struct SettingsView: View {
             case .updates: updatesSection
             }
         }
-        .formStyle(.grouped)
-        .textRole(.body)          // row labels follow the text size (macOS never scales them itself)
-        .formControlSize()        // stock sizes at standard text; a step up per text bump after
+        .settingsForm()           // Classic: grouped, role-sized labels, stock control sizes (ConsoleSettingsKit)
         .id(p)                    // each pane scrolls from its top
     }
 
@@ -154,6 +196,15 @@ struct SettingsView: View {
 
     private var transitionsSection: some View {
         Section {
+            if console {
+                SettingsValueRow("Crossfade", valueWidth: segmentWidth) {
+                    ConsoleSlider(title: "Crossfade",
+                                  value: Binding(get: { model.rotation.transitionSeconds },
+                                                 set: { v in model.updateRotation { $0.transitionSeconds = v } }),
+                                  range: 0...3, step: 0.1, detents: [0, 1, 2, 3],
+                                  readout: { $0 < 0.05 ? "Off" : String(format: "%.1f s", $0) })
+                }
+            } else {
             SettingsValueRow("Crossfade", valueWidth: segmentWidth) {
                 HStack(spacing: layout.controlGap) {
                     Slider(value: Binding(get: { model.rotation.transitionSeconds },
@@ -169,6 +220,7 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .frame(minWidth: valueWidth, alignment: .trailing)   // a minimum: the readout never truncates
                 }
+            }
             }
         } header: {
             SettingsHeader("Transitions")
@@ -207,19 +259,26 @@ struct SettingsView: View {
                         .frame(width: iconBox, alignment: .leading)   // icon on the Form's leading edge
                     VStack(alignment: .leading, spacing: layout.labelGap) {
                         Text(updateHeadline)
-                            .textRole(.bodyEmphasis)
+                            .settingsText(.bodyEmphasis)
                             .wrapping()
                         Text(updateDetail)
-                            .textRole(.caption)
+                            .settingsText(.caption)
                             .foregroundStyle(.secondary)
                             .wrapping()
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                Button(scaled: updateButtonTitle) { updates.primaryAction() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(isUpdateReady || isUpdateAvailable ? .accentColor : .secondary)
-                    .disabled(!updates.canCheck && !isUpdateReady)
+                if console {
+                    // Console: an orange key when there's something to install, else a grey one.
+                    Button(scaled: updateButtonTitle) { updates.primaryAction() }
+                        .buttonStyle(.keycap(isUpdateReady || isUpdateAvailable ? .signal : .plain))
+                        .disabled(!updates.canCheck && !isUpdateReady)
+                } else {
+                    Button(scaled: updateButtonTitle) { updates.primaryAction() }
+                        .buttonStyle(.borderedProminent)
+                        .tint(isUpdateReady || isUpdateAvailable ? .accentColor : .secondary)
+                        .disabled(!updates.canCheck && !isUpdateReady)
+                }
             }
             Toggle("Check for updates automatically", isOn: Binding(
                 get: { updates.automaticallyChecks },
@@ -249,11 +308,11 @@ struct SettingsView: View {
         case .checking, .downloading:
             ProgressView().adaptiveControlSize(.small)
         case .readyToInstall, .available:
-            Image(systemName: "arrow.down.circle.fill").foregroundStyle(Color.accentColor)
+            Image(systemName: "arrow.down.circle.fill").foregroundStyle(console ? ConsoleInk.signal : Color.accentColor)
         case .failed:
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(console ? ConsoleInk.amber : .orange)
         case .idle, .upToDate:
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(console ? ConsoleInk.green : .green)
         }
     }
 
@@ -302,15 +361,42 @@ struct SettingsView: View {
 private struct MenuBarIconChoice: View {
     @Binding var selection: MenuBarIcon
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.consoleSettings) private var console
     @State private var hovered: MenuBarIcon?
+    @ScaledLength(relativeTo: .body) private var keySide: CGFloat = 36
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Menu bar icon")
                 Text("\(selection.name) — it fills in while a live wallpaper plays.")
-                    .textRole(.callout).foregroundStyle(.secondary)
+                    .settingsText(.callout).foregroundStyle(.secondary)
             }
+            if console { consoleKeys } else { classicKeys }
+        }
+        .padding(.vertical, console ? 0 : Space.xs)
+        .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: selection)
+        .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: hovered)
+    }
+
+    /// Console: a row of square keys; the chosen icon's key is orange. They wrap at large text.
+    private var consoleKeys: some View {
+        FlowLayout(spacing: Space.xs, lineSpacing: Space.xs, alignment: .leading) {
+            ForEach(MenuBarIcon.allCases) { i in
+                Button { selection = i } label: {
+                    Image(systemName: i.symbol(live: false))
+                        .font(.system(size: keySide * 0.44))
+                        .frame(width: keySide, height: keySide)
+                }
+                .buttonStyle(.keycap(i == selection ? .signal : .plain, padding: EdgeInsets()))
+                .help(i.name)
+                .accessibilityLabel(i.name)
+                .accessibilityAddTraits(i == selection ? [.isButton, .isSelected] : .isButton)
+            }
+        }
+    }
+
+    private var classicKeys: some View {
             HStack(spacing: Space.xs) {
                 ForEach(MenuBarIcon.allCases) { i in
                     Button { selection = i } label: {
@@ -332,10 +418,6 @@ private struct MenuBarIconChoice: View {
                     .accessibilityAddTraits(i == selection ? [.isButton, .isSelected] : .isButton)
                 }
             }
-        }
-        .padding(.vertical, Space.xs)
-        .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: selection)
-        .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: hovered)
     }
 }
 
@@ -355,8 +437,11 @@ struct GeneralSettingsSection: View {
     @State private var loginError: String?
     @AppStorage(MenuBarIcon.key) private var menuBarIcon: MenuBarIcon = .standard
     @AppStorage(Appearance.key) private var appearance: Appearance = .classic
+    @Environment(\.consoleSettings) private var console
 
     private var opensAtLogin: Bool { loginStatus != .off }
+    /// A warning's colour: orange; Console's signal ink (readable on its light body).
+    private var warning: Color { console ? ConsoleInk.signalInk : .orange }
 
     var body: some View {
         Section {
@@ -367,22 +452,30 @@ struct GeneralSettingsSection: View {
             // Issue #6: an experiment, tried for real before anything is kept.
             // Shows what is drawn (Appearance.effective: DOTSTUDIO_APPEARANCE, or Classic in a
             // headless run), so a render never shows a choice the window doesn't wear.
-            Picker("Appearance", selection: Binding(get: { Appearance.effective(saved: appearance) },
-                                                    set: { appearance = $0 })) {
-                ForEach(Appearance.allCases) { Text($0.title).tag($0) }
+            let shownAppearance = Binding(get: { Appearance.effective(saved: appearance) }, set: { appearance = $0 })
+            if console {
+                // Console: the two appearances as keys (no pop-up on a keyboard of keys).
+                LabeledContent("Appearance") {
+                    ConsoleSegments(title: "Appearance", selection: shownAppearance,
+                                    options: Appearance.allCases.map { ($0.title, $0) })
+                }
+            } else {
+                Picker("Appearance", selection: shownAppearance) {
+                    ForEach(Appearance.allCases) { Text($0.title).tag($0) }
+                }
             }
             Toggle("Open DotStudio at login", isOn: Binding(get: { opensAtLogin }, set: setOpenAtLogin))
                 .formSwitchSize()
             if loginStatus == .requiresApproval {
                 HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
                     Text("Allow DotStudio in System Settings › General › Login Items.")
-                        .textRole(.caption).foregroundStyle(.orange).wrapping()
+                        .settingsText(.caption).foregroundStyle(warning).wrapping()
                     Spacer(minLength: 0)
                     Button(scaled: "Open Login Items\u{2026}") { LoginItem.openLoginItemsSettings() }
                         .buttonStyle(.link)
                 }
             } else if let loginError {
-                Text(loginError).textRole(.caption).foregroundStyle(.orange).wrapping()
+                Text(loginError).settingsText(.caption).foregroundStyle(warning).wrapping()
             }
             LabeledContent("Screensaver setup") {
                 Button(scaled: "Run Setup Again\u{2026}") { SetupGuidePanel.shared.show(model: model) }
@@ -457,9 +550,15 @@ enum SettingsMetrics {
 struct SettingsHeader: View {
     let title: String
     init(_ title: String) { self.title = title }
+    @Environment(\.consoleSettings) private var console
 
     var body: some View {
-        Text(title).textRole(.headline)
+        if console {
+            // Console: a printed mono-caps legend ("PRESET", "GENERAL").
+            Text(title).textRole(.legend).foregroundStyle(ConsoleInk.legend)
+        } else {
+            Text(title).textRole(.headline)
+        }
     }
 }
 
@@ -470,7 +569,7 @@ struct SettingsNote: View {
 
     var body: some View {
         Text(text)
-            .textRole(.caption)
+            .settingsText(.caption)
             .foregroundStyle(.secondary)
             .wrapping()
     }
@@ -505,9 +604,11 @@ private struct FormControlSize: ViewModifier {
 /// control's own font at every size; a Text label with a role scales (the bezel grows to fit).
 struct RoleButtonTitle: View {
     let title: String
+    @Environment(\.consoleSettings) private var console
 
     var body: some View {
-        Text(title).textRole(.body)
+        // Console Settings: a key's printed legend (mono caps), as the design's DONE.
+        Text(title).textRole(console ? .consoleKey : .body)
     }
 }
 
@@ -540,9 +641,14 @@ struct ScaledSegmentedPicker<Value: Hashable>: View {
     var alignment: Alignment = .trailing
 
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.consoleSettings) private var console
 
     var body: some View {
-        if typeSize < SettingsMetrics.scaledControlsFrom {
+        if console {
+            // Console Settings: keycaps in a well, the chosen one blue (ConsoleSettingsKit).
+            ConsoleSegments(title: title, selection: $selection, options: options, fills: fills)
+                .frame(maxWidth: fills ? .infinity : nil, alignment: alignment)
+        } else if typeSize < SettingsMetrics.scaledControlsFrom {
             let picker = Picker(title, selection: $selection) {
                 ForEach(options.indices, id: \.self) { i in Text(options[i].title).tag(options[i].value) }
             }
@@ -736,6 +842,99 @@ private struct FillingSegments: ViewModifier {
             content.buttonSizing(.flexible)
         } else {
             content
+        }
+    }
+}
+
+// MARK: - Console sidebar
+
+extension SettingsPane {
+    /// The sidebar icon's colour in Console (the design: Music orange, Weather amber, AI blue,
+    /// Power green; the rest printed in the legend grey).
+    var consoleTint: Color {
+        switch self {
+        case .power: return ConsoleInk.green
+        case .music: return ConsoleInk.signal
+        case .liveData: return ConsoleInk.amber
+        case .ai: return ConsoleInk.blueInk
+        default: return ConsoleInk.legend
+        }
+    }
+}
+
+/// Console's Settings sidebar: the groups' mono-caps legends, a row per pane (its icon and
+/// name), the chosen pane an orange key. ↑/↓ move between panes once it has focus.
+private struct ConsoleSettingsSidebar: View {
+    let selection: SettingsPane
+    let choose: (SettingsPane) -> Void
+    @State private var hovered: SettingsPane?
+    @FocusState private var focused: Bool
+    @ScaledLength(relativeTo: .body) private var iconWidth: CGFloat = 18
+    @ScaledLength(relativeTo: .body) private var iconSize: CGFloat = 13
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Space.m) {
+                ForEach(SettingsPane.Group.allCases, id: \.self) { group in
+                    VStack(alignment: .leading, spacing: Space.xxs) {
+                        Text(group.title)
+                            .textRole(.legend)
+                            .foregroundStyle(ConsoleInk.legend)
+                            .padding(.horizontal, Space.xs)
+                            .padding(.bottom, 2)
+                            .accessibilityAddTraits(.isHeader)
+                        ForEach(group.panes) { p in row(p) }
+                    }
+                }
+            }
+            .padding(Space.s)
+        }
+        .scrollIndicators(.never)
+        .focusable()
+        .focused($focused)
+        .focusEffectDisabled()
+        .onKeyPress(keys: [.upArrow, .downArrow]) { press in
+            let all = SettingsPane.Group.allCases.flatMap(\.panes)
+            guard let i = all.firstIndex(of: selection) else { return .ignored }
+            let j = press.key == .upArrow ? i - 1 : i + 1
+            guard all.indices.contains(j) else { return .handled }
+            choose(all[j])
+            return .handled
+        }
+    }
+
+    private func label(_ p: SettingsPane, on: Bool) -> some View {
+        HStack(spacing: Space.xs) {
+            Image(systemName: p.symbol)
+                .font(.system(size: iconSize, weight: .medium))
+                .foregroundStyle(on ? ConsoleInk.onSignal : p.consoleTint)
+                .frame(width: iconWidth)
+            Text(p.title)
+                .textRole(on ? .consoleTitle : .consoleBody)
+                .foregroundStyle(on ? ConsoleInk.onSignal : hovered == p ? ConsoleInk.ink : ConsoleInk.legend)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+    }
+
+    @ViewBuilder private func row(_ p: SettingsPane) -> some View {
+        if p == selection {
+            Button { choose(p) } label: { label(p, on: true) }
+                .buttonStyle(.keycap(.signal, padding: EdgeInsets(top: 5, leading: 8, bottom: 5, trailing: 8)))
+                .accessibilityAddTraits(.isSelected)
+        } else {
+            Button { choose(p) } label: {
+                label(p, on: false)
+                    .padding(.horizontal, Space.xs)
+                    .padding(.vertical, 5)
+                    .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(hovered == p ? ConsoleInk.surfaceHigh : .clear))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.bottom, 4)          // the chosen key's skirt room, so rows don't shift
+            .onHover { hovered = $0 ? p : (hovered == p ? nil : hovered) }
         }
     }
 }

@@ -23,9 +23,9 @@ struct LocationRow: View {
                     .scaledFont { .scaled(.title2, $0) }
                     .frame(width: iconBox, alignment: .leading)
                 VStack(alignment: .leading, spacing: layout.labelGap) {
-                    Text(title).textRole(.bodyEmphasis).wrapping()
+                    Text(title).settingsText(.bodyEmphasis).wrapping()
                     Text(manual ? "Set by you" : "Automatic, from your internet connection")
-                        .textRole(.caption)
+                        .settingsText(.caption)
                         .foregroundStyle(.secondary)
                         .wrapping()
                 }

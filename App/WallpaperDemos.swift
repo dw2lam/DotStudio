@@ -557,7 +557,7 @@ struct VisualSettingRow<Control: View>: View {
             HStack(alignment: .center, spacing: Space.m) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                    Text(detail).textRole(.callout).foregroundStyle(.secondary)
+                    Text(detail).settingsText(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -593,6 +593,7 @@ struct OptionCards<Value: Hashable>: View {
     var fixed = false
     @Namespace private var ring
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.consoleSettings) private var console
     @State private var width: CGFloat = 0
 
     private var index: Int { options.firstIndex { $0.value == selection } ?? 0 }
@@ -603,6 +604,42 @@ struct OptionCards<Value: Hashable>: View {
     }
 
     var body: some View {
+        if console { consoleBody } else { classicBody }
+    }
+
+    /// Console (the design's "ANOTHER APP IS FOCUSED"): the situation as a mono legend, a big
+    /// key per option with its live demo and its name in mono caps — the chosen one with an
+    /// orange edge — and what the chosen option does, in a sentence. The keys are the control
+    /// (no slider under them); VoiceOver reads them as buttons, the chosen one selected.
+    private var consoleBody: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            Text(title).textRole(.legend).foregroundStyle(ConsoleInk.legend)
+                .accessibilityAddTraits(.isHeader)
+            OptionCardRow(spacing: Space.s) {
+                ForEach(options.indices, id: \.self) { i in
+                    OptionCard(label: options[i].label, scene: options[i].scene, active: fixed || i == index,
+                               fixed: fixed, ring: ring) { choose(i) }
+                }
+            }
+            if !fixed {
+                let chosen = options[index]
+                if !chosen.explain.isEmpty {
+                    (Text(chosen.label.uppercased()).font(TextRole.consoleKey.font(typeSize)).foregroundColor(ConsoleInk.signalInk)
+                     + Text("  " + chosen.explain).foregroundColor(ConsoleInk.legend))
+                        .textRole(.consoleBodySmall)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .id(index)
+                        .transition(.opacity)
+                }
+            }
+        }
+        .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: index)
+        .accessibilityElement(children: .contain)
+    }
+
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    private var classicBody: some View {
         VStack(alignment: .leading, spacing: Space.s) {
             Label {
                 Text(title).textRole(.bodyEmphasis)
@@ -655,8 +692,43 @@ private struct OptionCard: View {
     let action: () -> Void
     @State private var hovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.consoleSettings) private var console
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
+        if console { consoleBody } else { classicBody }
+    }
+
+    /// Console: a big key on the well colour — the live demo (greyed and still until hovered
+    /// or chosen) over the option's name in mono caps; the chosen key's edge is orange. A card
+    /// that only states what always happens isn't pressable but keeps full strength.
+    private var consoleBody: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 6) {
+                WallpaperDemo(scene: scene, animates: active || hovering)
+                    .saturation(active || hovering ? 1 : 0)
+                    .opacity(active ? 1 : hovering ? 0.9 : 0.6)
+                Text(label)
+                    .textRole(.legend)
+                    .foregroundStyle(active ? ConsoleInk.ink : ConsoleInk.legend)
+                    .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+                    .minimumScaleFactor(0.8)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(Space.xs)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(ConsoleCardStyle(face: ConsoleInk.well, selected: active && !fixed, dimsWhenDisabled: false))
+        .disabled(fixed)
+        .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: hovering)
+        .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: active)
+        .onHover { hovering = $0 && !active }
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(active ? [.isButton, .isSelected] : .isButton)
+    }
+
+    private var classicBody: some View {
         Button(action: action) {
             VStack(spacing: Space.xs) {
                 WallpaperDemo(scene: scene, animates: active || hovering)

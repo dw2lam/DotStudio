@@ -105,6 +105,7 @@ struct WallpaperSettingsSection: View {
     @ScaledLength(relativeTo: .body) private var segmentWidth: CGFloat = SettingsMetrics.segmentWidth
     @ScaledLength(relativeTo: .body) private var popUpMaxWidth: CGFloat = SettingsMetrics.popUpMaxWidth
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.consoleSettings) private var console
 
     /// The Live Wallpaper pane (what plays) or the Power Saving pane (how it saves power).
     enum Part { case wallpaper, power }
@@ -113,8 +114,96 @@ struct WallpaperSettingsSection: View {
     var body: some View {
         switch part {
         case .wallpaper: wallpaperSection
-        case .power: powerSections
+        case .power:
+            if console { consolePowerSections } else { powerSections }
         }
+    }
+
+    // MARK: Console power
+
+    // The owner's Stitch design: PRESET over three big keys (CUSTOM ACTIVE when nothing
+    // matches), then each power source as a module — its icon square, name and a mono line of
+    // what it's set to, the Forced / Dynamic / Reactive keys, the big fps readout, the range in
+    // a well, the sentence, and the "another app is focused" cards — and the automatic pauses.
+    // Same settings, words and demos as Classic; both power sources (the design drew only one).
+    @ViewBuilder private var consolePowerSections: some View {
+        let current = PowerPreset.matching(wallpaper.settings, model.library)
+        Section {
+            PowerPresetPicker(current: current) { preset in
+                preset.apply(wallpaper: wallpaper, model: model)
+            }
+        } header: {
+            HStack(alignment: .firstTextBaseline) {
+                SettingsHeader("Preset")
+                Spacer(minLength: Space.s)
+                if current == nil {
+                    Text("Custom active").textRole(.legend).foregroundStyle(ConsoleInk.signalInk)
+                }
+            }
+        }
+        .consoleModuleSection()
+
+        Section {
+            ConsoleModule {
+                ConsoleModuleHeader(symbol: PowerSource.pluggedIn.symbol, fill: PowerSource.pluggedIn.consoleTint,
+                                    title: PowerSource.pluggedIn.title, summary: sourceSummary(onBattery: false)) {
+                    FrameRateControl.modeKeys(source: .pluggedIn, mode: setting(\.fpsModePluggedIn))
+                }
+                FrameRateControl(source: .pluggedIn,
+                                 mode: setting(\.fpsModePluggedIn),
+                                 limit: Binding(get: { model.library.frameRate ?? 120 },
+                                                set: { v in PowerPreset.setFrameRate(v, wallpaper: wallpaper, model: model) }),
+                                 floor: setting(\.fpsFloorPluggedIn))
+                ConsoleHairline()
+                otherAppRow(\.otherAppPluggedIn)
+            }
+        } footer: {
+            SettingsNote("The plugged-in limit is the screensaver's too. Each style plays at its own frame rate (Customize › Frame rate) up to the limit — Auto plays at the limit.")
+        }
+        .consoleModuleSection()
+
+        Section {
+            ConsoleModule {
+                let still = wallpaper.settings.batteryMode == .still
+                ConsoleModuleHeader(symbol: PowerSource.battery.symbol, fill: PowerSource.battery.consoleTint,
+                                    title: PowerSource.battery.title, summary: sourceSummary(onBattery: true)) {
+                    if !still { FrameRateControl.modeKeys(source: .battery, mode: setting(\.fpsModeOnBattery)) }
+                }
+                OptionCards(title: "Playback",
+                            options: WallpaperSettings.BatteryMode.allCases.map {
+                                .init(label: $0.title, value: $0, scene: .battery($0), explain: Self.batteryExplain($0))
+                            },
+                            selection: Binding(get: { wallpaper.settings.batteryMode },
+                                               set: { v in wallpaper.update { $0.batteryMode = v } }))
+                if !still {
+                    FrameRateControl(source: .battery,
+                                     mode: setting(\.fpsModeOnBattery),
+                                     limit: Binding(get: { wallpaper.settings.batteryTopFPS },
+                                                    set: { v in wallpaper.update { $0.batteryFPS = v } }),
+                                     floor: setting(\.fpsFloorOnBattery))
+                        .transition(.opacity)
+                }
+                ConsoleHairline()
+                otherAppRow(\.otherAppOnBattery)
+            }
+        } footer: {
+            SettingsNote("The screensaver keeps its own battery saving: at most 24 fps at lower resolution.")
+        }
+        .consoleModuleSection()
+
+        Section {
+            ConsoleModule {
+                OptionCards(title: "Always", options: [
+                                .init(label: "Full-screen app", value: 0, scene: .covered),
+                                .init(label: "Low Power Mode", value: 1, scene: .lowPower)],
+                            selection: .constant(0), fixed: true)
+            }
+        } header: {
+            SettingsHeader("Automatically")
+        } footer: {
+            SettingsNote("Pauses when a full-screen app or windows cover the desktop, the screen locks or sleeps, or the screensaver runs. Holds still in Low Power Mode or when your Mac runs hot. A paused clock still turns over each minute.")
+        }
+        .consoleModuleSection()
     }
 
     private var wallpaperSection: some View {
@@ -134,7 +223,7 @@ struct WallpaperSettingsSection: View {
                     // What the desktop shows right now; it changes with the screensaver.
                     let now = wallpaper.currentPreset?.name ?? "—"
                     Text(menuName(now))
-                        .textRole(.body)
+                        .settingsText(.body)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .frame(maxWidth: popUpMaxWidth, alignment: .trailing)
@@ -270,7 +359,7 @@ struct WallpaperSettingsSection: View {
     }
 
     private func powerHeader(_ title: String, symbol: String) -> some View {
-        Label(title, systemImage: symbol).textRole(.headline)
+        Label(title, systemImage: symbol).settingsText(.headline)
     }
 
     private var styleSelection: Binding<UUID?> {
@@ -290,7 +379,27 @@ struct WallpaperSettingsSection: View {
     /// segmented pickers switch to role-sized titles too) a pull-down whose title follows the
     /// text size, with the same checkmarked list inside.
     @ViewBuilder private var stylePicker: some View {
-        if typeSize < SettingsMetrics.scaledControlsFrom {
+        if console {
+            // Console: a key showing the style, the same checkmarked list inside.
+            Menu {
+                Picker("Style", selection: styleSelection) { styleChoices }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+            } label: {
+                HStack(spacing: Space.xs) {
+                    Text(menuName(wallpaper.settings.presetID.flatMap(model.preset)?.name ?? "None"))
+                        .textRole(.consoleBody)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(ConsoleInk.legend)
+                }
+            }
+            .menuStyle(.button)
+            .buttonStyle(.keycap)
+            .menuIndicator(.hidden)
+            .fixedSize()
+        } else if typeSize < SettingsMetrics.scaledControlsFrom {
             Picker("Style", selection: styleSelection) { styleChoices }
                 .labelsHidden()
         } else {
@@ -337,6 +446,14 @@ enum PowerPreset: String, CaseIterable, Identifiable {
         case .quality: return .purple
         case .balanced: return .blue
         case .saver: return .green
+        }
+    }
+    /// Its square's colour in Console (the design: orange, blue, green).
+    var consoleTint: Color {
+        switch self {
+        case .quality: return ConsoleInk.signal
+        case .balanced: return ConsoleInk.blue
+        case .saver: return ConsoleInk.green
         }
     }
     var summary: String {
@@ -398,9 +515,52 @@ private struct PowerPresetPicker: View {
     let current: PowerPreset?
     let choose: (PowerPreset) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.consoleSettings) private var console
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var hovered: PowerPreset?
 
     var body: some View {
+        if console { consoleBody } else { classicBody }
+    }
+
+    /// Console: three big keys (icon square, title, the one-line summary) side by side — a
+    /// column at accessibility text sizes — the chosen one sunk with an orange edge; the plain
+    /// sentence under them.
+    private var consoleBody: some View {
+        let stacked = typeSize.isAccessibilitySize
+        let layout = stacked ? AnyLayout(VStackLayout(spacing: Space.s)) : AnyLayout(HStackLayout(alignment: .top, spacing: Space.s))
+        return VStack(alignment: .leading, spacing: Space.s) {
+            layout {
+                ForEach(PowerPreset.allCases) { p in
+                    Button { choose(p) } label: {
+                        VStack(alignment: .leading, spacing: Space.xs) {
+                            HStack(alignment: .top) {
+                                ConsoleIconSquare(symbol: p.symbol, fill: p.consoleTint)
+                                Spacer(minLength: 0)
+                                if current == p { ConsoleLED(on: true) }
+                            }
+                            Text(p.title).textRole(.consoleTitle).foregroundStyle(ConsoleInk.ink)
+                            Text(p.summary).textRole(.consoleBodySmall).foregroundStyle(ConsoleInk.legend)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(Space.s)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    }
+                    .buttonStyle(ConsoleCardStyle(face: ConsoleInk.surface, selected: current == p))
+                    .accessibilityAddTraits(current == p ? [.isButton, .isSelected] : .isButton)
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            Text(current == nil ? "Custom — you've changed settings below. Pick a preset to start over."
+                                : "Sets everything below. Change anything to make it your own.")
+                .textRole(.consoleBodySmall).foregroundStyle(ConsoleInk.legend)
+                .contentTransition(.opacity)
+        }
+        .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: current)
+    }
+
+    private var classicBody: some View {
         VStack(alignment: .leading, spacing: Space.s) {
             HStack(spacing: Space.s) {
                 ForEach(PowerPreset.allCases) { p in
@@ -448,6 +608,8 @@ enum PowerSource {
     var title: String { self == .pluggedIn ? "When Plugged In" : "On Battery" }
     var symbol: String { self == .pluggedIn ? "powerplug.fill" : "battery.75percent" }
     var tint: Color { self == .pluggedIn ? .green : .orange }
+    /// Console: status green plugged in, amber on battery.
+    var consoleTint: Color { self == .pluggedIn ? ConsoleInk.green : ConsoleInk.amber }
 }
 
 /// A power source's section header: its symbol on a tile in its colour, the name, and a line
@@ -512,7 +674,64 @@ struct FrameRateControl: View {
         }
     }
 
+    @Environment(\.consoleSettings) private var console
+
+    /// Console: Forced / Dynamic / Reactive as keys (in the module's header, as the design).
+    static func modeKeys(source: PowerSource, mode: Binding<WallpaperSettings.FPSMode>) -> some View {
+        ModeKeys(source: source, mode: mode)
+    }
+
+    private struct ModeKeys: View {
+        let source: PowerSource
+        @Binding var mode: WallpaperSettings.FPSMode
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+        var body: some View {
+            ConsoleSegments(title: "\(source.title) frame rate mode",
+                            selection: $mode.animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion)),
+                            options: WallpaperSettings.FPSMode.allCases.map { ($0.title, $0) })
+        }
+    }
+
     var body: some View {
+        if console { consoleBody } else { classicBody }
+    }
+
+    /// Console: the big readout ("40–120 fps", how far it eases down), the range in a well,
+    /// the sentence. The mode keys sit in the module's header.
+    private var consoleBody: some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            HStack(alignment: .firstTextBaseline, spacing: Space.xxs) {
+                Text(adaptive ? "\(low)–\(limit)" : "\(limit)")
+                    .textRole(.readoutLarge).monospacedDigit()
+                    .foregroundStyle(ConsoleInk.ink)
+                    .contentTransition(.numericText())
+                Text("fps").textRole(.consoleValue).foregroundStyle(ConsoleInk.legend)
+                Spacer(minLength: Space.s)
+                if adaptive {
+                    Text("eases down to \(Int((Double(low) / Double(limit) * 100).rounded()))%")
+                        .textRole(.legend).foregroundStyle(ConsoleInk.legend)
+                        .contentTransition(.numericText())
+                        .transition(.opacity)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            RateRangeSlider(count: Self.stops.count, labels: Self.stops.map(String.init), tint: ConsoleInk.green,
+                            upper: Binding(get: { upper }, set: { i in
+                                limit = Self.stops[i]
+                                if let f = floor, Self.index(f) >= i { floor = i > 0 ? Self.stops[i - 1] : nil }
+                            }),
+                            lower: adaptive ? Binding(get: { lower }, set: { floor = Self.stops[$0] }) : nil)
+                .accessibilityLabel("\(source.title) frame rate")
+            Text(explain).textRole(.consoleBodySmall).foregroundStyle(ConsoleInk.legend)
+                .fixedSize(horizontal: false, vertical: true)
+                .contentTransition(.opacity)
+        }
+        .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: limit)
+        .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: floor)
+        .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: mode)
+    }
+
+    private var classicBody: some View {
         VStack(alignment: .leading, spacing: Space.s) {
             HStack(alignment: .center) {
                 Text("Frame rate").textRole(.bodyEmphasis)
@@ -567,11 +786,16 @@ struct RateRangeSlider: View {
     @Binding var upper: Int
     var lower: Binding<Int>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.consoleSettings) private var console
+    @Environment(\.colorScheme) private var scheme
     @State private var dragging: Handle?
     enum Handle { case lower, upper }
 
-    private let knob: CGFloat = 20
-    private let track: CGFloat = 5
+    /// Console: a 14 pt-wide keycap thumb, a 10 pt well (the design's stepped hardware track).
+    private var knob: CGFloat { console ? 14 : 20 }
+    private var knobHeight: CGFloat { console ? 20 : 20 }
+    private var track: CGFloat { console ? 10 : 5 }
+    @ScaledLength(relativeTo: .caption2) private var labelHeight: CGFloat = 14
 
     var body: some View {
         VStack(spacing: Space.xs) {
@@ -580,6 +804,18 @@ struct RateRangeSlider: View {
                 let x = { (i: Int) -> CGFloat in knob / 2 + w * CGFloat(i) / CGFloat(max(count - 1, 1)) }
                 let lo = lower?.wrappedValue
                 ZStack(alignment: .leading) {
+                    if console {
+                        // the well, its stops as notches, the range lit green from edge to edge
+                        Color.clear.frame(height: track).consoleWell(cornerRadius: 2)
+                        ForEach(0..<count, id: \.self) { i in
+                            Rectangle().fill(ConsoleInk.hairline).frame(width: 1, height: track - 4)
+                                .position(x: x(i), y: knobHeight / 2)
+                        }
+                        let from = lo == nil ? 0 : x(lo!), to = x(upper)
+                        RoundedRectangle(cornerRadius: 2, style: .continuous).fill(tint)
+                            .frame(width: max(to - from, track), height: track)
+                            .offset(x: from)
+                    } else {
                     Capsule().fill(Color.primary.opacity(0.1))
                         .frame(height: track)
                         .padding(.horizontal, knob / 2)
@@ -592,10 +828,11 @@ struct RateRangeSlider: View {
                         .frame(width: max(to - from, track), height: track)
                         .offset(x: from - (lo == nil ? knob / 2 : 0))
                         .padding(.leading, lo == nil ? knob / 2 : 0)
-                    if let lo { thumb(.lower).position(x: x(lo), y: knob / 2) }
-                    thumb(.upper).position(x: x(upper), y: knob / 2)
+                    }
+                    if let lo { thumb(.lower).position(x: x(lo), y: knobHeight / 2) }
+                    thumb(.upper).position(x: x(upper), y: knobHeight / 2)
                 }
-                .frame(height: knob)
+                .frame(height: knobHeight)
                 .contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 0)
                     .onChanged { g in
@@ -610,33 +847,52 @@ struct RateRangeSlider: View {
                     }
                     .onEnded { _ in dragging = nil })
             }
-            .frame(height: knob)
+            .frame(height: knobHeight)
             GeometryReader { geo in
                 let w = geo.size.width - knob
                 ForEach(0..<count, id: \.self) { i in
                     let on = i == upper || i == lower?.wrappedValue
                     let inside = i <= upper && i >= (lower?.wrappedValue ?? i)
+                    if console {
+                        // The design's stops: mono; inside the range green on graphite, bold
+                        // ink on the light body (green text there is too faint to read).
+                        let lit = inside && (lower != nil || on)
+                        Text(labels[i]).textRole(lit ? .consoleMonoStrong : .consoleMono)
+                            .foregroundStyle(lit ? (scheme == .dark ? ConsoleInk.green : ConsoleInk.ink) : ConsoleInk.legend)
+                            .fixedSize()
+                            .position(x: knob / 2 + w * CGFloat(i) / CGFloat(max(count - 1, 1)), y: labelHeight / 2)
+                    } else {
                     Text(labels[i]).textRole(.callout)
                         .foregroundStyle(on ? AnyShapeStyle(tint) : inside && lower != nil ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                         .fontWeight(on ? .semibold : .regular)
                         .fixedSize()
                         .position(x: knob / 2 + w * CGFloat(i) / CGFloat(max(count - 1, 1)), y: 8)
+                    }
                 }
             }
-            .frame(height: 16)
+            .frame(height: console ? labelHeight : 16)
         }
         .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: upper)
         .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: lower?.wrappedValue)
         .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: lower == nil)
     }
 
+    @ViewBuilder private func thumbFace(_ h: Handle) -> some View {
+        if console {
+            ConsoleThumb(pressed: dragging == h)
+                .frame(width: knob, height: knobHeight)
+        } else {
+            Circle()
+                .fill(Color.white)
+                .overlay(Circle().strokeBorder(Color.black.opacity(0.12), lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.25), radius: dragging == h ? 4 : 2, y: 1)
+                .frame(width: knob, height: knob)
+                .scaleEffect(dragging == h ? 1.12 : 1)
+        }
+    }
+
     private func thumb(_ h: Handle) -> some View {
-        Circle()
-            .fill(Color.white)
-            .overlay(Circle().strokeBorder(Color.black.opacity(0.12), lineWidth: 0.5))
-            .shadow(color: .black.opacity(0.25), radius: dragging == h ? 4 : 2, y: 1)
-            .frame(width: knob, height: knob)
-            .scaleEffect(dragging == h ? 1.12 : 1)
+        thumbFace(h)
             .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: dragging)
             .accessibilityElement()
             .accessibilityLabel(h == .upper ? (lower == nil ? "Frame rate" : "Highest") : "Lowest")

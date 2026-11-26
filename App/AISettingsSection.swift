@@ -18,17 +18,17 @@ struct AISettingsSection: View {
         let store = model.store.baseDir
         Section {
             Text("Assistants like Claude, Cursor or VS Code can design screensavers with you through DotStudio's MCP server: they read DotStudio's style guide, build styles from the scenes and looks or write new scenes of their own, preview them as images and check their GPU cost.")
-                .textRole(.body).wrapping()
+                .settingsText(.body).wrapping()
             // Recommended setup: each row says whether it's done, with the fix next to it.
             LabeledContent {
                 Text(ai.anyAssistantConnected ? "Connected" : "Not yet — connect one below")
-                    .textRole(.caption).foregroundStyle(.secondary)
+                    .settingsText(.caption).foregroundStyle(.secondary)
             } label: {
                 recommendedLabel(ai.anyAssistantConnected, "An AI app (recommended)", AIConnect.assistantHint)
             }
             LabeledContent {
                 HStack(spacing: layout.controlGap) {
-                    Text(ai.blenderReady ? "Ready" : ai.blenderStatus).textRole(.caption).foregroundStyle(.secondary).wrapping()
+                    Text(ai.blenderReady ? "Ready" : ai.blenderStatus).settingsText(.caption).foregroundStyle(.secondary).wrapping()
                     if !ai.blenderReady {
                         Button(scaled: "Get Blender…") { ai.getBlender() }
                             .help(AIConnect.blenderDownload.absoluteString)
@@ -39,7 +39,7 @@ struct AISettingsSection: View {
             }
             LabeledContent {
                 HStack(spacing: layout.controlGap) {
-                    Text(weather.enabled ? "On" : "Off").textRole(.caption).foregroundStyle(.secondary)
+                    Text(weather.enabled ? "On" : "Off").settingsText(.caption).foregroundStyle(.secondary)
                     if !weather.enabled { Button(scaled: "Turn On") { weather.enabled = true } }
                 }
             } label: {
@@ -47,7 +47,7 @@ struct AISettingsSection: View {
             }
             LabeledContent("How to use it") {
                 Text("1. Connect your assistant below.\n2. \(AIConnect.restartHint)\n3. Ask it for a screensaver — “\(AIConnect.examplePrompt)”\n4. \(AIConnect.libraryHint)")
-                    .textRole(.caption).foregroundStyle(.secondary).wrapping()
+                    .settingsText(.caption).foregroundStyle(.secondary).wrapping()
                     .multilineTextAlignment(.leading)
                     .textSelection(.enabled)
             }
@@ -55,7 +55,7 @@ struct AISettingsSection: View {
                 VStack(alignment: .leading, spacing: layout.labelGap) {
                     ForEach(AIConnect.abilities, id: \.title) { a in
                         (Text(a.title).fontWeight(.medium) + Text(" — " + a.detail))
-                            .textRole(.caption).foregroundStyle(.secondary).wrapping()
+                            .settingsText(.caption).foregroundStyle(.secondary).wrapping()
                     }
                 }
                 .multilineTextAlignment(.leading)
@@ -64,7 +64,7 @@ struct AISettingsSection: View {
                 VStack(alignment: .leading, spacing: layout.labelGap) {
                     ForEach(AIConnect.examples, id: \.self) { e in
                         HStack(alignment: .firstTextBaseline, spacing: layout.controlGap) {
-                            Text("“\(e)”").textRole(.caption).foregroundStyle(.secondary).wrapping()
+                            Text("“\(e)”").settingsText(.caption).foregroundStyle(.secondary).wrapping()
                                 .textSelection(.enabled)
                             Button(scaled: ai.copied == e ? "Copied" : "Copy") { ai.copy(e, e) }
                                 .adaptiveControlSize(.small)
@@ -90,7 +90,7 @@ struct AISettingsSection: View {
                 }
             }
             if let status = ai.desktopStatus {
-                Text(status).textRole(.caption).foregroundStyle(ai.desktopFailed ? .orange : .secondary).wrapping()
+                Text(status).settingsText(.caption).foregroundStyle(ai.desktopFailed ? .orange : .secondary).wrapping()
             }
             LabeledContent("Claude Code") {
                 Button(scaled: ai.copied == "code" ? "Copied" : "Copy Command") {
@@ -135,7 +135,7 @@ struct AISettingsSection: View {
                 .foregroundStyle(ok ? Color.green : Color.secondary)
         }
         .accessibilityValue(ok ? "Done" : "Not set up")
-        Text(detail).textRole(.caption).foregroundStyle(.secondary).wrapping()
+        Text(detail).settingsText(.caption).foregroundStyle(.secondary).wrapping()
     }
 
     /// The Settings form's scroll anchor for this section (the MCP popover's "More in Settings…").

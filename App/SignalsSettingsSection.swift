@@ -17,10 +17,10 @@ struct SignalsSettingsSection: View {
         let signals = model.library.signals ?? []
         Section {
             Text("Built in: weather, sun, time, battery, music")
-                .textRole(.caption).foregroundStyle(.secondary).wrapping()
+                .settingsText(.caption).foregroundStyle(.secondary).wrapping()
             if signals.isEmpty {
                 Text("Add a value from the web or a file, then use it in a When rule on the Screensaver card, or connect it to a custom scene's input in the editor.")
-                    .textRole(.body).foregroundStyle(.secondary).wrapping()
+                    .settingsText(.body).foregroundStyle(.secondary).wrapping()
             }
             ForEach(signals) { s in
                 SignalRow(signal: s, status: service.statuses[s.id], value: service.state.values[s.key],
@@ -73,12 +73,12 @@ struct SignalRow: View {
             Button(action: edit) {
                 VStack(alignment: .leading, spacing: layout.labelGap) {
                     HStack(spacing: Space.xs) {
-                        Text(signal.name).textRole(.bodyEmphasis).lineLimit(2)
+                        Text(signal.name).settingsText(.bodyEmphasis).lineLimit(2)
                         if signal.createdByAI { AIBadge() }
                     }
                     TimelineView(.periodic(from: .now, by: 60)) { ctx in
                         Text(detail(now: ctx.date))
-                            .textRole(.caption)
+                            .settingsText(.caption)
                             .foregroundStyle(problem != nil ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                             .wrapping()
                     }
@@ -90,12 +90,19 @@ struct SignalRow: View {
             .help("Edit “\(signal.name)”")
             Circle().fill(dotColor).frame(width: dot, height: dot)
                 .accessibilityLabel(problem ?? (fresh ? "Up to date" : "Idle"))
-            Toggle("On", isOn: Binding(get: { signal.enabled }, set: { setEnabled($0) }))
-                .labelsHidden()
-                .formSwitchSize()
-                .accessibilityLabel("\(signal.name) on")
+            if console {
+                ConsoleSwitch(isOn: Binding(get: { signal.enabled }, set: { setEnabled($0) }))
+                    .accessibilityLabel("\(signal.name) on")
+            } else {
+                Toggle("On", isOn: Binding(get: { signal.enabled }, set: { setEnabled($0) }))
+                    .labelsHidden()
+                    .formSwitchSize()
+                    .accessibilityLabel("\(signal.name) on")
+            }
         }
     }
+
+    @Environment(\.consoleSettings) private var console
 
     private var fresh: Bool { value?.isFresh() == true && value?.error == nil }
 
@@ -113,8 +120,8 @@ struct SignalRow: View {
 
     private var dotColor: Color {
         if !signal.enabled || !used { return Color.secondary.opacity(0.4) }
-        if problem != nil { return .orange }
-        return fresh ? .green : Color.secondary.opacity(0.4)
+        if problem != nil { return console ? ConsoleInk.amber : .orange }
+        return fresh ? (console ? ConsoleInk.green : .green) : Color.secondary.opacity(0.4)
     }
 
     private func detail(now: Date) -> String {
