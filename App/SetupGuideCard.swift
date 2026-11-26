@@ -46,6 +46,7 @@ struct SetupCard: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.layout) private var layout
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.console) private var console
     @ObservedObject var guide: SetupGuideModel
     /// The coach marks (panel only); UI shots pass a pinned one.
     @ObservedObject var coach: SetupCoach
@@ -129,7 +130,42 @@ struct SetupCard: View {
 
     // MARK: Status
 
-    private var statusHeader: some View {
+    @ViewBuilder private var statusHeader: some View {
+        if console {
+            consoleStatusHeader
+        } else {
+            classicStatusHeader
+        }
+    }
+
+    /// Console: the status as a module head — a coloured square with the glyph (green set up,
+    /// amber to do, orange to install), the title in the display face, the line under it.
+    private var consoleStatusHeader: some View {
+        let (symbol, tint, title, detail) = headerContent
+        let fill: Color = tint == .green ? ConsoleInk.green : tint == .orange ? ConsoleInk.amber : ConsoleInk.signal
+        return HStack(alignment: .center, spacing: Space.s) {
+            ConsoleIconSquare(symbol: Self.consoleGlyph(symbol), fill: fill)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).textRole(.consoleHeadline).foregroundStyle(ConsoleInk.ink).wrapping()
+                Text(detail).textRole(.consoleBodySmall).foregroundStyle(ConsoleInk.legend).wrapping()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// The header's circled glyph, bare (it sits on a square in Console).
+    private static func consoleGlyph(_ symbol: String) -> String {
+        switch symbol {
+        case "arrow.down.circle.fill": return "arrow.down"
+        case "exclamationmark.circle.fill": return "exclamationmark"
+        case "info.circle.fill": return "info"
+        case "checkmark.circle.fill": return "checkmark"
+        default: return symbol
+        }
+    }
+
+    private var classicStatusHeader: some View {
         let (symbol, tint, title, detail) = headerContent
         return HStack(alignment: .center, spacing: layout.itemGap) {
             Image(systemName: symbol)
@@ -206,6 +242,7 @@ struct SetupCard: View {
                 }
             }
         }
+        .overlay(alignment: .top) { if console { ConsoleHairline() } }
     }
 
     private func hint(_ i: Int) -> String {
@@ -213,26 +250,45 @@ struct SetupCard: View {
         return SetupSteps.all[i].hint
     }
 
-    private var navigation: some View {
-        HStack(spacing: layout.controlGap) {
-            Button { go(-1) } label: { Label("Back", systemImage: "chevron.left").textRole(.body) }
-                .disabled(current == 0)
-                .accessibilityHint("Shows the previous step")
-            Spacer(minLength: 0)
-            Text(current >= SetupSteps.count ? "All done" : "Step \(current + 1) of \(SetupSteps.count)")
-                .textRole(.callout)
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Spacer(minLength: 0)
-            Button { go(1) } label: {
-                Label("Next", systemImage: "chevron.right").labelStyle(TrailingIconLabelStyle()).textRole(.body)
+    @ViewBuilder private var navigation: some View {
+        if console {
+            // Console: ‹ BACK and NEXT › keys, the step as a mono readout between them.
+            HStack(spacing: layout.controlGap) {
+                Button { go(-1) } label: { SetupKeyLabel(title: "Back", symbol: "chevron.left") }
+                    .disabled(current == 0)
+                    .accessibilityHint("Shows the previous step")
+                Spacer(minLength: 0)
+                Text(current >= SetupSteps.count ? "All done" : "Step \(current + 1) of \(SetupSteps.count)")
+                    .textRole(.legend)
+                    .foregroundStyle(ConsoleInk.legend)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Button { go(1) } label: { SetupKeyLabel(title: "Next", symbol: "chevron.right", trailing: true) }
+                    .disabled(current >= SetupSteps.count - 1)
+                    .accessibilityHint("Shows the next step")
             }
-            .disabled(current >= SetupSteps.count - 1)
-            .accessibilityHint("Shows the next step")
+            .buttonStyle(.keycap(padding: HubMetrics.smallKey))
+        } else {
+            HStack(spacing: layout.controlGap) {
+                Button { go(-1) } label: { Label("Back", systemImage: "chevron.left").textRole(.body) }
+                    .disabled(current == 0)
+                    .accessibilityHint("Shows the previous step")
+                Spacer(minLength: 0)
+                Text(current >= SetupSteps.count ? "All done" : "Step \(current + 1) of \(SetupSteps.count)")
+                    .textRole(.callout)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Button { go(1) } label: {
+                    Label("Next", systemImage: "chevron.right").labelStyle(TrailingIconLabelStyle()).textRole(.body)
+                }
+                .disabled(current >= SetupSteps.count - 1)
+                .accessibilityHint("Shows the next step")
+            }
+            .buttonStyle(.bordered)
+            .adaptiveControlSize()
         }
-        .buttonStyle(.bordered)
-        .adaptiveControlSize()
     }
 
     private func go(_ delta: Int) {
@@ -253,37 +309,33 @@ struct SetupCard: View {
                 ReflowStack(rowAlignment: .center, columnAlignment: .leading, spacing: layout.controlGap) {
                     if !installed {
                         Button { model.installScreensaver(); guide.refresh() } label: {
-                            Label("Install", systemImage: "arrow.down.circle").textRole(.body)
+                            actionLabel("Install", symbol: "arrow.down.circle", consoleSymbol: "arrow.down")
                         }
-                        .buttonStyle(.borderedProminent)
+                        .modifier(SetupActionStyle(prominent: true))
                         .keyboardShortcut(.defaultAction)
-                        .adaptiveControlSize(.large)
                         .accessibilityHint("Installs the DotStudio screensaver, then opens System Settings")
                     } else {
                         let open = Button(action: onOpenSettings) {
-                            Label("Open System Settings", systemImage: "gearshape").textRole(.body)
+                            actionLabel("Open System Settings", symbol: "gearshape", consoleSymbol: "gearshape")
                         }
-                        .adaptiveControlSize(.large)
                         .help("Opens System Settings at Wallpaper, with this guide beside it")
                         .accessibilityHint("Opens System Settings at Wallpaper")
                         if status == .ready && !partial {
-                            open.buttonStyle(.bordered)
+                            open.modifier(SetupActionStyle(prominent: false))
                         } else {
-                            open.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                            open.modifier(SetupActionStyle(prominent: true)).keyboardShortcut(.defaultAction)
                         }
                         if context == .settings {
-                            Button { model.installScreensaver() } label: { Text("Reinstall").textRole(.body) }
-                                .buttonStyle(.bordered)
-                                .adaptiveControlSize(.large)
+                            Button { model.installScreensaver() } label: { actionLabel("Reinstall") }
+                                .modifier(SetupActionStyle(prominent: false))
                                 .help("Installs a fresh copy of the screensaver")
                         }
                     }
                     if context == .panel && coach.mode == .off {
                         Button { coach.guideMe() } label: {
-                            Label("Guide Me", systemImage: "hand.point.up.left").textRole(.body)
+                            actionLabel("Guide Me", symbol: "hand.point.up.left", consoleSymbol: "hand.point.up.left")
                         }
-                        .buttonStyle(.bordered)
-                        .adaptiveControlSize(.large)
+                        .modifier(SetupActionStyle(prominent: false))
                         .help("Rings each button to click in System Settings")
                         .accessibilityHint("Points at the controls to click in System Settings")
                     }
@@ -293,12 +345,64 @@ struct SetupCard: View {
                     Text(coach.trusted
                          ? "**Guide Me** rings each button in System Settings."
                          : "**Guide Me** rings each button in System Settings. It asks for Accessibility and only reads System Settings while this is open.")
-                        .textRole(.caption)
-                        .foregroundStyle(.secondary)
+                        .textRole(console ? .consoleBodySmall : .caption)
+                        .foregroundStyle(console ? AnyShapeStyle(ConsoleInk.legend) : AnyShapeStyle(.secondary))
                         .wrapping()
                 }
             }
         }
+    }
+}
+
+extension SetupCard {
+    /// An action's title: Classic's body-size Label (or Text); Console's key legend.
+    @ViewBuilder
+    fileprivate func actionLabel(_ title: String, symbol: String? = nil, consoleSymbol: String? = nil) -> some View {
+        if console {
+            SetupKeyLabel(title: title, symbol: consoleSymbol)
+        } else if let symbol {
+            Label(title, systemImage: symbol).textRole(.body)
+        } else {
+            Text(title).textRole(.body)
+        }
+    }
+}
+
+/// The card's action buttons: Classic's large bordered (prominent: filled) buttons; Console's
+/// keys (prominent: the orange key).
+private struct SetupActionStyle: ViewModifier {
+    let prominent: Bool
+    @Environment(\.console) private var console
+
+    func body(content: Content) -> some View {
+        if console {
+            content.buttonStyle(.keycap(prominent ? .signal : .plain))
+        } else if prominent {
+            content.buttonStyle(.borderedProminent).adaptiveControlSize(.large)
+        } else {
+            content.buttonStyle(.bordered).adaptiveControlSize(.large)
+        }
+    }
+}
+
+/// A Console key's legend: mono caps with an optional glyph before (or after) it.
+private struct SetupKeyLabel: View {
+    let title: String
+    var symbol: String? = nil
+    var trailing = false
+    @ScaledLength(relativeTo: .caption) private var glyph: CGFloat = 10
+
+    var body: some View {
+        HStack(spacing: Space.xxs + 2) {
+            if let symbol, !trailing { icon(symbol) }
+            Text(title).textRole(.consoleKey).lineLimit(1)
+            if let symbol, trailing { icon(symbol) }
+        }
+        .fixedSize()
+    }
+
+    private func icon(_ name: String) -> some View {
+        Image(systemName: name).font(.system(size: glyph, weight: .bold)).accessibilityHidden(true)
     }
 }
 
@@ -318,13 +422,80 @@ private struct SetupStepRow: View {
     enum State { case done, current, upcoming }
 
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
     @ScaledLength(relativeTo: .title3) private var disc: CGFloat = 26
+    @ScaledLength(relativeTo: .body) private var square: CGFloat = 24
+    @ScaledLength(relativeTo: .body) private var squareGlyph: CGFloat = 11
     let number: Int
     let step: SetupSteps.Step
     let hint: String
     let state: State
 
     var body: some View {
+        if console {
+            consoleBody
+        } else {
+            classicBody
+        }
+    }
+
+    /// Console: a ruled row — a small square key with the number (orange for the current
+    /// step, green with a tick once done, grey ahead), the line in the text face, the hint in
+    /// the legend grey; the current row sits on the surface colour.
+    private var consoleBody: some View {
+        HStack(alignment: .center, spacing: Space.s) {
+            consoleMarker
+            VStack(alignment: .leading, spacing: 2) {
+                Text(.init(step.line))
+                    .textRole(state == .current ? .consoleTitle : .consoleBody)
+                    .foregroundStyle(state == .done ? ConsoleInk.legend : ConsoleInk.ink)
+                    .wrapping()
+                if state == .current {
+                    Text(hint)
+                        .textRole(.consoleBodySmall)
+                        .foregroundStyle(ConsoleInk.legend)
+                        .wrapping()
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, Space.xs)
+        .padding(.horizontal, Space.xs)
+        .background(
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(state == .current ? ConsoleInk.surface : .clear)
+        )
+        .overlay(alignment: .bottom) { ConsoleHairline() }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Step \(number): \(SetupSteps.plain(step.line))")
+        .accessibilityValue(state == .done ? "Done" : state == .current ? "Current step. \(hint)" : "")
+        .accessibilityAddTraits(state == .current ? .isSelected : [])
+    }
+
+    private var consoleMarker: some View {
+        let shape = RoundedRectangle(cornerRadius: 2, style: .continuous)
+        return ZStack {
+            switch state {
+            case .done:
+                shape.fill(ConsoleInk.green)
+                Image(systemName: "checkmark")
+                    .font(.system(size: squareGlyph, weight: .bold))
+                    .foregroundStyle(ConsoleInk.onSignal)
+            case .current:
+                shape.fill(ConsoleInk.signal)
+                Text(String(format: "%02d", number)).textRole(.padNumber).foregroundStyle(ConsoleInk.onSignal)
+            case .upcoming:
+                shape.fill(ConsoleInk.keyFace)
+                shape.strokeBorder(ConsoleInk.hairline, lineWidth: 1)
+                Text(String(format: "%02d", number)).textRole(.padNumber).foregroundStyle(ConsoleInk.legend)
+            }
+        }
+        .frame(width: square, height: square)
+        .accessibilityHidden(true)
+    }
+
+    private var classicBody: some View {
         HStack(alignment: .center, spacing: layout.itemGap) {
             marker
             VStack(alignment: .leading, spacing: Space.xxs / 2) {
@@ -391,8 +562,40 @@ struct SetupStepPicture: View {
     var animate = true
 
     @State private var phase: SettingsMock.Phase = .clicked
+    @Environment(\.console) private var console
 
     var body: some View {
+        if console {
+            consoleBody
+        } else {
+            classicBody
+        }
+    }
+
+    /// Console: the drawn System Settings in a recessed well (a screen's surround); done, a
+    /// green square with a tick over it.
+    private var consoleBody: some View {
+        SettingsMock(step: step, phase: animate && !finished ? phase : .clicked)
+            .padding(Space.s)
+            .consoleWell(cornerRadius: 4)
+            .overlay {
+                if finished {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 4, style: .continuous).fill(ConsoleInk.panel.opacity(0.55))
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 30, weight: .bold))
+                            .foregroundStyle(ConsoleInk.onSignal)
+                            .frame(width: 64, height: 64)
+                            .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(ConsoleInk.green))
+                            .shadow(color: .black.opacity(0.2), radius: 6, y: 2)
+                    }
+                    .transition(.opacity)
+                }
+            }
+            .task(id: animate && !finished ? step : -1) { await loop() }
+    }
+
+    @ViewBuilder private var classicBody: some View {
         let shape = RoundedRectangle(cornerRadius: Radius.l, style: .continuous)
         SettingsMock(step: step, phase: animate && !finished ? phase : .clicked)
             .padding(Space.m)

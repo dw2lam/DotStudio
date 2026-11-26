@@ -8,6 +8,7 @@ import SwiftUI
 struct AISettingsSection: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.layout) private var layout
+    @Environment(\.consoleSettings) private var console
     @ObservedObject private var ai = AIConnect.shared
     @ObservedObject private var weather = WeatherService.shared
 
@@ -63,11 +64,28 @@ struct AISettingsSection: View {
             LabeledContent("Try asking") {
                 VStack(alignment: .leading, spacing: layout.labelGap) {
                     ForEach(AIConnect.examples, id: \.self) { e in
-                        HStack(alignment: .firstTextBaseline, spacing: layout.controlGap) {
-                            Text("“\(e)”").settingsText(.caption).foregroundStyle(.secondary).wrapping()
-                                .textSelection(.enabled)
-                            Button(scaled: ai.copied == e ? "Copied" : "Copy") { ai.copy(e, e) }
-                                .adaptiveControlSize(.small)
+                        if console {
+                            // Console: the prompt in a recessed well, its COPY key beside it.
+                            HStack(alignment: .center, spacing: layout.controlGap) {
+                                Text("“\(e)”").settingsText(.caption).foregroundStyle(ConsoleInk.ink).wrapping()
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, Space.xs)
+                                    .padding(.vertical, Space.xs - 2)
+                                    .consoleWell(cornerRadius: 3)
+                                Button { ai.copy(e, e) } label: {
+                                    Text(ai.copied == e ? "Copied" : "Copy").textRole(.consoleKey).lineLimit(1).fixedSize()
+                                }
+                                .buttonStyle(.keycap(padding: HubMetrics.smallKey))
+                                .accessibilityLabel("Copy example")
+                            }
+                        } else {
+                            HStack(alignment: .firstTextBaseline, spacing: layout.controlGap) {
+                                Text("“\(e)”").settingsText(.caption).foregroundStyle(.secondary).wrapping()
+                                    .textSelection(.enabled)
+                                Button(scaled: ai.copied == e ? "Copied" : "Copy") { ai.copy(e, e) }
+                                    .adaptiveControlSize(.small)
+                            }
                         }
                     }
                 }
@@ -90,7 +108,8 @@ struct AISettingsSection: View {
                 }
             }
             if let status = ai.desktopStatus {
-                Text(status).settingsText(.caption).foregroundStyle(ai.desktopFailed ? .orange : .secondary).wrapping()
+                Text(status).settingsText(.caption)
+                    .foregroundStyle(ai.desktopFailed ? (console ? ConsoleInk.signalInk : .orange) : .secondary).wrapping()
             }
             LabeledContent("Claude Code") {
                 Button(scaled: ai.copied == "code" ? "Copied" : "Copy Command") {
@@ -117,7 +136,7 @@ struct AISettingsSection: View {
                     : "Assistants can make styles for you to try; setting one as your screensaver or wallpaper stays with you.")
                 if !ai.pathIsStable {
                     SettingsNote("Move DotStudio to Applications first: assistants remember where its server is, and this copy may move.")
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(console ? ConsoleInk.signalInk : .orange)
                 }
             }
         }
@@ -131,8 +150,13 @@ struct AISettingsSection: View {
         Label {
             Text(title)
         } icon: {
-            Image(systemName: ok ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(ok ? Color.green : Color.secondary)
+            if console {
+                // Console: a status LED, lit green when it's set up (the value says Done).
+                ConsoleLED(on: ok, color: ConsoleInk.green)
+            } else {
+                Image(systemName: ok ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(ok ? Color.green : Color.secondary)
+            }
         }
         .accessibilityValue(ok ? "Done" : "Not set up")
         Text(detail).settingsText(.caption).foregroundStyle(.secondary).wrapping()

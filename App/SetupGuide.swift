@@ -495,6 +495,7 @@ struct LoginNudgeBanner: View {
     @ObservedObject private var nudge = LoginNudge.shared
     @Environment(\.layout) private var layout
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.console) private var console
     /// Only for this kind; nil: either.
     var kind: LoginNudge.Kind?
     /// Space above it when it shows (the card's banner slot has none of its own).
@@ -511,7 +512,54 @@ struct LoginNudgeBanner: View {
         .animation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion), value: nudge.pending)
     }
 
+    @ViewBuilder
     private func content(_ pending: LoginNudge.Kind) -> some View {
+        if console {
+            consoleContent(pending)
+        } else {
+            classicContent(pending)
+        }
+    }
+
+    private func sentence(_ pending: LoginNudge.Kind) -> String {
+        let what = pending == .wallpaper ? "your live wallpaper keeps playing" : "music keeps showing on your screensaver"
+        return "Start DotStudio at login so \(what) after a restart."
+    }
+
+    /// Console: a module on the surface with an orange edge — the power glyph on an orange
+    /// square, the sentence, then NOT NOW (a grey key) and TURN ON (the orange key).
+    private func consoleContent(_ pending: LoginNudge.Kind) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 4, style: .continuous)
+        return ReflowStack(rowAlignment: .center, columnAlignment: .leading, spacing: layout.itemGap) {
+            HStack(alignment: .center, spacing: Space.s) {
+                ConsoleIconSquare(symbol: "power", fill: ConsoleInk.signal)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Open at login").textRole(.legend).foregroundStyle(ConsoleInk.signalInk)
+                        .accessibilityHidden(true)
+                    Text(sentence(pending))
+                        .textRole(.consoleBodySmall)
+                        .foregroundStyle(ConsoleInk.ink)
+                        .wrapping()
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: Space.xs) {
+                Button { nudge.notNow() } label: { Text("Not Now").textRole(.consoleKey) }
+                    .buttonStyle(.keycap(padding: HubMetrics.smallKey))
+                Button { nudge.turnOn() } label: { Text("Turn On").textRole(.consoleKey) }
+                    .buttonStyle(.keycap(.signal, padding: HubMetrics.smallKey))
+                    .accessibilityHint("Opens DotStudio quietly in the menu bar when you log in")
+            }
+            .fixedSize()
+        }
+        .padding(Space.s)
+        .background(shape.fill(ConsoleInk.surface))
+        .overlay(shape.strokeBorder(ConsoleInk.signal.opacity(0.7), lineWidth: 1))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Suggestion: start DotStudio at login")
+    }
+
+    private func classicContent(_ pending: LoginNudge.Kind) -> some View {
         let shape = RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
         let what = pending == .wallpaper ? "your live wallpaper keeps playing" : "music keeps showing on your screensaver"
         return ReflowStack(rowAlignment: .center, columnAlignment: .leading, spacing: layout.itemGap) {
