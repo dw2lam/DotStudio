@@ -492,9 +492,12 @@ enum UIShots {
             AnyView(MCPPopover().background(Color(nsColor: .windowBackgroundColor))) }))
         s.append(Screen(name: "playlist-editor", frame: .fixed(CGSize(width: 420, height: 460)),
                         prepare: { $0.lineup($0.playlist) }, view: { _ in AnyView(PlaylistEditor()) }))
+        // The Source popover's content (Console: on the popover's panel colour, LibraryView)
+        let sourceConsole = Appearance.effective(saved: .classic) == .console
         for kind in ["slideshow", "photo", "video", "gradient"] {
             s.append(Screen(name: "source-\(kind)", frame: .fit(width: 320), view: { st in
-                AnyView(SourceEditor(source: .constant(st.source(kind)), model: st.model).padding(Space.m))
+                let editor = SourceEditor(source: .constant(st.source(kind)), model: st.model).padding(Space.m)
+                return sourceConsole ? AnyView(editor.background(ConsoleInk.panel)) : AnyView(editor)
             }))
         }
 
