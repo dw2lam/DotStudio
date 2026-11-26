@@ -28,7 +28,7 @@ import AppKit
 enum Appearance: String, CaseIterable, Identifiable {
     case classic, console
     var id: String { rawValue }
-    var title: String { self == .classic ? "Classic" : "Console" }
+    var title: String { self == .classic ? "Classic" : "Retro" }
     static let key = "appearance"
     /// DEV / offscreen renders: DOTSTUDIO_APPEARANCE=console|classic wins over the saved choice
     /// (UIShots never writes the user's own preference).
