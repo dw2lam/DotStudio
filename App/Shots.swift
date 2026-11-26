@@ -486,10 +486,25 @@ enum UIShots {
             AnyView(AddEffectPicker(source: st.model.library.source, thumbnailer: st.model.thumbnailer,
                                     include: { $0.isScene }, prompt: "Search scenes") { _ in })
         }))
-        // Console's MCP popover is two columns (~720 pt); Classic's one (340 pt)
-        let mcpWidth: CGFloat = Appearance.effective(saved: .classic) == .console ? 720 : 340
-        s.append(Screen(name: "mcp-popover", frame: .fit(width: mcpWidth), view: { _ in   // (a popover draws its own material)
-            AnyView(MCPPopover().background(Color(nsColor: .windowBackgroundColor))) }))
+        // The MCP popover (Console: one 400 pt column; Classic: 340 pt), its state pinned
+        // (AIConnect.Pinned) so it never depends on this Mac: in Applications, nothing
+        // connected, Blender ready, weather on — then added to Claude Desktop (and Claude
+        // Code), not in Applications, extras needing action, and the other-apps JSON.
+        let mcpWidth: CGFloat = Appearance.effective(saved: .classic) == .console ? 400 : 340
+        let mcpStates: [(tag: String, pin: AIConnect.Pinned, weather: Bool, client: MCPPopover.Client)] = [
+            ("", AIConnect.Pinned(), true, .code),
+            ("-added", AIConnect.Pinned(desktop: true, code: true), true, .code),
+            ("-move", AIConnect.Pinned(stable: false), true, .code),
+            ("-extras", AIConnect.Pinned(blender: nil), false, .code),
+            ("-otherapps", AIConnect.Pinned(desktop: true), true, .other),
+        ]
+        for state in mcpStates {
+            s.append(Screen(name: "mcp-popover\(state.tag)", frame: .fit(width: mcpWidth), prepare: { _ in
+                AIConnect.shared.pinned = state.pin
+                WeatherService.shared.enabled = state.weather
+            }, view: { _ in   // (a popover draws its own material)
+                AnyView(MCPPopover(client: state.client).background(Color(nsColor: .windowBackgroundColor))) }))
+        }
         s.append(Screen(name: "playlist-editor", frame: .fixed(CGSize(width: 420, height: 460)),
                         prepare: { $0.lineup($0.playlist) }, view: { _ in AnyView(PlaylistEditor()) }))
         // The Source popover's content (Console: on the popover's panel colour, LibraryView)
@@ -855,6 +870,7 @@ enum UIShots {
             if WallpaperController.shared.userPaused { WallpaperController.shared.togglePause() }
             AppPresence.shared.menuBarMode = true   // the default (prefs are in-memory here)
             if !WeatherService.shared.enabled { WeatherService.shared.enabled = true }
+            AIConnect.shared.pinned = nil            // (the MCP popover screens pin their own)
             LoginItem.demoStatus = .off             // never SMAppService here (SetupGuide.swift)
             LoginNudge.shared.setDemo(nil)
             SignalService.shared.setDemo(values: [:], rule: nil, statuses: [:])   // no When rule playing
