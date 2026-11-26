@@ -739,7 +739,7 @@ struct ConsoleKnob: View {
         let ring = size / 2 - size * 0.045           // the scale's radius
         let dot = max(size * 0.04, 2)                 // a tick dot
         let capD = size * 0.62                        // the cap's diameter
-        let skirt = max(size * 0.045, 2)              // how much of its side shows under it
+        let skirt = max(size * 0.09, 3)               // how much of its side shows under it (taller knob, 2026-11-26)
         let lit = hovering || dragging || focused
         return ZStack {
             // the printed scale: dots the value has passed darken
@@ -766,7 +766,7 @@ struct ConsoleKnob: View {
             // knurled edge — with a coloured cap set into the top, the pointer on the cap and
             // an engraved index on the metal.
             let press = dragging ? skirt * 0.5 : 0
-            let insetD = capD * 0.6
+            let insetD = capD * 0.78                  // the cap: mostly colour, a metal ring round it
             // the body's side: darker metal, and the soft drop shadow
             Circle()
                 .fill(LinearGradient(colors: [ConsoleInk.metalSide.opacity(0.9), ConsoleInk.metalSide],
@@ -809,7 +809,7 @@ struct ConsoleKnob: View {
             // the engraved index on the metal, turning with the knob
             Capsule()
                 .fill(Color.black.opacity(0.55))
-                .frame(width: max(size * 0.03, 1.5), height: (capD - insetD) / 2 - 2)
+                .frame(width: max(size * 0.03, 1.5), height: max((capD - insetD) / 2 - 1.5, 1.5))
                 .offset(y: -(insetD / 2 + (capD - insetD) / 4))
                 .rotationEffect(angle(fraction))
                 .offset(y: press)
