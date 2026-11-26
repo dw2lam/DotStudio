@@ -356,7 +356,7 @@ struct SignalEditorSheet: View {
     /// Console: Delete and Cancel as grey keys, Save (or Add) the orange one — the Settings
     /// sheet's Done.
     @ViewBuilder private var consoleButtons: some View {
-        let pad = EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16)
+        let pad = EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
         if !isNew {
             Button { delete() } label: { Text("Delete").textRole(.consoleKey) }
                 .buttonStyle(.keycap(padding: pad))

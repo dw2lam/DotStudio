@@ -1,6 +1,6 @@
 //  Console.swift — the "Console" appearance (issue #6, experimental): DotStudio as a small,
 //  precise instrument. Since 2026-11-26 it follows the owner's own Google Stitch redesign: a
-//  warm off-white / graphite body, keys with travel (a 4 pt skirt that disappears when pressed),
+//  warm off-white / graphite body, keys with travel (a slim 2 pt skirt the face sinks into),
 //  recessed wells, one orange signal, and three bundled SIL OFL faces (App/Fonts, registered
 //  through ATSApplicationFontsPath): Wix Madefor Display for titles, Instrument Sans for text,
 //  Source Code Pro for legends and readouts.
@@ -91,7 +91,7 @@ enum ConsoleInk {
     static let well = dynamic(rgb(0xFFFFFF), rgb(0x0E0E11))
     /// A key's face: #D8D8D1 / #2A2A2D.
     static let keyFace = dynamic(rgb(0xD8D8D1), rgb(0x2A2A2D))
-    /// A key's skirt (the 4 pt side you see under its face until it's pressed).
+    /// A key's skirt (the 2 pt side you see under its face until it's pressed).
     static let keySkirt = dynamic(rgb(0xB8B8B0), rgb(0x070709))
     /// The middle surface (sidebar, inset groups): #E2E2DC / #1F1F22.
     static let surface = dynamic(rgb(0xE2E2DC), rgb(0x1F1F22))
@@ -124,6 +124,33 @@ enum ConsoleInk {
     static let green = Color(nsColor: rgb(0x00D26A))
     /// Status amber (live weather, a warning): #FFB800.
     static let amber = Color(nsColor: rgb(0xFFB800))
+
+    // More signals, each with one job (2026-11-26, "a variety of vibrant colours… green for
+    // the toggles"): green = ON (switches, what's playing), yellow = a Look / live weather,
+    // pink = a pack tag / day & night. Orange stays the primary action and the screensaver;
+    // blue the wallpaper and a chosen segment. Each has a key face, a skirt, the ink printed
+    // on its face and an ink for text on the body (≥ 4.5:1 on the light chassis).
+
+    /// A switch that's on, a green key: #00BD5F on the light body (a step deeper, so the
+    /// near-black thumb and the fill both hold an edge on off-white), #00D26A on graphite.
+    static let greenKey = dynamic(rgb(0x00BD5F), rgb(0x00D26A))
+    static let greenSkirt = dynamic(rgb(0x00803F), rgb(0x005C2D))
+    /// Text on a green key / a green switch's thumb: near-black green (≈ 8:1 on the fill).
+    static let onGreen = Color(nsColor: rgb(0x00170A))
+    /// Green as text/edge on the body: #00753A (≈ 4.8:1) / #5CF0A0.
+    static let greenInk = dynamic(rgb(0x00753A), rgb(0x5CF0A0))
+    /// A yellow key (Looks, live weather): #FFC400.
+    static let yellow = Color(nsColor: rgb(0xFFC400))
+    static let yellowSkirt = dynamic(rgb(0xA67F00), rgb(0x7A5E00))
+    static let onYellow = Color(nsColor: rgb(0x1F1700))
+    /// Yellow as text on the body: #7A5A00 (≈ 5.3:1) / #FFD54D.
+    static let yellowInk = dynamic(rgb(0x7A5A00), rgb(0xFFD54D))
+    /// A pink key (a pack tag: Clocks, Nature…): #FF4D94.
+    static let pink = Color(nsColor: rgb(0xFF4D94))
+    static let pinkSkirt = dynamic(rgb(0xB3245F), rgb(0x8A1A48))
+    static let onPink = Color(nsColor: rgb(0x2A0014))
+    /// Pink as text on the body: #C2185B (≈ 4.8:1) / #FF8FBF.
+    static let pinkInk = dynamic(rgb(0xC2185B), rgb(0xFF8FBF))
 
     /// The four knob caps, in order (a style's dials cycle through them): the Stitch palette's
     /// own colours — the wallpaper blue, status green, a white cap, the signal orange.
@@ -245,32 +272,119 @@ private struct ConsoleWell: ViewModifier {
 
 // MARK: - Keys
 
-/// A Console keycap (the Stitch key): a face with a 4 pt skirt under it that the face sinks into when pressed
-/// (80 ms, ease-out), a soft drop shadow, a top highlight, and a haptic tick on press.
+/// A Console keycap (the Stitch key, refined 2026-11-26): a face on a slim 2 pt skirt that the
+/// face sinks into when pressed (80 ms, ease-out), a hairline edge, a faint top light, a short
+/// contact shadow — and on a coloured key a soft, wide glow in its own colour (a lit key, not
+/// a drop shadow). A haptic tick on press.
 ///  • `.plain`  — the grey key (icon keys, filter keys, Customize).
-///  • `.signal` — the orange key (Preview, Done, the selected filter, a latched choice).
-///  • `.blue`   — the wallpaper's blue (Play while the wallpaper plays).
-/// `latched` draws a key that's held down (a selected segment): its face rests 2 pt down in
-/// its skirt (a press takes it the full 3 pt). Only the face moves: the skirt's base — the
-/// key's footprint — and the layout size are the same in every state, so a latched key's
-/// bottom edge lines up with its neighbours'.
+///  • `.signal` — the orange key (Preview, Done, the primary action, ALL).
+///  • `.blue`   — the wallpaper's blue (Play while the wallpaper plays, a chosen segment).
+///  • `.green` / `.yellow` / `.pink` — a filter key's own colour while it's chosen (Playing,
+///    Looks, a pack tag); green is also ON.
+/// `latched` draws a key that's held down (a selected segment): its face rests 1 pt down in
+/// its skirt (a press takes it 1.5 pt). Only the face moves: the skirt's base — the key's
+/// footprint — and the layout size are the same in every state, so a latched key's bottom
+/// edge lines up with its neighbours'.
 struct ConsoleKeycapStyle: ButtonStyle {
-    enum Tint { case plain, signal, blue }
+    enum Tint { case plain, signal, blue, green, yellow, pink }
+    /// The skirt: how much of the key's side shows under its face (4 pt before 2026-11-26 —
+    /// the owner found the keys too thick). The faces' padding grew by what the skirt gave
+    /// up, so a key's footprint is as tall as before.
+    static let skirt: CGFloat = 2
     /// A press sinks the face this far into its skirt; a latched key rests at `latchedTravel`.
-    static let travel: CGFloat = 3
-    static let latchedTravel: CGFloat = 2
+    static let travel: CGFloat = 1.5
+    static let latchedTravel: CGFloat = 1
     var tint: Tint = .plain
     var latched = false
     var cornerRadius: CGFloat = 4
     /// Inner padding; nil = the label sets its own size (icon keys use a fixed frame).
     var padding: EdgeInsets? = ConsoleKeycapStyle.standardPadding
-    /// A standard key's padding: 8 × 14 around its legend (6 × 12 before 2026-11-26), so a
-    /// one-line key's face is about 30 pt tall, plus its skirt.
-    static let standardPadding = EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14)
+    /// A standard key's padding: 9 × 14 around its legend (8 × 14 over a 4 pt skirt, 6 × 12
+    /// before that), so a one-line key's face is about 32 pt tall, plus its skirt.
+    static let standardPadding = EdgeInsets(top: 9, leading: 14, bottom: 9, trailing: 14)
 
     func makeBody(configuration: Configuration) -> some View {
         ConsoleKeycapBody(configuration: configuration, tint: tint, latched: latched,
                        cornerRadius: cornerRadius, padding: padding)
+    }
+}
+
+extension ConsoleKeycapStyle.Tint {
+    /// The key's face.
+    var face: Color {
+        switch self {
+        case .plain: ConsoleInk.keyFace
+        case .signal: ConsoleInk.signal
+        case .blue: ConsoleInk.blue
+        case .green: ConsoleInk.greenKey
+        case .yellow: ConsoleInk.yellow
+        case .pink: ConsoleInk.pink
+        }
+    }
+    /// Its side, under the face.
+    var skirt: Color {
+        switch self {
+        case .plain: ConsoleInk.keySkirt
+        case .signal: ConsoleInk.signalSkirt
+        case .blue: ConsoleInk.blueSkirt
+        case .green: ConsoleInk.greenSkirt
+        case .yellow: ConsoleInk.yellowSkirt
+        case .pink: ConsoleInk.pinkSkirt
+        }
+    }
+    /// What prints on the face: dark ink on the bright keys, white on blue.
+    var ink: Color {
+        switch self {
+        case .plain: ConsoleInk.ink
+        case .signal: ConsoleInk.onSignal
+        case .blue: .white
+        case .green: ConsoleInk.onGreen
+        case .yellow: ConsoleInk.onYellow
+        case .pink: ConsoleInk.onPink
+        }
+    }
+    var isPlain: Bool { self == .plain }
+}
+
+/// The keys' light and shade, shared by every key-like part (ConsoleKeycapStyle,
+/// consoleKeyFace, the Settings cards, the switches' thumbs) so they read as one family.
+enum ConsoleKeyLight {
+    /// The face's wash, top to bottom: a faint light falling off to a hair of shade.
+    static func wash(_ tint: ConsoleKeycapStyle.Tint, dark: Bool) -> LinearGradient {
+        let top = tint.isPlain ? (dark ? 0.035 : 0.3) : 0.08
+        let bottom = tint.isPlain ? (dark ? 0.08 : 0.025) : 0.03
+        return LinearGradient(colors: [.white.opacity(top), .black.opacity(bottom)], startPoint: .top, endPoint: .bottom)
+    }
+    /// The lit top edge (gone while the key is down), drawn at `highlightWidth`.
+    static func highlight(_ tint: ConsoleKeycapStyle.Tint, dark: Bool, down: Bool) -> LinearGradient {
+        let o = down ? 0 : (tint.isPlain ? (dark ? 0.09 : 0.55) : 0.28)
+        return LinearGradient(colors: [.white.opacity(o), .clear], startPoint: .top, endPoint: .center)
+    }
+    static let highlightWidth: CGFloat = 0.75
+    /// A grey key's edge: a 0.5 pt line (1 pt hairline before 2026-11-26); orange and 1 pt
+    /// under the pointer. Coloured keys carry their edge in their skirt.
+    static let edgeWidth: CGFloat = 0.5
+    static let hoverEdgeWidth: CGFloat = 1
+    static func edge(hovering: Bool, dark: Bool) -> Color {
+        hovering ? ConsoleInk.signal.opacity(0.85) : ConsoleInk.outline.opacity(dark ? 0.45 : 0.35)
+    }
+    /// A press's shade inside the face.
+    static func pressShade(dark: Bool, down: Bool) -> Color { .black.opacity(down ? (dark ? 0.4 : 0.12) : 0) }
+
+    /// The shadow under the skirt. A grey key: a short contact shadow (a 6 pt drop before
+    /// 2026-11-26). A coloured key — or a grey one under the pointer — a soft glow in its
+    /// colour: wide (12 pt), low (0.2; 0.3 on graphite, where a light should read as lit),
+    /// a little brighter under the pointer, mostly gone while pressed.
+    struct Shade { let color: Color; let radius: CGFloat; let y: CGFloat }
+    static func shade(_ tint: ConsoleKeycapStyle.Tint, dark: Bool, down: Bool, hovering: Bool) -> Shade {
+        if tint.isPlain {
+            if hovering && !down {
+                return Shade(color: ConsoleInk.signal.opacity(dark ? 0.2 : 0.14), radius: 8, y: 1)
+            }
+            return Shade(color: .black.opacity(down ? 0 : (dark ? 0.32 : 0.07)), radius: down ? 0 : 1.5, y: 1)
+        }
+        let o = down ? (dark ? 0.12 : 0.08) : (dark ? 0.3 : 0.2) + (hovering ? 0.08 : 0)
+        return Shade(color: tint.face.opacity(o), radius: down ? 6 : 12, y: down ? 0.5 : 2)
     }
 }
 
@@ -285,55 +399,50 @@ private struct ConsoleKeycapBody: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
 
-    /// How far a press sinks the face into the skirt…
-    static let travel: CGFloat = ConsoleKeycapStyle.travel
-    /// …and where a latched key's face rests (part way: a latching switch held down).
-    static let latchedTravel: CGFloat = ConsoleKeycapStyle.latchedTravel
-    static let skirt: CGFloat = 4
-
     var body: some View {
-        let sink: CGFloat = configuration.isPressed ? Self.travel : latched ? Self.latchedTravel : 0
+        let skirtH = ConsoleKeycapStyle.skirt
+        let sink: CGFloat = configuration.isPressed ? ConsoleKeycapStyle.travel : latched ? ConsoleKeycapStyle.latchedTravel : 0
         let down = sink > 0
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         let dark = scheme == .dark
-        let face: Color = tint == .signal ? ConsoleInk.signal : tint == .blue ? ConsoleInk.blue : ConsoleInk.keyFace
-        let skirt: Color = tint == .signal ? ConsoleInk.signalSkirt : tint == .blue ? ConsoleInk.blueSkirt : ConsoleInk.keySkirt
-        let ink: Color = tint == .signal ? ConsoleInk.onSignal : tint == .blue ? .white
-            : (hovering && enabled ? ConsoleInk.signalInk : ConsoleInk.ink)
-        let topLight = tint == .plain ? (dark ? 0.07 : 0.75) : 0.14
-        let lift = down ? 0 : (tint == .plain ? (dark ? 0.6 : 0.12) : 0.3)
-        let glow: Color = tint == .signal ? ConsoleInk.signal : tint == .blue ? ConsoleInk.blue : .black
+        let hot = hovering && enabled
+        let ink: Color = tint.isPlain ? (hot ? ConsoleInk.signalInk : ConsoleInk.ink) : tint.ink
+        let shade = ConsoleKeyLight.shade(tint, dark: dark, down: down, hovering: hot)
 
         configuration.label
             .foregroundStyle(ink)
             .padding(padding ?? EdgeInsets())
             .background {
-                shape.fill(face)
-                    .overlay(shape.fill(LinearGradient(colors: [.white.opacity(topLight), .black.opacity(tint == .plain ? (dark ? 0.16 : 0.06) : 0)],
-                                                       startPoint: .top, endPoint: .bottom)))
-                    // pressed: a shadow inside the face from the top
-                    .overlay(shape.fill(Color.clear.shadow(.inner(color: .black.opacity(down ? (dark ? 0.55 : 0.2) : 0), radius: 1.5, y: 2))))
-                    // the top highlight
+                shape.fill(tint.face)
+                    .overlay(shape.fill(ConsoleKeyLight.wash(tint, dark: dark)))
+                    // pressed: a shade inside the face from the top
+                    .overlay(shape.fill(Color.clear.shadow(.inner(color: ConsoleKeyLight.pressShade(dark: dark, down: down), radius: 1, y: 1))))
+                    // the top light
                     .overlay(alignment: .top) {
-                        shape.strokeBorder(LinearGradient(colors: [.white.opacity(down ? 0 : (tint == .plain ? (dark ? 0.18 : 0.95) : 0.45)), .clear],
-                                                          startPoint: .top, endPoint: .center), lineWidth: 1)
+                        shape.strokeBorder(ConsoleKeyLight.highlight(tint, dark: dark, down: down), lineWidth: ConsoleKeyLight.highlightWidth)
                     }
             }
-            .overlay(shape.strokeBorder(tint == .plain ? (hovering && enabled ? ConsoleInk.signal : ConsoleInk.hairline) : .clear, lineWidth: 1))
-            .offset(y: sink)
-            // the skirt, then the drop shadow under everything. The skirt never moves: its base
-            // is the key's footprint, level with its neighbours' whether the key is up, latched
-            // or pressed — the face sinks into it.
-            .background {
-                shape.fill(skirt)
-                    .offset(y: Self.skirt)
-                    .shadow(color: glow.opacity(lift * (tint == .plain ? 1 : 0.9)), radius: 6, y: down ? 1 : 6)
+            .overlay {
+                if tint.isPlain {
+                    shape.strokeBorder(ConsoleKeyLight.edge(hovering: hot, dark: dark),
+                                       lineWidth: hot ? ConsoleKeyLight.hoverEdgeWidth : ConsoleKeyLight.edgeWidth)
+                }
             }
-            .padding(.bottom, Self.skirt)          // reserve the skirt's room so keys don't overlap rows
+            .offset(y: sink)
+            // the skirt, then its shadow or glow under everything. The skirt never moves: its
+            // base is the key's footprint, level with its neighbours' whether the key is up,
+            // latched or pressed — the face sinks into it.
+            .background {
+                shape.fill(tint.skirt)
+                    .offset(y: skirtH)
+                    .shadow(color: shade.color, radius: shade.radius, y: shade.y)
+            }
+            .padding(.bottom, skirtH)          // reserve the skirt's room so keys don't overlap rows
             .opacity(enabled ? 1 : 0.45)
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.08), value: sink)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: hot)
             .onChange(of: configuration.isPressed) { _, pressed in
                 if pressed { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
             }
