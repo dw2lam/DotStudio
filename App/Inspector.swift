@@ -98,7 +98,7 @@ struct SegmentedChoice<Value: Hashable>: View {
         // could swap an AppKit segmented control in and out as the width settled) is the
         // pattern that crashed on macOS 26 inside the inspector's list — see ColorWellsRow.
         if console {
-            ConsoleSegments(title: title, selection: $selection, options: options)
+            InspectorSegments(title: title, selection: $selection, options: options)
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             RoleSegments(title: title, selection: $selection, options: options)
@@ -1094,10 +1094,10 @@ struct ParamRow: View {
                               selection: Binding(get: { Int(value.rounded()) }, set: { value = Double($0) }),
                               options: options.enumerated().map { ($0.element, $0.offset) })
             } else if spec.isToggle {
-                ConsoleSwitch(label: spec.label, isOn: Binding(get: { value > 0.5 }, set: { value = $0 ? 1 : 0 }))
+                InspectorSwitch(label: spec.label, isOn: Binding(get: { value > 0.5 }, set: { value = $0 ? 1 : 0 }))
                     .frame(maxWidth: .infinity, alignment: .trailing)
             } else {
-                ConsoleSlider(label: spec.label, value: $value, range: spec.min...spec.max, step: spec.step,
+                InspectorFader(label: spec.label, value: $value, range: spec.min...spec.max, step: spec.step,
                               defaultValue: spec.def, format: format)
             }
         }

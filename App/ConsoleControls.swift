@@ -6,15 +6,15 @@
 //    • ConsoleInspectorRow — a parameter row: mono-caps legend on the left, its control in a
 //                            fixed column on the right, a hairline under it. Stacks (legend
 //                            above the control) at the sizes where every inspector row does.
-//    • ConsoleSlider       — a fader: a recessed 8 pt track, a square keycap thumb, the value in
+//    • InspectorFader       — a fader: a recessed 8 pt track, a square keycap thumb, the value in
 //                            mono beside it. A detent (a haptic tick) at the default.
-//    • ConsoleSwitch       — an inset switch: a recessed well with a small key that slides over;
+//    • InspectorSwitch       — an inset switch: a recessed well with a small key that slides over;
 //                            orange while on.
 //    • ConsoleMenuKeyLabel — a pop-up key's face (value + ⌃⌄), for a Menu's label.
 //    • ConsolePopupKey     — a pop-up key with the stock checkmarked list behind it.
 //    • ConsoleColorWell    — a colour swatch with its name; opens the system colour panel. Not
 //                            an NSColorWell: no AppKit control inside the inspector's list.
-//    • ConsoleSegments     — a segmented choice as a row of keys (the chosen one latched, lit).
+//    • InspectorSegments     — a segmented choice as a row of keys (the chosen one latched, lit).
 //    • ConsoleEqualGrid    — equal columns, as many as fit (theme swatches, segment keys).
 
 import SwiftUI
@@ -170,7 +170,7 @@ struct ConsoleRowLayout: Layout {
 /// Click or drag anywhere on the track; arrow keys once focused (⌥ fine); double-click (or
 /// VoiceOver's "Reset" action) for the default. The default has a detent with a tick, like
 /// ConsoleKnob's, and what's being changed shows on the preview's tag (ConsoleTouch).
-struct ConsoleSlider: View {
+struct InspectorFader: View {
     let label: String
     @Binding var value: Double
     let range: ClosedRange<Double>
@@ -297,7 +297,7 @@ struct ConsoleSlider: View {
 
 /// The design's inset switch: a recessed well with a small key in it; on, the well lights
 /// orange and the key slides right.
-struct ConsoleSwitch: View {
+struct InspectorSwitch: View {
     let label: String
     @Binding var isOn: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -483,7 +483,7 @@ struct ConsoleColorWell: View {
 
 /// A segmented choice as keys: one per option, the chosen one latched and lit. As many keys
 /// a row as fit at their full legend (all, then two, then one).
-struct ConsoleSegments<Value: Hashable>: View {
+struct InspectorSegments<Value: Hashable>: View {
     let title: String
     @Binding var selection: Value
     let options: [(title: String, value: Value)]
