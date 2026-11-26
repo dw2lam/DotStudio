@@ -74,10 +74,11 @@ if [[ -n $REMOTE ]]; then
   [[ $ENGINE == cycles ]] && SAMPLES=${SAMPLES:-128}
   RD=/tmp/dotstudio-reel-$(date +%Y%m%d%H%M%S)
   cleanup() {
-    # our Blender (its command line names our folder; found through /proc, not ps), then the folder
-    ssh -o BatchMode=yes "$REMOTE" "for p in /proc/[0-9]*; do [ \"\$(cat \$p/comm 2>/dev/null)\" = blender ] && \
-      tr '\\0' ' ' < \$p/cmdline 2>/dev/null | grep -q '$RD' && kill \${p#/proc/}; done; rm -rf '$RD'; \
-      ls /tmp | grep -c dotstudio-reel || true" | sed 's/^/remote leftovers: /'
+    # our Blender (by the pid it was started with — never by scanning other processes' command
+    # lines, which hangs on a process stuck exiting), then the folder
+    ssh -o BatchMode=yes "$REMOTE" "p=\$(cat '$RD/blender.pid' 2>/dev/null); \
+      [ -n \"\$p\" ] && [ \"\$(cat /proc/\$p/comm 2>/dev/null)\" = blender ] && kill \$p; rm -rf '$RD'; \
+      ls /tmp | grep -c dotstudio-reel || true" | sed 's/^/remote dotstudio-reel folders left: /'
   }
   trap cleanup EXIT INT TERM
   ssh -o BatchMode=yes "$REMOTE" "mkdir -p '$RD/work'"
@@ -106,8 +107,9 @@ for v in $VARIANTS; do
     rsync -a --exclude frames --exclude 'spec*.json' "$V/" "$REMOTE:$RD/work/$v/"
     rsync -a "$V/spec-remote.json" "$REMOTE:$RD/work/$v/spec.json"
     wait_for_gpu
-    ssh -o BatchMode=yes "$REMOTE" "cd '$RD' && nice -n 10 '$RBLENDER' -b --factory-startup --python film/run.py -- \
-      work/$v/spec.json --anim work/$v/frames --cycles-device $RDEVICE > work/$v/render.log 2>&1; \
+    ssh -o BatchMode=yes "$REMOTE" "cd '$RD' && { nice -n 10 '$RBLENDER' -b --factory-startup --python film/run.py -- \
+      work/$v/spec.json --anim work/$v/frames --cycles-device $RDEVICE > work/$v/render.log 2>&1 & \
+      echo \$! > blender.pid; wait \$!; rm -f blender.pid; }; \
       grep -E '^RESULT' work/$v/render.log || tail -20 work/$v/render.log"
     mkdir -p "$V/frames"
     rsync -a "$REMOTE:$RD/work/$v/frames/" "$V/frames/"

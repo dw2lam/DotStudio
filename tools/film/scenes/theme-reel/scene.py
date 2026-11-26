@@ -5,18 +5,22 @@ The parts are the app's own UI, captured offscreen by UIShots (capture.sh) and p
 the window is the base of the stack; the Screensaver & Wallpaper deck, a row of style tiles, the
 editor's inspector and a row of keys float above it, each a picture on a real slab with rounded
 corners and a little thickness (Classic's glass cards are frosted glass that refracts what's
-behind). Retro adds the hardware: a panel of machined aluminium dials with coloured caps (real
-geometry, knurled edges, a spun face) turning during the loop — the shot racks focus from them to
-the deck and back.
+behind). At the front, built as real geometry, each theme's hero: Retro's panel of machined
+aluminium dials with coloured caps (knurled edges, a spun face, printed scale and legends) that
+turn; Classic's switch and slider on a frosted glass plate (the switch flips on and off, its track
+turning accent blue; the slider moves). The shot racks focus from the hero to the deck and back.
 
 Params (the spec's "params"; render-all.sh writes one spec per variant):
     theme  "classic" | "retro"
     tone   "light" | "dark"
     parts  folder with prep.py's output (window.png, deck.png, …, parts.json)
+    font   the legends' font file (default: the repo's App/Fonts/HankenGrotesk-Medium.ttf)
+    cycles_device  Cycles' GPU backend off a Mac (OPTIX, CUDA, HIP…)
+    fstop, view    the lens (default 0.08) and the view transform (default Standard)
 
 Everything that moves is periodic in the loop (8 s): the camera's orbit, dolly and roll, the
-parts' float, the key light's drift, the rack focus (front, to the back, and front again) and the
-dials' turns (eased moves that come back to where they started).
+parts' float, the key light's drift, the rack focus (front, to the back, and front again), the
+dials' turns and the switch and slider (eased moves that come back to where they started).
 """
 import json
 import math
@@ -78,9 +82,8 @@ STACK = {
     "inspector": (4.7, 0.3, 2.5),
     "keys": (-2.7, -4.0, 3.0),
 }
-# Classic has no hardware: its keys (the blue Preview, a slider, segments) take the dials' place
-# at the front, a size up.
-CLASSIC_KEYS = ((1.9, -4.7, 4.1), 1.15)
+# The hero at the front, where the shot opens in focus: Retro's dial panel; Classic's switch and
+# slider on a frosted glass plate.
 DIALS_AT = (2.4, -4.8, 4.2)
 DIALS_SCALE = 0.85
 CORNER = {"retro": {"window": 14, "default": 6},
@@ -294,11 +297,7 @@ def build(ctx):
     for name, (x, y, z) in STACK.items():
         info = manifest[name]
         w, h = info["size"][0] * PT, info["size"][1] * PT
-        k = 1.0
-        if classic and name == "keys":
-            (x, y, z), k = CLASSIC_KEYS
         root = G.empty("Part_" + name, coll, (x, y, z))
-        root.scale = (k, k, k)
         roots[name] = root
         pic = G.plane_uv("Pic_" + name, w, h, ui_mat("UI_" + name, os.path.join(parts_dir, name + ".png"), L, classic),
                          coll, (0, 0, 0.002))
@@ -344,6 +343,48 @@ def build(ctx):
                 d.parent = droot
             text(f"Legend{i}", lg, 0.15, legend_mat, coll, (cx, -0.62, 0.003), droot, P.get("font", FONT))
 
+    # Classic: its controls, real — a switch and a slider on a frosted glass plate
+    controls = None
+    if classic:
+        croot = G.empty("Controls", coll, DIALS_AT)
+        croot.scale = (DIALS_SCALE,) * 3
+        roots["dials"] = croot
+        plate = M.principled("GlassPlate", lin(L["glass"]), 0.32, **{"Transmission Weight": 1.0, "IOR": 1.45,
+                                                                     "Coat Weight": 0.6, "Coat Roughness": 0.05})
+        _glassy(plate)
+        rounded_slab("Plate", 4.6, 1.6, 0.12, 0.42, plate, coll, bevel=0.03).parent = croot
+        accent = lin(0x0A84FF if tone == "dark" else 0x007AFF)
+        groove = lin(0x48484C if tone == "dark" else 0xD6D6DB)
+        white = M.principled("KnobWhite", lin(0xFBFBFD), 0.3, **{"Coat Weight": 0.6, "Coat Roughness": 0.1})
+        # the switch: a capsule track whose colour runs grey -> accent as it turns on, a white knob
+        track_mat = M.principled("SwitchTrack", groove, 0.35, **{"Coat Weight": 0.5, "Coat Roughness": 0.08})
+        nt, ln = M._nodes(track_mat)
+        mix = nt.new("ShaderNodeMix")
+        mix.data_type = "RGBA"
+        mix.inputs[6].default_value = (*groove, 1)
+        mix.inputs[7].default_value = (*accent, 1)
+        ln.new(mix.outputs[2], nt.get("Principled BSDF").inputs["Base Color"])
+        sx = -1.2
+        track = rounded_slab("SwitchTrack", 1.3, 0.74, 0.06, 0.37, track_mat, coll, bevel=0.02)
+        track.location = (sx, 0, 0.06)
+        track.parent = croot
+        sknob = ring_mesh("SwitchKnob", [(0.3, 0.0), (0.31, 0.04), (0.30, 0.07), (0.26, 0.088)], white, coll)
+        G.smooth_by_angle(sknob, 60)
+        sknob.parent = croot
+        # the slider: a groove, an accent fill from its left end, a white knob
+        rx0, rlen = 0.0, 1.9
+        rail = rounded_slab("SliderRail", rlen, 0.11, 0.03, 0.055, M.principled("Rail", groove, 0.4), coll, bevel=0.01)
+        rail.location = (rx0 + rlen / 2, 0, 0.03)
+        rail.parent = croot
+        froot = G.empty("SliderFillRoot", coll, (rx0, 0, 0.032), parent=croot)
+        fill = rounded_slab("SliderFill", 1.0, 0.11, 0.032, 0.05, M.principled("Fill", accent, 0.3), coll, bevel=0.0)
+        fill.location = (0.5, 0, 0)
+        fill.parent = froot
+        lknob = ring_mesh("SliderKnob", [(0.19, 0.0), (0.2, 0.03), (0.19, 0.055), (0.16, 0.068)], white, coll)
+        G.smooth_by_angle(lknob, 60)
+        lknob.parent = croot
+        controls = dict(mix=mix.inputs[0], sknob=sknob, sx=sx, froot=froot, lknob=lknob, rx0=rx0, rlen=rlen)
+
     # ---------------------------------------------------------------- light
     def area(name, size, energy, color, loc, target, shape="RECTANGLE", size_y=None):
         ld = bpy.data.lights.new(name, "AREA")
@@ -379,7 +420,7 @@ def build(ctx):
     coll.objects.link(cam)
     scene.camera = cam
 
-    front = Vector(CLASSIC_KEYS[0] if classic else DIALS_AT)
+    front = Vector(DIALS_AT)
     back = Vector(FOCUS_BACK)
 
     def cam_at(t):
@@ -406,6 +447,9 @@ def build(ctx):
         [(0.0, 0.20), (0.4, 0.20), (1.3, 0.62), (3.9, 0.62), (4.7, 0.95), (6.4, 0.95), (7.4, 0.20), (8.0, 0.20)],
     ]
 
+    # Classic's slider: the same kind of eased moves
+    slide = [(0.0, 0.25), (1.6, 0.25), (2.5, 0.82), (4.3, 0.82), (5.1, 0.45), (6.5, 0.45), (7.5, 0.25), (8.0, 0.25)]
+
     def value(keys, t):
         t = t % S
         for (t0, v0), (t1, v1) in zip(keys, keys[1:]):
@@ -428,11 +472,21 @@ def build(ctx):
             r.rotation_euler = (tilt * math.sin(u + ph + 0.7), tilt * math.cos(u + ph), 0)
         for kr, keys in zip(dial_roots, turns):
             kr.rotation_euler = (0, 0, math.radians(135 - 270 * value(keys, t)))
+        if controls:
+            c = controls
+            on = smoothstep(0.9, 1.25, t) - smoothstep(4.9, 5.25, t)       # the switch: on, then off
+            c["mix"].default_value = on
+            c["sknob"].location = (c["sx"] + 0.28 * (2 * on - 1), 0, 0.06 + 0.06)
+            sv = value(slide, t)
+            c["froot"].scale = (max(sv * c["rlen"], 0.06), 1, 1)
+            c["lknob"].location = (c["rx0"] + sv * c["rlen"], 0, 0.06)
         # the key light drifts, so the sheen moves across the glossy parts
         key_l.location = Vector((-7.5 + 2.5 * math.sin(u + 0.4), 6.0 + 1.5 * math.cos(u), 15.0))
         G.look_at(key_l, key_l.location, tgt)
 
     ids = [cam, (cd, "dof.focus_distance"), key_l] + list(roots.values()) + dial_roots
+    if controls:
+        ids += [controls["sknob"], controls["lknob"], (controls["froot"], "scale"), (controls["mix"], "default_value")]
     lp.bake(ids, pose, props=("location", "rotation_euler"))
 
     # colour: the UI's own colours, unbent (the toolkit's AgX look is for photoreal scenes)
