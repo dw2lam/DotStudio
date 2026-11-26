@@ -152,9 +152,11 @@ struct StyleTile: View, Equatable {
     /// a hovered one's half as strong. Selecting switches instantly, as Classic does on the
     /// SwiftUI side: a spring here would re-run the window's view graph every frame of it (see
     /// SelectionRing). A pad fills its grid row's height, so a row's panels end on one line.
+    /// It sits inside its section's box (LibraryView), so at rest it has no panel or edge of
+    /// its own — the box is the surface; under the pointer it sinks to the chassis colour.
     private var pad: some View {
         let shape = RoundedRectangle(cornerRadius: HubMetrics.panelRadius, style: .continuous)
-        let edge = selected ? ConsoleInk.signal : hovering ? ConsoleInk.signal.opacity(0.55) : ConsoleInk.hairline
+        let edge = selected ? ConsoleInk.signal : hovering ? ConsoleInk.signal.opacity(0.55) : Color.clear
         return VStack(alignment: .leading, spacing: Space.xs) {
             picture(radius: HubMetrics.wellRadius)
                 .background(ConsoleInk.well)
@@ -173,7 +175,7 @@ struct StyleTile: View, Equatable {
         }
         .padding(Space.xs)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(shape.fill(ConsoleInk.panel))
+        .background(shape.fill(hovering ? ConsoleInk.chassis : Color.clear))
         .overlay(shape.strokeBorder(edge, lineWidth: 1))
     }
 
