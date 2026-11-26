@@ -148,6 +148,9 @@ private struct GalleryPage: View {
 
     /// Space above the cards, under the toolbar.
     private var topInset: CGFloat { layout.widthClass.pick(Space.m, Space.m, Space.l) }
+    /// Between the page's blocks. Console's boxes sit close (owner: "keep sections closer"):
+    /// each box carries its own padding, so a small gap is enough to separate them.
+    private var blockGap: CGFloat { console ? layout.widthClass.pick(Space.s, Space.s, Space.m) : layout.sectionGap }
 
     private func gallery(_ state: GalleryState) -> some View {
         let matcher = StyleMatcher(filter: filter, query: query, playing: state.playingIDs)
@@ -159,12 +162,12 @@ private struct GalleryPage: View {
                 DestinationRow(state: state)
                     .pageColumn(layout)
                     .padding(.top, topInset)
-                    .padding(.bottom, layout.sectionGap - FilterBar.verticalInset)
+                    .padding(.bottom, blockGap - FilterBar.verticalInset)
 
                 Section {
                     grid(sections, state: state, matcher: matcher)
                         .pageColumn(layout)
-                        .padding(.top, layout.sectionGap - FilterBar.verticalInset)
+                        .padding(.top, blockGap - FilterBar.verticalInset)
                         .padding(.bottom, Space.xxl)
                 } header: {
                     FilterBar(filter: $filter, query: $query, searchFocused: searchFocused,
@@ -268,7 +271,7 @@ private struct GalleryPage: View {
     /// same line as the header, the search well and the cards' contents (`cardPadding` in).
     @ViewBuilder
     private func consoleModules(_ sections: [GallerySection], state: GalleryState, matcher: StyleMatcher) -> some View {
-        VStack(alignment: .leading, spacing: layout.sectionGap) {
+        VStack(alignment: .leading, spacing: blockGap) {
             if sections.allSatisfy({ $0.presets.isEmpty }) && matcher.isFiltering {
                 EmptyResults(filter: filter, query: query) {
                     Motion.run { query = ""; filter = .all }
