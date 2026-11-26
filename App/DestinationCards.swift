@@ -134,7 +134,7 @@ struct DestinationGeometry: Equatable {
          console: Bool = false) {
         let p = layout.cardPadding
         // No tokens for the column's range; on the grid, grown with the text.
-        let consoleCol = layout.scaled(layout.widthClass.pick(176, 190, 220))
+        let consoleCol = layout.scaled(layout.widthClass.pick(180, 204, 232))
         let colMin = console ? consoleCol : layout.scaled(layout.widthClass.pick(176, 232, 272))
         let colMax = console ? consoleCol : layout.scaled(layout.widthClass.pick(240, 300, 360))
         let thumbMin = layout.widthClass.pick(CGFloat(140), 176, 220)
@@ -466,15 +466,15 @@ struct SyncKey: View {
         Button(action: action) {
             VStack(spacing: Space.xxs) {
                 Image(systemName: "link")
-                    .scaledFont { .scaled(points: 12, $0, weight: .semibold) }
+                    .scaledFont { .scaled(points: 14, $0, weight: .semibold) }
                     .foregroundStyle(level > 0.5 ? ConsoleInk.signalInk : ConsoleInk.legend)
-                Text("Sync").textRole(.legend)
+                Text("Sync").textRole(.consoleKeySmall)
                     .lineLimit(1)
                     .fixedSize()
             }
-            .frame(minWidth: layout.scaled(28))
+            .frame(minWidth: layout.scaled(32))
         }
-        .buttonStyle(.keycap(latched: isOn, padding: EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8)))
+        .buttonStyle(.keycap(latched: isOn, padding: EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10)))
         .fixedSize()
         .help("Same as Screensaver — play whatever the screensaver shows, same playlist and night style, so it picks up right where your desktop was. Picking a wallpaper style turns this off.")
         .accessibilityLabel("Same as Screensaver")
@@ -564,14 +564,13 @@ private struct DestinationCardLayout<Preview: View, Keys: View, Banner: View>: V
         VStack(alignment: .leading, spacing: 0) {
             header
             Spacer(minLength: layout.itemGap)
-            // Console: the rows are one ruled list (a hairline over the first, under each).
+            // Console: the rows sit flush, unruled; each row's hover wash reaches a little past
+            // the column (PanelKey.Frame's inset) so the legends line up with the title.
             VStack(alignment: .leading, spacing: console ? 0 : PanelKey.gap(layout)) {
                 keys
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(alignment: .top) {
-                if console { Rectangle().fill(ConsoleInk.hairline).frame(height: 1) }
-            }
+            .padding(.horizontal, console ? -PanelKey.consoleInset : 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -768,8 +767,8 @@ struct ScreensaverCard: View {
         DestinationHeader(eyebrow: "Screensaver",
                           title: playing?.name ?? "Nothing yet",
                           subtitle: geometry.showsSubtitle ? subtitle : nil,
-                          channel: "CH.01 // Screensaver",
-                          light: model.setupStatus == .ready && playing != nil ? ConsoleInk.signal : nil)
+                          badge: DeckBadge(symbol: "play.rectangle.fill", tone: .signal,
+                                           lit: model.setupStatus == .ready && playing != nil))
     }
 
     /// The glow's state in words (the setup strip says what to do about it).
@@ -936,7 +935,7 @@ private struct NowPlayingLine: View {
     @ScaledLength(relativeTo: .callout) private var musicArt: CGFloat = 20
 
     @Environment(\.console) private var console
-    @ScaledLength(relativeTo: .caption) private var consoleKey: CGFloat = 20
+    @ScaledLength(relativeTo: .caption) private var consoleKey: CGFloat = 24
 
     var body: some View {
         let _ = Perf.body("NowPlayingLine")
@@ -958,7 +957,7 @@ private struct NowPlayingLine: View {
                 .help(now.trackLine)
             if now.needsAutomationFix, let source = now.source {
                 Button { now.allowControl(source) } label: { HubKeyLabel(text: "Allow\u{2026}") }
-                    .buttonStyle(.keycap(.signal, padding: EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8)))
+                    .buttonStyle(.keycap(.signal, padding: HubMetrics.smallKey))
                     .fixedSize()
                     .padding(.vertical, Space.xxs)
                     .help("Allow DotStudio to control \(source.displayName) — opens System Settings › Privacy & Security › Automation (turn on \(source.automationName) under DotStudio)")
@@ -982,7 +981,7 @@ private struct NowPlayingLine: View {
     private func transportKey(_ symbol: String, _ label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .scaledFont { .scaled(points: 9, $0, weight: .bold) }
+                .scaledFont { .scaled(points: 10.5, $0, weight: .bold) }
                 .frame(width: consoleKey, height: consoleKey)
         }
         .buttonStyle(.keycap(cornerRadius: 2, padding: EdgeInsets()))
@@ -1105,32 +1104,30 @@ private struct DestinationHeader: View {
     var titleFrom: String? = nil
     var subtitleFrom: String? = nil
     var roll: CGFloat = 1
-    /// Console: the deck's printed channel ("CH.01 // Screensaver") in the eyebrow's place.
-    var channel: String? = nil
-    /// Console: the deck's light — lit in this colour, or dark (nil).
-    var light: Color? = nil
+    /// Console: the deck's own mark — its glyph and colour (DeckBadge).
+    var badge: DeckBadge? = nil
 
     var body: some View {
         if console { consoleBody } else { classicBody }
     }
 
-    /// Console (the Stitch deck header): the channel legend with the deck's light at the
-    /// right, the title in the display face, the one-line "what it is" under it.
+    /// Console (a deck as a tile): the deck's badge and its name as the tile's title
+    /// ("Screensaver", "Wallpaper"), then what it plays now and the one line of how.
     private var consoleBody: some View {
-        VStack(alignment: .leading, spacing: Space.xxs / 2) {
-            HStack(spacing: Space.xs) {
-                Text(channel ?? eyebrow)
-                    .textRole(.legend)
-                    .foregroundStyle(ConsoleInk.legend)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: Space.xs + 2) {
+                if let badge { badge }
+                Text(eyebrow)
+                    .textRole(.consoleTileTitle)
+                    .foregroundStyle(ConsoleInk.ink)
                     .lineLimit(1)
-                    .accessibilityLabel(eyebrow)
-                Spacer(minLength: 0)
-                HubLED(color: light)
+                    .layoutPriority(1)
+                    .accessibilityAddTraits(.isHeader)
             }
-            .padding(.bottom, Space.xxs)
+            .padding(.bottom, Space.s)
             RollingReadout(from: titleFrom ?? title, to: title, progress: roll) { t in
                 Text(t)
-                    .textRole(.consoleHeadline)
+                    .textRole(.consoleNowPlaying)
                     .foregroundStyle(ConsoleInk.ink)
                     .truncating(t, lines: 2)
             }
@@ -1141,6 +1138,7 @@ private struct DestinationHeader: View {
                         .foregroundStyle(ConsoleInk.legend)
                         .truncating(t, lines: 2)
                 }
+                .padding(.top, 2)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1255,19 +1253,24 @@ enum PanelKey {
     /// Between stacked keys.
     static func gap(_ layout: LayoutMetrics) -> CGFloat { layout.scaled(6) }
 
+    /// Console: how far a row's wash reaches past the deck's column on each side.
+    static let consoleInset: CGFloat = 6
+
     /// A key's padding and height (30 at the default text size, grown with it; a step taller in a wide window).
-    /// Console: a ruled row of the deck's list — flush with the column, 24 pt, a hairline under it.
+    /// Console: a row of the deck's list — 26 / 28 / 30 pt by width class, unruled (24 pt with
+    /// a hairline under each before 2026-11-26), its content inset by `consoleInset` inside
+    /// the hover wash.
     struct Frame: ViewModifier {
         @Environment(\.layout) private var layout
         @Environment(\.console) private var console
         @ScaledLength(relativeTo: .callout) private var height: CGFloat = 30
-        @ScaledLength(relativeTo: .caption) private var rowHeight: CGFloat = 24
 
         func body(content: Content) -> some View {
             if console {
                 content
-                    .frame(maxWidth: .infinity, minHeight: rowHeight, alignment: .leading)
-                    .overlay(alignment: .bottom) { Rectangle().fill(ConsoleInk.hairline).frame(height: 1) }
+                    .padding(.horizontal, PanelKey.consoleInset)
+                    .frame(maxWidth: .infinity, minHeight: layout.scaled(layout.widthClass.pick(26, 28, 30)),
+                           alignment: .leading)
             } else {
                 content
                     .padding(.horizontal, layout.controlGap + Space.xxs)
@@ -1341,7 +1344,7 @@ private struct PanelKeyBody<Label: View>: View {
     /// Console: a ruled row with no face; under the pointer a faint wash of the high surface,
     /// pressed a deeper one, and its value prints in signal (PanelKeyHot).
     private var row: some View {
-        let shape = RoundedRectangle(cornerRadius: 2, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: HubMetrics.wellRadius, style: .continuous)
         return label
             .environment(\.panelKeyHot, hovering && isEnabled)
             .background(shape.fill(ConsoleInk.surfaceHigh.opacity(pressed ? 0.6 : hovering && isEnabled ? 0.3 : 0)))
@@ -1383,7 +1386,7 @@ struct PanelKeyLabel: View {
     @Environment(\.console) private var console
     @Environment(\.panelKeyHot) private var hot
     @ScaledLength(relativeTo: .callout) private var iconBox: CGFloat = 16
-    @ScaledLength(relativeTo: .caption2) private var legendIconBox: CGFloat = 13
+    @ScaledLength(relativeTo: .caption2) private var legendIconBox: CGFloat = 15
     let symbol: String
     let title: String
     var values: [String] = []
@@ -1398,7 +1401,7 @@ struct PanelKeyLabel: View {
     private var row: some View {
         HStack(spacing: Space.xs - 2) {
             Image(systemName: symbol)
-                .scaledFont { .scaled(points: 10.5, $0, weight: .medium) }
+                .scaledFont { .scaled(points: 11.5, $0, weight: .medium) }
                 .foregroundStyle(ConsoleInk.legend)
                 .frame(width: legendIconBox)
             if !title.isEmpty {
@@ -1500,23 +1503,30 @@ extension EnvironmentValues {
     }
 }
 
-/// Console: a deck's light (the Stitch channel LED): lit in its colour with a soft halo, or
-/// dark. Decoration — the deck's VoiceOver value says its state in words.
-private struct HubLED: View {
-    let color: Color?
-    @ScaledLength(relativeTo: .caption2) private var dot: CGFloat = 8
+/// Console: a deck's mark beside its title — a small square in the deck's own colour (the
+/// Screensaver's signal orange, the Wallpaper's blue: the same colours as the pads' tags and
+/// the hover bar's keys) with the deck's glyph. Lit (filled) while the deck is on screen; out,
+/// a grey key face with the glyph still in the deck's colour, so each tile keeps its identity
+/// when it's off. Decoration — the deck's VoiceOver value says its state in words.
+struct DeckBadge: View {
+    enum Tone { case signal, blue }
+    let symbol: String
+    let tone: Tone
+    let lit: Bool
+    @ScaledLength(relativeTo: .title2) private var side: CGFloat = 26
+    @ScaledLength(relativeTo: .title2) private var glyph: CGFloat = 12.5
 
     var body: some View {
-        Circle()
-            .fill(color ?? ConsoleInk.hairline)
-            .frame(width: dot, height: dot)
-            .background {
-                if let color {
-                    Circle().fill(RadialGradient(colors: [color.opacity(0.45), color.opacity(0)], center: .center,
-                                                 startRadius: dot * 0.3, endRadius: dot))
-                        .frame(width: dot * 2, height: dot * 2)
-                }
-            }
+        let shape = RoundedRectangle(cornerRadius: HubMetrics.wellRadius, style: .continuous)
+        let fill = tone == .signal ? ConsoleInk.signal : ConsoleInk.blue
+        let ink: Color = lit ? (tone == .signal ? ConsoleInk.onSignal : .white)
+                             : (tone == .signal ? ConsoleInk.signalInk : ConsoleInk.blueInk)
+        Image(systemName: symbol)
+            .font(.system(size: glyph, weight: .semibold))
+            .foregroundStyle(ink)
+            .frame(width: side, height: side)
+            .background(shape.fill(lit ? fill : ConsoleInk.keyFace))
+            .overlay(shape.strokeBorder(lit ? Color.black.opacity(0.12) : ConsoleInk.hairline, lineWidth: 1))
             .accessibilityHidden(true)
     }
 }
@@ -1563,8 +1573,8 @@ private struct WallpaperTransport: View {
 
     @Environment(\.layout) private var layout
     @Environment(\.console) private var console
-    @ScaledLength(relativeTo: .caption) private var consoleKey: CGFloat = 20
-    @ScaledLength(relativeTo: .caption2) private var legendIconBox: CGFloat = 13
+    @ScaledLength(relativeTo: .caption) private var consoleKey: CGFloat = 24
+    @ScaledLength(relativeTo: .caption2) private var legendIconBox: CGFloat = 15
     @ScaledLength(relativeTo: .callout) private var height: CGFloat = 30
     let mode: Mode
     let select: (Mode) -> Void
@@ -1581,7 +1591,7 @@ private struct WallpaperTransport: View {
     private var consoleRow: some View {
         HStack(spacing: Space.xs - 2) {
             Image(systemName: "playpause")
-                .scaledFont { .scaled(points: 10.5, $0, weight: .medium) }
+                .scaledFont { .scaled(points: 11.5, $0, weight: .medium) }
                 .foregroundStyle(ConsoleInk.legend)
                 .frame(width: legendIconBox)
             ViewThatFits(in: .horizontal) {
@@ -1606,7 +1616,7 @@ private struct WallpaperTransport: View {
         let on = m == mode
         return Button { if !on { select(m) } } label: {
             Image(systemName: symbol(m))
-                .scaledFont { .scaled(points: 9, $0, weight: .bold) }
+                .scaledFont { .scaled(points: 10.5, $0, weight: .bold) }
                 .frame(width: consoleKey, height: consoleKey)
         }
         .buttonStyle(.keycap(on && m == .play ? .blue : .plain, latched: on && m != .play,
@@ -2013,8 +2023,8 @@ struct WallpaperCard: View {
                                  subtitle: geometry.showsSubtitle ? "Following the screensaver, in step" : nil,
                                  titleFrom: own?.name ?? "Your desktop, alive",
                                  subtitleFrom: ownSubtitle, roll: progress,
-                                 channel: "CH.02 // Wallpaper",
-                                 light: mode == .play ? ConsoleInk.blue : nil)
+                                 badge: DeckBadge(symbol: "photo.fill.on.rectangle.fill", tone: .blue,
+                                                  lit: mode == .play))
     }
 
     /// Its own style (or the drawn desktop when off), with the screensaver's style coming up
@@ -2270,6 +2280,9 @@ private struct ModelStillContext<Content: View>: View {
 /// `@ScaledLength(relativeTo: .callout)` where it's used.
 enum GalleryControl {
     static let height: CGFloat = 28
+    /// Console: a filter key with its skirt, and the search well level with its face (28 before
+    /// 2026-11-26).
+    static let consoleHeight: CGFloat = 34
 }
 
 /// Inline glass search field.
@@ -2277,6 +2290,7 @@ struct SearchField: View {
     @Environment(\.layout) private var layout
     @Environment(\.console) private var console
     @ScaledLength(relativeTo: .callout) private var height: CGFloat = GalleryControl.height
+    @ScaledLength(relativeTo: .callout) private var consoleHeight: CGFloat = GalleryControl.consoleHeight
     @Binding var text: String
     var prompt = "Search"
     var focus: FocusState<Bool>.Binding? = nil
@@ -2306,8 +2320,8 @@ struct SearchField: View {
                 .help("Clear")
             }
         }
-        .padding(.horizontal, Space.xs)
-        .frame(height: height - HubMetrics.keySkirt)
+        .padding(.horizontal, Space.xs + 2)
+        .frame(height: consoleHeight - HubMetrics.keySkirt)
         .consoleWell(cornerRadius: HubMetrics.wellRadius, focused: focus?.wrappedValue ?? false)
     }
 
