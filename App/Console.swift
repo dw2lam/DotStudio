@@ -161,6 +161,12 @@ enum ConsoleInk {
         dynamic(rgb(0xFF7300), rgb(0xFF7300)),     // orange
     ]
     static let knobNames = ["blue", "green", "white", "orange"]
+    /// The knobs' machined aluminium: the spun face's light, mid and dark, and the body's side.
+    /// A touch darker on the graphite chassis, as anodised metal reads under a dim light.
+    static let metalLight = dynamic(rgb(0xF4F4F2), rgb(0xD9D9D6))
+    static let metalMid = dynamic(rgb(0xD2D3D1), rgb(0xA9AAA8))
+    static let metalDark = dynamic(rgb(0xA9AAA8), rgb(0x7E7F7E))
+    static let metalSide = dynamic(rgb(0x8E8F8D), rgb(0x4A4B4A))
     /// Each cap's pointer line: white on the blue cap, the near-black of text on a signal key
     /// on the brighter ones.
     static let knobPointers: [Color] = [
@@ -755,39 +761,77 @@ struct ConsoleKnob: View {
                 .rotationEffect(angle(def))
                 .accessibilityHidden(true)
 
-            // the cap's skirt: its side, a shade under the cap, and the soft drop shadow
+            // The knob, as the hardware's (owner, 2026-11-26): a machined aluminium body —
+            // its side under it, a spun face whose sheen stays put while the knob turns, a
+            // knurled edge — with a coloured cap set into the top, the pointer on the cap and
+            // an engraved index on the metal.
+            let press = dragging ? skirt * 0.5 : 0
+            let insetD = capD * 0.6
+            // the body's side: darker metal, and the soft drop shadow
             Circle()
-                .fill(color)
-                .overlay(Circle().fill(Color.black.opacity(isWhite ? 0.22 : 0.32)))
+                .fill(LinearGradient(colors: [ConsoleInk.metalSide.opacity(0.9), ConsoleInk.metalSide],
+                                     startPoint: .top, endPoint: .bottom))
                 .frame(width: capD, height: capD)
                 .offset(y: dragging ? skirt * 0.5 : skirt)
-                .shadow(color: .black.opacity(dragging ? 0.16 : 0.22), radius: dragging ? 2 : 4, y: dragging ? 1 : 3)
-            // the cap's face: its colour lit from above like the keys' (a top light that fades
-            // to clear in the cap's own colour, so the white cap isn't veiled grey), a lit top
-            // edge, a shallow dished centre and a rim — orange while the hand is on it, as a
-            // key's edge on hover
+                .shadow(color: .black.opacity(dragging ? 0.18 : 0.26), radius: dragging ? 2 : 4, y: dragging ? 1 : 3)
+            // the spun face: a conic sheen (two bright lobes, fixed to the light, not the knob)
+            Circle()
+                .fill(AngularGradient(stops: [
+                    .init(color: ConsoleInk.metalLight, location: 0.00),
+                    .init(color: ConsoleInk.metalMid, location: 0.12),
+                    .init(color: ConsoleInk.metalDark, location: 0.25),
+                    .init(color: ConsoleInk.metalMid, location: 0.38),
+                    .init(color: ConsoleInk.metalLight, location: 0.50),
+                    .init(color: ConsoleInk.metalMid, location: 0.62),
+                    .init(color: ConsoleInk.metalDark, location: 0.75),
+                    .init(color: ConsoleInk.metalMid, location: 0.88),
+                    .init(color: ConsoleInk.metalLight, location: 1.00),
+                ], center: .center, angle: .degrees(-60)))
+                // a top light and a lower shade over the spin, so it reads as a domed top
+                .overlay(Circle().fill(LinearGradient(colors: [.white.opacity(0.22), .clear, .black.opacity(0.10)],
+                                                      startPoint: .top, endPoint: .bottom)))
+                // the knurled edge: fine ridges round the rim
+                .overlay(
+                    ForEach(0..<48, id: \.self) { i in
+                        Rectangle()
+                            .fill(Color.black.opacity(0.16))
+                            .frame(width: 0.6, height: capD * 0.07)
+                            .offset(y: -capD / 2 + capD * 0.035)
+                            .rotationEffect(.degrees(Double(i) * 7.5))
+                    }
+                )
+                .overlay(Circle().strokeBorder(LinearGradient(colors: [.white.opacity(0.85), .white.opacity(0.1)],
+                                                              startPoint: .top, endPoint: .bottom), lineWidth: 0.75))
+                .overlay(Circle().strokeBorder(lit && isEnabled ? ConsoleInk.signal : Color.black.opacity(0.28),
+                                               lineWidth: lit && isEnabled ? 1.25 : 0.5))
+                .frame(width: capD, height: capD)
+                .offset(y: press)
+            // the engraved index on the metal, turning with the knob
+            Capsule()
+                .fill(Color.black.opacity(0.55))
+                .frame(width: max(size * 0.03, 1.5), height: (capD - insetD) / 2 - 2)
+                .offset(y: -(insetD / 2 + (capD - insetD) / 4))
+                .rotationEffect(angle(fraction))
+                .offset(y: press)
+            // the coloured cap set into the top: a shallow recess round it, lit from above
             Circle()
                 .fill(color)
                 .overlay(Circle().fill(LinearGradient(stops: [
-                    .init(color: .white.opacity(isWhite ? 0.6 : 0.28), location: 0),
-                    .init(color: .white.opacity(0), location: 0.55),
-                    .init(color: .black.opacity(isWhite ? 0.04 : 0.08), location: 1),
+                    .init(color: .white.opacity(isWhite ? 0.5 : 0.3), location: 0),
+                    .init(color: .white.opacity(0), location: 0.6),
+                    .init(color: .black.opacity(isWhite ? 0.05 : 0.1), location: 1),
                 ], startPoint: .top, endPoint: .bottom)))
-                .overlay(Circle().strokeBorder(LinearGradient(colors: [.white.opacity(isWhite ? 0.95 : 0.55), .clear],
-                                                              startPoint: .top, endPoint: .center), lineWidth: 1))
-                .overlay(Circle().strokeBorder(Color.black.opacity(0.07), lineWidth: 1).padding(capD * 0.17))
-                .overlay(Circle().strokeBorder(lit && isEnabled ? ConsoleInk.signal
-                                                                : (isWhite ? ConsoleInk.whiteKnobRim : Color.black.opacity(0.2)),
-                                               lineWidth: lit && isEnabled ? 1.25 : (isWhite ? 1 : 0.75)))
-                .frame(width: capD, height: capD)
-                .offset(y: dragging ? skirt * 0.5 : 0)
-            // the pointer: a line from near the centre to near the rim
+                .overlay(Circle().strokeBorder(isWhite ? ConsoleInk.whiteKnobRim.opacity(0.7) : Color.black.opacity(0.18), lineWidth: 0.75))
+                .frame(width: insetD, height: insetD)
+                .background(Circle().fill(Color.black.opacity(0.22)).frame(width: insetD + 2, height: insetD + 2).offset(y: -0.5))
+                .offset(y: press)
+            // the pointer: a short line on the cap, from its middle toward its edge
             Capsule()
                 .fill(ConsoleInk.knobPointers[cap])
-                .frame(width: max(size * 0.045, 2), height: capD * 0.34)
-                .offset(y: -capD * 0.27)
+                .frame(width: max(size * 0.04, 2), height: insetD * 0.38)
+                .offset(y: -insetD * 0.24)
                 .rotationEffect(angle(fraction))
-                .offset(y: dragging ? skirt * 0.5 : 0)
+                .offset(y: press)
             if focused {
                 Circle().strokeBorder(ConsoleInk.signal, lineWidth: 1.5)
                     .frame(width: capD + 6, height: capD + 6)
