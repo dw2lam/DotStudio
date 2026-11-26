@@ -1225,16 +1225,17 @@ private struct ChoiceColumn: View {
     }
 }
 
-/// One Settings section in the grouped Form Settings uses, at the Settings window's width.
+/// One Settings section in the Form Settings uses (settingsForm: Classic's grouped Form, or
+/// Console's ruled sections on the pane's panel colour), at the Settings window's width.
 private struct SettingsSectionPreview<Content: View>: View {
+    @Environment(\.console) private var console
     @ViewBuilder var content: () -> Content
 
     var body: some View {
         Form { content() }
-            .formStyle(.grouped)
-            .textRole(.body)
-            .formControlSize()
+            .settingsForm()
             .scrollDisabled(true)
+            .background(console ? ConsoleInk.panel : .clear)
     }
 }
 

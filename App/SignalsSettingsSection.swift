@@ -12,6 +12,7 @@ struct SignalsSettingsSection: View {
     @ObservedObject private var service = SignalService.shared
     @Environment(\.layout) private var layout
     @State private var editing: Signal?
+    @Environment(\.console) private var console
 
     var body: some View {
         let signals = model.library.signals ?? []
@@ -41,6 +42,7 @@ struct SignalsSettingsSection: View {
         .sheet(item: $editing) { s in
             SignalEditorSheet(original: s, isNew: !(model.library.signals ?? []).contains { $0.id == s.id })
                 .environmentObject(model)
+                .environment(\.console, console)   // the sheet is its own root
                 .adaptiveLayout()
         }
     }
@@ -79,7 +81,8 @@ struct SignalRow: View {
                     TimelineView(.periodic(from: .now, by: 60)) { ctx in
                         Text(detail(now: ctx.date))
                             .settingsText(.caption)
-                            .foregroundStyle(problem != nil ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                            .foregroundStyle(problem != nil ? AnyShapeStyle(console ? ConsoleInk.signalInk : .orange)
+                                                            : AnyShapeStyle(.secondary))
                             .wrapping()
                     }
                 }
@@ -148,7 +151,18 @@ struct SignalRow: View {
 
 /// "AI" beside something an assistant made (like BetaTag, accent-tinted).
 struct AIBadge: View {
+    @Environment(\.console) private var console
+
     var body: some View {
+        if console {
+            // Console: a small printed tag, as the hub's (no accent outline)
+            ConsoleTag(text: "AI").fixedSize().accessibilityLabel("Made by AI")
+        } else {
+            classic
+        }
+    }
+
+    private var classic: some View {
         Label("AI", systemImage: "sparkles")
             .labelStyle(.titleAndIcon)
             .textRole(.badge)
@@ -193,43 +207,47 @@ struct SignalEditorSheet: View {
         _result = State(initialValue: Self.demoResult)
     }
 
+    @Environment(\.console) private var console
+
     var body: some View {
         VStack(spacing: 0) {
             Text(isNew ? "Add Signal" : "Edit Signal")
-                .textRole(.headline)
+                .textRole(console ? .consoleHeadline : .headline)
+                .foregroundStyle(console ? AnyShapeStyle(ConsoleInk.ink) : AnyShapeStyle(.primary))
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding([.horizontal, .top], layout.cardPadding)
+                .padding([.horizontal, .top], console ? Space.l : layout.cardPadding)
             Form {
                 Section {
-                    TextField("Name", text: $s.name, prompt: Text("Air quality"))
-                    Picker("Comes from", selection: $s.kind) {
-                        Text("The web").tag(SignalKind.web)
-                        Text("A file").tag(SignalKind.file)
-                    }
-                    .pickerStyle(.segmented)
+                    field("Name") { TextField("Name", text: $s.name, prompt: Text("Air quality")) }
+                    choice("Comes from", $s.kind, [("The web", SignalKind.web), ("A file", SignalKind.file)], segmented: true)
                     if s.kind == .web {
-                        TextField("URL", text: Binding(get: { s.url ?? "" }, set: { s.url = $0 }), prompt: Text("https://…"))
+                        field("URL") {
+                            TextField("URL", text: Binding(get: { s.url ?? "" }, set: { s.url = $0 }), prompt: Text("https://…"))
+                        }
                         Text("https only. {lat} and {lon} in the address use your location, rounded to about 10 km.")
-                            .textRole(.caption).foregroundStyle(.secondary).wrapping()
+                            .settingsText(.caption).foregroundStyle(.secondary).wrapping()
                     } else {
                         LabeledContent("File") {
                             HStack {
                                 TextField("File", text: Binding(get: { s.file ?? "" }, set: { s.file = $0 }), prompt: Text("office.json"))
                                     .labelsHidden()
+                                    .modifier(SignalFieldLook())
                                 Button(scaled: "Reveal") { reveal() }
                             }
                         }
                         Text("A file in DotStudio's signal-files folder: JSON, or plain text with one number or word. Shortcuts, scripts and cron can write it.")
-                            .textRole(.caption).foregroundStyle(.secondary).wrapping()
+                            .settingsText(.caption).foregroundStyle(.secondary).wrapping()
                     }
-                    TextField("Value at", text: Binding(get: { s.pointer ?? "" }, set: { s.pointer = $0.isEmpty ? nil : $0 }),
-                              prompt: Text("/data/aqi (empty: the whole thing)"))
+                    field("Value at") {
+                        TextField("Value at", text: Binding(get: { s.pointer ?? "" }, set: { s.pointer = $0.isEmpty ? nil : $0 }),
+                                  prompt: Text("/data/aqi (empty: the whole thing)"))
+                    }
                     HStack {
                         Button(scaled: testing ? "Testing…" : "Test") { test() }
                             .disabled(testing)
                         if let r = result {
-                            Text(resultLine(r)).textRole(.caption)
-                                .foregroundStyle(r.ok ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange)).wrapping()
+                            Text(resultLine(r)).settingsText(.caption)
+                                .foregroundStyle(r.ok ? AnyShapeStyle(.secondary) : AnyShapeStyle(warning)).wrapping()
                         }
                     }
                     if let outline = result?.outline, !outline.isEmpty {
@@ -243,18 +261,18 @@ struct SignalEditorSheet: View {
                                 if on, s.auth == nil { s.auth = SignalAuth(placement: .header, name: "") }
                             }
                         if usesKey {
-                            Picker("Send it as", selection: Binding(get: { s.auth?.placement ?? .header },
-                                                                    set: { s.auth = SignalAuth(placement: $0, name: s.auth?.name ?? "") })) {
-                                Text("A header").tag(SignalAuth.Placement.header)
-                                Text("A query parameter").tag(SignalAuth.Placement.query)
+                            choice("Send it as", Binding(get: { s.auth?.placement ?? .header },
+                                                         set: { s.auth = SignalAuth(placement: $0, name: s.auth?.name ?? "") }),
+                                   [("A header", SignalAuth.Placement.header), ("A query parameter", SignalAuth.Placement.query)])
+                            field("Name") {
+                                TextField("Name", text: Binding(get: { s.auth?.name ?? "" },
+                                                                set: { s.auth = SignalAuth(placement: s.auth?.placement ?? .header, name: $0) }),
+                                          prompt: Text("X-API-Key"))
                             }
-                            TextField("Name", text: Binding(get: { s.auth?.name ?? "" },
-                                                            set: { s.auth = SignalAuth(placement: s.auth?.placement ?? .header, name: $0) }),
-                                      prompt: Text("X-API-Key"))
-                            SecureField("Key", text: $key, prompt: Text(keyPrompt))
+                            field("Key") { SecureField("Key", text: $key, prompt: Text(keyPrompt)) }
                             if let k = keyState, k != .found("") {
-                                Text(keyLine(k)).textRole(.caption)
-                                    .foregroundStyle(k == .needsReentry || k == .missing ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                                Text(keyLine(k)).settingsText(.caption)
+                                    .foregroundStyle(k == .needsReentry || k == .missing ? AnyShapeStyle(warning) : AnyShapeStyle(.secondary))
                                     .wrapping()
                             }
                         }
@@ -265,69 +283,129 @@ struct SignalEditorSheet: View {
                     }
                 }
                 Section {
-                    Picker("Value", selection: $s.valueType) {
-                        Text("Number").tag(SignalValueType.number)
-                        Text("Yes / No").tag(SignalValueType.bool)
-                        Text("Word").tag(SignalValueType.string)
-                    }
+                    choice("Value", $s.valueType, [("Number", SignalValueType.number), ("Yes / No", SignalValueType.bool),
+                                                   ("Word", SignalValueType.string)])
                     if s.valueType == .number {
                         LabeledContent("Adjust") {
                             HStack(spacing: Space.xs) {
                                 Spacer(minLength: 0)
                                 Text("×").foregroundStyle(.secondary)
                                 TextField("Scale", value: $s.scale, format: .number, prompt: Text("1")).labelsHidden()
-                                    .multilineTextAlignment(.trailing).frame(maxWidth: layout.scaled(72))
+                                    .multilineTextAlignment(.trailing).modifier(SignalFieldLook()).frame(maxWidth: layout.scaled(72))
                                 Text("+").foregroundStyle(.secondary)
                                 TextField("Offset", value: $s.offset, format: .number, prompt: Text("0")).labelsHidden()
-                                    .multilineTextAlignment(.trailing).frame(maxWidth: layout.scaled(72))
+                                    .multilineTextAlignment(.trailing).modifier(SignalFieldLook()).frame(maxWidth: layout.scaled(72))
                             }
                         }
-                        TextField("Unit", text: Binding(get: { s.unit ?? "" }, set: { s.unit = $0.isEmpty ? nil : String($0.prefix(12)) }),
-                                  prompt: Text("None"))
+                        field("Unit") {
+                            TextField("Unit", text: Binding(get: { s.unit ?? "" }, set: { s.unit = $0.isEmpty ? nil : String($0.prefix(12)) }),
+                                      prompt: Text("None"))
+                        }
                         LabeledContent("Usual range") {
                             HStack(spacing: Space.xs) {
                                 Spacer(minLength: 0)
                                 TextField("Low", value: $rangeLo, format: .number, prompt: Text("Low")).labelsHidden()
-                                    .multilineTextAlignment(.trailing).frame(maxWidth: layout.scaled(72))
+                                    .multilineTextAlignment(.trailing).modifier(SignalFieldLook()).frame(maxWidth: layout.scaled(72))
                                 Text("–").foregroundStyle(.secondary)
                                 TextField("High", value: $rangeHi, format: .number, prompt: Text("High")).labelsHidden()
-                                    .multilineTextAlignment(.trailing).frame(maxWidth: layout.scaled(72))
+                                    .multilineTextAlignment(.trailing).modifier(SignalFieldLook()).frame(maxWidth: layout.scaled(72))
                             }
                         }
-                        TextField("When missing", value: $s.defaultValue, format: .number, prompt: Text("0"))
+                        field("When missing") {
+                            TextField("When missing", value: $s.defaultValue, format: .number, prompt: Text("0"))
+                        }
                     }
                     if s.kind == .web {
-                        Picker("Check every", selection: Binding(get: { s.pollMinutes ?? Signal.defaultPollMinutes }, set: { s.pollMinutes = $0 })) {
-                            ForEach([5.0, 10, 15, 30, 60, 180, 720], id: \.self) { m in
-                                Text(m < 60 ? "\(Int(m)) min" : "\(Int(m / 60)) hr").tag(m)
-                            }
-                        }
+                        choice("Check every", Binding(get: { s.pollMinutes ?? Signal.defaultPollMinutes }, set: { s.pollMinutes = $0 }),
+                               [5.0, 10, 15, 30, 60, 180, 720].map { m in (m < 60 ? "\(Int(m)) min" : "\(Int(m / 60)) hr", m) })
                     }
                 }
             }
-            .formStyle(.grouped)
-            .textRole(.body)
-            .formControlSize()
-            Divider()
+            .settingsForm()   // Classic: the grouped Form; Console: its ruled sections (ConsoleSettingsKit)
+            if console { ConsoleHairline() } else { Divider() }
             HStack(spacing: layout.controlGap) {
                 if let problem {
-                    Text(problem).textRole(.caption).foregroundStyle(.orange).wrapping()
+                    Text(problem).settingsText(.caption).foregroundStyle(warning).wrapping()
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     Spacer(minLength: 0)
                 }
-                if !isNew { Button(scaled: "Delete") { delete() } }
-                Button(scaled: "Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button(scaled: isNew ? "Add" : "Save") { save() }.keyboardShortcut(.defaultAction)
+                if console {
+                    consoleButtons
+                } else {
+                    if !isNew { Button(scaled: "Delete") { delete() } }
+                    Button(scaled: "Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                    Button(scaled: isNew ? "Add" : "Save") { save() }.keyboardShortcut(.defaultAction)
+                }
             }
-            .padding(layout.cardPadding)
+            .padding(.horizontal, console ? Space.l : layout.cardPadding)
+            .padding(.vertical, console ? Space.s : layout.cardPadding)
+            // the Settings' Console text roles for the bar's caption (settingsText)
+            .environment(\.consoleSettings, console)
         }
         .frame(minWidth: 480, idealWidth: layout.scaled(520), minHeight: 420, idealHeight: layout.scaled(620))
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(console ? ConsoleInk.panel : Color(nsColor: .windowBackgroundColor))
         .onAppear {
             if original.auth != nil, !isNew {
                 keyState = SignalService.shared.statuses[original.id]?.key
                     ?? (SignalKeychain.has(original.id) ? nil : .missing)
+            }
+        }
+    }
+
+    /// Console: Delete and Cancel as grey keys, Save (or Add) the orange one — the Settings
+    /// sheet's Done.
+    @ViewBuilder private var consoleButtons: some View {
+        let pad = EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16)
+        if !isNew {
+            Button { delete() } label: { Text("Delete").textRole(.consoleKey) }
+                .buttonStyle(.keycap(padding: pad))
+        }
+        Button { dismiss() } label: { Text("Cancel").textRole(.consoleKey) }
+            .buttonStyle(.keycap(padding: pad))
+            .keyboardShortcut(.cancelAction)
+        Button { save() } label: { Text(isNew ? "Add" : "Save").textRole(.consoleKey) }
+            .buttonStyle(.keycap(.signal, padding: pad))
+            .keyboardShortcut(.defaultAction)
+    }
+
+    /// A warning's colour: orange (Classic), the signal ink (Console, readable on the panel).
+    private var warning: Color { console ? ConsoleInk.signalInk : .orange }
+
+    /// A labelled text field: the Form labels it (Classic); Console prints the label as a row
+    /// and the field as a recessed well.
+    @ViewBuilder private func field<F: View>(_ label: String, @ViewBuilder _ f: () -> F) -> some View {
+        if console {
+            LabeledContent(label) {
+                f().labelsHidden().modifier(SignalFieldLook())
+                    .frame(maxWidth: layout.scaled(280))
+            }
+        } else {
+            f()
+        }
+    }
+
+    /// A choice: the stock pop-up (or segmented control) in Classic; a Console key with a menu
+    /// (or keycaps in a well) in Console.
+    @ViewBuilder private func choice<V: Hashable>(_ title: String, _ selection: Binding<V>,
+                                                  _ options: [(title: String, value: V)],
+                                                  segmented: Bool = false) -> some View {
+        if console {
+            LabeledContent(title) {
+                if segmented {
+                    ConsoleSegments(title: title, selection: selection, options: options)
+                } else {
+                    ConsoleMenuPicker(title: title, selection: selection, options: options)
+                }
+            }
+        } else if segmented {
+            Picker(title, selection: selection) {
+                ForEach(options.indices, id: \.self) { i in Text(options[i].title).tag(options[i].value) }
+            }
+            .pickerStyle(.segmented)
+        } else {
+            Picker(title, selection: selection) {
+                ForEach(options.indices, id: \.self) { i in Text(options[i].title).tag(options[i].value) }
             }
         }
     }
@@ -362,7 +440,7 @@ struct SignalEditorSheet: View {
     /// The document's leaves; clicking one makes it the value.
     private func outlineList(_ items: [SignalOutlineItem]) -> some View {
         VStack(alignment: .leading, spacing: Space.xxs) {
-            Text("Click a value to use it").textRole(.caption).foregroundStyle(.secondary)
+            Text("Click a value to use it").settingsText(.caption).foregroundStyle(.secondary)
             ForEach(items.prefix(20), id: \.pointer) { item in
                 Button {
                     s.pointer = item.pointer
@@ -372,10 +450,15 @@ struct SignalEditorSheet: View {
                 } label: {
                     HStack(spacing: Space.xs) {
                         Image(systemName: s.pointer == item.pointer ? "largecircle.fill.circle" : "circle")
-                            .foregroundStyle(s.pointer == item.pointer ? Color.accentColor : .secondary)
-                        Text(item.pointer.isEmpty ? "(all)" : item.pointer).textRole(.caption).monospaced().lineLimit(1)
+                            .foregroundStyle(s.pointer == item.pointer ? (console ? ConsoleInk.signal : Color.accentColor) : .secondary)
+                        // Console: the pointer in the mono face (Classic: the caption, monospaced)
+                        if console {
+                            Text(item.pointer.isEmpty ? "(all)" : item.pointer).textRole(.consoleMono).lineLimit(1)
+                        } else {
+                            Text(item.pointer.isEmpty ? "(all)" : item.pointer).textRole(.caption).monospaced().lineLimit(1)
+                        }
                         Spacer(minLength: Space.xs)
-                        Text(leaf(item.value)).textRole(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(leaf(item.value)).settingsText(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                     .contentShape(Rectangle())
                 }
@@ -447,5 +530,14 @@ struct SignalEditorSheet: View {
         let dir = SignalPolicy.filesDir(model.store.baseDir)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         NSWorkspace.shared.activateFileViewerSelecting([dir])
+    }
+}
+
+/// A text field in the signal editor: as the Form draws it (Classic), or plain text in a
+/// recessed well with an orange edge while typing (Console — the inspector's field).
+private struct SignalFieldLook: ViewModifier {
+    @Environment(\.console) private var console
+    func body(content: Content) -> some View {
+        if console { content.modifier(InspectorTextFieldStyle()) } else { content }
     }
 }
