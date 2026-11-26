@@ -455,23 +455,12 @@ struct GeneralSettingsSection: View {
             // headless run), so a render never shows a choice the window doesn't wear.
             let shownAppearance = Binding(get: { Appearance.effective(saved: appearance) }, set: { appearance = $0 })
             let mode = Binding(get: { colorMode }, set: { colorMode = $0; ColorMode.apply($0) })
-            if console {
-                // Console: the two appearances as keys (no pop-up on a keyboard of keys).
-                LabeledContent("Theme") {
-                    ConsoleSegments(title: "Theme", selection: shownAppearance,
-                                    options: Appearance.allCases.map { ($0.title, $0) })
-                }
-                LabeledContent("Mode") {
-                    ConsoleSegments(title: "Mode", selection: mode,
-                                    options: ColorMode.allCases.map { ($0.title, $0) })
-                }
-            } else {
-                Picker("Theme", selection: shownAppearance) {
-                    ForEach(Appearance.allCases) { Text($0.title).tag($0) }
-                }
-                Picker("Mode", selection: mode) {
-                    ForEach(ColorMode.allCases) { Text($0.title).tag($0) }
-                }
+            // Theme and Mode as pictures of the window in each look, with their names.
+            LabeledContent("Theme") {
+                ThemePictureChoices(selection: shownAppearance, mode: colorMode)
+            }
+            LabeledContent("Mode") {
+                ModePictureChoices(selection: mode, theme: shownAppearance.wrappedValue)
             }
             Toggle("Open DotStudio at login", isOn: Binding(get: { opensAtLogin }, set: setOpenAtLogin))
                 .formSwitchSize()
