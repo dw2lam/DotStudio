@@ -165,6 +165,7 @@ struct DotStudioApp: App {
 /// AppPresence; the live wallpaper must outlive the main window.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        ColorMode.apply()   // Settings › General › Mode (Auto follows macOS)
         // Safe mode (two quick crashes in a row): no live wallpaper until "Start Normally".
         if CrashReporter.shared.safeMode {
             NotificationCenter.default.addObserver(forName: CrashReporter.safeModeChanged, object: nil,

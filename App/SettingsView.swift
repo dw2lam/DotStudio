@@ -438,6 +438,7 @@ struct GeneralSettingsSection: View {
     @AppStorage(MenuBarIcon.key) private var menuBarIcon: MenuBarIcon = .standard
     @AppStorage(Appearance.key) private var appearance: Appearance = .classic
     @Environment(\.consoleSettings) private var console
+    @AppStorage(ColorMode.key) private var colorMode: ColorMode = .auto
 
     private var opensAtLogin: Bool { loginStatus != .off }
     /// A warning's colour: orange; Console's signal ink (readable on its light body).
@@ -453,15 +454,23 @@ struct GeneralSettingsSection: View {
             // Shows what is drawn (Appearance.effective: DOTSTUDIO_APPEARANCE, or Classic in a
             // headless run), so a render never shows a choice the window doesn't wear.
             let shownAppearance = Binding(get: { Appearance.effective(saved: appearance) }, set: { appearance = $0 })
+            let mode = Binding(get: { colorMode }, set: { colorMode = $0; ColorMode.apply($0) })
             if console {
                 // Console: the two appearances as keys (no pop-up on a keyboard of keys).
-                LabeledContent("Appearance") {
-                    ConsoleSegments(title: "Appearance", selection: shownAppearance,
+                LabeledContent("Theme") {
+                    ConsoleSegments(title: "Theme", selection: shownAppearance,
                                     options: Appearance.allCases.map { ($0.title, $0) })
                 }
+                LabeledContent("Mode") {
+                    ConsoleSegments(title: "Mode", selection: mode,
+                                    options: ColorMode.allCases.map { ($0.title, $0) })
+                }
             } else {
-                Picker("Appearance", selection: shownAppearance) {
+                Picker("Theme", selection: shownAppearance) {
                     ForEach(Appearance.allCases) { Text($0.title).tag($0) }
+                }
+                Picker("Mode", selection: mode) {
+                    ForEach(ColorMode.allCases) { Text($0.title).tag($0) }
                 }
             }
             Toggle("Open DotStudio at login", isOn: Binding(get: { opensAtLogin }, set: setOpenAtLogin))

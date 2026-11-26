@@ -35,6 +35,26 @@ enum Appearance: String, CaseIterable, Identifiable {
     static let forced: Appearance? = ProcessInfo.processInfo.environment["DOTSTUDIO_APPEARANCE"].flatMap(Appearance.init)
 }
 
+/// Light or dark for the app's own windows (Settings › General › Mode), in either appearance.
+/// Auto follows macOS. Never applied in a headless run (renders set their own).
+enum ColorMode: String, CaseIterable, Identifiable {
+    case auto, light, dark
+    var id: String { rawValue }
+    var title: String { switch self { case .auto: "Auto"; case .light: "Light"; case .dark: "Dark" } }
+    static let key = "colorMode"
+    static var saved: ColorMode {
+        UserDefaults.standard.string(forKey: key).flatMap(ColorMode.init) ?? .auto
+    }
+    @MainActor static func apply(_ mode: ColorMode = saved) {
+        guard !Appearance.isHeadlessRun, DemoHooks.appearance == nil else { return }
+        switch mode {
+        case .auto: NSApp.appearance = nil
+        case .light: NSApp.appearance = NSAppearance(named: .aqua)
+        case .dark: NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
+    }
+}
+
 private struct ConsoleKey: EnvironmentKey { static let defaultValue = false }
 
 extension EnvironmentValues {
