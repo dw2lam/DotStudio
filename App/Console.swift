@@ -187,13 +187,17 @@ enum ConsoleInk {
 
 // MARK: - Type
 
-/// The bundled faces, by PostScript name (App/Fonts).
+/// The bundled faces, by PostScript name (App/Fonts). Retro's type follows Teenage
+/// Engineering's manner (their site sets a custom Univers in thin and light weights, labels in
+/// lowercase): Hanken Grotesk — a free (OFL) neo-grotesque close to Univers — light for titles,
+/// regular for text, medium for keys and labels, never heavy; mono only for numbers and code.
 enum ConsoleFace {
-    static let display = "WixMadeforDisplay-SemiBold"
-    static let displayMedium = "WixMadeforDisplay-Medium"
-    static let text = "InstrumentSans-Regular"
-    static let textMedium = "InstrumentSans-Medium"
-    static let textSemibold = "InstrumentSans-SemiBold"
+    static let display = "HankenGrotesk-Light"
+    static let displayMedium = "HankenGrotesk-Regular"
+    static let text = "HankenGrotesk-Regular"
+    static let textMedium = "HankenGrotesk-Medium"
+    static let textSemibold = "HankenGrotesk-Medium"
+    static let label = "HankenGrotesk-Medium"
     static let mono = "SourceCodePro-Medium"
     static let monoSemibold = "SourceCodePro-SemiBold"
     static let monoBold = "SourceCodePro-Bold"
@@ -213,23 +217,24 @@ extension TextRole {
     static let consoleBodySmall = TextRole(style: .callout, points: 12, face: ConsoleFace.text)
     /// A key's legend: 12 pt mono caps, tracked (11 pt before 2026-11-26 — the owner found the
     /// keys a touch small).
-    static let consoleKey = TextRole(style: .caption, points: 12, tracking: 0.5, uppercase: true, face: ConsoleFace.monoSemibold)
+    static let consoleKey = TextRole(style: .caption, points: 13, tracking: 0.1, face: ConsoleFace.label, lowercase: true)
     /// A small key's legend (Customize, Preview, the hover bar's keys — HubKeyLabel): 11.5 pt
     /// mono caps, a step over the printed legends so a key reads as something to press.
-    static let consoleKeySmall = TextRole(style: .caption, points: 11.5, tracking: 0.6, uppercase: true, face: ConsoleFace.monoSemibold)
-    /// A row's value in mono, not uppercased ("1 style", "Same on all"): 12 pt.
-    static let consoleValue = TextRole(style: .caption, points: 12, monospacedDigits: true, face: ConsoleFace.mono)
+    static let consoleKeySmall = TextRole(style: .caption, points: 12.5, tracking: 0.1, face: ConsoleFace.label, lowercase: true)
+    /// A row's value ("1 style", "Same on all"): 13 pt text face, tabular digits (mono before
+    /// 2026-11-26; Retro now keeps mono for code only).
+    static let consoleValue = TextRole(style: .caption, points: 13, monospacedDigits: true, face: ConsoleFace.text)
     /// A deck's name ("Screensaver", "Wallpaper"): 22 pt display — the tile's own title.
     static let consoleTileTitle = TextRole(style: .title2, points: 22, face: ConsoleFace.display)
     /// What a deck plays now ("Liquid Chrome"): 15 pt Instrument Sans medium, a step under the title.
     static let consoleNowPlaying = TextRole(style: .body, points: 15, face: ConsoleFace.textMedium)
 
     /// Tiny printed legends: 10 pt mono caps, tracked 0.8.
-    static let legend = TextRole(style: .caption2, points: 10, tracking: 0.8, uppercase: true, face: ConsoleFace.monoSemibold)
+    static let legend = TextRole(style: .caption2, points: 11.5, tracking: 0.1, face: ConsoleFace.label, lowercase: true)
     /// A pad's number ("07").
     static let padNumber = TextRole(style: .caption, points: 10.5, monospacedDigits: true, face: ConsoleFace.monoSemibold)
     /// Numeric readouts (slider values, fps).
-    static let readout = TextRole(style: .callout, points: 11.5, monospacedDigits: true, face: ConsoleFace.mono)
+    static let readout = TextRole(style: .callout, points: 12.5, monospacedDigits: true, face: ConsoleFace.text)
     /// A big numeric readout ("40–120" fps): 24 pt display.
     static let readoutLarge = TextRole(style: .title2, points: 24, face: ConsoleFace.displayMedium)
     /// A pad's name: Instrument Sans semibold, as the design (not mono caps).

@@ -27,9 +27,9 @@ import AppKit
 extension TextRole {
     /// Small mono names that aren't legends (a theme's name under its swatch, a colour's name
     /// beside its well): 10 pt mono, tracked, NOT uppercased — the design's label-sm.
-    static let consoleCaption = TextRole(style: .caption2, points: 10, tracking: 0, face: ConsoleFace.monoSemibold)
+    static let consoleCaption = TextRole(style: .caption2, points: 11, tracking: 0, face: ConsoleFace.label, lowercase: true)
     /// A big key's legend (Add Effect, the destination keys): 12.5 pt mono caps (the design's label-lg, a half step up).
-    static let consoleKeyLarge = TextRole(style: .callout, points: 12.5, tracking: 0.4, uppercase: true, face: ConsoleFace.monoSemibold)
+    static let consoleKeyLarge = TextRole(style: .callout, points: 13.5, tracking: 0.1, face: ConsoleFace.label, lowercase: true)
 }
 
 // MARK: - Scaled insets

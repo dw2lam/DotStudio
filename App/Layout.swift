@@ -358,10 +358,12 @@ struct TextRole: Equatable {
     var tracking: CGFloat = 0
     var uppercase = false
     var monospacedDigits = false
-    /// A bundled face by PostScript name (Console: "InstrumentSans-SemiBold", …) instead of the
+    /// A bundled face by PostScript name (Retro: "HankenGrotesk-Medium", …) instead of the
     /// system font; its weight is the face's own (`weight`/`design` are ignored). Sized like
     /// any role: `points` or the style's size, scaled with the text size.
     var face: String? = nil
+    /// Set in lowercase (Retro's labels and keys, in Teenage Engineering's manner).
+    var lowercase = false
 
     /// The font at a given text size.
     func font(_ size: DynamicTypeSize) -> Font {
@@ -446,7 +448,7 @@ private struct TextRoleModifier: ViewModifier {
         content
             .font(role.font(typeSize))
             .tracking(role.tracking)
-            .textCase(role.uppercase ? .uppercase : nil)
+            .textCase(role.uppercase ? .uppercase : role.lowercase ? .lowercase : nil)
     }
 }
 

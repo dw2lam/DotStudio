@@ -984,24 +984,14 @@ extension SourceSpec {
 /// Console (the Stitch header strip): a hairline after the traffic lights, the orange light,
 /// the name, and the app's real version on a small tag.
 private struct HubWordmark: View {
-    @ScaledLength(relativeTo: .body) private var rule: CGFloat = 16
-    private static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-
+    // Just the name (owner, 2026-11-26): no dot, rule or version tag — the version lives in
+    // About DotStudio.
     var body: some View {
-        HStack(spacing: Space.xs) {
-            Rectangle().fill(ConsoleInk.hairline).frame(width: 1, height: rule)
-                .padding(.trailing, Space.xxs)
-            Circle().fill(ConsoleInk.signal).frame(width: 8, height: 8)
-            Text("DotStudio")
-                .textRole(.consoleTitle)
-                .foregroundStyle(ConsoleInk.ink)
-            if let v = Self.version {
-                ConsoleTag(text: "v\(v)")
-            }
-        }
-        .fixedSize()
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Self.version.map { "DotStudio, version \($0)" } ?? "DotStudio")
+        Text("DotStudio")
+            .textRole(.consoleTitle)
+            .foregroundStyle(ConsoleInk.ink)
+            .fixedSize()
+            .accessibilityLabel("DotStudio")
     }
 }
 

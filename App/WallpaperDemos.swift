@@ -624,7 +624,7 @@ struct OptionCards<Value: Hashable>: View {
             if !fixed {
                 let chosen = options[index]
                 if !chosen.explain.isEmpty {
-                    (Text(chosen.label.uppercased()).font(TextRole.consoleKey.font(typeSize)).foregroundColor(ConsoleInk.signalInk)
+                    (Text(chosen.label.lowercased()).font(TextRole.consoleKey.font(typeSize)).foregroundColor(ConsoleInk.signalInk)
                      + Text("  " + chosen.explain).foregroundColor(ConsoleInk.legend))
                         .textRole(.consoleBodySmall)
                         .fixedSize(horizontal: false, vertical: true)
