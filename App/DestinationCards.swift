@@ -261,14 +261,15 @@ struct DestinationRow: View {
         let along = (firstExtent ?? ((side ? size.width : size.height) - geometry.gap) / 2) + geometry.gap / 2
         let center = side ? CGPoint(x: along, y: size.height / 2)
                           : CGPoint(x: layout.cardPadding + geometry.thumbWidth / 2, y: along)
-        // Console: the Stitch bridge — a hairline from the decks' top to their bottom, broken
-        // by the key: in the gap while split, on the seam once merged.
         let inset = console ? Space.xxs : layout.cardPadding
         let clearance = (side ? keySize.height : keySize.width) / 2 + (console ? Space.xxs : Space.xs)
         ZStack(alignment: .topLeading) {
-            SeamHairline(vertical: side, center: center, length: side ? size.height : size.width,
-                         inset: inset, clearance: clearance, console: console)
-                .opacity(console ? 1 : progress)
+            // Console: no hairline — the SYNC key stands alone between the decks (owner's call).
+            if !console {
+                SeamHairline(vertical: side, center: center, length: side ? size.height : size.width,
+                             inset: inset, clearance: clearance, console: console)
+                    .opacity(progress)
+            }
             SyncKey(level: progress, isOn: synced) { toggleSync() }
                 .onGeometryChange(for: CGSize.self) { $0.size } action: { keySize = $0 }
                 .position(center)
