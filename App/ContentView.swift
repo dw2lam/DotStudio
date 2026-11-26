@@ -52,6 +52,9 @@ struct ContentView: View {
         .animation(Motion.pick(Motion.hero, reduceMotion: reduceMotion), value: model.editingID)
         .navigationTitle(editing?.name ?? "DotStudio")
         .navigationSubtitle(editing.map { $0.isScene ? "Scene" : "Look" } ?? "")
+        // Console's gallery prints its own wordmark in the toolbar (LibraryView): the window
+        // keeps its title (Window menu, Mission Control, VoiceOver) but doesn't draw it twice.
+        .background(WindowTitleVisibility(hidden: isConsole && editing == nil))
         // Settings: a large sheet on this window (not a window of its own), so it's there in
         // full screen too. Sized from the window, within limits.
         .background {
@@ -116,6 +119,31 @@ struct ContentView: View {
         guard !hasCompletedOnboarding, !Self.isRenderingShots, !DemoHooks.isActive,
               !model.showOnboarding, model.storeAlert == nil else { return }
         model.showOnboarding = true
+    }
+}
+
+/// Shows or hides the hosting window's drawn title (the title itself stays set).
+private struct WindowTitleVisibility: NSViewRepresentable {
+    let hidden: Bool
+
+    func makeNSView(context: Context) -> Probe { Probe() }
+
+    func updateNSView(_ v: Probe, context: Context) {
+        v.hidesTitle = hidden
+        v.apply()
+    }
+
+    final class Probe: NSView {
+        var hidesTitle = false
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            apply()
+        }
+        func apply() {
+            guard let window else { return }
+            let want: NSWindow.TitleVisibility = hidesTitle ? .hidden : .visible
+            if window.titleVisibility != want { window.titleVisibility = want }
+        }
     }
 }
 

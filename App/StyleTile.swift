@@ -39,10 +39,6 @@ struct StyleTile: View, Equatable {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.console) private var console
     let preset: Preset
-    /// Console's pad number ("07"): the style's place in the gallery as shown unfiltered
-    /// (Scenes, then Looks), from 1, so it keeps its number while a filter is on. 0 in
-    /// Classic, which never prints it, so it never makes a Classic tile unequal.
-    let number: Int
     let badges: TileBadges
     let lineup: ScreensaverLineup
     let selected: Bool
@@ -65,10 +61,9 @@ struct StyleTile: View, Equatable {
     /// Deselected, its ring still fading out (SelectionRing removes itself when done).
     @State private var ringFading = false
 
-    init(model: AppModel, preset: Preset, number: Int = 0, badges: TileBadges, lineup: ScreensaverLineup) {
+    init(model: AppModel, preset: Preset, badges: TileBadges, lineup: ScreensaverLineup) {
         self.model = model
         self.preset = preset
-        self.number = number
         self.badges = badges
         self.lineup = lineup
         selected = model.selectedID == preset.id
@@ -82,7 +77,7 @@ struct StyleTile: View, Equatable {
     }
 
     static func == (a: StyleTile, b: StyleTile) -> Bool {
-        a.model === b.model && a.preset == b.preset && a.number == b.number && a.badges == b.badges && a.lineup == b.lineup
+        a.model === b.model && a.preset == b.preset && a.badges == b.badges && a.lineup == b.lineup
             && a.selected == b.selected && a.isOpen == b.isOpen && a.editorOpen == b.editorOpen
             && a.source == b.source && a.music == b.music && a.location == b.location
     }
@@ -150,39 +145,23 @@ struct StyleTile: View, Equatable {
         .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
     }
 
-    /// Console (issue #6): a pad — the picture inset in a flat panel, its number and name
-    /// printed under it (a Look's effects on their own line below), then lights for where it
-    /// plays. The selected pad's number and edge print in signal; hovering lifts the panel a
-    /// little. Selecting switches instantly, as Classic does on the SwiftUI side: a SwiftUI
-    /// spring here would re-run the window's view graph every frame of it (see SelectionRing).
-    /// A pad fills its grid row's height, so a row's panels end on one line whatever they print.
+    /// Console (the owner's Stitch main hub): a flat panel with the picture in a recessed
+    /// well, the name in Instrument Sans with the style's live capabilities printed beside it
+    /// (WEATHER, LIVE SKY, DAY/NIGHT), a Look's effects on a legend line under it. Where it
+    /// plays is a tag on the picture (HubTileTags). The selected pad's edge prints in signal,
+    /// a hovered one's half as strong. Selecting switches instantly, as Classic does on the
+    /// SwiftUI side: a spring here would re-run the window's view graph every frame of it (see
+    /// SelectionRing). A pad fills its grid row's height, so a row's panels end on one line.
     private var pad: some View {
-        let traits = LiveTraits.of(preset)
+        let shape = RoundedRectangle(cornerRadius: HubMetrics.panelRadius, style: .continuous)
+        let edge = selected ? ConsoleInk.signal : hovering ? ConsoleInk.signal.opacity(0.55) : ConsoleInk.hairline
         return VStack(alignment: .leading, spacing: Space.xs) {
-            picture(radius: Radius.s)
-                .overlay(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
+            picture(radius: HubMetrics.wellRadius)
+                .background(ConsoleInk.well)
+                .overlay(RoundedRectangle(cornerRadius: HubMetrics.wellRadius, style: .continuous)
                     .strokeBorder(ConsoleInk.hairline, lineWidth: 1))
             VStack(alignment: .leading, spacing: Space.xxs) {
-                HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
-                    if number > 0 {
-                        Text(String(format: "%02d", number))
-                            .textRole(.padNumber)
-                            .foregroundStyle(selected ? ConsoleInk.signalInk : ConsoleInk.legend)
-                    }
-                    Text(preset.name)
-                        .textRole(.padName)
-                        .foregroundStyle(ConsoleInk.ink)
-                        .truncating(preset.name)
-                    Spacer(minLength: Space.xxs)
-                    HStack(spacing: Space.xs) {
-                        if traits.weather { Text("WX").help("Live weather — shows your real weather as it changes") }
-                        if traits.sky { Text("SKY").help("Live sky — its light follows the real sun") }
-                        if traits.dayNight { Text("D/N").help("Day & night — switches at sunrise and sunset") }
-                    }
-                    .textRole(.legend)
-                    .foregroundStyle(ConsoleInk.legend)
-                    .fixedSize()
-                }
+                HubNameRow(name: preset.name, traits: LiveTraits.of(preset))
                 if let summary {
                     Text(summary)
                         .textRole(.legend)
@@ -190,52 +169,12 @@ struct StyleTile: View, Equatable {
                         .truncating(summary)
                 }
             }
-            PadLightRow { lights }
+            .padding(.horizontal, Space.xxs / 2)
         }
         .padding(Space.xs)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
-            .fill(ConsoleInk.panel.opacity(hovering ? 1 : 0.85)))
-        .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
-            .strokeBorder(selected ? ConsoleInk.signalInk : ConsoleInk.hairline, lineWidth: selected ? 2 : 1))
-        .shadow(color: .black.opacity(hovering ? 0.12 : 0), radius: hovering ? 6 : 0, y: hovering ? 3 : 0)
-        .offset(y: hovering && !reduceMotion ? -1.5 : 0)
-    }
-
-    /// A pad's lights say what Classic's badges say (TileBadgeCluster, same conditions). A
-    /// light is lit only while the style is on screen there now; an unlit one says where it
-    /// waits — in the rotating playlist, for a When rule, for the night. A pad with nothing to
-    /// say prints nothing (no row of "off" legends).
-    @ViewBuilder private var lights: some View {
-        if let rule = badges.rule, badges.showsRule {
-            // A When rule plays it in the lineup's place; of several, the one on screen is lit.
-            ConsoleLED(on: badges.playingNow, label: "When")
-                .help(badges.playingNow ? "Playing now for the When rule \u{201C}\(rule.name)\u{201D}"
-                                        : "Plays for the When rule \u{201C}\(rule.name)\u{201D}")
-        } else if badges.onScreensaver && badges.showsLineup {
-            if !lineup.rotates || badges.playingNow || badges.pinnedScreensaver {
-                // The one screensaver style, the playlist's pick now, or a display's own style.
-                ConsoleLED(on: true, label: "Saver")
-                    .help(!lineup.rotates ? "Plays as your screensaver\(badges.screensaverDisplay.map { " on \($0)" } ?? "")"
-                          : badges.playingNow ? "In the screensaver playlist — on screen now"
-                          : "Plays as the screensaver\(badges.screensaverDisplay.map { " on \($0)" } ?? " on some displays")")
-            } else {
-                ConsoleLED(on: false, label: "Playlist")
-                    .help("In the screensaver playlist — not on screen now")
-            }
-        } else if badges.pinnedScreensaver {
-            ConsoleLED(on: true, label: "Saver")
-                .help("Plays as the screensaver\(badges.screensaverDisplay.map { " on \($0)" } ?? " on some displays")")
-        }
-        if badges.night && badges.showsLineup {
-            // Lit while it's the one on screen (at night).
-            ConsoleLED(on: badges.playingNow, color: ConsoleInk.knobs[0], label: "Night")
-                .help(badges.playingNow ? "Plays at night — on screen now" : "Plays at night")
-        }
-        if (badges.wallpaper && !badges.sharedWallpaperOffScreen) || badges.pinnedWallpaper {
-            ConsoleLED(on: true, color: ConsoleInk.knobs[1], label: "Wall")
-                .help("Playing as your wallpaper\(badges.wallpaperDisplay.map { " on \($0)" } ?? "")")
-        }
+        .background(shape.fill(ConsoleInk.panel))
+        .overlay(shape.strokeBorder(edge, lineWidth: 1))
     }
 
     private var classic: some View {
@@ -301,7 +240,11 @@ struct StyleTile: View, Equatable {
     private var overlays: some View {
         VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 0) {
-                if !console { TileBadgeCluster(badges: badges, rotates: lineup.rotates) }
+                if console {
+                    HubTileTags(badges: badges, rotates: lineup.rotates)
+                } else {
+                    TileBadgeCluster(badges: badges, rotates: lineup.rotates)
+                }
                 Spacer(minLength: 0)
                 // Customize, right on the tile (issue #2): on the selected tile, and on hover —
                 // the editor (colours, effects, speed) is otherwise a double-click or a menu away.
@@ -657,8 +600,7 @@ struct TileBadgeCluster: View {
 /// opening it in the editor (issue #2: the editor was a double-click or a menu away).
 struct CustomizeButton: View {
     let name: String
-    /// Console's flat key instead of the dark badge (the gallery's pads; the Screensaver and
-    /// Wallpaper cards are still Classic).
+    /// Console's keycap instead of the dark badge (the gallery's pads and both decks).
     var flat = false
     let action: () -> Void
 
@@ -666,12 +608,9 @@ struct CustomizeButton: View {
         Group {
             if flat {
                 Button(action: action) {
-                    HStack(spacing: Space.xxs) {
-                        Image(systemName: "slider.horizontal.3")
-                        Text("Customize")
-                    }
+                    HubKeyLabel(text: "Customize", symbol: "slider.horizontal.3")
                 }
-                .buttonStyle(ConsoleKeyStyle(size: .compact))
+                .buttonStyle(.keycap(padding: HubMetrics.smallKey))
             } else {
                 Button(action: action) {
                     GlassBadge(text: "Customize", symbol: "slider.horizontal.3", tint: Color.black.opacity(0.55))
@@ -721,7 +660,7 @@ private extension TileBadges {
 
 private struct TileActionBar: View {
     @EnvironmentObject var model: AppModel
-    /// Console: flat keys on a panel (no glass, no accent blue).
+    /// Console: keycaps on a panel (no glass, no accent blue).
     @Environment(\.console) private var console
     @ObservedObject private var wallpaper = WallpaperSlot.shared
     @ObservedObject private var roster = DisplayRoster.shared
@@ -777,19 +716,18 @@ private struct TileActionBar: View {
         .fixedSize()
     }
 
-    // Console's keys print the pad's own legends (SAVER, WALL — the lights they turn on), in
-    // the pad's colours: the mono caps of "Screensaver" would fold the bar on most pads.
+    // Console: an orange key while it's the screensaver, a blue one while it's the wallpaper
+    // (the decks' and the pads' tags in the same colours).
     @ViewBuilder private var destinationButtons: some View {
         DestinationButton(title: "Screensaver", symbol: "play.rectangle", on: isPlayingAlone,
-                          help: isPlayingAlone ? "Playing as your screensaver" : "Set as Screensaver — play only this style",
-                          legend: "Saver") {
+                          help: isPlayingAlone ? "Playing as your screensaver" : "Set as Screensaver — play only this style") {
             if !isPlayingAlone { Motion.run { model.playAsScreensaver(preset.id) } }
         }
 
         if wallpaper.isAvailable {
             DestinationButton(title: "Wallpaper", symbol: "photo.on.rectangle", on: badges.wallpaper,
                               help: badges.wallpaper ? "Playing as your wallpaper — click to stop it" : "Set as Wallpaper",
-                              light: ConsoleInk.knobs[1], legend: "Wall") {
+                              tint: .blue) {
                 Motion.run { wallpaper.toggle(preset.id) }
             }
         }
@@ -799,12 +737,9 @@ private struct TileActionBar: View {
     @ViewBuilder private var setAsMenu: some View {
         if console {
             Button { popUpMore(includeDestinations: true) } label: {
-                HStack(spacing: Space.xxs) {
-                    Text("Set as\u{2026}")
-                    Image(systemName: "chevron.down").imageScale(.small)
-                }
+                HubKeyLabel(text: "Set as\u{2026}", trailingSymbol: "chevron.down")
             }
-            .buttonStyle(ConsoleKeyStyle())
+            .buttonStyle(.keycap(padding: HubMetrics.smallKey))
             .help("Set as Screensaver, Wallpaper or both, and more")
         } else {
             Button { popUpMore(includeDestinations: true) } label: {
@@ -832,7 +767,7 @@ private struct TileActionBar: View {
         }
         return Group {
             if console {
-                button.buttonStyle(ConsoleKeyStyle(size: .square))
+                button.buttonStyle(.keycap(padding: HubMetrics.squareKey))
             } else {
                 button.buttonStyle(ScaledIconButtonStyle())
             }
@@ -895,8 +830,8 @@ private struct TileActionBar: View {
 }
 
 /// One destination in the hover bar: icon + word, in the accent colour with a checkmark
-/// while this style plays there. Console: a flat key with its own light, latched (sunk into
-/// the well, light lit) while this style plays there.
+/// while this style plays there. Console: a keycap that turns orange (Screensaver) or blue
+/// (Wallpaper) with a check while this style plays there.
 private struct DestinationButton: View {
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.console) private var console
@@ -905,10 +840,8 @@ private struct DestinationButton: View {
     let symbol: String
     let on: Bool
     let help: String
-    /// Console: the key's light colour (the pad's light for the same destination).
-    var light: Color = ConsoleInk.signal
-    /// Console: the key's printed legend, when shorter than `title` (VoiceOver hears `help`).
-    var legend: String? = nil
+    /// Console: the key's colour while on.
+    var tint: ConsoleKeycapStyle.Tint = .signal
     let action: () -> Void
     @State private var hovering = false
 
@@ -918,13 +851,9 @@ private struct DestinationButton: View {
 
     private var key: some View {
         Button(action: action) {
-            HStack(spacing: Space.xxs + 1) {
-                // The key's state light; the latched face and the selected trait say it too.
-                ConsoleLED(on: on, color: light).accessibilityHidden(true)
-                Text(legend ?? title)
-            }
+            HubKeyLabel(text: title, symbol: on ? "checkmark" : nil)
         }
-        .buttonStyle(ConsoleKeyStyle(latched: on))
+        .buttonStyle(.keycap(on ? tint : .plain, padding: HubMetrics.smallKey))
         .help(help)
         .accessibilityLabel(help)
         .accessibilityAddTraits(on ? .isSelected : [])
@@ -976,69 +905,209 @@ private struct ScaledIconButton: View {
     }
 }
 
-// MARK: - Console keys and lights
+// MARK: - Console hub parts
 
-/// Console (issue #6): a small flat key, the filter keys' look: panel face, hairline edge,
-/// mono caps legend in ink. Pressed — or latched on — it sinks into the well; under the
-/// pointer its edge darkens (the face stays opaque: keys sit over pictures).
-struct ConsoleKeyStyle: ButtonStyle {
-    enum Size {
-        /// The hover bar's keys (26 pt at the default text size).
-        case regular
-        /// An icon-only key, as wide as it is tall.
-        case square
-        /// A key on a picture ("Customize"), badge-sized (20 pt).
-        case compact
-    }
-    var size: Size = .regular
-    var latched = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        ConsoleKeyFace(configuration: configuration, size: size, latched: latched)
-    }
+/// Console (the Stitch main hub): the gallery's measures that Layout.swift has no token for —
+/// the design's 6 pt panels and 4 pt wells and keys.
+enum HubMetrics {
+    /// A deck, a tile, the hover bar.
+    static let panelRadius: CGFloat = 6
+    /// A picture's well, a key, the search well.
+    static let wellRadius: CGFloat = 4
+    /// A small key's padding (Customize, Preview, the hover bar's keys).
+    static let smallKey = EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8)
+    /// An icon-only small key ("…").
+    static let squareKey = EdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6)
+    /// The keycap's skirt (Console.swift): the room it takes under every key's face.
+    static let keySkirt: CGFloat = 4
 }
 
-private struct ConsoleKeyFace: View {
-    let configuration: ButtonStyleConfiguration
-    let size: ConsoleKeyStyle.Size
-    let latched: Bool
-    @Environment(\.isEnabled) private var isEnabled
-    @ScaledLength(relativeTo: .body) private var regularHeight: CGFloat = 26
-    @ScaledLength(relativeTo: .caption) private var compactHeight: CGFloat = 20
-    @State private var hovering = false
+/// Console: what a small key prints — an optional glyph and a mono-caps legend (the keycap
+/// sets the ink).
+struct HubKeyLabel: View {
+    let text: String
+    var symbol: String? = nil
+    var trailingSymbol: String? = nil
 
     var body: some View {
-        let height = size == .compact ? compactHeight : regularHeight
-        let shape = RoundedRectangle(cornerRadius: Radius.xs, style: .continuous)
-        configuration.label
-            .textRole(.legend)
-            .lineLimit(1)
-            .foregroundStyle(ConsoleInk.ink)
-            .padding(.horizontal, size == .square ? 0 : size == .compact ? Space.xs : Space.xs + 2)
-            .frame(minWidth: size == .square ? height : nil, minHeight: height)
-            .fixedSize()
-            .background(shape.fill(latched || configuration.isPressed ? ConsoleInk.well : ConsoleInk.panel))
-            .overlay(shape.strokeBorder(hovering && isEnabled ? ConsoleInk.legend : ConsoleInk.hairline, lineWidth: 1))
-            .contentShape(shape)
-            .onHover { hovering = $0 }
-    }
-}
-
-/// Console: a pad's row of lights (and the New tiles' empty one). With nothing lit it keeps
-/// one light's height, so pads with and without lights are the same size; at large text
-/// sizes the lights wrap rather than clip.
-struct PadLightRow<Content: View>: View {
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            // The line's height, whatever is (or isn't) lit.
-            ConsoleLED(on: false, label: "Saver")
-                .hidden()
-                .accessibilityHidden(true)
-            FlowLayout(spacing: Space.s, lineSpacing: Space.xxs) { content }
+        HStack(spacing: Space.xxs) {
+            if let symbol { glyph(symbol) }
+            Text(text).textRole(.legend)
+            if let trailingSymbol { glyph(trailingSymbol) }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .lineLimit(1)
+        .fixedSize()
+    }
+
+    private func glyph(_ name: String) -> some View {
+        Image(systemName: name).scaledFont { .scaled(points: 9.5, $0, weight: .bold) }
+    }
+}
+
+/// Console: a small printed tag on a picture — where a style plays. Orange for the
+/// screensaver, blue for the wallpaper, a grey key-face tag for a place it waits (the
+/// playlist, the night, a When rule not on screen).
+struct HubTag: View {
+    enum Tone { case signal, blue, plain }
+    let text: String
+    var symbol: String? = nil
+    var tone: Tone = .plain
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 2, style: .continuous)
+        HStack(spacing: 3) {
+            if let symbol {
+                Image(systemName: symbol).scaledFont { .scaled(points: 8.5, $0, weight: .bold) }
+            }
+            Text(text).textRole(.legend).lineLimit(1)
+        }
+        .foregroundStyle(tone == .plain ? ConsoleInk.ink : ConsoleInk.onSignal)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(shape.fill(tone == .signal ? ConsoleInk.signal : tone == .blue ? ConsoleInk.blue : ConsoleInk.keyFace))
+        .overlay(shape.strokeBorder(tone == .plain ? ConsoleInk.hairline : .clear, lineWidth: 1))
+        .fixedSize()
+    }
+}
+
+/// Console: the tags on a pad's picture — what TileBadgeCluster says in Classic, on the same
+/// conditions. A filled tag means it's on screen there now; a grey one says where it waits.
+struct HubTileTags: View {
+    let badges: TileBadges
+    let rotates: Bool
+
+    var body: some View {
+        if !badges.isEmpty {
+            let ssOn = badges.screensaverDisplay.map { " \u{00B7} \($0)" } ?? ""
+            let wpOn = badges.wallpaperDisplay.map { " \u{00B7} \($0)" } ?? ""
+            FlowLayout(spacing: Space.xxs, lineSpacing: Space.xxs) {
+                if let rule = badges.rule, badges.showsRule {
+                    HubTag(text: "When" + (badges.playingNow ? ssOn : ""), symbol: rule.symbol,
+                           tone: badges.playingNow ? .signal : .plain)
+                        .help(badges.playingNow ? "Playing now for the When rule \u{201C}\(rule.name)\u{201D}"
+                                                : "Plays for the When rule \u{201C}\(rule.name)\u{201D}")
+                        .accessibilityLabel(badges.playingNow ? "Playing for When rule \(rule.name)" : "When rule \(rule.name)")
+                } else if badges.onScreensaver && badges.showsLineup {
+                    if rotates {
+                        // On screen now: the lineup's pick, or a display's own style.
+                        let now = badges.playingNow || badges.pinnedScreensaver
+                        HubTag(text: now ? "Screensaver" + ssOn : "Playlist", tone: now ? .signal : .plain)
+                            .help(badges.playingNow ? "In the screensaver playlist — on screen now" : "In the screensaver playlist")
+                    } else {
+                        HubTag(text: "Screensaver" + ssOn, tone: .signal)
+                            .help("Plays as your screensaver\(badges.screensaverDisplay.map { " on \($0)" } ?? "")")
+                    }
+                } else if badges.pinnedScreensaver {
+                    HubTag(text: "Screensaver" + ssOn, tone: .signal)
+                        .help("Plays as the screensaver\(badges.screensaverDisplay.map { " on \($0)" } ?? " on some displays")")
+                }
+                if badges.night && badges.showsLineup {
+                    // Filled while it's the one on screen (at night).
+                    HubTag(text: "Night", symbol: "moon.fill",
+                           tone: badges.playingNow && !badges.onScreensaver ? .signal : .plain)
+                        .help(badges.playingNow ? "Plays at night — on screen now" : "Plays at night")
+                }
+                if (badges.wallpaper && !badges.sharedWallpaperOffScreen) || badges.pinnedWallpaper {
+                    HubTag(text: "Wallpaper" + wpOn, tone: .blue)
+                        .help("Playing as your wallpaper\(badges.wallpaperDisplay.map { " on \($0)" } ?? "")")
+                }
+            }
+            .transition(.opacity)
+        }
+    }
+}
+
+/// Console: a pad's name and, on the right, what makes it live — WEATHER (amber), LIVE SKY
+/// (blue), DAY/NIGHT (grey), as printed words. On a pad too narrow for the words and the
+/// whole name, the words become glyphs in the same colours (their meaning stays in the
+/// tooltip and for VoiceOver).
+struct HubNameRow: View {
+    @Environment(\.colorScheme) private var scheme
+    let name: String
+    let traits: LiveTraits
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            row(words: true, nameFixed: true)
+            row(words: false, nameFixed: false)
+        }
+    }
+
+    private func row(words: Bool, nameFixed: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
+            Group {
+                if nameFixed {
+                    Text(name).lineLimit(1).fixedSize()
+                } else {
+                    Text(name).truncating(name)
+                }
+            }
+            .textRole(.padName)
+            .foregroundStyle(ConsoleInk.ink)
+            Spacer(minLength: 0)
+            if traits.weather || traits.sky || traits.dayNight {
+                HStack(alignment: .firstTextBaseline, spacing: Space.xxs + 2) {
+                    if traits.weather { weather(words) }
+                    if traits.sky { sky(words) }
+                    if traits.dayNight { dayNight(words) }
+                }
+                .fixedSize()
+            }
+        }
+    }
+
+    private var dark: Bool { scheme == .dark }
+
+    /// Amber is a light: printed on the graphite, a filled tag on the light body (amber text
+    /// on off-white can't be read).
+    @ViewBuilder private func weather(_ words: Bool) -> some View {
+        Group {
+            if words {
+                Text("Weather").textRole(.legend)
+                    .foregroundStyle(dark ? ConsoleInk.amber : ConsoleInk.onSignal)
+                    .padding(.horizontal, dark ? 0 : 3)
+                    .background(RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(dark ? Color.clear : ConsoleInk.amber))
+            } else {
+                Image(systemName: "cloud.sun.fill")
+                    .scaledFont { .scaled(points: 10.5, $0, weight: .semibold) }
+                    .foregroundStyle(dark ? ConsoleInk.amber : Self.amberInk)
+            }
+        }
+        .help("Live weather — shows your real weather (rain, clouds, fog) as it changes")
+        .accessibilityLabel("Live weather")
+    }
+
+    /// The amber glyph on the light body: darkened to read (≈ 4.5:1 on the panel).
+    private static let amberInk = Color(nsColor: NSColor(srgbRed: 0.55, green: 0.38, blue: 0, alpha: 1))
+
+    @ViewBuilder private func sky(_ words: Bool) -> some View {
+        let ink = dark ? ConsoleInk.blue : ConsoleInk.blueInk
+        Group {
+            if words {
+                Text("Live sky").textRole(.legend).foregroundStyle(ink)
+            } else {
+                Image(systemName: "sun.horizon.fill")
+                    .scaledFont { .scaled(points: 10.5, $0, weight: .semibold) }
+                    .foregroundStyle(ink)
+            }
+        }
+        .help("Live sky — its light follows the real sun: sunrise, day, sunset and night")
+        .accessibilityLabel("Live sky")
+    }
+
+    @ViewBuilder private func dayNight(_ words: Bool) -> some View {
+        Group {
+            if words {
+                Text("Day/Night").textRole(.legend)
+            } else {
+                Image(systemName: "circle.lefthalf.filled")
+                    .scaledFont { .scaled(points: 10.5, $0, weight: .semibold) }
+            }
+        }
+        .foregroundStyle(ConsoleInk.legend)
+        .help("Day & night — a day version and a night version, switching at sunrise and sunset")
+        .accessibilityLabel("Day and night")
     }
 }
 
