@@ -129,11 +129,66 @@ struct SceneThemeStrip: View {
     @Binding var effect: EffectInstance
     @Environment(\.layout) private var layout
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.console) private var console
+    @ScaledLength(relativeTo: .caption2) private var consoleSwatch: CGFloat = 24
+    /// A swatch cell's narrowest (the design's six-up strip); a long name widens its own cell.
+    @ScaledLength(relativeTo: .caption2) private var consoleCell: CGFloat = 52
     @State private var hovered: String?
 
     var body: some View {
         let themes = SceneThemes.themes(for: effect)
         if themes.count > 1 {
+            if console { consoleStrip(themes) } else { classic(themes) }
+        }
+    }
+
+    /// Console: the design's swatch strip — the THEME legend over equal cells, each a round
+    /// swatch with its name in mono; the one it's wearing is a lit cell with an orange edge.
+    private func consoleStrip(_ themes: [SceneTheme]) -> some View {
+        let current = SceneThemes.current(themes, effect)
+        let cell = RoundedRectangle(cornerRadius: 4, style: .continuous)
+        return VStack(alignment: .leading, spacing: Space.xxs) {
+            Text("Theme").textRole(.legend).foregroundStyle(ConsoleInk.legend)
+                .accessibilityAddTraits(.isHeader)
+            // Packed like words (a cell as wide as its name), so the real, longer names
+            // ("Multicolour", "Monochrome") still sit two rows deep, not three.
+            FlowLayout(spacing: Space.xxs, lineSpacing: Space.xxs) {
+                ForEach(themes) { t in
+                    let on = t.id == current
+                    let hover = hovered == t.id
+                    Button {
+                        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+                        withAnimation(Motion.pick(Motion.smooth, reduceMotion: reduceMotion)) { SceneThemes.apply(t, to: &effect) }
+                    } label: {
+                        VStack(spacing: Space.xxs) {
+                            swatch(t)
+                                .frame(width: consoleSwatch, height: consoleSwatch)
+                                .overlay(Circle().strokeBorder(on ? ConsoleInk.signal : ConsoleInk.hairline, lineWidth: 1))
+                            Text(t.name)
+                                .textRole(.consoleCaption)
+                                .foregroundStyle(on ? ConsoleInk.ink : ConsoleInk.legend)
+                                .lineLimit(1)
+                                .fixedSize()
+                        }
+                        .padding(Space.xxs)
+                        .frame(minWidth: consoleCell)
+                        .background(cell.fill(on ? ConsoleInk.keyFace : .clear))
+                        .overlay(cell.strokeBorder(on ? ConsoleInk.signal : (hover ? ConsoleInk.hairline : .clear), lineWidth: 1))
+                        .contentShape(cell)
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { hovered = $0 ? t.id : (hovered == t.id ? nil : hovered) }
+                    .animation(Motion.pick(Motion.brief, reduceMotion: reduceMotion), value: on)
+                    .help("\(t.name) theme")
+                    .accessibilityLabel("\(t.name) theme")
+                    .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+                }
+            }
+        }
+    }
+
+    private func classic(_ themes: [SceneTheme]) -> some View {
+        Group {
             VStack(alignment: .leading, spacing: layout.labelGap) {
                 Text("Theme").textRole(.callout).foregroundStyle(.secondary)
                 FlowLayout(spacing: Space.xs, lineSpacing: Space.xs) {
