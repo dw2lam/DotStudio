@@ -513,6 +513,7 @@ private struct ConsoleSplitKey<Items: View>: View {
     @ViewBuilder var items: Items
     @State private var hovering = false
     @ScaledLength(relativeTo: .body) private var chevronWidth: CGFloat = Space.grid(7)   // 28
+    @ScaledInsets(relativeTo: DestinationConsoleMetrics.style) private var padding = DestinationConsoleMetrics.padding
 
     var body: some View {
         let ink: Color = lit ? .white : (hovering ? ConsoleInk.signalInk : ConsoleInk.ink)
@@ -524,9 +525,9 @@ private struct ConsoleSplitKey<Items: View>: View {
                         primary()
                     }) {
                         DestinationConsoleLegend(title: title, systemImage: systemImage)
-                            .padding(.leading, DestinationConsoleMetrics.padding.leading)
-                            .padding(.trailing, Space.s)
-                            .padding(.vertical, DestinationConsoleMetrics.padding.top)
+                            .padding(.leading, padding.leading)
+                            .padding(.trailing, padding.trailing * 0.75)   // 12 at the default size
+                            .padding(.vertical, padding.top)
                             .frame(maxHeight: .infinity)
                             .contentShape(Rectangle())
                     }
@@ -543,8 +544,8 @@ private struct ConsoleSplitKey<Items: View>: View {
                 menu {
                     HStack(spacing: 0) {
                         DestinationConsoleLegend(title: title, systemImage: systemImage)
-                            .padding(.leading, DestinationConsoleMetrics.padding.leading)
-                            .padding(.vertical, DestinationConsoleMetrics.padding.top)
+                            .padding(.leading, padding.leading)
+                            .padding(.vertical, padding.top)
                         chevron
                     }
                     .frame(maxHeight: .infinity)
@@ -586,6 +587,7 @@ private struct DestinationPill: View {
     let title: String
     let systemImage: String
     @Environment(\.console) private var console
+    @ScaledInsets(relativeTo: DestinationConsoleMetrics.style) private var padding = DestinationConsoleMetrics.padding
 
     var body: some View {
         if console {
@@ -594,8 +596,10 @@ private struct DestinationPill: View {
                 DestinationConsoleLegend(title: title, systemImage: nil)
             }
             .foregroundStyle(ConsoleInk.ink)
-            .padding(DestinationConsoleMetrics.padding)
-            .consoleKeyFace(pressed: true)
+            .padding(padding)
+            // held down as a state: the face rests in its skirt, the footprint level with
+            // the keys beside it
+            .consoleKeyFace(latched: true)
             .help(title)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(title)
@@ -647,20 +651,24 @@ private struct DestinationButtonStyle: ViewModifier {
     var kind: GlassButtonKind = .normal
     var latched = false
     @Environment(\.console) private var console
+    @ScaledInsets(relativeTo: DestinationConsoleMetrics.style) private var padding = DestinationConsoleMetrics.padding
 
     func body(content: Content) -> some View {
         if console {
             content.buttonStyle(.keycap(kind == .prominent ? .signal : .plain, latched: latched,
-                                        padding: DestinationConsoleMetrics.padding))
+                                        padding: padding))
         } else {
             content.glassButton(kind)
         }
     }
 }
 
-/// Console key metrics under the preview (the design's px-16 py-8 keys).
+/// Console key metrics under the preview (the design's px-16 py-8 keys) at the default text
+/// size. Each key reads them through `@ScaledInsets` relative to its legend's role
+/// (consoleKeyLarge, a callout), so the margins grow with the text.
 private enum DestinationConsoleMetrics {
     static let padding = EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
+    static let style: Font.TextStyle = .callout
 }
 
 /// A Console destination key's legend: its symbol and the words in mono caps (12 pt, the
@@ -752,8 +760,8 @@ private struct HeaderMenuKey: View {
 }
 
 /// Console: the preview's status tag (the design's top-left readout): a blue light and the
-/// style's real facts in mono caps; while a fader is moved, an orange light, what it is and
-/// its value. Its own view, so only it redraws as the value moves.
+/// style's real facts in mono caps; while a dial is turned, a light in its cap's colour, what
+/// it is and its value. Its own view, so only it redraws as the value moves.
 private struct ConsoleStatusTag: View {
     let facts: String
     @ObservedObject private var touch = ConsoleTouch.shared
@@ -763,7 +771,9 @@ private struct ConsoleStatusTag: View {
     var body: some View {
         let t = touch.current
         HStack(spacing: Space.xxs + 2) {
-            Circle().fill(t == nil ? ConsoleInk.blue : ConsoleInk.signal).frame(width: dot, height: dot)
+            Circle().fill(t.map { ConsoleInk.knobs[$0.colorIndex % ConsoleInk.knobs.count] } ?? ConsoleInk.blue)
+                .overlay(Circle().strokeBorder(ConsoleInk.hairline, lineWidth: 0.5))   // (the white cap's light)
+                .frame(width: dot, height: dot)
             if let t {
                 Text(t.label).textRole(.legend).foregroundStyle(ConsoleInk.legend)
                 Text(t.value).textRole(.legend).foregroundStyle(ConsoleInk.ink)

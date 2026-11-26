@@ -6,8 +6,12 @@
 //    • ConsoleInspectorRow — a parameter row: mono-caps legend on the left, its control in a
 //                            fixed column on the right, a hairline under it. Stacks (legend
 //                            above the control) at the sizes where every inspector row does.
+//    • ScaledInsets         — @ScaledLength for a key's padding (grows with its legend).
 //    • InspectorFader       — a fader: a recessed 8 pt track, a square keycap thumb, the value in
-//                            mono beside it. A detent (a haptic tick) at the default.
+//                            mono beside it. A detent (a haptic tick) at the default. (A style's
+//                            numeric settings are dials — ConsoleKnob in ConsoleDialGrid — so
+//                            this is only the fallback for a range with no travel.)
+//    • ConsoleDialGrid     — a bank of dials in balanced equal columns, up to four a row.
 //    • InspectorSwitch       — an inset switch: a recessed well with a small key that slides over;
 //                            orange while on.
 //    • ConsoleMenuKeyLabel — a pop-up key's face (value + ⌃⌄), for a Menu's label.
@@ -28,22 +32,49 @@ extension TextRole {
     static let consoleKeyLarge = TextRole(style: .callout, points: 12, tracking: 0.4, uppercase: true, face: ConsoleFace.monoSemibold)
 }
 
+// MARK: - Scaled insets
+
+/// `@ScaledLength` for a key's padding: four design lengths that follow the text size in
+/// step with text of `relativeTo`, so a key's legend keeps its margins as it grows.
+///     @ScaledInsets(relativeTo: .callout) private var padding = EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
+@propertyWrapper
+struct ScaledInsets: DynamicProperty {
+    @Environment(\.dynamicTypeSize) private var typeSize
+    private let base: EdgeInsets
+    private let style: Font.TextStyle
+
+    init(wrappedValue: EdgeInsets, relativeTo style: Font.TextStyle = .body) {
+        base = wrappedValue
+        self.style = style
+    }
+
+    var wrappedValue: EdgeInsets {
+        func s(_ v: CGFloat) -> CGFloat { TypeScale.length(v, relativeTo: style, typeSize) }
+        return EdgeInsets(top: s(base.top), leading: s(base.leading), bottom: s(base.bottom), trailing: s(base.trailing))
+    }
+}
+
 // MARK: - Key face
 
 extension View {
     /// A keycap's face behind this content: the face colour, a top light, a hairline (orange
     /// while hovered), and the skirt under it — sunk into the skirt while `pressed`.
+    /// `latched`: held down as a state (a status key) — the face rests part way into the skirt.
+    /// Only the face moves: the skirt's base (the key's footprint) and the layout size never
+    /// change, so a sunk key's bottom edge lines up with its neighbours'.
     /// `reserve` keeps the skirt's room under the content (rows of keys don't overlap).
-    func consoleKeyFace(_ tint: ConsoleKeycapStyle.Tint = .plain, pressed: Bool = false, hovering: Bool = false,
-                        cornerRadius: CGFloat = 4, skirt: CGFloat = 4, reserve: Bool = true) -> some View {
-        modifier(ConsoleKeyFaceModifier(tint: tint, pressed: pressed, hovering: hovering,
-                                cornerRadius: cornerRadius, skirt: skirt, reserve: reserve))
+    func consoleKeyFace(_ tint: ConsoleKeycapStyle.Tint = .plain, pressed: Bool = false, latched: Bool = false,
+                        hovering: Bool = false, cornerRadius: CGFloat = 4, skirt: CGFloat = 4,
+                        reserve: Bool = true) -> some View {
+        modifier(ConsoleKeyFaceModifier(tint: tint, pressed: pressed, latched: latched, hovering: hovering,
+                                        cornerRadius: cornerRadius, skirt: skirt, reserve: reserve))
     }
 }
 
 struct ConsoleKeyFaceModifier: ViewModifier {
     var tint: ConsoleKeycapStyle.Tint = .plain
     var pressed = false
+    var latched = false
     var hovering = false
     var cornerRadius: CGFloat = 4
     var skirt: CGFloat = 4
@@ -57,26 +88,30 @@ struct ConsoleKeyFaceModifier: ViewModifier {
         let face: Color = tint == .signal ? ConsoleInk.signal : tint == .blue ? ConsoleInk.blue : ConsoleInk.keyFace
         let skirtInk: Color = tint == .signal ? ConsoleInk.signalSkirt : tint == .blue ? ConsoleInk.blueSkirt : ConsoleInk.keySkirt
         let topLight = tint == .plain ? (dark ? 0.07 : 0.75) : 0.14
-        let lift = pressed ? 0 : (tint == .plain ? (dark ? 0.6 : 0.12) : 0.3)
+        // pressed: the full travel; latched: part way (as ConsoleKeycapStyle)
+        let sink: CGFloat = pressed ? min(ConsoleKeycapStyle.travel, skirt - 1)
+            : latched ? min(ConsoleKeycapStyle.latchedTravel, skirt - 1) : 0
+        let down = sink > 0
+        let lift = down ? 0 : (tint == .plain ? (dark ? 0.6 : 0.12) : 0.3)
         let glow: Color = tint == .signal ? ConsoleInk.signal : tint == .blue ? ConsoleInk.blue : .black
-        let travel = min(3, skirt - 1)
         content
             .background {
                 shape.fill(face)
                     .overlay(shape.fill(LinearGradient(colors: [.white.opacity(topLight), .black.opacity(tint == .plain ? (dark ? 0.16 : 0.06) : 0)],
                                                        startPoint: .top, endPoint: .bottom)))
-                    .overlay(shape.fill(Color.clear.shadow(.inner(color: .black.opacity(pressed ? (dark ? 0.55 : 0.2) : 0), radius: 1.5, y: 2))))
+                    .overlay(shape.fill(Color.clear.shadow(.inner(color: .black.opacity(down ? (dark ? 0.55 : 0.2) : 0), radius: 1.5, y: 2))))
                     .overlay(alignment: .top) {
-                        shape.strokeBorder(LinearGradient(colors: [.white.opacity(pressed ? 0 : (tint == .plain ? (dark ? 0.18 : 0.95) : 0.45)), .clear],
+                        shape.strokeBorder(LinearGradient(colors: [.white.opacity(down ? 0 : (tint == .plain ? (dark ? 0.18 : 0.95) : 0.45)), .clear],
                                                           startPoint: .top, endPoint: .center), lineWidth: 1)
                     }
             }
             .overlay(shape.strokeBorder(tint == .plain ? (hovering && enabled ? ConsoleInk.signal : ConsoleInk.hairline) : .clear, lineWidth: 1))
-            .offset(y: pressed ? travel : 0)
+            .offset(y: sink)
+            // the skirt never moves: its base is the key's footprint in every state
             .background {
                 shape.fill(skirtInk)
-                    .offset(y: pressed ? 1 : skirt)
-                    .shadow(color: glow.opacity(lift * (tint == .plain ? 1 : 0.9)), radius: skirt * 1.5, y: pressed ? 1 : skirt * 1.5)
+                    .offset(y: skirt)
+                    .shadow(color: glow.opacity(lift * (tint == .plain ? 1 : 0.9)), radius: skirt * 1.5, y: down ? 1 : skirt * 1.5)
             }
             .padding(.bottom, reserve ? skirt : 0)
             .opacity(enabled ? 1 : 0.45)
@@ -293,6 +328,81 @@ struct InspectorFader: View {
     }
 }
 
+// MARK: - Dial grid
+
+/// A bank of dials (ConsoleKnob) in equal columns: as many as fit up to `maxColumns`, with
+/// the rows balanced (five dials go 3 + 2, not 4 + 1). A column is never narrower than a dial
+/// can't do without at the chosen text size — its dial, readout and longest legend word (a
+/// zero-width proposal: the parts that don't wrap) — so big text means fewer columns, never
+/// smaller dials or split words. Each dial is centred at the top of its cell.
+///
+/// Measured inside one layout, so the dials — each with its own state, focus and scroll
+/// catcher — keep their identity when the column count changes; a ViewThatFits would build
+/// them again in the middle of the inspector list's layout (the pattern ColorWellsRow
+/// documents as a crash).
+struct ConsoleDialGrid: Layout {
+    var maxColumns = 4
+    var spacing: CGFloat
+    var rowSpacing: CGFloat
+
+    /// The narrowest a dial's column can be.
+    private func need(_ subviews: Subviews) -> CGFloat {
+        subviews.map { $0.sizeThatFits(ProposedViewSize(width: 0, height: nil)).width }.max() ?? 0
+    }
+
+    private func columns(_ width: CGFloat?, _ subviews: Subviews) -> Int {
+        let n = subviews.count
+        guard n > 0 else { return 1 }
+        let most = min(maxColumns, n)
+        guard let width, width.isFinite else { return most }
+        let w = need(subviews)
+        let fit = (1...most).reversed().first { CGFloat($0) * w + CGFloat($0 - 1) * spacing <= width + 0.5 } ?? 1
+        let rows = (n + fit - 1) / fit
+        return (n + rows - 1) / rows
+    }
+
+    private func cellWidth(_ width: CGFloat, cols: Int) -> CGFloat {
+        max((width - CGFloat(cols - 1) * spacing) / CGFloat(cols), 0)
+    }
+
+    private func rowHeights(_ subviews: Subviews, cols: Int, cell: CGFloat?) -> [CGFloat] {
+        stride(from: 0, to: subviews.count, by: cols).map { s in
+            (s..<min(s + cols, subviews.count)).map {
+                subviews[$0].sizeThatFits(ProposedViewSize(width: cell, height: nil)).height
+            }.max() ?? 0
+        }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard !subviews.isEmpty else { return .zero }
+        let cols = columns(proposal.width, subviews)
+        let width: CGFloat
+        if let w = proposal.width, w.isFinite { width = w }
+        else {
+            let cell = subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0
+            width = CGFloat(cols) * cell + CGFloat(cols - 1) * spacing
+        }
+        let hs = rowHeights(subviews, cols: cols, cell: cellWidth(width, cols: cols))
+        return CGSize(width: width, height: hs.reduce(0, +) + CGFloat(max(hs.count - 1, 0)) * rowSpacing)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard !subviews.isEmpty else { return }
+        let cols = columns(bounds.width, subviews)
+        let cell = cellWidth(bounds.width, cols: cols)
+        var y = bounds.minY
+        for (r, h) in rowHeights(subviews, cols: cols, cell: cell).enumerated() {
+            for c in 0..<cols {
+                let i = r * cols + c
+                guard i < subviews.count else { break }
+                subviews[i].place(at: CGPoint(x: bounds.minX + CGFloat(c) * (cell + spacing) + cell / 2, y: y),
+                                  anchor: .top, proposal: ProposedViewSize(width: cell, height: nil))
+            }
+            y += h + rowSpacing
+        }
+    }
+}
+
 // MARK: - Switch
 
 /// The design's inset switch: a recessed well with a small key in it; on, the well lights
@@ -442,21 +552,36 @@ final class ConsoleColorPanel: NSObject, ObservableObject {
 
 /// The design's colour well: a small swatch and its name. Click to edit it in the colour
 /// panel; the swatch wears an orange edge while the panel is editing it.
+///
+/// The panel writes through the swatch's binding as of its latest render, never the one it
+/// was opened with. A layer's binding comes from `ForEach($preset.effects)`, which addresses
+/// the layer by its index at that moment: after the layers are reordered, a captured binding
+/// would recolour whichever layer moved into that slot. The swatch's own identity (and so
+/// this target) follows the layer's ID, so the panel keeps editing the layer it was opened on.
 struct ConsoleColorWell: View {
     let title: String
     @Binding var color: Color
     @ObservedObject private var panel = ConsoleColorPanel.shared
     @State private var id = UUID()
+    @State private var target = Target()
     @State private var hovering = false
     @ScaledLength(relativeTo: .caption2) private var swatchWidth: CGFloat = 24
     @ScaledLength(relativeTo: .caption2) private var swatchHeight: CGFloat = 16
 
+    /// Where the panel's colour goes: refreshed with this swatch's binding on every render.
+    /// (A plain reference, not observed: updating it never asks for another render.)
+    private final class Target {
+        var binding: Binding<Color>?
+        func update(_ b: Binding<Color>) { binding = b }
+    }
+
     var body: some View {
+        let _ = target.update($color)
         let active = panel.owner == id
         let shape = RoundedRectangle(cornerRadius: 2, style: .continuous)
         Button {
-            let binding = $color
-            panel.open(id, color: NSColor(color)) { binding.wrappedValue = Color(nsColor: $0) }
+            let target = target
+            panel.open(id, color: NSColor(color)) { target.binding?.wrappedValue = Color(nsColor: $0) }
         } label: {
             HStack(spacing: Space.xxs) {
                 shape.fill(color)
@@ -488,6 +613,8 @@ struct InspectorSegments<Value: Hashable>: View {
     @Binding var selection: Value
     let options: [(title: String, value: Value)]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The keys' margins grow with their legends (consoleKey is a caption-relative role).
+    @ScaledInsets(relativeTo: .caption) private var padding = EdgeInsets(top: 5, leading: 8, bottom: 5, trailing: 8)
 
     var body: some View {
         ConsoleEqualGrid(spacing: Space.xxs, rowSpacing: Space.xxs, allowed: [options.count, 2, 1]) {
@@ -502,8 +629,7 @@ struct InspectorSegments<Value: Hashable>: View {
                         .fixedSize()
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.keycap(on ? .signal : .plain, latched: on,
-                                     padding: EdgeInsets(top: 5, leading: 8, bottom: 5, trailing: 8)))
+                .buttonStyle(.keycap(on ? .signal : .plain, latched: on, padding: padding))
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
         }
@@ -581,13 +707,14 @@ struct InspectorSmallButton: View {
     var fixed = true
     let action: () -> Void
     @Environment(\.console) private var console
+    @ScaledInsets(relativeTo: .caption) private var keyPadding = EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10)
 
     var body: some View {
         if console {
             Button(action: action) {
                 Text(title).textRole(.consoleKey).lineLimit(1)
             }
-            .buttonStyle(.keycap(padding: EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10)))
+            .buttonStyle(.keycap(padding: keyPadding))
             .fixedSize()
         } else if fixed {
             Button(action: action) { ScaledControlLabel(title: title, role: .inspectorSmallControl) }
