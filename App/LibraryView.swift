@@ -253,6 +253,75 @@ private struct GalleryPage: View {
 
     @ViewBuilder
     private func grid(_ sections: [GallerySection], state: GalleryState, matcher: StyleMatcher) -> some View {
+        if console {
+            consoleModules(sections, state: state, matcher: matcher)
+        } else {
+            classicGrid(sections, state: state, matcher: matcher)
+        }
+    }
+
+    /// Console: the page as a stack of boxed modules under the filter box — each section (its
+    /// header at the top, its tiles under it) in its own panel, `sectionGap` apart, as the
+    /// destination cards and the filter row are. The pads inside drop their own panel: the box
+    /// is the surface, a pad only shows its edge under the pointer or when selected. The grid
+    /// reaches a pad's inset (Space.xs) into the box's padding, so the pictures start on the
+    /// same line as the header, the search well and the cards' contents (`cardPadding` in).
+    @ViewBuilder
+    private func consoleModules(_ sections: [GallerySection], state: GalleryState, matcher: StyleMatcher) -> some View {
+        VStack(alignment: .leading, spacing: layout.sectionGap) {
+            if sections.allSatisfy({ $0.presets.isEmpty }) && matcher.isFiltering {
+                EmptyResults(filter: filter, query: query) {
+                    Motion.run { query = ""; filter = .all }
+                }
+                .padding(layout.cardPadding)
+                .consolePanel(cornerRadius: HubMetrics.panelRadius)
+                .transition(.lift(reduceMotion: reduceMotion))
+            } else {
+                ForEach(sections) { section in
+                    VStack(alignment: .leading, spacing: layout.itemGap) {
+                        SectionHeader(section: section)
+                        LazyVGrid(columns: consoleColumns, alignment: .leading, spacing: consolePadGap) {
+                            tiles(section, state: state)
+                        }
+                        .padding(.horizontal, -Space.xs)
+                        .padding(.bottom, -Space.xs)
+                    }
+                    .padding(layout.cardPadding)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .consolePanel(cornerRadius: HubMetrics.panelRadius)
+                    .transition(.lift(reduceMotion: reduceMotion))
+                }
+            }
+        }
+    }
+
+    /// Console pads carry a Space.xs inset of their own (their edge sits that far outside the
+    /// picture), so the grid's gutter is the column gap less two insets: pictures stay one
+    /// column gap apart, and two neighbouring edges never touch.
+    private var consolePadGap: CGFloat { max(layout.gridColumnGap - 2 * Space.xs, Space.xxs) }
+
+    private var consoleColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: layout.tileMinWidth), spacing: consolePadGap, alignment: .top)]
+    }
+
+    @ViewBuilder
+    private func tiles(_ section: GallerySection, state: GalleryState) -> some View {
+        ForEach(section.presets) { preset in
+            StyleTile(model: model, preset: preset,
+                      badges: state.badges(for: preset.id), lineup: state.lineup)
+                .equatable()
+                .id(preset.id)
+                .transition(.lift(reduceMotion: reduceMotion))
+        }
+        switch section.kind {
+        case .scenes: NewSceneTile()
+        case .looks: NewTile(title: "New Look", symbol: "plus") { model.addPreset() }
+        case .results: EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private func classicGrid(_ sections: [GallerySection], state: GalleryState, matcher: StyleMatcher) -> some View {
         if sections.allSatisfy({ $0.presets.isEmpty }) && matcher.isFiltering {
             EmptyResults(filter: filter, query: query) {
                 Motion.run { query = ""; filter = .all }
@@ -264,18 +333,7 @@ private struct GalleryPage: View {
             LazyVGrid(columns: layout.tileColumns, alignment: .leading, spacing: rowGap) {
                 ForEach(Array(sections.enumerated()), id: \.element.id) { i, section in
                     Section {
-                        ForEach(section.presets) { preset in
-                            StyleTile(model: model, preset: preset,
-                                      badges: state.badges(for: preset.id), lineup: state.lineup)
-                                .equatable()
-                                .id(preset.id)
-                                .transition(.lift(reduceMotion: reduceMotion))
-                        }
-                        switch section.kind {
-                        case .scenes: NewSceneTile()
-                        case .looks: NewTile(title: "New Look", symbol: "plus") { model.addPreset() }
-                        case .results: EmptyView()
-                        }
+                        tiles(section, state: state)
                     } header: {
                         SectionHeader(section: section)
                             // The grid puts its row gap around every row, header rows too. Re-space
@@ -526,10 +584,9 @@ private struct FilterBar: View {
             .noScrollEdgeEffects()
             .mask(chipFade.mask)
         }
-        // Console (the Stitch filter row): between two hairlines, a gutter inside each.
-        .padding(.vertical, console ? Space.s - Self.verticalInset : 0)
-        .overlay(alignment: .top) { if console { hairline } }
-        .overlay(alignment: .bottom) { if console { hairline } }
+        // Console: the filter row is a box of its own — a panel with the destination cards'
+        // corners and inset, the search well `cardPadding` in (on the cards' content line).
+        .modifier(ConsoleFilterBox(enabled: console, layout: layout))
         .pageColumn(layout)
         .padding(.vertical, Self.verticalInset)
         .background {
@@ -553,8 +610,23 @@ private struct FilterBar: View {
         }
     }
 
-    private var hairline: some View {
-        Rectangle().fill(ConsoleInk.hairline).frame(height: 1).allowsHitTesting(false)
+}
+
+/// Console: the filter row's box. Classic passes the row through untouched.
+private struct ConsoleFilterBox: ViewModifier {
+    let enabled: Bool
+    let layout: LayoutMetrics
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .padding(.horizontal, layout.cardPadding)
+                .padding(.vertical, Space.s)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .consolePanel(cornerRadius: HubMetrics.panelRadius)
+        } else {
+            content
+        }
     }
 }
 
@@ -719,7 +791,7 @@ private struct EmptyResults: View {
         }
         .readableWidth(layout, alignment: .center)
         .frame(maxWidth: .infinity)
-        .padding(.vertical, Space.xxl + Space.l)
+        .padding(.vertical, Space.xxl)   // inside its box, which adds cardPadding
     }
 
     private var classicBody: some View {
@@ -803,8 +875,9 @@ struct NewTileFace: View {
         }
         .padding(Space.xs)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(shape.fill(ConsoleInk.panel))
-        .overlay(shape.strokeBorder(hovering ? ConsoleInk.signal.opacity(0.55) : ConsoleInk.hairline, lineWidth: 1))
+        // In its section's box, like a pad: no panel or edge at rest.
+        .background(shape.fill(hovering ? ConsoleInk.chassis : Color.clear))
+        .overlay(shape.strokeBorder(hovering ? ConsoleInk.signal.opacity(0.55) : Color.clear, lineWidth: 1))
         .contentShape(Rectangle())
         .motion(Motion.snappy, value: hovering)
         .accessibilityElement(children: .ignore)
