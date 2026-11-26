@@ -129,7 +129,7 @@ struct MusicSettingsSection: View {
                 MusicPlayerRow(status: now.music, now: now, showsTrack: !showsTrack)
             } else {
                 Text("DotStudio isn't watching Spotify or Apple Music right now — choose Corner or Full Screen below.")
-                    .textRole(.caption)
+                    .settingsText(.caption)
                     .foregroundStyle(.secondary)
                     .wrapping()
             }
@@ -383,6 +383,7 @@ private struct MusicLayoutMiniature: View {
 /// runs out of room (large text, a long song name).
 struct MusicPlayerRow: View {
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
     let status: MusicPlayerStatus
     @ObservedObject var now: MusicNow
     /// Name the song in the status — off while Settings shows it on its own row.
@@ -394,9 +395,9 @@ struct MusicPlayerRow: View {
                 MusicAppIcon(source: status.source)
                 VStack(alignment: .leading, spacing: layout.labelGap) {
                     Text(status.source.displayName)
-                        .textRole(.bodyEmphasis)
+                        .settingsText(.bodyEmphasis)
                     Text(detail)
-                        .textRole(.caption)
+                        .settingsText(.caption)
                         .foregroundStyle(.secondary)
                         .truncating(detail, lines: 2)
                 }
@@ -424,19 +425,29 @@ struct MusicPlayerRow: View {
         if status.isRunning {
             switch status.automation {
             case .allowed:
-                Label("Allowed", systemImage: "checkmark.circle.fill")
-                    .textRole(.caption)
-                    .foregroundStyle(.green)
-                    .lineLimit(1)
-                    .fixedSize()
-                    .help("DotStudio can read exact progress and artwork, and play or pause \(status.source.displayName).")
+                Group {
+                    if console {
+                        ConsoleLED(on: true, color: ConsoleInk.green, label: "Allowed").fixedSize()
+                    } else {
+                        Label("Allowed", systemImage: "checkmark.circle.fill")
+                            .textRole(.caption)
+                            .foregroundStyle(.green)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                }
+                .help("DotStudio can read exact progress and artwork, and play or pause \(status.source.displayName).")
             case .denied:
                 HStack(spacing: layout.controlGap) {
-                    Label("Needs permission", systemImage: "exclamationmark.triangle.fill")
-                        .textRole(.caption)
-                        .foregroundStyle(.orange)
-                        .lineLimit(1)
-                        .fixedSize()
+                    if console {
+                        ConsoleLED(on: true, color: ConsoleInk.amber, label: "Needs permission").fixedSize()
+                    } else {
+                        Label("Needs permission", systemImage: "exclamationmark.triangle.fill")
+                            .textRole(.caption)
+                            .foregroundStyle(.orange)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
                     Button(scaled: "Allow\u{2026}") { now.allowControl(status.source) }
                         .help("Opens System Settings › Privacy & Security › Automation — turn on \(status.source.automationName) under DotStudio.")
                 }
@@ -462,12 +473,12 @@ private struct MusicSettingsNowPlaying: View {
                 MusicArtThumb(image: now.artwork, palette: now.state.palette ?? [], side: art)
                 VStack(alignment: .leading, spacing: layout.labelGap) {
                     Text(now.title)
-                        .textRole(.bodyEmphasis)
+                        .settingsText(.bodyEmphasis)
                         .truncating(now.title)
                     let sub = [now.artist, now.isPlaying ? now.sourceName : "Paused"].filter { !$0.isEmpty }
                         .joined(separator: " \u{00B7} ")
                     Text(sub)
-                        .textRole(.caption)
+                        .settingsText(.caption)
                         .foregroundStyle(.secondary)
                         .truncating(sub)
                 }
@@ -514,14 +525,18 @@ struct MusicAppIcon: View {
 
 /// A Settings pop-up: the stock pop-up while its 13-pt title matches the row labels; from
 /// .xxLarge a pull-down whose title follows the text size (as the wallpaper's Style row).
+/// Console: the pop-up key (ConsoleMenuPicker) at every text size.
 struct SettingsPopUp<Value: Hashable>: View {
     let title: String
     @Binding var selection: Value
     let options: [(title: String, value: Value)]
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.console) private var console
 
     var body: some View {
-        if typeSize < SettingsMetrics.scaledControlsFrom {
+        if console {
+            ConsoleMenuPicker(title: title, selection: $selection, options: options)
+        } else if typeSize < SettingsMetrics.scaledControlsFrom {
             picker.labelsHidden().fixedSize()
         } else {
             Menu {

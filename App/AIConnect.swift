@@ -43,6 +43,13 @@ final class AIConnect: ObservableObject {
     static let examplePrompt = "Make me a calm ocean screensaver with a clock, and show me a preview."
     static let libraryHint = "New styles appear in your Library, ready to play. When the AI changes your screensaver or wallpaper, a small notice shows what it did, with Undo."
     static var configJSON: String { ClaudeDesktopConfig.snippet(command: helperPath) }
+    /// The same JSON on one line, for showing in a small space (Copy still copies `configJSON`).
+    static var configJSONCompact: String {
+        guard let obj = try? JSONSerialization.jsonObject(with: Data(configJSON.utf8)),
+              let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys, .withoutEscapingSlashes])
+        else { return configJSON }
+        return String(decoding: data, as: UTF8.self)
+    }
 
     // Blender: optional, recommended. With it the AI can make photoreal film scenes like Commute
     // (dotstudio-mcp's film tools, FilmPaths in MCP/Film.swift); DotStudio never installs it.
@@ -189,11 +196,20 @@ struct MCPToolbarButton: View {
 struct MCPPopover: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
     @ObservedObject private var ai = AIConnect.shared
     @ObservedObject private var weather = WeatherService.shared
     var close: () -> Void = {}
 
     var body: some View {
+        if console {
+            MCPConsolePanel(close: close)
+        } else {
+            classic
+        }
+    }
+
+    @ViewBuilder private var classic: some View {
         let store = model.store.baseDir
         let range = layout.popoverWidth
         VStack(alignment: .leading, spacing: layout.itemGap) {
@@ -357,9 +373,264 @@ struct MCPPopover: View {
     }
 }
 
-/// The small "Beta" capsule on the AI features (Settings ▸ AI, the MCP popover) for 1.5.
-struct BetaTag: View {
+// MARK: - Console
+
+/// The MCP popover in the Console appearance: the same content and actions as the Classic one,
+/// as a small instrument panel — a title with its BETA tag and status LEDs, the recommended
+/// setup as a module of ruled rows (an LED each, the fix as a key), the four steps under
+/// "01 // …" legends, the copyable command / JSON / prompt in recessed wells with a COPY key,
+/// the two permissions as Console switches, and a key to Settings ▸ AI.
+private struct MCPConsolePanel: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.layout) private var layout
+    @ObservedObject private var ai = AIConnect.shared
+    @ObservedObject private var weather = WeatherService.shared
+    var close: () -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     var body: some View {
+        let store = model.store.baseDir
+        let range = layout.popoverWidth
+        let column = min(max(layout.scaled(320), range.lowerBound), range.upperBound)
+        // Two columns (the state and setup | the steps) so it stays shorter than a laptop
+        // screen; one from the accessibility text sizes (picked from the size, never measured).
+        Group {
+            if typeSize.isAccessibilitySize {
+                // One column, in the Classic popover's order.
+                VStack(alignment: .leading, spacing: Space.m) {
+                    header
+                    recommended
+                    steps
+                    permissions(store)
+                    settingsKey
+                }
+                .frame(width: column, alignment: .topLeading)
+            } else {
+                HStack(alignment: .top, spacing: Space.l) {
+                    VStack(alignment: .leading, spacing: Space.m) {
+                        header
+                        recommended
+                        permissions(store)
+                        settingsKey
+                    }
+                    .frame(width: column, alignment: .topLeading)
+                    steps
+                        .frame(width: column, alignment: .topLeading)
+                        .padding(.leading, Space.l)
+                        .overlay(alignment: .leading) { ConsoleHairline(vertical: true) }
+                }
+            }
+        }
+        .padding(Space.m)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(ConsoleInk.panel)
+        .presentationBackground(ConsoleInk.panel)
+        .foregroundStyle(ConsoleInk.ink, ConsoleInk.legend)
+        .onAppear { ai.refresh(store: store) }
+    }
+
+    /// The four steps.
+    private var steps: some View {
+        VStack(alignment: .leading, spacing: Space.m) {
+            step(1, "Connect your assistant") {
+                VStack(alignment: .leading, spacing: Space.s) {
+                    Button { ai.addToDesktop() } label: {
+                        Text(ai.installedInDesktop ? "Added to Claude Desktop" : "Add to Claude Desktop")
+                            .textRole(.consoleKey).wrapping()
+                    }
+                    .buttonStyle(.keycap(ai.installedInDesktop ? .plain : .signal, latched: ai.installedInDesktop))
+                    .disabled(ai.installedInDesktop || !ai.helperFound)
+                    copyable("Claude Code", text: AIConnect.claudeCodeCommand, tag: "code",
+                             help: AIConnect.claudeCodeCommand)
+                    copyable("Other apps \u{00B7} JSON", text: AIConnect.configJSONCompact, copies: AIConnect.configJSON,
+                             tag: "json", help: "The mcpServers entry for Cursor, VS Code, Codex and other MCP clients")
+                }
+                .disabled(!ai.helperFound)
+                if let s = ai.desktopStatus {
+                    note(s, tint: ai.desktopFailed ? ConsoleInk.signalInk : ConsoleInk.legend)
+                }
+            }
+            step(2, "Restart it") {
+                note(AIConnect.restartHint)
+            }
+            step(3, "Ask for a screensaver") {
+                copyable("Example", text: "\u{201C}\(AIConnect.examplePrompt)\u{201D}", copies: AIConnect.examplePrompt,
+                         tag: "prompt", help: "Copy example", mono: false)
+            }
+            step(4, "Find it in your Library") {
+                note(AIConnect.libraryHint)
+            }
+        }
+    }
+
+    /// The two permissions as ruled switch rows (the same AISettings as Settings ▸ AI).
+    private func permissions(_ store: URL) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            permission("Let AI change what plays", isOn: ai.allowPlaybackBinding(store: store))
+                .help("Off: assistants can still create and edit styles, but never change your screensaver or live wallpaper.")
+            permission("Let AI add live data signals", isOn: ai.allowSignalsBinding(store: store))
+                .help("Off: assistants can't add, change or delete signals. They never see a signal's key either way.")
+        }
+        .overlay(alignment: .top) { ConsoleHairline() }
+    }
+
+    private var settingsKey: some View {
+        Button {
+            close()
+            AppPresence.shared.showSettings(.ai)
+        } label: {
+            Text("What can it do? More in Settings\u{2026}").textRole(.consoleKey).wrapping()
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.keycap)
+    }
+
+    // MARK: Parts
+
+    /// MCP · BETA, the pitch, and the server's state as LEDs (with the move warning).
+    private var header: some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            VStack(alignment: .leading, spacing: Space.xxs) {
+                HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
+                    Text("MCP").textRole(.consoleHeadline).foregroundStyle(ConsoleInk.ink).wrapping()
+                    BetaTag()
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isHeader)
+                Text("Let Claude or any MCP app build screensavers in DotStudio.")
+                    .textRole(.consoleBodySmall).foregroundStyle(ConsoleInk.legend).wrapping()
+            }
+            VStack(alignment: .leading, spacing: Space.xs) {
+                ConsoleLED(on: ai.helperFound, color: ConsoleInk.green,
+                           label: ai.helperFound ? "Server ready in DotStudio" : "Server not found in this copy of DotStudio")
+                ConsoleLED(on: ai.settings.allowPlaybackChanges, color: ConsoleInk.signal,
+                           label: ai.settings.allowPlaybackChanges ? "AI may change what plays" : "AI can make styles, not change what plays")
+                if !ai.pathIsStable {
+                    ConsoleLED(on: true, color: ConsoleInk.amber, label: "Move DotStudio to Applications first")
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// The recommended setup: a module of ruled rows, each with its LED and its fix.
+    private var recommended: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            Text("Recommended").textRole(.legend).foregroundStyle(ConsoleInk.legend)
+                .accessibilityAddTraits(.isHeader)
+            VStack(alignment: .leading, spacing: 0) {
+                recommendation(ai.anyAssistantConnected, "An AI app connected", AIConnect.assistantHint) { EmptyView() }
+                recommendation(ai.blenderReady, ai.blenderReady ? ai.blenderStatus : "Blender, for film scenes (optional)",
+                               AIConnect.blenderHint) {
+                    if !ai.blenderReady {
+                        Button { ai.getBlender() } label: { Text("Get Blender\u{2026}").textRole(.consoleKey) }
+                            .buttonStyle(.keycap(padding: HubMetrics.smallKey))
+                            .help(AIConnect.blenderDownload.absoluteString)
+                    }
+                }
+                recommendation(weather.enabled, "Live weather on", AIConnect.weatherHint, last: true) {
+                    if !weather.enabled {
+                        Button { weather.enabled = true } label: { Text("Turn On").textRole(.consoleKey) }
+                            .buttonStyle(.keycap(padding: HubMetrics.smallKey))
+                    }
+                }
+            }
+            .padding(.horizontal, Space.s)
+            .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(ConsoleInk.surface))
+            .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous).strokeBorder(ConsoleInk.hairline, lineWidth: 1))
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func recommendation<Fix: View>(_ ok: Bool, _ title: String, _ detail: String, last: Bool = false,
+                                           @ViewBuilder fix: () -> Fix) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
+            ConsoleLED(on: ok, color: ConsoleInk.green)
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+            VStack(alignment: .leading, spacing: Space.xxs) {
+                Text(title).textRole(.consoleBodySmallEmphasis).foregroundStyle(ConsoleInk.ink).wrapping()
+                Text(detail).textRole(.consoleBodySmall).foregroundStyle(ConsoleInk.legend).wrapping()
+                fix()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, Space.s)
+        .overlay(alignment: .bottom) { if !last { ConsoleHairline() } }
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(ok ? "Done" : "Not set up")
+    }
+
+    /// One how-to step under its printed legend: the number in the signal ink, "//", the title.
+    private func step<Content: View>(_ n: Int, _ title: String, @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            (Text(String(format: "%02d", n)).foregroundColor(ConsoleInk.signalInk)
+                + Text(" // ").foregroundColor(ConsoleInk.legend)
+                + Text(title).foregroundColor(ConsoleInk.ink))
+                .textRole(.legend)
+                .wrapping()
+                .accessibilityLabel("Step \(n): \(title)")
+                .accessibilityAddTraits(.isHeader)
+            content()
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    /// Something to copy: its legend and a COPY key on one line, the text itself in a well
+    /// under it (selectable; mono for a command or JSON). The key says COPIED for a moment.
+    private func copyable(_ legend: String, text: String, copies: String? = nil, tag: String,
+                          help: String, mono: Bool = true) -> some View {
+        VStack(alignment: .leading, spacing: Space.xxs) {
+            HStack(alignment: .center, spacing: Space.xs) {
+                Text(legend).textRole(.legend).foregroundStyle(ConsoleInk.legend)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button { ai.copy(copies ?? text, tag) } label: {
+                    Text(ai.copied == tag ? "Copied" : "Copy").textRole(.consoleKey).lineLimit(1).fixedSize()
+                }
+                .buttonStyle(.keycap(padding: HubMetrics.smallKey))
+                .help(help)
+                .accessibilityLabel("Copy \(legend)")
+            }
+            Text(text)
+                .textRole(mono ? .consoleMono : .consoleBodySmall)
+                .foregroundStyle(ConsoleInk.ink)
+                .wrapping()
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, Space.xs)
+                .padding(.vertical, Space.xs - 2)
+                .consoleWell(cornerRadius: 3)
+        }
+    }
+
+    private func note(_ text: String, tint: Color = ConsoleInk.legend) -> some View {
+        Text(text).textRole(.consoleBodySmall).foregroundStyle(tint).wrapping()
+    }
+
+    /// A permission as a ruled switch row.
+    private func permission(_ title: String, isOn: Binding<Bool>) -> some View {
+        Toggle(isOn: isOn) {
+            Text(title).textRole(.consoleBody).foregroundStyle(ConsoleInk.ink).wrapping()
+        }
+        .toggleStyle(ConsoleSwitchStyle())
+        .padding(.vertical, Space.xs)
+        .overlay(alignment: .bottom) { ConsoleHairline() }
+    }
+}
+
+/// The small "Beta" capsule on the AI features (Settings ▸ AI, the MCP popover) for 1.5.
+/// Console: a printed grey tag.
+struct BetaTag: View {
+    @Environment(\.console) private var console
+
+    var body: some View {
+        if console {
+            ConsoleTag(text: "Beta").fixedSize().accessibilityLabel("Beta")
+        } else {
+            classic
+        }
+    }
+
+    private var classic: some View {
         Text("Beta")
             .textRole(.badge)
             .foregroundStyle(.secondary)

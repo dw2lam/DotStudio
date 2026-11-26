@@ -356,28 +356,62 @@ struct MusicArtThumb: View {
 }
 
 /// Previous · Play/Pause · Next. Glass buttons on the glass cards; borderless in a Form.
+/// Console: small square keys in a recessed well (as the wallpaper deck's ▶ ‖ ⏻), Play/Pause a
+/// blue key while the song plays.
 /// Disabled while the player can't be controlled (not running, or Automation refused).
 struct MusicTransport: View {
     @ObservedObject var now: MusicNow
     var showsPrevious = true
     var glass = true
+    @Environment(\.console) private var console
     @ScaledLength(relativeTo: .callout) private var glyph: CGFloat = 12
     @ScaledLength(relativeTo: .callout) private var hit: CGFloat = 16
+    @ScaledLength(relativeTo: .caption) private var key: CGFloat = 20
+    @ScaledLength(relativeTo: .caption) private var keyGlyph: CGFloat = 9
 
     var body: some View {
-        HStack(spacing: glass ? Space.xxs : Space.xs) {
+        if console {
+            keys
+                .padding([.top, .horizontal], 2)
+                .consoleWell(cornerRadius: 3)
+                .fixedSize()
+        } else {
+            keys
+        }
+    }
+
+    private var keys: some View {
+        HStack(spacing: console ? 2 : glass ? Space.xxs : Space.xs) {
             if showsPrevious {
                 control("backward.fill", "Previous") { now.previous() }
             }
-            control(now.isPlaying ? "pause.fill" : "play.fill", now.isPlaying ? "Pause" : "Play") { now.playPause() }
+            control(now.isPlaying ? "pause.fill" : "play.fill", now.isPlaying ? "Pause" : "Play",
+                    lit: now.isPlaying && now.canControl) { now.playPause() }
             control("forward.fill", "Next") { now.next() }
         }
         .disabled(!now.canControl)
     }
 
     @ViewBuilder
-    private func control(_ symbol: String, _ label: String, action: @escaping () -> Void) -> some View {
+    private func control(_ symbol: String, _ label: String, lit: Bool = false, action: @escaping () -> Void) -> some View {
         let tip = now.canControl ? label : "Allow DotStudio to control \(now.sourceName) to use the controls (Settings › Music)"
+        if console {
+            Button(action: action) {
+                Image(systemName: symbol)
+                    .font(.system(size: keyGlyph, weight: .bold))
+                    .frame(width: key, height: key)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.keycap(lit ? .blue : .plain, cornerRadius: 2, padding: EdgeInsets()))
+            .accessibilityLabel(label)
+            .help(tip)
+        } else {
+            classicControl(symbol, label, tip: tip, action: action)
+        }
+    }
+
+    @ViewBuilder
+    private func classicControl(_ symbol: String, _ label: String, tip: String, action: @escaping () -> Void) -> some View {
         let b = Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: glyph, weight: .semibold))
