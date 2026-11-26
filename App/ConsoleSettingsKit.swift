@@ -6,7 +6,7 @@
 //    • settingsForm()         — a pane's Form: Classic's grouped Form, or Console's sections —
 //                               a mono-caps legend over a ruled list of rows (or a module), the
 //                               plain sentence under it — with Console switches, keys and rows.
-//    • ConsoleSwitch          — the design's square switch: a well that fills orange when on.
+//    • ConsoleSwitch          — the design's square switch: a well that lights green when on.
 //    • ConsoleSegments        — a choice of keycaps in a well; the chosen one blue.
 //    • ConsoleCardStyle       — a big key (a preset card, an option card) with travel.
 //    • ConsoleModule / ConsoleModuleHeader / ConsoleIconSquare — the power source's block.
@@ -260,7 +260,7 @@ struct ConsoleSwitchStyle: ToggleStyle {
     }
 }
 
-/// The design's switch: a square well with a key in it; on, the well fills orange and the key
+/// The design's switch: a square well with a key in it; on, the well lights green and the key
 /// (near-black) slides right. A haptic tick when it flips.
 struct ConsoleSwitch: View {
     @Binding var isOn: Bool
@@ -280,17 +280,14 @@ struct ConsoleSwitch: View {
                 Color.clear
                     .consoleWell(cornerRadius: 3)
                     .overlay {
-                        RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .fill(ConsoleInk.signal)
-                            .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                .strokeBorder(ConsoleInk.signalSkirt.opacity(0.6), lineWidth: 1))
+                        ConsoleSwitchLight(shape: RoundedRectangle(cornerRadius: 3, style: .continuous))
                             .opacity(isOn ? 1 : 0)
                     }
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .fill(isOn ? ConsoleInk.onSignal : ConsoleInk.keyFace)
+                    .fill(isOn ? ConsoleInk.onGreen : ConsoleInk.keyFace)
                     .overlay(RoundedRectangle(cornerRadius: 2, style: .continuous)
-                        .strokeBorder(isOn ? Color.clear : ConsoleInk.outline.opacity(0.6), lineWidth: 1))
-                    .shadow(color: .black.opacity(isOn ? 0 : 0.25), radius: 1, y: 1)
+                        .strokeBorder(isOn ? Color.clear : ConsoleInk.outline.opacity(0.5), lineWidth: 0.75))
+                    .shadow(color: .black.opacity(isOn ? 0 : 0.18), radius: 1, y: 0.5)
                     .frame(width: key, height: key)
                     .padding(inset)
             }
@@ -332,7 +329,7 @@ struct ConsoleSegments<Value: Hashable>: View {
                         .fixedSize()
                         .frame(maxWidth: fills || stacked ? .infinity : nil)
                 }
-                .buttonStyle(.keycap(on ? tint : .plain, padding: EdgeInsets(top: 6, leading: 11, bottom: 6, trailing: 11)))
+                .buttonStyle(.keycap(on ? tint : .plain, padding: EdgeInsets(top: 7, leading: 11, bottom: 7, trailing: 11)))
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
         }
@@ -346,8 +343,9 @@ struct ConsoleSegments<Value: Hashable>: View {
 
 // MARK: - Cards
 
-/// A big key: a face of `face` colour over a 4 pt skirt it sinks into when pressed, a hairline
-/// edge (orange when hovered; a heavier orange when `selected`), a haptic tick on press.
+/// A big key: a face of `face` colour over the keys' slim 2 pt skirt it sinks into when
+/// pressed, a fine edge (orange when hovered; a firmer orange with a soft orange glow when
+/// `selected`), a haptic tick on press.
 struct ConsoleCardStyle: ButtonStyle {
     var face: Color = ConsoleInk.surface
     var selected = false
@@ -376,26 +374,33 @@ private struct ConsoleCardBody: View {
         let down = configuration.isPressed && enabled
         let dark = scheme == .dark
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        let edge: Color = selected ? ConsoleInk.signal : hovering && enabled ? ConsoleInk.signal.opacity(0.7) : ConsoleInk.hairline
+        let hot = hovering && enabled
+        let skirt = ConsoleKeycapStyle.skirt
+        let edge: Color = selected ? ConsoleInk.signal : hot ? ConsoleInk.signal.opacity(0.6) : ConsoleInk.hairline
+        // the selected card glows softly in signal; a hovered one a breath of it
+        let glow: Color = down ? .clear
+            : selected ? ConsoleInk.signal.opacity(dark ? 0.26 : 0.18)
+            : hot ? ConsoleInk.signal.opacity(dark ? 0.16 : 0.1)
+            : .black.opacity(dark ? 0.3 : 0.06)
         configuration.label
             .background {
                 shape.fill(face)
-                    .overlay(shape.fill(LinearGradient(colors: [.white.opacity(dark ? 0.04 : 0.35), .black.opacity(dark ? 0.12 : 0.04)],
+                    .overlay(shape.fill(LinearGradient(colors: [.white.opacity(dark ? 0.03 : 0.25), .black.opacity(dark ? 0.08 : 0.02)],
                                                        startPoint: .top, endPoint: .bottom)))
-                    .overlay(shape.fill(Color.clear.shadow(.inner(color: .black.opacity(down ? (dark ? 0.5 : 0.18) : 0), radius: 2, y: 2))))
+                    .overlay(shape.fill(Color.clear.shadow(.inner(color: ConsoleKeyLight.pressShade(dark: dark, down: down), radius: 1.5, y: 1))))
                     .overlay(alignment: .top) {
-                        shape.strokeBorder(LinearGradient(colors: [.white.opacity(down ? 0 : (dark ? 0.12 : 0.8)), .clear],
-                                                          startPoint: .top, endPoint: .center), lineWidth: 1)
+                        shape.strokeBorder(LinearGradient(colors: [.white.opacity(down ? 0 : (dark ? 0.08 : 0.5)), .clear],
+                                                          startPoint: .top, endPoint: .center), lineWidth: ConsoleKeyLight.highlightWidth)
                     }
             }
-            .overlay(shape.strokeBorder(edge, lineWidth: selected ? 1.5 : 1))
-            .offset(y: down ? 3 : 0)
+            .overlay(shape.strokeBorder(edge, lineWidth: selected ? 1.25 : (hot ? 1 : 0.75)))
+            .offset(y: down ? ConsoleKeycapStyle.travel : 0)
             .background {
                 shape.fill(ConsoleInk.keySkirt)
-                    .offset(y: down ? 1 : 4)
-                    .shadow(color: .black.opacity(down ? 0 : (dark ? 0.5 : 0.1)), radius: 6, y: down ? 1 : 5)
+                    .offset(y: skirt)
+                    .shadow(color: glow, radius: selected || hot ? 12 : 1.5, y: selected || hot ? 2 : 1)
             }
-            .padding(.bottom, 4)
+            .padding(.bottom, skirt)
             .opacity(enabled || !dims ? 1 : 0.45)
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
@@ -553,13 +558,13 @@ struct ConsoleThumb: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: 2, style: .continuous)
         shape.fill(ConsoleInk.surfaceHigh)
-            .overlay(shape.fill(LinearGradient(colors: [.white.opacity(scheme == .dark ? 0.08 : 0.5), .clear],
+            .overlay(shape.fill(LinearGradient(colors: [.white.opacity(scheme == .dark ? 0.05 : 0.3), .clear],
                                                startPoint: .top, endPoint: .bottom)))
-            .overlay(shape.strokeBorder(ConsoleInk.outline, lineWidth: 1))
+            .overlay(shape.strokeBorder(ConsoleInk.outline.opacity(0.8), lineWidth: 0.75))
             .overlay(Rectangle().fill(ConsoleInk.legend.opacity(0.6)).frame(width: 1).padding(.vertical, 5))   // the grip
-            .offset(y: pressed ? 1.5 : 0)
-            .background(shape.fill(ConsoleInk.keySkirt).offset(y: pressed ? 0.5 : 2.5))
-            .shadow(color: .black.opacity(pressed ? 0.1 : (scheme == .dark ? 0.5 : 0.2)), radius: 3, y: 2)
+            .offset(y: pressed ? 1 : 0)
+            .background(shape.fill(ConsoleInk.keySkirt).offset(y: pressed ? 0.5 : 1.5))
+            .shadow(color: .black.opacity(pressed ? 0.06 : (scheme == .dark ? 0.35 : 0.1)), radius: 1.5, y: 1)
             .scaleEffect(pressed ? 1.06 : 1)
     }
 }

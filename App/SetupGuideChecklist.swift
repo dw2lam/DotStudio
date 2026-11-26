@@ -566,7 +566,7 @@ struct SetupGuidePanelView: View {
         if console {
             Button(action: onDone) { Text("Done").textRole(.consoleKey) }
                 .buttonStyle(.keycap(guide.snapshot.status == .ready ? .signal : .plain,
-                                     padding: EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16)))
+                                     padding: EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)))
         } else {
             Button(action: onDone) { Text("Done").textRole(.body) }
                 .adaptiveControlSize(.large)

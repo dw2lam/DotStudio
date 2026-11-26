@@ -57,14 +57,15 @@ struct ScaledInsets: DynamicProperty {
 // MARK: - Key face
 
 extension View {
-    /// A keycap's face behind this content: the face colour, a top light, a hairline (orange
-    /// while hovered), and the skirt under it — sunk into the skirt while `pressed`.
+    /// A keycap's face behind this content: the face colour, a faint top light, a 0.5 pt edge
+    /// (orange while hovered), and the slim skirt under it — sunk into the skirt while
+    /// `pressed`. Lit and shaded exactly as ConsoleKeycapStyle (ConsoleKeyLight).
     /// `latched`: held down as a state (a status key) — the face rests part way into the skirt.
     /// Only the face moves: the skirt's base (the key's footprint) and the layout size never
     /// change, so a sunk key's bottom edge lines up with its neighbours'.
     /// `reserve` keeps the skirt's room under the content (rows of keys don't overlap).
     func consoleKeyFace(_ tint: ConsoleKeycapStyle.Tint = .plain, pressed: Bool = false, latched: Bool = false,
-                        hovering: Bool = false, cornerRadius: CGFloat = 4, skirt: CGFloat = 4,
+                        hovering: Bool = false, cornerRadius: CGFloat = 4, skirt: CGFloat = ConsoleKeycapStyle.skirt,
                         reserve: Bool = true) -> some View {
         modifier(ConsoleKeyFaceModifier(tint: tint, pressed: pressed, latched: latched, hovering: hovering,
                                         cornerRadius: cornerRadius, skirt: skirt, reserve: reserve))
@@ -77,7 +78,7 @@ struct ConsoleKeyFaceModifier: ViewModifier {
     var latched = false
     var hovering = false
     var cornerRadius: CGFloat = 4
-    var skirt: CGFloat = 4
+    var skirt: CGFloat = ConsoleKeycapStyle.skirt
     var reserve = true
     @Environment(\.colorScheme) private var scheme
     @Environment(\.isEnabled) private var enabled
@@ -85,33 +86,33 @@ struct ConsoleKeyFaceModifier: ViewModifier {
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         let dark = scheme == .dark
-        let face: Color = tint == .signal ? ConsoleInk.signal : tint == .blue ? ConsoleInk.blue : ConsoleInk.keyFace
-        let skirtInk: Color = tint == .signal ? ConsoleInk.signalSkirt : tint == .blue ? ConsoleInk.blueSkirt : ConsoleInk.keySkirt
-        let topLight = tint == .plain ? (dark ? 0.07 : 0.75) : 0.14
+        let hot = hovering && enabled
         // pressed: the full travel; latched: part way (as ConsoleKeycapStyle)
-        let sink: CGFloat = pressed ? min(ConsoleKeycapStyle.travel, skirt - 1)
-            : latched ? min(ConsoleKeycapStyle.latchedTravel, skirt - 1) : 0
+        let sink: CGFloat = pressed ? min(ConsoleKeycapStyle.travel, skirt * 0.75)
+            : latched ? min(ConsoleKeycapStyle.latchedTravel, skirt * 0.5) : 0
         let down = sink > 0
-        let lift = down ? 0 : (tint == .plain ? (dark ? 0.6 : 0.12) : 0.3)
-        let glow: Color = tint == .signal ? ConsoleInk.signal : tint == .blue ? ConsoleInk.blue : .black
+        let shade = ConsoleKeyLight.shade(tint, dark: dark, down: down, hovering: hot)
         content
             .background {
-                shape.fill(face)
-                    .overlay(shape.fill(LinearGradient(colors: [.white.opacity(topLight), .black.opacity(tint == .plain ? (dark ? 0.16 : 0.06) : 0)],
-                                                       startPoint: .top, endPoint: .bottom)))
-                    .overlay(shape.fill(Color.clear.shadow(.inner(color: .black.opacity(down ? (dark ? 0.55 : 0.2) : 0), radius: 1.5, y: 2))))
+                shape.fill(tint.face)
+                    .overlay(shape.fill(ConsoleKeyLight.wash(tint, dark: dark)))
+                    .overlay(shape.fill(Color.clear.shadow(.inner(color: ConsoleKeyLight.pressShade(dark: dark, down: down), radius: 1, y: 1))))
                     .overlay(alignment: .top) {
-                        shape.strokeBorder(LinearGradient(colors: [.white.opacity(down ? 0 : (tint == .plain ? (dark ? 0.18 : 0.95) : 0.45)), .clear],
-                                                          startPoint: .top, endPoint: .center), lineWidth: 1)
+                        shape.strokeBorder(ConsoleKeyLight.highlight(tint, dark: dark, down: down), lineWidth: ConsoleKeyLight.highlightWidth)
                     }
             }
-            .overlay(shape.strokeBorder(tint == .plain ? (hovering && enabled ? ConsoleInk.signal : ConsoleInk.hairline) : .clear, lineWidth: 1))
+            .overlay {
+                if tint.isPlain {
+                    shape.strokeBorder(ConsoleKeyLight.edge(hovering: hot, dark: dark),
+                                       lineWidth: hot ? ConsoleKeyLight.hoverEdgeWidth : ConsoleKeyLight.edgeWidth)
+                }
+            }
             .offset(y: sink)
             // the skirt never moves: its base is the key's footprint in every state
             .background {
-                shape.fill(skirtInk)
+                shape.fill(tint.skirt)
                     .offset(y: skirt)
-                    .shadow(color: glow.opacity(lift * (tint == .plain ? 1 : 0.9)), radius: skirt * 1.5, y: down ? 1 : skirt * 1.5)
+                    .shadow(color: shade.color, radius: shade.radius, y: shade.y)
             }
             .padding(.bottom, reserve ? skirt : 0)
             .opacity(enabled ? 1 : 0.45)
@@ -280,14 +281,14 @@ struct InspectorFader: View {
     private var thumb: some View {
         let shape = RoundedRectangle(cornerRadius: 2, style: .continuous)
         return Color.clear
-            .frame(width: thumbWidth, height: thumbHeight - 3)
+            .frame(width: thumbWidth, height: thumbHeight - 2)
             .overlay(alignment: .center) {
                 // the thumb's grip line
-                Rectangle().fill(ConsoleInk.legend.opacity(0.6)).frame(width: 1, height: (thumbHeight - 3) * 0.45)
+                Rectangle().fill(ConsoleInk.legend.opacity(0.6)).frame(width: 1, height: (thumbHeight - 2) * 0.45)
             }
-            .consoleKeyFace(pressed: dragging, hovering: hovering || dragging, cornerRadius: 2, skirt: 3, reserve: false)
-            .overlay(shape.strokeBorder(focused ? ConsoleInk.signal : .clear, lineWidth: 1.5).offset(y: dragging ? 2 : 0))
-            .offset(y: -1.5)
+            .consoleKeyFace(pressed: dragging, hovering: hovering || dragging, cornerRadius: 2, reserve: false)
+            .overlay(shape.strokeBorder(focused ? ConsoleInk.signal : .clear, lineWidth: 1.5).offset(y: dragging ? ConsoleKeycapStyle.travel : 0))
+            .offset(y: -1)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.08), value: dragging)
     }
 
@@ -405,8 +406,23 @@ struct ConsoleDialGrid: Layout {
 
 // MARK: - Switch
 
+/// A switch's lit well: ON is green (orange before 2026-11-26 — orange is the primary action),
+/// the fill a step deeper on the light body, a fine edge in its skirt colour and a soft green
+/// glow around it. Shared by InspectorSwitch and ConsoleSwitch.
+struct ConsoleSwitchLight<S: InsettableShape>: View {
+    let shape: S
+    @Environment(\.colorScheme) private var scheme
+    var body: some View {
+        let dark = scheme == .dark
+        shape.fill(ConsoleInk.greenKey)
+            .overlay(shape.fill(LinearGradient(colors: [.white.opacity(0.1), .clear], startPoint: .top, endPoint: .bottom)))
+            .overlay(shape.strokeBorder(ConsoleInk.greenSkirt.opacity(dark ? 0.8 : 0.55), lineWidth: 0.75))
+            .shadow(color: ConsoleInk.greenKey.opacity(dark ? 0.3 : 0.22), radius: 8, y: 1)
+    }
+}
+
 /// The design's inset switch: a recessed well with a small key in it; on, the well lights
-/// orange and the key slides right.
+/// green and the key slides right.
 struct InspectorSwitch: View {
     let label: String
     @Binding var isOn: Bool
@@ -423,16 +439,15 @@ struct InspectorSwitch: View {
             let shape = RoundedRectangle(cornerRadius: 2, style: .continuous)
             ZStack(alignment: isOn ? .trailing : .leading) {
                 if isOn {
-                    shape.fill(ConsoleInk.signal)
-                        .overlay(shape.strokeBorder(ConsoleInk.signalSkirt.opacity(0.6), lineWidth: 1))
+                    ConsoleSwitchLight(shape: shape)
                 } else {
                     Color.clear.consoleWell(cornerRadius: 2)
                 }
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .fill(isOn ? ConsoleInk.onSignal : ConsoleInk.legend)
+                    .fill(isOn ? ConsoleInk.onGreen : ConsoleInk.legend)
                     .overlay(RoundedRectangle(cornerRadius: 2, style: .continuous)
-                        .strokeBorder(LinearGradient(colors: [.white.opacity(0.3), .clear], startPoint: .top, endPoint: .center), lineWidth: 1))
-                    .shadow(color: .black.opacity(0.35), radius: 1, y: 1)
+                        .strokeBorder(LinearGradient(colors: [.white.opacity(isOn ? 0.18 : 0.3), .clear], startPoint: .top, endPoint: .center), lineWidth: 0.75))
+                    .shadow(color: .black.opacity(isOn ? 0.15 : 0.22), radius: 1, y: 0.5)
                     .frame(width: knob, height: knob)
                     .padding((height - knob) / 2)
             }
@@ -454,7 +469,7 @@ struct ConsoleMenuKeyLabel: View {
     let text: String
     var dim = false
     @State private var hovering = false
-    @ScaledLength(relativeTo: .caption) private var minHeight: CGFloat = 28
+    @ScaledLength(relativeTo: .caption) private var minHeight: CGFloat = 30
 
     var body: some View {
         HStack(spacing: Space.xs) {
@@ -614,7 +629,7 @@ struct InspectorSegments<Value: Hashable>: View {
     let options: [(title: String, value: Value)]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The keys' margins grow with their legends (consoleKey is a caption-relative role).
-    @ScaledInsets(relativeTo: .caption) private var padding = EdgeInsets(top: 7, leading: 10, bottom: 7, trailing: 10)
+    @ScaledInsets(relativeTo: .caption) private var padding = EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10)
 
     var body: some View {
         ConsoleEqualGrid(spacing: Space.xxs, rowSpacing: Space.xxs, allowed: [options.count, 2, 1]) {
@@ -629,7 +644,7 @@ struct InspectorSegments<Value: Hashable>: View {
                         .fixedSize()
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.keycap(on ? .signal : .plain, latched: on, padding: padding))
+                .buttonStyle(.keycap(on ? .blue : .plain, latched: on, padding: padding))
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
         }
@@ -707,7 +722,7 @@ struct InspectorSmallButton: View {
     var fixed = true
     let action: () -> Void
     @Environment(\.console) private var console
-    @ScaledInsets(relativeTo: .caption) private var keyPadding = EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
+    @ScaledInsets(relativeTo: .caption) private var keyPadding = EdgeInsets(top: 7, leading: 12, bottom: 7, trailing: 12)
 
     var body: some View {
         if console {

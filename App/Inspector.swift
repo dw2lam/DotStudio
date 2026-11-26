@@ -353,7 +353,7 @@ struct EffectStackView: View {
     @State private var expanded: Set<UUID>
     @State private var showAdd = false
     /// Console: the Add Effect key's margins, grown with its legend (consoleKeyLarge).
-    @ScaledInsets(relativeTo: .callout) private var addKeyPadding = EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
+    @ScaledInsets(relativeTo: .callout) private var addKeyPadding = EdgeInsets(top: 9, leading: 16, bottom: 9, trailing: 16)
 
     init(preset: Binding<Preset>, model: AppModel) {
         _preset = preset

@@ -688,8 +688,8 @@ private struct FilterChip: View {
     }
 
     /// Console (the Stitch filter keys): a keycap printing the filter and its count in mono
-    /// caps — the selected one an orange key. VoiceOver hears the filter and its
-    /// count; the selected trait says which is on.
+    /// caps — the selected one lit in its own colour (`consoleTint`). VoiceOver hears the
+    /// filter and its count; the selected trait says which is on.
     private var key: some View {
         Button(action: action) {
             HStack(spacing: Space.xs) {
@@ -705,10 +705,23 @@ private struct FilterChip: View {
             .frame(minHeight: consoleHeight - HubMetrics.keySkirt)
             .fixedSize()
         }
-        .buttonStyle(.keycap(selected ? .signal : .plain,
+        .buttonStyle(.keycap(selected ? consoleTint : .plain,
                              padding: EdgeInsets(top: 0, leading: 14, bottom: 0, trailing: 14)))
         .accessibilityLabel(count.map { "\(filter.title), \($0)" } ?? filter.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    /// Console: the colour a filter key lights in while it's chosen — each says what it is,
+    /// as the rest of the hub does: All the orange of the primary key, Playing the green of
+    /// ON, Scenes the blue of the live sky, Looks yellow, and the packs (Clocks, Nature…) pink.
+    private var consoleTint: ConsoleKeycapStyle.Tint {
+        switch filter {
+        case .all: .signal
+        case .playing: .green
+        case .scenes: .blue
+        case .looks: .yellow
+        case .tag: .pink
+        }
     }
 
     private var chip: some View {
@@ -880,7 +893,7 @@ struct NewTileFace: View {
         .frame(maxHeight: .infinity, alignment: .top)
         // In its section's box, like a pad: no panel or edge at rest.
         .background(shape.fill(hovering ? ConsoleInk.chassis : Color.clear))
-        .overlay(shape.strokeBorder(hovering ? ConsoleInk.signal.opacity(0.55) : Color.clear, lineWidth: 1))
+        .overlay(shape.strokeBorder(hovering ? ConsoleInk.signal.opacity(0.4) : Color.clear, lineWidth: 1))
         .contentShape(Rectangle())
         .motion(Motion.snappy, value: hovering)
         .accessibilityElement(children: .ignore)
@@ -992,8 +1005,8 @@ private struct HubWordmark: View {
     }
 }
 
-/// A header key's glyph: 20 pt square, so every key is the same 36 pt square (the keycap's
-/// 8 pt padding around it; 32 pt before 2026-11-26).
+/// A header key's glyph: 20 pt square, so every key is the same 38 pt square (the keycap's
+/// 9 pt padding around it, over a 2 pt skirt; 36 + 4, and 32 + 4, before).
 private struct HubIconLabelStyle: LabelStyle {
     @ScaledLength(relativeTo: .body) private var box: CGFloat = 20
     func makeBody(configuration: Configuration) -> some View {
@@ -1004,10 +1017,10 @@ private struct HubIconLabelStyle: LabelStyle {
 }
 
 private extension View {
-    /// A Console header key: a 36 pt square keycap around the item's icon.
+    /// A Console header key: a 38 pt square keycap around the item's icon.
     func hubHeaderKey() -> some View {
         labelStyle(HubIconLabelStyle())
-            .buttonStyle(.keycap(padding: EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8)))
+            .buttonStyle(.keycap(padding: EdgeInsets(top: 9, leading: 9, bottom: 9, trailing: 9)))
             .padding(.horizontal, Space.xxs / 2)   // the Stitch header's 4 pt between keys
     }
 }

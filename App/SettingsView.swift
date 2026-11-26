@@ -117,7 +117,7 @@ struct SettingsView: View {
                     Button { model.settingsPane = nil } label: {
                         Text("Done").textRole(.consoleKey)
                     }
-                    .buttonStyle(.keycap(.signal, padding: EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16)))
+                    .buttonStyle(.keycap(.signal, padding: EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)))
                     .keyboardShortcut(.cancelAction)
                 }
                 .padding(.horizontal, Space.l)
@@ -363,7 +363,7 @@ private struct MenuBarIconChoice: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.consoleSettings) private var console
     @State private var hovered: MenuBarIcon?
-    @ScaledLength(relativeTo: .body) private var keySide: CGFloat = 36
+    @ScaledLength(relativeTo: .body) private var keySide: CGFloat = 38
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
@@ -938,19 +938,19 @@ private struct ConsoleSettingsSidebar: View {
     @ViewBuilder private func row(_ p: SettingsPane) -> some View {
         if p == selection {
             Button { choose(p) } label: { label(p, on: true) }
-                .buttonStyle(.keycap(.signal, padding: EdgeInsets(top: 5, leading: 8, bottom: 5, trailing: 8)))
+                .buttonStyle(.keycap(.signal, padding: EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8)))
                 .accessibilityAddTraits(.isSelected)
         } else {
             Button { choose(p) } label: {
                 label(p, on: false)
                     .padding(.horizontal, Space.xs)
-                    .padding(.vertical, 5)
+                    .padding(.vertical, 6)
                     .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(hovered == p ? ConsoleInk.surfaceHigh : .clear))
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .padding(.bottom, 4)          // the chosen key's skirt room, so rows don't shift
+            .padding(.bottom, ConsoleKeycapStyle.skirt)   // the chosen key's skirt room, so rows don't shift
             .onHover { hovered = $0 ? p : (hovered == p ? nil : hovered) }
         }
     }

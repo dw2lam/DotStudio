@@ -38,6 +38,7 @@ struct StyleTile: View, Equatable {
     @Environment(\.heroNamespace) private var hero
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.console) private var console
+    @Environment(\.colorScheme) private var scheme
     let preset: Preset
     let badges: TileBadges
     let lineup: ScreensaverLineup
@@ -156,7 +157,10 @@ struct StyleTile: View, Equatable {
     /// its own — the box is the surface; under the pointer it sinks to the chassis colour.
     private var pad: some View {
         let shape = RoundedRectangle(cornerRadius: HubMetrics.panelRadius, style: .continuous)
-        let edge = selected ? ConsoleInk.signal : hovering ? ConsoleInk.signal.opacity(0.55) : Color.clear
+        let edge = selected ? ConsoleInk.signal.opacity(0.9) : hovering ? ConsoleInk.signal.opacity(0.4) : Color.clear
+        // the selected pad's edge is lit: a soft, wide orange glow behind its line (one pad,
+        // so two shadows), a touch stronger on graphite
+        let glow = scheme == .dark ? 0.6 : 0.45   // (a shadow, not a blur: the same in offscreen renders)
         return VStack(alignment: .leading, spacing: Space.xs) {
             picture(radius: HubMetrics.wellRadius)
                 .background(ConsoleInk.well)
@@ -176,6 +180,14 @@ struct StyleTile: View, Equatable {
         .padding(Space.xs)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(shape.fill(hovering ? ConsoleInk.chassis : Color.clear))
+        .background {
+            if selected {
+                shape.strokeBorder(ConsoleInk.signal, lineWidth: 1.5)
+                    .shadow(color: ConsoleInk.signal.opacity(glow), radius: 5)
+                    .shadow(color: ConsoleInk.signal.opacity(glow * 0.6), radius: 14)
+                    .allowsHitTesting(false)
+            }
+        }
         .overlay(shape.strokeBorder(edge, lineWidth: 1))
     }
 
@@ -916,13 +928,13 @@ enum HubMetrics {
     static let panelRadius: CGFloat = 6
     /// A picture's well, a key, the search well.
     static let wellRadius: CGFloat = 4
-    /// A small key's padding (Customize, Preview, the hover bar's keys): 6 × 10 around an
-    /// 11.5 pt legend — about 27 pt of face (4 × 8 and 22 pt before 2026-11-26).
-    static let smallKey = EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10)
+    /// A small key's padding (Customize, Preview, the hover bar's keys): 7 × 10 around an
+    /// 11.5 pt legend — about 29 pt of face over a 2 pt skirt (6 × 10 over 4 pt, and 4 × 8, before).
+    static let smallKey = EdgeInsets(top: 7, leading: 10, bottom: 7, trailing: 10)
     /// An icon-only small key ("…").
-    static let squareKey = EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8)
+    static let squareKey = EdgeInsets(top: 7, leading: 8, bottom: 7, trailing: 8)
     /// The keycap's skirt (Console.swift): the room it takes under every key's face.
-    static let keySkirt: CGFloat = 4
+    static let keySkirt: CGFloat = ConsoleKeycapStyle.skirt
 }
 
 /// Console: what a small key prints — an optional glyph and a mono-caps legend (the keycap
@@ -1128,7 +1140,7 @@ struct HubNameRow: View {
                     .scaledFont { .scaled(points: 10.5, $0, weight: .semibold) }
             }
         }
-        .foregroundStyle(ConsoleInk.legend)
+        .foregroundStyle(ConsoleInk.pinkInk)   // each live trait its own ink: weather amber, sky blue, day & night pink
         .help("Day & night — a day version and a night version, switching at sunrise and sunset")
         .accessibilityLabel("Day and night")
     }

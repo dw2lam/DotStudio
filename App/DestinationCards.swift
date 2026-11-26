@@ -461,20 +461,20 @@ struct SyncKey: View {
     }
 
     /// Console (the Stitch SYNC key): a keycap with a link glyph over the word; synced, it
-    /// stays down and its glyph lights in signal as the decks merge.
+    /// stays down and its glyph lights green (ON, as the switches) as the decks merge.
     private var key: some View {
         Button(action: action) {
             VStack(spacing: Space.xxs) {
                 Image(systemName: "link")
                     .scaledFont { .scaled(points: 14, $0, weight: .semibold) }
-                    .foregroundStyle(level > 0.5 ? ConsoleInk.signalInk : ConsoleInk.legend)
+                    .foregroundStyle(level > 0.5 ? ConsoleInk.greenInk : ConsoleInk.legend)   // ON is green, as the switches
                 Text("Sync").textRole(.consoleKeySmall)
                     .lineLimit(1)
                     .fixedSize()
             }
             .frame(minWidth: layout.scaled(32))
         }
-        .buttonStyle(.keycap(latched: isOn, padding: EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10)))
+        .buttonStyle(.keycap(latched: isOn, padding: EdgeInsets(top: 11, leading: 10, bottom: 11, trailing: 10)))
         .fixedSize()
         .help("Same as Screensaver — play whatever the screensaver shows, same playlist and night style, so it picks up right where your desktop was. Picking a wallpaper style turns this off.")
         .accessibilityLabel("Same as Screensaver")
@@ -935,7 +935,7 @@ private struct NowPlayingLine: View {
     @ScaledLength(relativeTo: .callout) private var musicArt: CGFloat = 20
 
     @Environment(\.console) private var console
-    @ScaledLength(relativeTo: .caption) private var consoleKey: CGFloat = 24
+    @ScaledLength(relativeTo: .caption) private var consoleKey: CGFloat = 26
 
     var body: some View {
         let _ = Perf.body("NowPlayingLine")
@@ -1573,7 +1573,7 @@ private struct WallpaperTransport: View {
 
     @Environment(\.layout) private var layout
     @Environment(\.console) private var console
-    @ScaledLength(relativeTo: .caption) private var consoleKey: CGFloat = 24
+    @ScaledLength(relativeTo: .caption) private var consoleKey: CGFloat = 26
     @ScaledLength(relativeTo: .caption2) private var legendIconBox: CGFloat = 15
     @ScaledLength(relativeTo: .callout) private var height: CGFloat = 30
     let mode: Mode

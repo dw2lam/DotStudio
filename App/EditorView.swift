@@ -241,7 +241,7 @@ struct EditorView: View {
                         .lineLimit(1)
                     ConsoleTag(text: preset.isScene ? "Scene" : "Look").fixedSize()
                 }
-                .padding(.bottom, 4)   // on the keys' faces, not their skirts
+                .padding(.bottom, ConsoleKeycapStyle.skirt)   // on the keys' faces, not their skirts
                 .accessibilityElement(children: .combine)
             }
             .fixedSize()
@@ -667,7 +667,7 @@ private struct DestinationButtonStyle: ViewModifier {
 /// size. Each key reads them through `@ScaledInsets` relative to its legend's role
 /// (consoleKeyLarge, a callout), so the margins grow with the text.
 private enum DestinationConsoleMetrics {
-    static let padding = EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
+    static let padding = EdgeInsets(top: 9, leading: 16, bottom: 9, trailing: 16)
     static let style: Font.TextStyle = .callout
 }
 
@@ -730,10 +730,10 @@ extension ToolbarContent {
     }
 }
 
-/// A header keycap's glyph (back, ▶): a 32 pt square face (36 pt with its skirt; 28 + 4 before 2026-11-26).
+/// A header keycap's glyph (back, ▶): a 34 pt square face (36 pt with its 2 pt skirt; 32 + 4, and 28 + 4, before).
 private struct HeaderKeyGlyph: View {
     let systemImage: String
-    @ScaledLength(relativeTo: .body) private var side: CGFloat = 32
+    @ScaledLength(relativeTo: .body) private var side: CGFloat = 34
 
     var body: some View {
         Image(systemName: systemImage)
@@ -746,7 +746,7 @@ private struct HeaderKeyGlyph: View {
 /// The header's ••• key: a Menu can't take the keycap ButtonStyle, so its face is drawn.
 private struct HeaderMenuKey: View {
     @State private var hovering = false
-    @ScaledLength(relativeTo: .body) private var side: CGFloat = 32
+    @ScaledLength(relativeTo: .body) private var side: CGFloat = 34
 
     var body: some View {
         Image(systemName: "ellipsis")
