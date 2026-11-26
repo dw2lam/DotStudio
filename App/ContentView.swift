@@ -52,9 +52,11 @@ struct ContentView: View {
         .animation(Motion.pick(Motion.hero, reduceMotion: reduceMotion), value: model.editingID)
         .navigationTitle(editing?.name ?? "DotStudio")
         .navigationSubtitle(editing.map { $0.isScene ? "Scene" : "Look" } ?? "")
-        // Console's gallery prints its own wordmark in the toolbar (LibraryView): the window
-        // keeps its title (Window menu, Mission Control, VoiceOver) but doesn't draw it twice.
-        .background(WindowTitleVisibility(hidden: isConsole && editing == nil))
+        // Console prints its own wordmark (LibraryView) and the editor its own name strip: the
+        // window keeps its title (Window menu, Mission Control, VoiceOver) but doesn't draw it
+        // twice. macOS 15+: SwiftUI owns the toolbar title (an NSWindow titleVisibility flip
+        // gets undone), so it's removed there; macOS 14 hides the drawn title on the window.
+        .modifier(ConsoleHidesWindowTitle(hidden: isConsole))
         // Settings: a large sheet on this window (not a window of its own), so it's there in
         // full screen too. Sized from the window, within limits.
         .background {
@@ -119,6 +121,19 @@ struct ContentView: View {
         guard !hasCompletedOnboarding, !Self.isRenderingShots, !DemoHooks.isActive,
               !model.showOnboarding, model.storeAlert == nil else { return }
         model.showOnboarding = true
+    }
+}
+
+/// Hides the window's drawn title in Console (see ContentView). The availability branch is
+/// fixed for a run, so the content's identity never changes; nil keeps the title.
+private struct ConsoleHidesWindowTitle: ViewModifier {
+    let hidden: Bool
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) {
+            content.toolbar(removing: hidden ? .title : nil)
+        } else {
+            content.background(WindowTitleVisibility(hidden: hidden))
+        }
     }
 }
 
