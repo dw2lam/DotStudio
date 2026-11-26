@@ -1,6 +1,8 @@
 //  SetupCoachViews.swift — what the setup coach draws (SetupCoach.swift): the glowing ring
 //  and its callout over System Settings (CoachMarkView, in the click-through overlay), and the
-//  guide panel's coach card (waiting for permission · what the coach sees · all set).
+//  guide panel's coach card (waiting for permission · what the coach sees · all set), in the
+//  Classic or the Console look (\.console: a module on the surface colour, a status square,
+//  keys for its actions).
 //  CoachOverlayPreview stands in for System Settings in UI shots (Shots.swift: coach-*).
 
 import SwiftUI
@@ -122,10 +124,22 @@ private struct CalloutSizeKey: PreferenceKey {
 /// waits for permission, or says what the coach sees. The step itself (its line and picture) is the card's.
 struct CoachCard: View {
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var coach: SetupCoach
     @ObservedObject var guide: SetupGuideModel
+    /// Console: the waiting light's blink.
+    @State private var blink = true
 
     var body: some View {
+        if console {
+            consoleBody
+        } else {
+            classicBody
+        }
+    }
+
+    private var classicBody: some View {
         Group {
             switch coach.mode {
             case .off: EmptyView()   // the setup card offers Guide Me
@@ -138,6 +152,98 @@ struct CoachCard: View {
         .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(Color.accentColor.opacity(0.08)))
         .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).strokeBorder(Color.accentColor.opacity(0.22)))
         .accessibilityElement(children: .contain)
+    }
+
+    // MARK: Console
+
+    /// Console: the same states as a module (ConsoleModule) — a coloured square with the glyph
+    /// (amber waiting or stuck, orange guiding, green all set), the headline in the text face,
+    /// the line under it in the legend grey, the actions as keys (the main one orange).
+    @ViewBuilder private var consoleBody: some View {
+        switch coach.mode {
+        case .off: EmptyView()
+        case .waitingForPermission:
+            ConsoleModule {
+                consoleHead(symbol: "lock.shield", fill: ConsoleInk.amber, title: "Waiting for Permission",
+                            lines: ["Turn on DotStudio in Privacy & Security \u{203A} Accessibility. The guide starts by itself.",
+                                    "Already listed? Remove it with \u{2212}, then add it again."],
+                            waitingLight: true)
+                ReflowStack(rowAlignment: .center, columnAlignment: .leading, spacing: layout.controlGap) {
+                    Button { coach.openAccessibilitySettings() } label: { keyLegend("Accessibility Settings\u{2026}") }
+                        .buttonStyle(.keycap)   // the card's Open System Settings is the orange key
+                        .accessibilityHint("Opens System Settings at Privacy & Security, Accessibility")
+                    Button { coach.useIllustratedGuide() } label: { keyLegend("Just Show Pictures") }
+                        .buttonStyle(.keycap)
+                        .accessibilityHint("Skips the pointer; step through the pictures instead")
+                }
+            }
+            .accessibilityElement(children: .contain)
+        case .coaching:
+            ConsoleModule {
+                consoleHead(symbol: step == .finished ? "checkmark" : statusSymbol, fill: consoleFill,
+                            title: headline, lines: statusLine.map { [$0] } ?? [])
+                ReflowStack(rowAlignment: .center, columnAlignment: .leading, spacing: layout.controlGap) {
+                    consolePrimaryButton
+                    Button { coach.useIllustratedGuide() } label: { keyLegend("Stop Guiding") }
+                        .buttonStyle(.keycap)
+                        .accessibilityHint("Turns off the pointer; step through the pictures instead")
+                }
+            }
+            .animation(.easeOut(duration: 0.2), value: step)
+            .accessibilityElement(children: .contain)
+        }
+    }
+
+    /// The status square's colour: green all set, amber when the coach can't point, else the
+    /// signal orange (it's pointing, or about to).
+    private var consoleFill: Color {
+        if step == .finished { return ConsoleInk.green }
+        if coach.accessibilityOff || coach.degraded || coach.blockedByGuide || manual { return ConsoleInk.amber }
+        return ConsoleInk.signal
+    }
+
+    private func consoleHead(symbol: String, fill: Color, title: String, lines: [String],
+                             waitingLight: Bool = false) -> some View {
+        HStack(alignment: .top, spacing: Space.s) {
+            ConsoleIconSquare(symbol: symbol, fill: fill)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .center, spacing: Space.xs) {
+                    Text(title).textRole(.consoleTitle).foregroundStyle(ConsoleInk.ink).wrapping()
+                    if waitingLight {
+                        ConsoleLED(on: blink, color: ConsoleInk.amber)
+                            .onAppear {
+                                guard !reduceMotion, !OffscreenCapture.isActive else { return }
+                                withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { blink = false }
+                            }
+                    }
+                }
+                ForEach(lines, id: \.self) { line in
+                    Text(.init(line)).textRole(.consoleBodySmall).foregroundStyle(ConsoleInk.legend).wrapping()
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func keyLegend(_ title: String) -> some View {
+        Text(title).textRole(.consoleKey).lineLimit(1).fixedSize()
+    }
+
+    @ViewBuilder private var consolePrimaryButton: some View {
+        if coach.accessibilityOff {
+            Button { coach.openAccessibilitySettings() } label: { keyLegend("Accessibility Settings\u{2026}") }
+                .buttonStyle(.keycap(.signal))
+                .accessibilityHint("Opens System Settings at Privacy & Security, Accessibility")
+        } else if !manual && coach.decision.situation == .settingsClosed && step != .finished {
+            Button { coach.reopenWallpaper() } label: { keyLegend("Open System Settings") }
+                .buttonStyle(.keycap(.signal))
+                .accessibilityHint("Opens System Settings at Wallpaper")
+        } else if !manual && coach.decision.situation == .elsewhere {
+            Button { coach.reopenWallpaper() } label: { keyLegend("Go Back to Wallpaper") }
+                .buttonStyle(.keycap(.signal))
+                .accessibilityHint("Opens System Settings at Wallpaper")
+        }
     }
 
     // MARK: Waiting for permission
