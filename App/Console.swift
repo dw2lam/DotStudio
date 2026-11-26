@@ -627,11 +627,11 @@ struct ConsoleKnob: View {
     /// The dial's square (scale, cap and pointer): 64 pt at the default text size.
     @ScaledLength(relativeTo: .body) private var size: CGFloat = 64
     @ScaledLength(relativeTo: .callout) private var fieldWidth: CGFloat = 110
-    /// The hand is on the knob (a drag in progress). Resets itself if the drag is cancelled.
-    @GestureState private var dragging = false
+    /// The hand is on the knob (the mouse is down on it). Set by the dial's AppKit mouse
+    /// catcher (KnobScroll), not a SwiftUI gesture — see its hitTest.
+    @State private var dragging = false
     /// A drag's running value before the detent and the step, so slow and ⌥-fine moves add up.
     @State private var dragRaw: Double?
-    @State private var dragLastY: CGFloat = 0
     /// A trackpad swipe's running value since it began over the knob (momentum included).
     @State private var swipeRaw: Double?
     @State private var hovering = false
@@ -657,9 +657,9 @@ struct ConsoleKnob: View {
             dial
                 .frame(width: size, height: size)
                 .contentShape(Circle())
-                .gesture(drag)
-                .onTapGesture(count: 2) { reset() }
-                // Scroll: an AppKit view over the dial that only ever takes scroll events.
+                // Drag, click, double-click and scroll: an AppKit view over the dial takes the
+                // left mouse and scrolls itself (in a List, SwiftUI's gestures lose the mouse
+                // to the row's reorder drag).
                 .overlay(KnobScroll(enabled: isEnabled, engaged: dragging, turn: scrolled).accessibilityHidden(true))
                 .onHover { hovering = $0 }
                 .focusable()
@@ -693,8 +693,7 @@ struct ConsoleKnob: View {
             }
             .frame(maxWidth: .infinity)
         }
-        .onChange(of: dragging) { _, held in if !held { endDrag() } }
-        .onDisappear { endDrag() }
+        .onDisappear { dragging = false; endDrag() }
     }
 
     private var longestWord: String {
@@ -855,30 +854,10 @@ struct ConsoleKnob: View {
         case exact
     }
 
-    private var drag: some Gesture {
-        DragGesture(minimumDistance: 1)
-            .updating($dragging) { _, held, _ in held = true }
-            .onChanged { g in
-                if dragRaw == nil { dragRaw = value; dragLastY = 0 }
-                // Each event's own movement at the sensitivity of the moment: pressing or
-                // letting go of ⌥ mid-drag changes the speed from here on, never the value.
-                let dy = g.translation.height - dragLastY
-                dragLastY = g.translation.height
-                let fine = NSEvent.modifierFlags.contains(.option)
-                // clamped like a real end stop: turning back moves it at once, coarse or fine
-                let raw = min(max((dragRaw ?? value) - Double(dy) * span / (fine ? 1800 : 180),
-                                  range.lowerBound), range.upperBound)
-                dragRaw = raw
-                set(raw, .sweep)
-            }
-            .onEnded { _ in endDrag() }
-    }
-
     /// The hand let go (or the drag was cancelled, or the knob went away mid-drag).
     private func endDrag() {
         guard dragRaw != nil else { return }
         dragRaw = nil
-        dragLastY = 0
         ConsoleTouch.shared.release()
     }
 
@@ -910,6 +889,27 @@ struct ConsoleKnob: View {
             set(raw, .sweep)
         case let .notch(d, fine):
             set(value + d * span / (fine ? 2400 : 240), .step)
+        case .press:
+            guard isEnabled else { return }
+            focused = true
+            dragging = true
+            dragRaw = value
+            return
+        case let .drag(d, fine):
+            guard dragging else { return }
+            // each event's own movement at the moment's sensitivity (180 pt = the full range;
+            // ⌥ ten times finer): pressing ⌥ mid-drag changes the speed, never the value.
+            let raw = min(max((dragRaw ?? value) + d * span / (fine ? 1800 : 180), range.lowerBound), range.upperBound)
+            dragRaw = raw
+            set(raw, .sweep)
+            return
+        case .release:
+            dragging = false
+            endDrag()
+            return
+        case .doubleClick:
+            reset()
+            return
         }
         ConsoleTouch.shared.release()
     }
@@ -992,6 +992,14 @@ private struct KnobScroll: NSViewRepresentable {
         case swipe(Double, fine: Bool)
         /// A mouse wheel's notch (or a device without gestures): one discrete step, in points.
         case notch(Double, fine: Bool)
+        /// The mouse went down on the dial (a click or the start of a drag).
+        case press
+        /// A drag's movement since the last one, in points (up = more).
+        case drag(Double, fine: Bool)
+        /// The mouse came up (the drag, if any, is over).
+        case release
+        /// A double-click: back to the default.
+        case doubleClick
     }
 
     var enabled: Bool
@@ -1040,10 +1048,39 @@ private struct KnobScroll: NSViewRepresentable {
             tracking = t
         }
 
+        /// Scrolls, and the left mouse: a dial lives in the inspector's List, whose rows can be
+        /// dragged to reorder (`onMove`) — AppKit gives a mouse-down in a row to the table's
+        /// row drag before any SwiftUI drag gesture sees it, so the dial turned like a picture
+        /// (owner, 2026-11-26). An AppKit view that takes the mouse itself keeps it, as an
+        /// NSSlider does. Right clicks fall through to the knob's context menu.
         override func hitTest(_ point: NSPoint) -> NSView? {
-            guard enabled, NSApp.currentEvent?.type == .scrollWheel else { return nil }
-            return super.hitTest(point)
+            guard enabled else { return nil }
+            switch NSApp.currentEvent?.type {
+            case .scrollWheel, .leftMouseDown, .leftMouseDragged, .leftMouseUp: return super.hitTest(point)
+            default: return nil
+            }
         }
+
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        private var lastY: CGFloat = 0
+        override func mouseDown(with e: NSEvent) {
+            guard enabled, let turn else { return }
+            if e.clickCount == 2 { turn(.doubleClick); return }
+            armed = true
+            lastY = e.locationInWindow.y
+            turn(.press)
+        }
+
+        override func mouseDragged(with e: NSEvent) {
+            guard enabled, let turn else { return }
+            let y = e.locationInWindow.y
+            let dy = Double(y - lastY)         // window y grows upward: up = more
+            lastY = y
+            if dy != 0 { turn(.drag(dy, fine: e.modifierFlags.contains(.option))) }
+        }
+
+        override func mouseUp(with e: NSEvent) { turn?(.release) }
 
         // The tracking area is this view's own: it tells "the pointer moved onto the dial" from
         // "the dial scrolled under the pointer" (the pointer's place in the window didn't change).

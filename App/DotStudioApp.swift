@@ -39,6 +39,7 @@ struct DotStudioApp: App {
         #if DEBUG
         DebugCrash.runIfRequested()   // DOTSTUDIO_DEBUG_CRASH: the crash reporter's self-test
         CrashSelfTest.runIfRequested()
+        KnobProbe.runIfRequested()      // DOTSTUDIO_KNOB_PROBE: a dial turns under the mouse in a reorderable List
         #endif
         if let dir = ProcessInfo.processInfo.environment["DOTSTUDIO_SHOTS"] {
             Shots.run(outDir: dir)   // renders the gallery and exits
