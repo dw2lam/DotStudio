@@ -157,6 +157,7 @@ enum UIShots {
                             // Build the view after prepare() so it sees this render's state.
                             if shooter.render(screen.view(stage), size: size, typeSize: text.size, dark: dark,
                                               chrome: screen.frame.isWindow && env["DOTSTUDIO_UI_CHROME"] == "1",
+                                              transparent: isLayer(screen.name),
                                               to: out.appendingPathComponent(file)) {
                                 manifest.append(Shot(file: file, screen: screen.name, size: size, text: text.tag,
                                                      stress: stress, dark: dark))
@@ -791,7 +792,40 @@ enum UIShots {
             AnyView(MenuBarStayNotice(quit: {}, keepRunning: {}, turnOnMenuBarMode: {})
                 .background(.regularMaterial))
         }))
+        s += themeLayerScreens()
         return s
+    }
+
+    // MARK: Theme layers
+
+    /// The real parts of the app, each on its own transparent PNG, for Settings › Theme's films
+    /// (tools/film/scenes/theme-reel: Blender stacks them in depth). Run once per theme
+    /// (DOTSTUDIO_APPEARANCE=console or not) with DOTSTUDIO_UI_ONLY=theme-layer-,
+    /// DOTSTUDIO_UI_SIZES=1280x800, DOTSTUDIO_UI_CHROME=1 and DOTSTUDIO_UI_APPEARANCE=both.
+    /// The window is opaque (the stack's base); every other part has nothing around it.
+    private static func themeLayerScreens() -> [Screen] {
+        let playing: (Stage) -> Void = { st in
+            st.lineup(st.playlist)
+            WallpaperSlot.shared.set(st.model.library.presets.first { $0.name == "Golden Hour" }?.id ?? st.wallpaper)
+        }
+        return [
+            Screen(name: "theme-layer-window", frame: .window, prepare: playing, view: { _ in AnyView(ContentView()) }),
+            Screen(name: "theme-layer-deck", frame: .fit(width: 1040), prepare: playing,
+                   view: { st in AnyView(LayerDeck(model: st.model).padding(24)) }),
+            Screen(name: "theme-layer-tiles", frame: .fit(width: 1040), prepare: { st in playing(st); st.model.selectedID = nil },
+                   view: { st in AnyView(LayerTiles(model: st.model).padding(24)) }),
+            Screen(name: "theme-layer-inspector", frame: .fit(width: 400), prepare: { $0.edit($0.scene) },
+                   view: { st in AnyView(LayerInspector(model: st.model, id: st.scene).padding(24)) }),
+            Screen(name: "theme-layer-keys", frame: .fit(width: 600), view: { _ in AnyView(LayerKeys().padding(24)) }),
+        ]
+    }
+
+    static func isLayer(_ name: String) -> Bool { name.hasPrefix("theme-layer-") && name != "theme-layer-window" }
+
+    /// Says it's the key window (never ordered in, so it never takes the keyboard).
+    private final class KeyLookingWindow: NSWindow {
+        override var isKeyWindow: Bool { true }
+        override var isMainWindow: Bool { true }
     }
 
     /// The tag chip with the most styles, so the filtered gallery has something to show.
@@ -1010,7 +1044,8 @@ enum UIShots {
 
         private static let console = Appearance.effective(saved: .classic) == .console
 
-        private func root(_ view: AnyView, width: CGFloat, height: CGFloat?, typeSize: DynamicTypeSize) -> some View {
+        private func root(_ view: AnyView, width: CGFloat, height: CGFloat?, typeSize: DynamicTypeSize,
+                          transparent: Bool = false) -> some View {
             view
                 .frame(width: width, height: height)
                 .adaptiveLayout()
@@ -1018,7 +1053,7 @@ enum UIShots {
                 // Classic unless DOTSTUDIO_APPEARANCE says otherwise: a render never reads the
                 // owner's saved choice (Appearance.effective — the same rule ContentView uses).
                 .environment(\.console, Self.console)
-                .background(Self.console ? ConsoleInk.chassis : .clear)
+                .background(Self.console && !transparent ? ConsoleInk.chassis : .clear)
                 .environmentObject(model)
                 .environmentObject(updates)
         }
@@ -1048,16 +1083,21 @@ enum UIShots {
         /// - chrome: a titled window whose toolbar the view fills (its `.toolbar` items, as the
         ///   main window shows them), captured title bar and all (DOTSTUDIO_UI_CHROME=1).
         func render(_ view: AnyView, size: CGSize, typeSize: DynamicTypeSize, dark: Bool, chrome: Bool = false,
-                    to url: URL) -> Bool {
+                    transparent: Bool = false, to url: URL) -> Bool {
             autoreleasepool {
-                let host = NSHostingView(rootView: root(view, width: size.width, height: size.height, typeSize: typeSize))
+                let host = NSHostingView(rootView: root(view, width: size.width, height: size.height, typeSize: typeSize,
+                                                        transparent: transparent))
                 host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
                 let style: NSWindow.StyleMask = chrome ? [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
                                                        : [.borderless]
-                let win = NSWindow(contentRect: CGRect(origin: CGPoint(x: -30000, y: -30000), size: size),
-                                   styleMask: style, backing: .buffered, defer: false)
+                // (a part for the theme films draws as in the front window: AppKit's controls
+                // show their accent only in a key window)
+                let win = (transparent ? KeyLookingWindow.self : NSWindow.self)
+                    .init(contentRect: CGRect(origin: CGPoint(x: -30000, y: -30000), size: size),
+                          styleMask: style, backing: .buffered, defer: false)
                 win.isReleasedWhenClosed = false
                 win.appearance = host.appearance
+                if transparent { win.isOpaque = false; win.backgroundColor = .clear }
                 if chrome {
                     host.sceneBridgingOptions = [.toolbars, .title]
                     win.toolbarStyle = .unified
@@ -1399,6 +1439,107 @@ private struct InputsShot: View {
                       onDuplicate: {}, onRemove: {}, model: model)
                 .padding(Space.m)
                 .background(.regularMaterial)
+        }
+    }
+}
+
+// MARK: - Theme layers (the parts)
+
+/// The Screensaver and Wallpaper deck, as the gallery's top shows it.
+private struct LayerDeck: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject private var slot = WallpaperSlot.shared
+
+    var body: some View {
+        DestinationRow(state: GalleryState(model: model, wallpaperID: slot.styleID))
+    }
+}
+
+/// A row of the gallery's style tiles (Golden Hour, Meadow, Commute) in a box of the page's colour.
+private struct LayerTiles: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.console) private var console
+    @ObservedObject private var slot = WallpaperSlot.shared
+
+    var body: some View {
+        let state = GalleryState(model: model, wallpaperID: slot.styleID)
+        let scenes = model.library.presets.filter(\.isScene)
+        let named = ["Golden Hour", "Meadow", "Commute"].compactMap { n in scenes.first { $0.name == n } }
+        let shape = RoundedRectangle(cornerRadius: console ? 6 : 14, style: .continuous)
+        HStack(alignment: .top, spacing: 20) {
+            ForEach(named.count == 3 ? named : Array(scenes.prefix(3))) { p in
+                StyleTile(model: model, preset: p, badges: state.badges(for: p.id), lineup: state.lineup)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(Space.m)
+        .background(console ? AnyShapeStyle(ConsoleInk.panel) : AnyShapeStyle(Color(nsColor: .windowBackgroundColor)), in: shape)
+        .overlay(shape.strokeBorder(console ? ConsoleInk.hairline : Color.primary.opacity(0.1), lineWidth: 1))
+    }
+}
+
+/// The editor's inspector: a style's first effect, open, on the inspector's panel.
+private struct LayerInspector: View {
+    @ObservedObject var model: AppModel
+    let id: UUID
+    @Environment(\.console) private var console
+    @State private var open = true
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: console ? 6 : 12, style: .continuous)
+        if let i = model.library.presets.firstIndex(where: { $0.id == id }), !model.library.presets[i].effects.isEmpty {
+            EffectRow(effect: $model.library.presets[i].effects[0], isExpanded: $open, isFirst: true,
+                      onDuplicate: {}, onRemove: {}, model: model)
+                .padding(Space.m)
+                .background(console ? AnyShapeStyle(ConsoleInk.panel) : AnyShapeStyle(Color(nsColor: .windowBackgroundColor)),
+                            in: shape)
+                .overlay(shape.strokeBorder(console ? ConsoleInk.hairline : Color.primary.opacity(0.1), lineWidth: 1))
+        }
+    }
+}
+
+/// A row of each theme's keys: Retro's orange and blue keycaps, a switch and segments; Classic's
+/// Preview button, a slider and a segmented control (an NSSwitch would draw unlit offscreen).
+private struct LayerKeys: View {
+    @Environment(\.console) private var console
+    @State private var on = true
+    @State private var mode = "auto"
+    @State private var classicMode = 0
+    @State private var level = 0.62
+
+    var body: some View {
+        if console {
+            HStack(spacing: 12) {
+                Button {} label: {
+                    Label("preview", systemImage: "play.fill").labelStyle(.titleAndIcon)
+                        .textRole(.consoleKey).lineLimit(1).fixedSize()
+                }
+                .buttonStyle(.keycap(.signal))
+                Button {} label: {
+                    Label("wallpaper", systemImage: "desktopcomputer").labelStyle(.titleAndIcon)
+                        .textRole(.consoleKey).lineLimit(1).fixedSize()
+                }
+                .buttonStyle(.keycap(.blue))
+                ConsoleSwitch(isOn: $on)
+                ConsoleSegments(title: "Mode", selection: $mode, options: [("auto", "auto"), ("light", "light"), ("dark", "dark")])
+            }
+            .padding(14)
+            .background(ConsoleInk.panel, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(ConsoleInk.hairline, lineWidth: 1))
+        } else {
+            HStack(spacing: 14) {
+                Button {} label: { Label("Preview", systemImage: "play.fill") }
+                    .buttonStyle(.borderedProminent).controlSize(.large)
+                Slider(value: $level).frame(width: 120)
+                Picker("Mode", selection: $classicMode) {
+                    Text("Auto").tag(0); Text("Light").tag(1); Text("Dark").tag(2)
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+            }
+            .environment(\.controlActiveState, .key)
+            .padding(16)
+            .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.1), lineWidth: 1))
         }
     }
 }
