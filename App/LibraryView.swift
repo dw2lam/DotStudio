@@ -19,6 +19,7 @@ struct LibraryView: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var wallpaper = WallpaperSlot.shared
     @ObservedObject private var roster = DisplayRoster.shared
+    @Environment(\.console) private var console
     @State private var filter: GalleryFilter = DemoHooks.filter ?? .all
     @State private var query = DemoHooks.search ?? ""
     @FocusState private var searchFocused: Bool
@@ -36,7 +37,9 @@ struct LibraryView: View {
                         filter: $filter, query: $query, searchFocused: $searchFocused)
         }
         .toolbar {
-            if model.editingID == nil {
+            if model.editingID == nil && console {
+                consoleToolbar
+            } else if model.editingID == nil {
                 ToolbarItemGroup(placement: .primaryAction) {
                     UpdateReadyButton()
                     newMenu
@@ -69,6 +72,44 @@ struct LibraryView: View {
     }
 
     // MARK: Toolbar
+
+    /// Console (the Stitch header strip): a hairline after the traffic lights, the orange
+    /// light, "DotStudio" and the app's version on a tag; on the right, New / MCP / Settings as
+    /// 32 pt square keys (no toolbar glass behind them). The window's own title is hidden while
+    /// this shows (ContentView), so the name isn't printed twice.
+    @ToolbarContentBuilder
+    private var consoleToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            HubWordmark()
+        }
+        .hubBareToolbarItem()
+        // With the window's title hidden nothing pushes the keys right: a flexible space does.
+        HubToolbarSpace()
+        ToolbarItem(placement: .primaryAction) {
+            UpdateReadyButton()
+        }
+        .hubBareToolbarItem()
+        ToolbarItem(placement: .primaryAction) {
+            newMenu
+                .menuStyle(.button)
+                .menuIndicator(.hidden)
+                .hubHeaderKey()
+        }
+        .hubBareToolbarItem()
+        ToolbarItem(placement: .primaryAction) {
+            MCPToolbarButton()
+                .hubHeaderKey()
+        }
+        .hubBareToolbarItem()
+        ToolbarItem(placement: .primaryAction) {
+            Button { model.openSettings() } label: {
+                Label("Settings", systemImage: "gearshape")
+            }
+            .help("Settings (⌘,)")
+            .hubHeaderKey()
+        }
+        .hubBareToolbarItem()
+    }
 
     private var newMenu: some View {
         Menu {
@@ -111,8 +152,6 @@ private struct GalleryPage: View {
         let matcher = StyleMatcher(filter: filter, query: query, playing: state.playingIDs)
         let ordered = displayOrder()
         let sections = sections(matcher, ordered: ordered)
-        // Console numbers its pads; Classic tiles all get 0 (never printed, never a change).
-        let numbers = console ? padNumbers(ordered) : [:]
         return ScrollViewReader { proxy in
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
@@ -122,7 +161,7 @@ private struct GalleryPage: View {
                     .padding(.bottom, layout.sectionGap - FilterBar.verticalInset)
 
                 Section {
-                    grid(sections, state: state, matcher: matcher, numbers: numbers)
+                    grid(sections, state: state, matcher: matcher)
                         .pageColumn(layout)
                         .padding(.top, layout.sectionGap - FilterBar.verticalInset)
                         .padding(.bottom, Space.xxl)
@@ -162,6 +201,8 @@ private struct GalleryPage: View {
         let title: String
         let subtitle: String
         let presets: [Preset]
+        /// The search a results section matched (Console prints it beside the count).
+        var query = ""
         var id: Kind { kind }
     }
 
@@ -174,13 +215,6 @@ private struct GalleryPage: View {
             let ra = ranks[a.element.id] ?? 3, rb = ranks[b.element.id] ?? 3
             return ra != rb ? ra < rb : a.offset < b.offset    // stable: library order within a rank
         }.map(\.element)
-    }
-
-    /// Console's pad numbers: each style's place in the unfiltered gallery — Scenes, then
-    /// Looks — from 1, so the grid reads 01, 02, 03… and a style keeps its number under a filter.
-    private func padNumbers(_ ordered: [Preset]) -> [UUID: Int] {
-        let shown = ordered.filter(\.isScene) + ordered.filter { !$0.isScene }
-        return Dictionary(shown.enumerated().map { ($0.element.id, $0.offset + 1) }) { first, _ in first }
     }
 
     private func sections(_ matcher: StyleMatcher, ordered all: [Preset]) -> [GallerySection] {
@@ -198,7 +232,7 @@ private struct GalleryPage: View {
         if filter == .playing { title = "Playing" }
         let q = query.trimmingCharacters(in: .whitespaces)
         let subtitle = q.isEmpty ? "\(hits.count) \(noun)" : "\(hits.count) \(noun) matching “\(q)”"
-        return [GallerySection(kind: .results, title: title, subtitle: subtitle, presets: hits)]
+        return [GallerySection(kind: .results, title: title, subtitle: subtitle, presets: hits, query: q)]
     }
 
     private func counts(_ state: GalleryState) -> [GalleryFilter: Int] {
@@ -217,8 +251,7 @@ private struct GalleryPage: View {
     private var rowGap: CGFloat { console ? layout.gridColumnGap : layout.gridRowGap }
 
     @ViewBuilder
-    private func grid(_ sections: [GallerySection], state: GalleryState, matcher: StyleMatcher,
-                      numbers: [UUID: Int]) -> some View {
+    private func grid(_ sections: [GallerySection], state: GalleryState, matcher: StyleMatcher) -> some View {
         if sections.allSatisfy({ $0.presets.isEmpty }) && matcher.isFiltering {
             EmptyResults(filter: filter, query: query) {
                 Motion.run { query = ""; filter = .all }
@@ -231,7 +264,7 @@ private struct GalleryPage: View {
                 ForEach(Array(sections.enumerated()), id: \.element.id) { i, section in
                     Section {
                         ForEach(section.presets) { preset in
-                            StyleTile(model: model, preset: preset, number: numbers[preset.id] ?? 0,
+                            StyleTile(model: model, preset: preset,
                                       badges: state.badges(for: preset.id), lineup: state.lineup)
                                 .equatable()
                                 .id(preset.id)
@@ -273,12 +306,72 @@ private struct SectionHeader: View {
     @Environment(\.layout) private var layout
     @ScaledLength(relativeTo: .body) private var swatchWidth: CGFloat = 32
     @ScaledLength(relativeTo: .body) private var swatchHeight: CGFloat = 20
+    @Environment(\.console) private var console
     let section: GalleryPage.GallerySection
     @State private var showSource = false
 
+    /// Console (the Stitch "Scenes" header): the title in the display face, its real count in
+    /// a mono legend beside it (and what a search matched), the Looks' Source key at the right.
+    private var consoleHeader: some View {
+        let n = section.presets.count
+        let q = section.query.isEmpty ? nil : "matching \u{201C}\(section.query)\u{201D}"
+        let titles = HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
+            Text(section.title)
+                .textRole(.consoleHeadline)
+                .foregroundStyle(ConsoleInk.ink)
+                .lineLimit(1)
+                .fixedSize()
+                .accessibilityAddTraits(.isHeader)
+            Text("\(n) \(n == 1 ? "style" : "styles")")
+                .textRole(.legend)
+                .foregroundStyle(ConsoleInk.legend)
+                .fixedSize()
+                .contentTransition(.numericText())
+            if let q {
+                Text(q)
+                    .textRole(.consoleValue)
+                    .foregroundStyle(ConsoleInk.legend)
+                    .truncating(q)
+            }
+        }
+        return Group {
+            if section.kind == .looks {
+                // The Source key sits at the line's end when it fits, else under the title.
+                ReflowStack(rowAlignment: .center, columnAlignment: .leading,
+                            spacing: layout.itemGap, columnSpacing: layout.labelGap, spread: true) {
+                    titles
+                    consoleSourceButton
+                }
+            } else {
+                titles.frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var consoleSourceButton: some View {
+        Button { showSource.toggle() } label: {
+            HStack(spacing: Space.xs) {
+                SourceSwatch(source: model.library.source)
+                    .frame(width: swatchWidth * 0.75, height: swatchHeight * 0.7)
+                    .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 2, style: .continuous).strokeBorder(ConsoleInk.hairline))
+                HubKeyLabel(text: "Source: \(model.library.source.displayName)", trailingSymbol: "chevron.down")
+            }
+        }
+        .buttonStyle(.keycap(padding: HubMetrics.smallKey))
+        .fixedSize()
+        .help("The slideshow, photo, video or gradient every Look restyles")
+        .popover(isPresented: $showSource, arrowEdge: .bottom) {
+            SourcePopover()
+                .adaptiveLayout()   // the popover is its own root
+        }
+    }
+
     var body: some View {
         let _ = Perf.body("SectionHeader")
-        if section.kind == .looks {
+        if console {
+            consoleHeader
+        } else if section.kind == .looks {
             // The Source button sits on the title's line when it fits, else under the text.
             ReflowStack(rowAlignment: .firstTextBaseline, columnAlignment: .leading,
                         spacing: layout.controlGap * 2 + layout.itemGap, columnSpacing: layout.itemGap,
@@ -358,6 +451,7 @@ private struct FilterBar: View {
     /// Above and below the bar's content (part of the gap to the cards and to the grid).
     static let verticalInset = Space.xs
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
     @Binding var filter: GalleryFilter
     @Binding var query: String
     var searchFocused: FocusState<Bool>.Binding
@@ -418,6 +512,10 @@ private struct FilterBar: View {
             .noScrollEdgeEffects()
             .mask(chipFade.mask)
         }
+        // Console (the Stitch filter row): between two hairlines, a gutter inside each.
+        .padding(.vertical, console ? Space.s - Self.verticalInset : 0)
+        .overlay(alignment: .top) { if console { hairline } }
+        .overlay(alignment: .bottom) { if console { hairline } }
         .pageColumn(layout)
         .padding(.vertical, Self.verticalInset)
         .background {
@@ -429,14 +527,20 @@ private struct FilterBar: View {
                 let y = g.frame(in: .named(FilterBar.space)).minY
                 let pinned = min(max((150 - y) / 70, 0), 1)   // fully there once under the toolbar
                 if pinned > 0 {
-                    Color(nsColor: .windowBackgroundColor)
-                        .overlay(alignment: .bottom) { Divider() }
+                    (console ? ConsoleInk.chassis : Color(nsColor: .windowBackgroundColor))
+                        .overlay(alignment: .bottom) {
+                            if console { Rectangle().fill(ConsoleInk.hairline).frame(height: 1) } else { Divider() }
+                        }
                         .padding(.top, -(Space.xxl + Space.s))   // up under the toolbar
                         .opacity(pinned)
                 }
             }
             .allowsHitTesting(false)
         }
+    }
+
+    private var hairline: some View {
+        Rectangle().fill(ConsoleInk.hairline).frame(height: 1).allowsHitTesting(false)
     }
 }
 
@@ -493,35 +597,26 @@ private struct FilterChip: View {
         if console { key } else { chip }
     }
 
-    /// Console (issue #6): a small labelled key — mono caps on a flat key, an LED lit when
-    /// it's the selected filter, the count printed beside it. VoiceOver hears the filter and
-    /// its count (the LED repeats the selected trait, so it stays silent).
+    /// Console (the Stitch filter keys): a keycap printing the filter and its count in mono
+    /// caps — the selected one an orange key. VoiceOver hears the filter and its
+    /// count; the selected trait says which is on.
     private var key: some View {
         Button(action: action) {
-            HStack(spacing: layout.labelGap) {
-                ConsoleLED(on: selected).accessibilityHidden(true)
-                Text(filter.title).textRole(.padName)
-                    .foregroundStyle(ConsoleInk.ink)
+            HStack(spacing: Space.xs) {
+                Text(filter.title)
                 if let count {
-                    Text("\(count)").textRole(.legend)
-                        .foregroundStyle(ConsoleInk.legend)
+                    Text("\(count)")
+                        .opacity(0.75)
                         .contentTransition(.numericText())
                 }
             }
+            .textRole(.consoleKey)
             .lineLimit(1)
-            .padding(.horizontal, layout.controlGap)
-            .frame(minHeight: height)
+            .frame(minHeight: height - HubMetrics.keySkirt)
             .fixedSize()
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
-            .fill(selected ? ConsoleInk.well : ConsoleInk.panel.opacity(hovering ? 1 : 0.8)))
-        .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(ConsoleInk.hairline))
-        .offset(y: selected ? 0.5 : 0)
-        .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.12), value: hovering)
-        .animation(.easeOut(duration: 0.12), value: selected)
+        .buttonStyle(.keycap(selected ? .signal : .plain,
+                             padding: EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12)))
         .accessibilityLabel(count.map { "\(filter.title), \($0)" } ?? filter.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
@@ -560,6 +655,7 @@ private struct FilterChip: View {
 
 private struct EmptyResults: View {
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
     @ScaledLength(relativeTo: .title3) private var iconCircle: CGFloat = 64
     let filter: GalleryFilter
     let query: String
@@ -572,21 +668,59 @@ private struct EmptyResults: View {
         return "\(q.prefix(26))…\(q.suffix(13))"
     }
 
+    private var symbol: String { query.isEmpty ? (filter.symbol ?? "square.grid.2x2") : "magnifyingglass" }
+    private var headline: String { query.isEmpty ? "Nothing in \(filter.title) yet" : "No styles match “\(shownQuery)”" }
+    private var message: String {
+        query.isEmpty ? "Add Built-in Styles from the New menu, or make your own."
+                      : "Try a style name, an effect like “Dither”, or a pack like “Clocks”."
+    }
+
     var body: some View {
+        if console { consoleBody } else { classicBody }
+    }
+
+    /// Console: the glyph in a recessed well, the words in the hub's faces, an orange key.
+    private var consoleBody: some View {
         VStack(spacing: layout.itemGap) {
-            Image(systemName: query.isEmpty ? (filter.symbol ?? "square.grid.2x2") : "magnifyingglass")
+            Image(systemName: symbol)
+                .scaledFont { .scaled(points: 24, $0, weight: .light) }
+                .foregroundStyle(ConsoleInk.legend)
+                .frame(width: iconCircle, height: iconCircle)
+                .consoleWell(cornerRadius: HubMetrics.panelRadius)
+            VStack(spacing: layout.labelGap) {
+                Text(headline)
+                    .textRole(.consoleHeadline)
+                    .foregroundStyle(ConsoleInk.ink)
+                    .wrapping(.center)
+                    .help(query)
+                Text(message)
+                    .textRole(.consoleBodySmall)
+                    .foregroundStyle(ConsoleInk.legend)
+                    .wrapping(.center)
+            }
+            Button(action: reset) { HubKeyLabel(text: "Show All Styles") }
+                .buttonStyle(.keycap(.signal))
+                .padding(.top, Space.xxs)
+        }
+        .readableWidth(layout, alignment: .center)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, Space.xxl + Space.l)
+    }
+
+    private var classicBody: some View {
+        VStack(spacing: layout.itemGap) {
+            Image(systemName: symbol)
                 .scaledFont { .scaled(points: 30, $0, weight: .light) }
                 .foregroundStyle(.secondary)
                 .frame(width: iconCircle, height: iconCircle)
                 .glassSurface(.regular, in: Circle())
             // Headline and message read as one block; icon and button an item step away.
             VStack(spacing: layout.labelGap) {
-                Text(query.isEmpty ? "Nothing in \(filter.title) yet" : "No styles match “\(shownQuery)”")
+                Text(headline)
                     .textRole(.headline)
                     .wrapping(.center)
                     .help(query)
-                Text(query.isEmpty ? "Add Built-in Styles from the New menu, or make your own."
-                                   : "Try a style name, an effect like “Dither”, or a pack like “Clocks”.")
+                Text(message)
                     .textRole(.callout)
                     .foregroundStyle(.secondary)
                     .wrapping(.center)
@@ -631,17 +765,17 @@ struct NewTileFace: View {
         if console { pad } else { classic }
     }
 
-    /// Console (issue #6): an empty pad, built like StyleTile's — the same panel, radii and
-    /// inset — with a dashed well the picture's size, a "+" in it, the title as a printed
-    /// legend and the pads' (empty) light row, so it lines up with the pads beside it. Under
-    /// the pointer it lifts like a pad, its well and "+" in signal.
+    /// Console: an empty pad, built like StyleTile's — the same panel, radii and inset — with
+    /// a dashed well the picture's size, a "+" in it and the title where a pad prints its
+    /// name. Under the pointer its edge, well and "+" turn signal, as a pad's edge does.
     private var pad: some View {
-        VStack(alignment: .leading, spacing: Space.xs) {
-            RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
-                .fill(ConsoleInk.well.opacity(hovering ? 0.8 : 0.5))
-                .overlay(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
-                    .strokeBorder(hovering ? ConsoleInk.signalInk : ConsoleInk.legend.opacity(0.6),
-                                  style: StrokeStyle(lineWidth: 1, dash: [4, 4])))
+        let shape = RoundedRectangle(cornerRadius: HubMetrics.panelRadius, style: .continuous)
+        let well = RoundedRectangle(cornerRadius: HubMetrics.wellRadius, style: .continuous)
+        return VStack(alignment: .leading, spacing: Space.xs) {
+            well
+                .fill(ConsoleInk.well.opacity(hovering ? 0.9 : 0.6))
+                .overlay(well.strokeBorder(hovering ? ConsoleInk.signalInk : ConsoleInk.legend.opacity(0.55),
+                                           style: StrokeStyle(lineWidth: 1, dash: [4, 4])))
                 .overlay(Image(systemName: "plus")
                     .scaledFont { .scaled(points: 16, $0, weight: .semibold) }
                     .foregroundStyle(hovering ? ConsoleInk.signalInk : ConsoleInk.legend))
@@ -650,16 +784,12 @@ struct NewTileFace: View {
                 .textRole(.padName)
                 .foregroundStyle(hovering ? ConsoleInk.ink : ConsoleInk.legend)
                 .truncating(title)
-            PadLightRow { EmptyView() }
+                .padding(.horizontal, Space.xxs / 2)
         }
         .padding(Space.xs)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
-            .fill(ConsoleInk.panel.opacity(hovering ? 1 : 0.85)))
-        .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
-            .strokeBorder(ConsoleInk.hairline, lineWidth: 1))
-        .shadow(color: .black.opacity(hovering ? 0.12 : 0), radius: hovering ? 6 : 0, y: hovering ? 3 : 0)
-        .offset(y: hovering && !reduceMotion ? -1.5 : 0)
+        .background(shape.fill(ConsoleInk.panel))
+        .overlay(shape.strokeBorder(hovering ? ConsoleInk.signal.opacity(0.55) : ConsoleInk.hairline, lineWidth: 1))
         .contentShape(Rectangle())
         .motion(Motion.snappy, value: hovering)
         .accessibilityElement(children: .ignore)
@@ -741,6 +871,73 @@ extension SourceSpec {
         case .gradient: return "Gradient"
         case .image: return mediaFilename == nil ? "Photo (none)" : "Photo"
         case .video: return mediaFilename == nil ? "Video (none)" : "Video"
+        }
+    }
+}
+
+// MARK: - Console header
+
+/// Console (the Stitch header strip): a hairline after the traffic lights, the orange light,
+/// the name, and the app's real version on a small tag.
+private struct HubWordmark: View {
+    @ScaledLength(relativeTo: .body) private var rule: CGFloat = 16
+    private static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+
+    var body: some View {
+        HStack(spacing: Space.xs) {
+            Rectangle().fill(ConsoleInk.hairline).frame(width: 1, height: rule)
+                .padding(.trailing, Space.xxs)
+            Circle().fill(ConsoleInk.signal).frame(width: 8, height: 8)
+            Text("DotStudio")
+                .textRole(.consoleTitle)
+                .foregroundStyle(ConsoleInk.ink)
+            if let v = Self.version {
+                ConsoleTag(text: "v\(v)")
+            }
+        }
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Self.version.map { "DotStudio, version \($0)" } ?? "DotStudio")
+    }
+}
+
+/// A header key's glyph: 16 pt square, so every key is the same 32 pt square (the keycap's
+/// 8 pt padding around it).
+private struct HubIconLabelStyle: LabelStyle {
+    @ScaledLength(relativeTo: .body) private var box: CGFloat = 16
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.icon
+            .scaledFont { .scaled(points: 14, $0, weight: .medium) }
+            .frame(width: box, height: box)
+    }
+}
+
+private extension View {
+    /// A Console header key: a 32 pt square keycap around the item's icon.
+    func hubHeaderKey() -> some View {
+        labelStyle(HubIconLabelStyle())
+            .buttonStyle(.keycap(padding: EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8)))
+            .padding(.horizontal, Space.xxs / 2)   // the Stitch header's 4 pt between keys
+    }
+}
+
+/// A flexible toolbar space (macOS 26; before it, the toolbar's own layout).
+private struct HubToolbarSpace: ToolbarContent {
+    var body: some ToolbarContent {
+        if #available(macOS 26, *) {
+            ToolbarSpacer(.flexible)
+        }
+    }
+}
+
+private extension ToolbarContent {
+    /// No toolbar glass behind a Console header item: the keys are the surface (macOS 26).
+    @ToolbarContentBuilder
+    func hubBareToolbarItem() -> some ToolbarContent {
+        if #available(macOS 26, *) {
+            sharedBackgroundVisibility(.hidden)
+        } else {
+            self
         }
     }
 }
