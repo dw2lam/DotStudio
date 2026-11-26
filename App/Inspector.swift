@@ -352,6 +352,8 @@ struct EffectStackView: View {
     /// views in the window") and the app crashed on opening any style (1.4.1–1.4.3).
     @State private var expanded: Set<UUID>
     @State private var showAdd = false
+    /// Console: the Add Effect key's margins, grown with its legend (consoleKeyLarge).
+    @ScaledInsets(relativeTo: .callout) private var addKeyPadding = EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
 
     init(preset: Binding<Preset>, model: AppModel) {
         _preset = preset
@@ -508,7 +510,7 @@ struct EffectStackView: View {
                     .textRole(.consoleKeyLarge)
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.keycap(padding: EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)))
+            .buttonStyle(.keycap(padding: addKeyPadding))
             .help("Add an effect to the top of this style's stack")
         } else {
             Button { showAdd = true } label: {
@@ -602,9 +604,8 @@ struct EffectRow: View {
                     // (a Custom Scene's params and colours are its package manifest's)
                     // Console: one ruled group — a hairline over the first row and under each.
                     VStack(alignment: .leading, spacing: console ? 0 : layout.inspectorRowGap) {
-                        ForEach(effect.paramSpecs) { spec in
-                            ParamRow(spec: spec, value: paramBinding(spec))
-                        }
+                        // (Console: its numeric settings as a bank of dials, then the rest)
+                        ParamGroup(specs: effect.paramSpecs, value: paramBinding)
                         if effect.kind.usesColors, !wells.isEmpty {
                             ColorWellsRow(wells: wells)
                         }
@@ -1068,6 +1069,68 @@ struct InspectorMenu<Value: Hashable>: View {
     }
 }
 
+/// A set of parameters, in the inspector's rows. Classic: one `ParamRow` each, in order.
+/// Console: the numeric ones (`ParamSpec.isDial`) as a bank of dials first — a fader is
+/// never shown for a parameter that has a dial — then the menus and switches as rows.
+struct ParamGroup: View {
+    let specs: [ParamSpec]
+    let value: (ParamSpec) -> Binding<Double>
+    @Environment(\.console) private var console
+
+    var body: some View {
+        if console {
+            let dials = specs.filter(\.isDial)
+            if !dials.isEmpty {
+                ConsoleDialBank(specs: dials, value: value)
+            }
+            ForEach(specs.filter { !$0.isDial }) { spec in
+                ParamRow(spec: spec, value: value(spec))
+            }
+        } else {
+            ForEach(specs) { spec in
+                ParamRow(spec: spec, value: value(spec))
+            }
+        }
+    }
+}
+
+extension ParamSpec {
+    /// A setting turned on a dial (Console): a number with some travel — not a menu or a switch.
+    var isDial: Bool { options == nil && !isToggle && max > min }
+}
+
+/// Console: a style's numeric settings as rotary dials (ConsoleKnob) — the caps cycle blue,
+/// green, white, orange in the settings' order, up to four a row (ConsoleDialGrid), the value
+/// above each and its name below — ruled by a hairline under the bank like the rows after it.
+struct ConsoleDialBank: View {
+    let specs: [ParamSpec]
+    let value: (ParamSpec) -> Binding<Double>
+    @Environment(\.layout) private var layout
+
+    var body: some View {
+        ConsoleDialGrid(maxColumns: 4, spacing: Space.xxs, rowSpacing: layout.itemGap) {
+            ForEach(Array(specs.enumerated()), id: \.element.key) { i, spec in
+                ConsoleKnob(label: spec.label, value: value(spec), range: spec.min...spec.max,
+                            step: spec.step, defaultValue: spec.def, colorIndex: i,
+                            format: { ParamRow.format(spec, $0) })
+                    .contextMenu {
+                        let v = value(spec)
+                        Button("Reset \(spec.label) to \(ParamRow.format(spec, spec.def))") { v.wrappedValue = spec.def }
+                            .disabled(abs(v.wrappedValue - spec.def) <= 1e-6)
+                    }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, Space.s)
+        .padding(.bottom, Space.s)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(ConsoleInk.hairline).frame(height: 1).accessibilityHidden(true)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Dials")
+    }
+}
+
 /// One parameter: menu, switch, or labeled slider with a readable value and reset —
 /// all in the same label column + control column.
 struct ParamRow: View {
@@ -1453,10 +1516,11 @@ private struct SourceEditorContent: View {
                     .wrapping()
             }
             VStack(alignment: .leading, spacing: rowGap) {
-                ParamRow(spec: ParamSpec("hold", "Seconds Each", 6, 120, def: SourceSpec.defaultSlideSeconds),
-                         value: Binding(get: { source.slideInterval }, set: { source.slideSeconds = $0 }))
-                ParamRow(spec: ParamSpec("motion", "Pan & Zoom", 0, 1, def: SourceSpec.defaultMotion),
-                         value: Binding(get: { source.motionAmount }, set: { source.motion = $0 }))
+                ParamGroup(specs: [ParamSpec("hold", "Seconds Each", 6, 120, def: SourceSpec.defaultSlideSeconds),
+                                   ParamSpec("motion", "Pan & Zoom", 0, 1, def: SourceSpec.defaultMotion)]) { spec in
+                    spec.key == "hold" ? Binding(get: { source.slideInterval }, set: { source.slideSeconds = $0 })
+                                       : Binding(get: { source.motionAmount }, set: { source.motion = $0 })
+                }
             }
             FlowLayout(spacing: layout.controlGap, lineSpacing: layout.controlGap) {
                 InspectorSmallButton(title: choose, fixed: false) { importing = true }
@@ -1499,8 +1563,10 @@ private struct SourceEditorContent: View {
                 .help("Swap colors")
                 .accessibilityLabel("Swap colors")
             }
-            ParamRow(spec: ParamSpec("angle", "Angle", 0, 6.28, def: 1.1), value: $source.gradientAngle)
-            ParamRow(spec: ParamSpec("drift", "Drift", 0, 3, def: 1.0), value: $source.gradientDrift)
+            ParamGroup(specs: [ParamSpec("angle", "Angle", 0, 6.28, def: 1.1),
+                               ParamSpec("drift", "Drift", 0, 3, def: 1.0)]) { spec in
+                spec.key == "angle" ? $source.gradientAngle : $source.gradientDrift
+            }
         }
     }
 

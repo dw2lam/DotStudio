@@ -105,14 +105,26 @@ enum ConsoleInk {
     /// Status amber (live weather, a warning): #FFB800.
     static let amber = Color(nsColor: rgb(0xFFB800))
 
-    /// The four knob colours, in order (the editor's first four parameters).
+    /// The four knob caps, in order (a style's dials cycle through them): the Stitch palette's
+    /// own colours — the wallpaper blue, status green, a white cap, the signal orange.
     static let knobs: [Color] = [
-        dynamic(rgb(0x2E6BF0), rgb(0x4C84FF)),     // blue
-        dynamic(rgb(0x1FA35B), rgb(0x2FC774)),     // green
-        dynamic(rgb(0xF7F6F2), rgb(0xE9E7E1)),     // white
-        dynamic(rgb(0xF2551D), rgb(0xFF6A2B)),     // orange
+        dynamic(rgb(0x0088E8), rgb(0x0095F8)),     // blue
+        dynamic(rgb(0x00BD5F), rgb(0x00D26A)),     // green
+        dynamic(rgb(0xFBFBF7), rgb(0xE4E1E6)),     // white
+        dynamic(rgb(0xFF7300), rgb(0xFF7300)),     // orange
     ]
     static let knobNames = ["blue", "green", "white", "orange"]
+    /// Each cap's pointer line: white on the blue cap, the near-black of text on a signal key
+    /// on the brighter ones.
+    static let knobPointers: [Color] = [
+        Color.white.opacity(0.95),
+        Color(nsColor: rgb(0x00170A, 0.82)),
+        Color(nsColor: rgb(0x141416, 0.8)),
+        Color(nsColor: rgb(0x1F0B00, 0.85)),
+    ]
+    /// The default's dot printed beside each knob: the cap's colour, except the white cap's,
+    /// which prints in ink (a white dot would vanish on the light panel).
+    static let knobMarks: [Color] = [knobs[0], knobs[1], ink, knobs[3]]
 
     /// The white knob's rim. On the light panel a near-white cap has no edge of its own, so it
     /// gets a printed grey one (≥ 3:1 against the panel and the strip's well); on the graphite
@@ -121,6 +133,9 @@ enum ConsoleInk {
     /// The white knob's value arc: legend grey at the weight of the coloured arcs (about 3.4:1
     /// on the light strip, 4.9:1 on the dark one — the blue arc's contrast), not a heavier ink.
     static let whiteKnobArc = legend.opacity(0.8)
+    /// A knob's printed scale: the tick dots the value hasn't reached, and those it has.
+    static let knobTick = dynamic(rgb(0x7A7A7E, 0.45), rgb(0x78767A, 0.55))
+    static let knobTickLit = dynamic(rgb(0x525257), rgb(0xACAAAE))
 }
 
 // MARK: - Type
@@ -207,9 +222,15 @@ private struct ConsoleWell: ViewModifier {
 ///  • `.plain`  — the grey key (icon keys, filter keys, Customize).
 ///  • `.signal` — the orange key (Preview, Done, the selected filter, a latched choice).
 ///  • `.blue`   — the wallpaper's blue (Play while the wallpaper plays).
-/// `latched` draws a key that's held down (a selected segment): sunk, skirt hidden.
+/// `latched` draws a key that's held down (a selected segment): its face rests 2 pt down in
+/// its skirt (a press takes it the full 3 pt). Only the face moves: the skirt's base — the
+/// key's footprint — and the layout size are the same in every state, so a latched key's
+/// bottom edge lines up with its neighbours'.
 struct ConsoleKeycapStyle: ButtonStyle {
     enum Tint { case plain, signal, blue }
+    /// A press sinks the face this far into its skirt; a latched key rests at `latchedTravel`.
+    static let travel: CGFloat = 3
+    static let latchedTravel: CGFloat = 2
     var tint: Tint = .plain
     var latched = false
     var cornerRadius: CGFloat = 4
@@ -233,11 +254,15 @@ private struct ConsoleKeycapBody: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
 
-    static let travel: CGFloat = 3
+    /// How far a press sinks the face into the skirt…
+    static let travel: CGFloat = ConsoleKeycapStyle.travel
+    /// …and where a latched key's face rests (part way: a latching switch held down).
+    static let latchedTravel: CGFloat = ConsoleKeycapStyle.latchedTravel
     static let skirt: CGFloat = 4
 
     var body: some View {
-        let down = configuration.isPressed || latched
+        let sink: CGFloat = configuration.isPressed ? Self.travel : latched ? Self.latchedTravel : 0
+        let down = sink > 0
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         let dark = scheme == .dark
         let face: Color = tint == .signal ? ConsoleInk.signal : tint == .blue ? ConsoleInk.blue : ConsoleInk.keyFace
@@ -264,18 +289,20 @@ private struct ConsoleKeycapBody: View {
                     }
             }
             .overlay(shape.strokeBorder(tint == .plain ? (hovering && enabled ? ConsoleInk.signal : ConsoleInk.hairline) : .clear, lineWidth: 1))
-            .offset(y: down ? Self.travel : 0)
-            // the skirt, then the drop shadow under everything
+            .offset(y: sink)
+            // the skirt, then the drop shadow under everything. The skirt never moves: its base
+            // is the key's footprint, level with its neighbours' whether the key is up, latched
+            // or pressed — the face sinks into it.
             .background {
                 shape.fill(skirt)
-                    .offset(y: down ? 1 : Self.skirt)
+                    .offset(y: Self.skirt)
                     .shadow(color: glow.opacity(lift * (tint == .plain ? 1 : 0.9)), radius: 6, y: down ? 1 : 6)
             }
             .padding(.bottom, Self.skirt)          // reserve the skirt's room so keys don't overlap rows
             .opacity(enabled ? 1 : 0.45)
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.08), value: down)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.08), value: sink)
             .onChange(of: configuration.isPressed) { _, pressed in
                 if pressed { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
             }
@@ -407,19 +434,23 @@ final class ConsoleTouch: ObservableObject {
 
 // MARK: - Knob
 
-/// A rotary knob that is a slider: 270° of travel, a coloured cap with a pointer, the value's
-/// arc lit in the knob's colour, a readout above (click to type an exact value) and the
-/// legend below.
+/// A rotary knob that is a slider (a hardware encoder): 270° of travel printed as a scale of
+/// 11 tick dots (those the value has passed darken), a coloured dot at the default, a
+/// keycap-like cap — its colour, a lit top edge and a skirt under it, as the Stitch keys —
+/// with a pointer line; the value in mono above (click to type an exact value) and the
+/// legend in mono caps below.
 ///
 /// Turn it by dragging up/down (the full range in 180 pt; ⌥ for a tenth of that, which can be
 /// pressed or let go mid-drag), by scrolling over it, or with the arrow keys once focused
 /// (⌥ fine). Double-click, ⌫ or VoiceOver's "Reset to default" action resets it.
 ///
-/// The default has a detent. A drag or a trackpad swipe settles into it and has to push
-/// through to leave; a discrete step (arrow key, VoiceOver, a mouse-wheel notch) is never held
-/// there, but one that would jump over the default stops on it once. Typed values and resets
-/// are exact. The trackpad ticks once as the value lands on the default (or a fast turn passes
-/// it), never while it sits there.
+/// The trackpad ticks (`.alignment`) each time the value crosses a twelfth of its range, like
+/// an encoder's detents. The default has a detent of its own: a drag or a trackpad swipe
+/// settles into it and has to push through to leave; a discrete step (arrow key, VoiceOver, a
+/// mouse-wheel notch) is never held there, but one that would jump over the default stops on
+/// it once. Typed values and resets are exact. The trackpad gives a firmer tick
+/// (`.levelChange`) as the value lands on the default or a fast turn passes it, never while
+/// it sits there.
 struct ConsoleKnob: View {
     let label: String
     @Binding var value: Double
@@ -432,7 +463,8 @@ struct ConsoleKnob: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isEnabled) private var isEnabled
-    @ScaledLength(relativeTo: .body) private var size: CGFloat = 46
+    /// The dial's square (scale, cap and pointer): 64 pt at the default text size.
+    @ScaledLength(relativeTo: .body) private var size: CGFloat = 64
     @ScaledLength(relativeTo: .callout) private var fieldWidth: CGFloat = 110
     /// The hand is on the knob (a drag in progress). Resets itself if the drag is cancelled.
     @GestureState private var dragging = false
@@ -446,14 +478,19 @@ struct ConsoleKnob: View {
     @State private var typed = ""
     @FocusState private var focused: Bool
 
-    private var color: Color { ConsoleInk.knobs[colorIndex % ConsoleInk.knobs.count] }
-    private var isWhite: Bool { colorIndex % ConsoleInk.knobs.count == 2 }
+    private var cap: Int { colorIndex % ConsoleInk.knobs.count }
+    private var color: Color { ConsoleInk.knobs[cap] }
+    private var isWhite: Bool { cap == 2 }
     private var span: Double { max(range.upperBound - range.lowerBound, 1e-9) }
     private var fraction: Double { min(max((value - range.lowerBound) / span, 0), 1) }
     private static let sweep = 270.0
+    /// The printed scale's dots, start to end.
+    private static let ticks = 11
+    /// Haptic detents per full turn (one each twelfth of the range).
+    private static let detents = 12.0
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: Space.xxs) {
             readout
 
             dial
@@ -482,8 +519,8 @@ struct ConsoleKnob: View {
 
             // The legend gets the knob's whole column and wraps onto a second line at a space
             // (CURTAIN HEIGHT), at the user's text size — never shrunk below it. Its longest
-            // word sets the knob's minimum width, so a word is never split: the channel strip
-            // (KnobStripLayout) goes 2×2 rather than break BRIGHTNESS or MISREGISTRATION.
+            // word sets the knob's minimum width, so a word is never split: the dial grid
+            // (ConsoleDialGrid) takes fewer columns rather than break BRIGHTNESS or MISREGISTRATION.
             ZStack {
                 Text(longestWord).textRole(.legend).fixedSize().hidden().accessibilityHidden(true)
                 Text(label)
@@ -509,9 +546,9 @@ struct ConsoleKnob: View {
                 .textRole(.readout)
                 .foregroundStyle(ConsoleInk.ink)
                 .lineLimit(1)
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .frame(minWidth: size + 8)
-                .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(ConsoleInk.well))
+                .padding(.horizontal, Space.xxs + 2).padding(.vertical, 1)
+                .frame(minWidth: size * 0.8)
+                .consoleWell(cornerRadius: 2)
                 .contentTransition(.numericText())
         }
         .buttonStyle(.plain)
@@ -531,64 +568,78 @@ struct ConsoleKnob: View {
 
     // MARK: Drawing
 
+    /// The dial, all drawn in its `size` square around one centre: the printed scale (11 dots
+    /// on a 270° arc, open at the bottom), the default's coloured dot on it, and the cap — a
+    /// round key on a skirt with a pointer line. Angles: 0° points straight up; the scale runs
+    /// from −135° (the minimum) to +135° (the maximum).
     private var dial: some View {
-        let start = Angle.degrees(135), end = Angle.degrees(135 + Self.sweep * fraction)
         let def = min(max((defaultValue - range.lowerBound) / span, 0), 1)
+        let angle = { (f: Double) in Angle.degrees(-Self.sweep / 2 + Self.sweep * f) }
+        let ring = size / 2 - size * 0.045           // the scale's radius
+        let dot = max(size * 0.04, 2)                 // a tick dot
+        let capD = size * 0.62                        // the cap's diameter
+        let skirt = max(size * 0.045, 2)              // how much of its side shows under it
+        let lit = hovering || dragging || focused
         return ZStack {
-            // the track and the value's arc
-            Circle().trim(from: 0, to: Self.sweep / 360)
-                .rotation(.degrees(135))
-                .stroke(ConsoleInk.hairline, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-            ArcShape(start: start, end: end)
-                .stroke(isWhite ? ConsoleInk.whiteKnobArc : color,
-                        style: StrokeStyle(lineWidth: 3, lineCap: .round))
-            // the default's tick, printed on the chassis
-            Capsule().fill(ConsoleInk.legend)
-                .frame(width: 1.5, height: 4)
-                .offset(y: -size / 2 - 1)
-                .rotationEffect(.degrees(-135 + Self.sweep * def))
-            // the cap: slight shading, a light top and a darker foot. Each half fades to clear
-            // in its own colour — a white→black gradient would lay a grey veil over the middle
-            // that sinks the white cap into the light panel.
+            // the printed scale: dots the value has passed darken
+            ForEach(0..<Self.ticks, id: \.self) { i in
+                let f = Double(i) / Double(Self.ticks - 1)
+                Circle()
+                    .fill(f <= fraction + 1e-6 ? ConsoleInk.knobTickLit : ConsoleInk.knobTick)
+                    .frame(width: dot, height: dot)
+                    .offset(y: -ring)
+                    .rotationEffect(angle(f))
+            }
+            // the default's dot, a size up, in the cap's colour (with a hairline so the white
+            // and the bright caps' dots hold an edge on either panel)
+            Circle()
+                .fill(ConsoleInk.knobMarks[cap])
+                .overlay(Circle().strokeBorder(ConsoleInk.panel.opacity(0.9), lineWidth: 0.75))
+                .frame(width: dot * 2.1, height: dot * 2.1)
+                .offset(y: -ring)
+                .rotationEffect(angle(def))
+                .accessibilityHidden(true)
+
+            // the cap's skirt: its side, a shade under the cap, and the soft drop shadow
             Circle()
                 .fill(color)
-                .shadow(color: .black.opacity(dragging ? 0.30 : 0.18), radius: dragging ? 3 : 1.5, y: 1)
+                .overlay(Circle().fill(Color.black.opacity(isWhite ? 0.22 : 0.32)))
+                .frame(width: capD, height: capD)
+                .offset(y: dragging ? skirt * 0.5 : skirt)
+                .shadow(color: .black.opacity(dragging ? 0.16 : 0.22), radius: dragging ? 2 : 4, y: dragging ? 1 : 3)
+            // the cap's face: its colour lit from above like the keys' (a top light that fades
+            // to clear in the cap's own colour, so the white cap isn't veiled grey), a lit top
+            // edge, a shallow dished centre and a rim — orange while the hand is on it, as a
+            // key's edge on hover
+            Circle()
+                .fill(color)
                 .overlay(Circle().fill(LinearGradient(stops: [
-                    .init(color: .white.opacity(0.22), location: 0),
-                    .init(color: .white.opacity(0), location: 0.5),
-                    .init(color: .black.opacity(0), location: 0.5),
-                    .init(color: .black.opacity(isWhite ? 0.05 : 0.10), location: 1),
+                    .init(color: .white.opacity(isWhite ? 0.6 : 0.28), location: 0),
+                    .init(color: .white.opacity(0), location: 0.55),
+                    .init(color: .black.opacity(isWhite ? 0.04 : 0.08), location: 1),
                 ], startPoint: .top, endPoint: .bottom)))
-                .overlay(Circle().strokeBorder(isWhite ? ConsoleInk.whiteKnobRim : Color.black.opacity(0.18),
-                                               lineWidth: isWhite ? 1 : 0.75))
-                .padding(7)
-            // the pointer
+                .overlay(Circle().strokeBorder(LinearGradient(colors: [.white.opacity(isWhite ? 0.95 : 0.55), .clear],
+                                                              startPoint: .top, endPoint: .center), lineWidth: 1))
+                .overlay(Circle().strokeBorder(Color.black.opacity(0.07), lineWidth: 1).padding(capD * 0.17))
+                .overlay(Circle().strokeBorder(lit && isEnabled ? ConsoleInk.signal
+                                                                : (isWhite ? ConsoleInk.whiteKnobRim : Color.black.opacity(0.2)),
+                                               lineWidth: lit && isEnabled ? 1.25 : (isWhite ? 1 : 0.75)))
+                .frame(width: capD, height: capD)
+                .offset(y: dragging ? skirt * 0.5 : 0)
+            // the pointer: a line from near the centre to near the rim
             Capsule()
-                .fill(isWhite ? Color.black.opacity(0.7) : Color.white.opacity(0.95))
-                .frame(width: 2.5, height: size * 0.2)
-                .offset(y: -size * 0.2)
-                .rotationEffect(.degrees(-135 + Self.sweep * fraction))
+                .fill(ConsoleInk.knobPointers[cap])
+                .frame(width: max(size * 0.045, 2), height: capD * 0.34)
+                .offset(y: -capD * 0.27)
+                .rotationEffect(angle(fraction))
+                .offset(y: dragging ? skirt * 0.5 : 0)
             if focused {
-                Circle().strokeBorder(Color.accentColor.opacity(0.7), lineWidth: 2).padding(-3)
+                Circle().strokeBorder(ConsoleInk.signal, lineWidth: 1.5)
+                    .frame(width: capD + 6, height: capD + 6)
             }
         }
-        .scaleEffect(hovering || dragging ? 1.04 : 1)
-        .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: hovering)
         .animation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion), value: dragging)
-    }
-
-    private struct ArcShape: Shape {
-        var start: Angle, end: Angle
-        var animatableData: AnimatablePair<Double, Double> {
-            get { AnimatablePair(start.degrees, end.degrees) }
-            set { start = .degrees(newValue.first); end = .degrees(newValue.second) }
-        }
-        func path(in r: CGRect) -> Path {
-            var p = Path()
-            p.addArc(center: CGPoint(x: r.midX, y: r.midY), radius: min(r.width, r.height) / 2,
-                     startAngle: start, endAngle: end, clockwise: false)
-            return p
-        }
+        .animation(Motion.pick(Motion.brief, reduceMotion: reduceMotion), value: lit)
     }
 
     // MARK: Turning
@@ -641,7 +692,8 @@ struct ConsoleKnob: View {
 
     private func reset() {
         guard isEnabled else { return }
-        set(defaultValue, .exact)
+        // the pointer swings back (a cut under Reduce Motion)
+        withAnimation(Motion.pick(Motion.snappy, reduceMotion: reduceMotion)) { set(defaultValue, .exact) }
         ConsoleTouch.shared.release()   // show it, then let go
     }
 
@@ -679,13 +731,21 @@ struct ConsoleKnob: View {
         case .step: if across { n = defaultValue }
         case .exact: break
         }
-        // the detent's tick: once as the value lands on the default — slowly or not — or as a
-        // fast turn passes straight over it; never again while it sits there
+        // the default's detent: a firm tick once as the value lands on it — slowly or not — or
+        // as a fast turn passes straight over it; never again while it sits there. Otherwise a
+        // light tick each time the value crosses into another twelfth of the range.
         if (!fromDefault && n == defaultValue) || (turn == .sweep && across && n != defaultValue) {
+            NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+        } else if turn != .exact, detent(from) != detent(n) {
             NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
         }
         if n != from { value = n }
         ConsoleTouch.shared.touch(.init(label: label, value: format(n), colorIndex: colorIndex))
+    }
+
+    /// Which twelfth of the range `v` is in (the top end counts with the last one).
+    private func detent(_ v: Double) -> Int {
+        min(Int(((v - range.lowerBound) / span * Self.detents).rounded(.down)), Int(Self.detents) - 1)
     }
 
     /// The typed value, read in the unit the readout shows: on a "40%" readout a bare 25 is
