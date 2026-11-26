@@ -108,7 +108,7 @@ enum ConsoleInk {
     /// The one signal colour: live / active / selected. #FF7300 in both.
     static let signal = dynamic(rgb(0xFF7300), rgb(0xFF7300))
     /// The signal's skirt (an orange key's side): #B34B00 / #8C3D00.
-    static let signalSkirt = dynamic(rgb(0xB34B00), rgb(0x8C3D00))
+    static let signalSkirt = dynamic(rgb(0xCC5A00), rgb(0xA34800))
     /// Text ON a signal (orange) key: near-black, like the design (#1F0B00).
     static let onSignal = Color(nsColor: rgb(0x1F0B00))
     /// The signal colour as TEXT or a thin edge on the light body: dark enough for WCAG AA
@@ -117,7 +117,7 @@ enum ConsoleInk {
     /// The wallpaper's blue (its channel light, the Play key): #0088E8 / #0095F8.
     static let blue = dynamic(rgb(0x0088E8), rgb(0x0095F8))
     /// The blue key's skirt.
-    static let blueSkirt = dynamic(rgb(0x005599), rgb(0x003A66))
+    static let blueSkirt = dynamic(rgb(0x1670C4), rgb(0x0B5A9C))
     /// Blue as text/edge on the body: #005FA1 / #9FCAFF.
     static let blueInk = dynamic(rgb(0x005FA1), rgb(0x9FCAFF))
     /// Status green (a range that's on, a source that's fine): #00D26A.
@@ -134,20 +134,20 @@ enum ConsoleInk {
     /// A switch that's on, a green key: #00BD5F on the light body (a step deeper, so the
     /// near-black thumb and the fill both hold an edge on off-white), #00D26A on graphite.
     static let greenKey = dynamic(rgb(0x00BD5F), rgb(0x00D26A))
-    static let greenSkirt = dynamic(rgb(0x00803F), rgb(0x005C2D))
+    static let greenSkirt = dynamic(rgb(0x00994D), rgb(0x007A3C))
     /// Text on a green key / a green switch's thumb: near-black green (≈ 8:1 on the fill).
     static let onGreen = Color(nsColor: rgb(0x00170A))
     /// Green as text/edge on the body: #00753A (≈ 4.8:1) / #5CF0A0.
     static let greenInk = dynamic(rgb(0x00753A), rgb(0x5CF0A0))
     /// A yellow key (Looks, live weather): #FFC400.
     static let yellow = Color(nsColor: rgb(0xFFC400))
-    static let yellowSkirt = dynamic(rgb(0xA67F00), rgb(0x7A5E00))
+    static let yellowSkirt = dynamic(rgb(0xC79A00), rgb(0x9C7800))
     static let onYellow = Color(nsColor: rgb(0x1F1700))
     /// Yellow as text on the body: #7A5A00 (≈ 5.3:1) / #FFD54D.
     static let yellowInk = dynamic(rgb(0x7A5A00), rgb(0xFFD54D))
     /// A pink key (a pack tag: Clocks, Nature…): #FF4D94.
     static let pink = Color(nsColor: rgb(0xFF4D94))
-    static let pinkSkirt = dynamic(rgb(0xB3245F), rgb(0x8A1A48))
+    static let pinkSkirt = dynamic(rgb(0xD13A78), rgb(0xA82A5E))
     static let onPink = Color(nsColor: rgb(0x2A0014))
     /// Pink as text on the body: #C2185B (≈ 4.8:1) / #FF8FBF.
     static let pinkInk = dynamic(rgb(0xC2185B), rgb(0xFF8FBF))
@@ -294,6 +294,12 @@ struct ConsoleKeycapStyle: ButtonStyle {
     /// A press sinks the face this far into its skirt; a latched key rests at `latchedTravel`.
     static let travel: CGFloat = 1.5
     static let latchedTravel: CGFloat = 1
+    /// A group of keys in a well (segments, transport): room around the keys inside the well
+    /// and between them (2 pt each before 2026-11-26 — the owner wanted the box roomier).
+    /// The bottom inset is smaller: the keys' skirts already sit there.
+    static let wellInset: CGFloat = 4
+    static let wellBottomInset: CGFloat = 3
+    static let wellSpacing: CGFloat = 3
     var tint: Tint = .plain
     var latched = false
     var cornerRadius: CGFloat = 4
@@ -383,8 +389,12 @@ enum ConsoleKeyLight {
             }
             return Shade(color: .black.opacity(down ? 0 : (dark ? 0.32 : 0.07)), radius: down ? 0 : 1.5, y: 1)
         }
-        let o = down ? (dark ? 0.12 : 0.08) : (dark ? 0.3 : 0.2) + (hovering ? 0.08 : 0)
-        return Shade(color: tint.face.opacity(o), radius: down ? 6 : 12, y: down ? 0.5 : 2)
+        // Softer again (owner, 2026-11-26: "even softer — the green switch is right, the blue
+        // isn't"): wide and faint like the switch's light, blue a step fainter still (a
+        // saturated blue reads louder than green at the same opacity).
+        let k: Double = tint == .blue ? 0.7 : 1
+        let o = (down ? (dark ? 0.08 : 0.05) : (dark ? 0.2 : 0.13) + (hovering ? 0.05 : 0)) * k
+        return Shade(color: tint.face.opacity(o), radius: down ? 6 : 14, y: down ? 0.5 : 1)
     }
 }
 

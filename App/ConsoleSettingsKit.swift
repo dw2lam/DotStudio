@@ -318,7 +318,8 @@ struct ConsoleSegments<Value: Hashable>: View {
 
     var body: some View {
         let stacked = typeSize.isAccessibilitySize
-        let layout = stacked ? AnyLayout(VStackLayout(spacing: 2)) : AnyLayout(HStackLayout(spacing: 2))
+        let gap = ConsoleKeycapStyle.wellSpacing
+        let layout = stacked ? AnyLayout(VStackLayout(spacing: gap)) : AnyLayout(HStackLayout(spacing: gap))
         layout {
             ForEach(options.indices, id: \.self) { i in
                 let on = options[i].value == selection
@@ -333,8 +334,9 @@ struct ConsoleSegments<Value: Hashable>: View {
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
         }
-        .padding(2)
-        .consoleWell(cornerRadius: 4)
+        .padding(EdgeInsets(top: ConsoleKeycapStyle.wellInset, leading: ConsoleKeycapStyle.wellInset,
+                            bottom: ConsoleKeycapStyle.wellBottomInset, trailing: ConsoleKeycapStyle.wellInset))
+        .consoleWell(cornerRadius: 5)
         .fixedSize(horizontal: !(fills || stacked), vertical: true)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(title)

@@ -372,8 +372,9 @@ struct MusicTransport: View {
     var body: some View {
         if console {
             keys
-                .padding([.top, .horizontal], 2)
-                .consoleWell(cornerRadius: 3)
+                .padding(EdgeInsets(top: ConsoleKeycapStyle.wellInset, leading: ConsoleKeycapStyle.wellInset,
+                                    bottom: ConsoleKeycapStyle.wellBottomInset - 2, trailing: ConsoleKeycapStyle.wellInset))
+                .consoleWell(cornerRadius: 4)
                 .fixedSize()
         } else {
             keys
@@ -381,7 +382,7 @@ struct MusicTransport: View {
     }
 
     private var keys: some View {
-        HStack(spacing: console ? 2 : glass ? Space.xxs : Space.xs) {
+        HStack(spacing: console ? ConsoleKeycapStyle.wellSpacing : glass ? Space.xxs : Space.xs) {
             if showsPrevious {
                 control("backward.fill", "Previous") { now.previous() }
             }

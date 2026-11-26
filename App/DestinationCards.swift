@@ -962,11 +962,12 @@ private struct NowPlayingLine: View {
                     .padding(.vertical, Space.xxs)
                     .help("Allow DotStudio to control \(source.displayName) — opens System Settings › Privacy & Security › Automation (turn on \(source.automationName) under DotStudio)")
             } else {
-                HStack(spacing: 2) {
+                HStack(spacing: ConsoleKeycapStyle.wellSpacing) {
                     transportKey(now.isPlaying ? "pause.fill" : "play.fill", now.isPlaying ? "Pause" : "Play") { now.playPause() }
                     transportKey("forward.fill", "Next") { now.next() }
                 }
-                .padding([.top, .horizontal], 2)
+                .padding(EdgeInsets(top: ConsoleKeycapStyle.wellInset, leading: ConsoleKeycapStyle.wellInset,
+                                    bottom: ConsoleKeycapStyle.wellBottomInset - 2, trailing: ConsoleKeycapStyle.wellInset))
                 .consoleWell(cornerRadius: HubMetrics.wellRadius)
                 .fixedSize()
                 .padding(.vertical, Space.xxs)
@@ -1599,10 +1600,11 @@ private struct WallpaperTransport: View {
                 Color.clear.frame(width: 0, height: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 2) {
+            HStack(spacing: ConsoleKeycapStyle.wellSpacing) {
                 ForEach(Mode.allCases, id: \.self) { m in consoleKey(m) }
             }
-            .padding([.top, .horizontal], 2)
+            .padding(EdgeInsets(top: ConsoleKeycapStyle.wellInset, leading: ConsoleKeycapStyle.wellInset,
+                                    bottom: ConsoleKeycapStyle.wellBottomInset - 2, trailing: ConsoleKeycapStyle.wellInset))
             .consoleWell(cornerRadius: HubMetrics.wellRadius)
             .fixedSize()
             .padding(.vertical, Space.xxs)
