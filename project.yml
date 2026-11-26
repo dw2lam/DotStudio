@@ -81,6 +81,10 @@ targets:
       - path: tools/film
         type: folder
         buildPhase: resources
+      # The release notes (Contents/Resources/CHANGELOG.md): What's New after an update and
+      # Settings › Updates › Release Notes read them (App/Changelog.swift).
+      - path: CHANGELOG.md
+        buildPhase: resources
     dependencies:
       - target: DotStudioSaver
         embed: true

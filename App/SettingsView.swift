@@ -177,7 +177,9 @@ struct SettingsView: View {
                 WeatherSettingsSection()            // live weather for the sea scenes
                 SignalsSettingsSection()            // live values When rules react to
             case .ai: AISettingsSection()           // assistants via dotstudio-mcp
-            case .updates: updatesSection
+            case .updates:
+                updatesSection
+                ReleaseNotesSection()               // every release's notes (ChangelogViews.swift)
             }
         }
         .settingsForm()           // Classic: grouped, role-sized labels, stock control sizes (ConsoleSettingsKit)

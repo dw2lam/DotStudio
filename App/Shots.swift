@@ -653,6 +653,27 @@ enum UIShots {
                                 st.model.settingsPane = pane
                             }, view: { _ in AnyView(SettingsView().frame(width: 860, height: pane == .power ? 2700 : 640)) }))
         }
+        // Release notes (Changelog.swift): the What's New sheet for one update and for several
+        // skipped ones; Settings › Updates in full (Release Notes, the newest marked installed),
+        // and opened from "See All Updates" (scrolled to the notes)
+        let notes = Changelog.bundled.releases
+        let pinVersion: (Stage) -> Void = { _ in AppVersion.override = notes.first?.version }
+        for (tag, count) in [("single", 1), ("multi", 3)] {
+            s.append(Screen(name: "whatsnew-\(tag)", frame: .fixed(CGSize(width: WhatsNewSheet.width, height: 640)),
+                            prepare: pinVersion, view: { _ in
+                AnyView(WhatsNewSheet(releases: Array(notes.prefix(count)), onContinue: {}, onSeeAll: {}))
+            }))
+        }
+        s.append(Screen(name: "settings-pane-updates-notes", frame: .fit(width: 860, minHeight: 1500),
+                        prepare: { st in pinVersion(st); st.model.settingsPane = .updates },
+                        view: { _ in AnyView(SettingsView().frame(width: 860, height: 1500)) }))
+        s.append(Screen(name: "settings-pane-updates-seeall", frame: .fit(width: 860, minHeight: 640),
+                        prepare: { st in
+                            pinVersion(st)
+                            st.model.settingsPane = .updates
+                            WhatsNew.Center.shared.scrollToReleaseNotes = true
+                        },
+                        view: { _ in AnyView(SettingsView().frame(width: 860, height: 640)) }))
         // Settings › General on its own, in both menu-bar modes (the footer changes with it)
         s.append(Screen(name: "settings-general", frame: .fit(width: 640, minHeight: 160),
                         view: { _ in AnyView(SettingsSectionPreview { GeneralSettingsSection() }) }))
