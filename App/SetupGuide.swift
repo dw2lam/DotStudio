@@ -264,6 +264,29 @@ final class SetupGuideModel: ObservableObject {
 
 // MARK: - The floating guide panel
 
+/// The guide panel's root: publishes \.console from the saved appearance (Appearance.effective,
+/// as ContentView) and tells the panel when it changes, so an open guide follows Settings ›
+/// General › Appearance.
+private struct SetupGuidePanelAppearance<Content: View>: View {
+    @AppStorage(Appearance.key) private var appearance: Appearance = .classic
+    var onConsole: (Bool) -> Void
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        let console = Appearance.effective(saved: appearance) == .console
+        content()
+            .environment(\.console, console)
+            .onChange(of: console) { _, on in onConsole(on) }
+    }
+}
+
+extension Appearance {
+    /// The saved choice (Settings › General › Appearance), read outside a view.
+    static var saved: Appearance {
+        UserDefaults.standard.string(forKey: key).flatMap(Appearance.init) ?? .classic
+    }
+}
+
 /// Help ▸ Set Up Screensaver…, the Screensaver card's "Show Me How" and Settings › General's
 /// "Run Setup Again": the guide in a small panel that floats, so it stays visible beside
 /// System Settings while the user follows it.
@@ -289,9 +312,13 @@ final class SetupGuidePanel: NSObject, NSWindowDelegate {
         }
         let guide = SetupGuideModel.shared
         guide.onStatusChange = { [weak model] _ in model?.refreshSetupStatus() }
-        let root = SetupGuidePanelView(guide: guide,
-                                       onOpenSettings: { [weak self] in self?.moveBesideSettings() },
-                                       onDone: { [weak self] in self?.close() })
+        // Its own root (not under ContentView): it reads Settings › General › Appearance itself,
+        // and follows a change while it's open.
+        let root = SetupGuidePanelAppearance(onConsole: { [weak self] in self?.paintChrome(console: $0) }) {
+            SetupGuidePanelView(guide: guide,
+                                onOpenSettings: { [weak self] in self?.moveBesideSettings() },
+                                onDone: { [weak self] in self?.close() })
+        }
             .environmentObject(model)
             .adaptiveLayout()
         let p = NSPanel(contentRect: CGRect(origin: .zero, size: Self.size),
@@ -304,6 +331,7 @@ final class SetupGuidePanel: NSObject, NSWindowDelegate {
         p.isReleasedWhenClosed = false
         p.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
         p.contentViewController = NSHostingController(rootView: root)
+        if Appearance.effective(saved: Appearance.saved) == .console { paintChrome(console: true, panel: p) }
         p.setContentSize(Self.size)
         p.contentMinSize = CGSize(width: 400, height: 560)
         p.delegate = self
@@ -329,6 +357,14 @@ final class SetupGuidePanel: NSObject, NSWindowDelegate {
     }
 
     private var docked = false
+
+    /// Console: the title bar in the panel colour, so it reads as one surface with the content
+    /// (Classic: the stock title bar and window colour).
+    private func paintChrome(console: Bool, panel: NSPanel? = nil) {
+        guard let p = panel ?? self.panel else { return }
+        p.titlebarAppearsTransparent = console
+        p.backgroundColor = console ? NSColor(ConsoleInk.panel) : .windowBackgroundColor
+    }
 
     /// The smallest the panel's frame gets (its content minimum plus the title bar).
     private func minimumFrameSize(_ panel: NSPanel) -> CGSize {

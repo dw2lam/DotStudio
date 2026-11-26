@@ -552,10 +552,19 @@ struct SettingsHeader: View {
     init(_ title: String) { self.title = title }
     @Environment(\.consoleSettings) private var console
 
+    /// Console before macOS 15: the Form can't split into sections there (ConsoleFormSections
+    /// lays the parts out in one column at the row gap), so the header brings the gap between
+    /// sections (Space.xl) itself. Nothing on macOS 15+, where the sections space themselves.
+    private static var legacySectionGap: CGFloat {
+        if #available(macOS 15.0, *) { return 0 }
+        return Space.xl - Space.s
+    }
+
     var body: some View {
         if console {
             // Console: a printed mono-caps legend ("PRESET", "GENERAL").
             Text(title).textRole(.legend).foregroundStyle(ConsoleInk.legend)
+                .padding(.top, Self.legacySectionGap)
         } else {
             Text(title).textRole(.headline)
         }

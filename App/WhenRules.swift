@@ -2,6 +2,9 @@
 //  §7): the When key (its menu and its popover editor), the sentence editor, and AppModel's rule
 //  edits. The rules are stored in library.json (Library.rules, Shared/Signals/PlayRule.swift); the
 //  app's SignalService decides which one plays and every host follows its lease.
+//  Console (\.console): the popover on the panel colour, rules as ruled rows with a printed
+//  tag, a Console switch and an edit key; the sentence editor's pop-ups, fields and buttons
+//  as keys and wells (the Signal editor's look). Classic unchanged.
 
 import SwiftUI
 
@@ -82,6 +85,7 @@ struct WhenKey: View {
 struct WhenRulesEditor: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
     /// The rule being written (a new one, or a copy of one to change).
     @State private var draft: RuleDraft?
 
@@ -90,16 +94,16 @@ struct WhenRulesEditor: View {
         let width = layout.popoverWidth
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: layout.labelGap) {
-                Text("When Rules").textRole(.headline).wrapping()
+                Text("When Rules").textRole(console ? .consoleHeadline : .headline).wrapping()
                 Text("Play a style when something happens. The first rule that matches wins; a display with its own style keeps it.")
-                    .textRole(.caption).foregroundStyle(.secondary).wrapping()
+                    .textRole(console ? .consoleBodySmall : .caption).foregroundStyle(.secondary).wrapping()
             }
             .padding(layout.cardPadding)
-            Divider()
+            if console { ConsoleHairline() } else { Divider() }
             ScrollView {
                 VStack(alignment: .leading, spacing: layout.itemGap) {
                     if rules.isEmpty && draft == nil {
-                        Text("No rules yet.").textRole(.body).foregroundStyle(.secondary)
+                        Text("No rules yet.").textRole(console ? .consoleBody : .body).foregroundStyle(.secondary)
                     }
                     ForEach(rules) { r in
                         if draft?.id == r.id {
@@ -114,6 +118,7 @@ struct WhenRulesEditor: View {
                     }
                     if draft == nil {
                         Button(scaled: "Add Rule\u{2026}") { draft = RuleDraft(new: model.library) }
+                            .modifier(RuleKeyStyle())
                             .disabled(rules.count >= PlayRule.maxCount || model.library.presets.isEmpty)
                     }
                 }
@@ -123,6 +128,7 @@ struct WhenRulesEditor: View {
         }
         .frame(minWidth: width.lowerBound, idealWidth: min(max(layout.scaled(440), width.lowerBound), width.upperBound),
                maxWidth: width.upperBound, minHeight: layout.scaled(240), idealHeight: layout.scaled(380), maxHeight: .infinity)
+        .modifier(WhenConsolePanel())
     }
 
     private var binding: Binding<RuleDraft> {
@@ -134,14 +140,62 @@ struct WhenRulesEditor: View {
 struct RuleChipRow: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
     let rule: PlayRule
     let active: Bool
     let edit: () -> Void
 
     var body: some View {
+        if console { consoleBody } else { classicBody }
+    }
+
+    /// Console: a ruled row — the rule as a printed tag (its symbol, "Snow day → Aurora"; an
+    /// orange edge and a lit PLAYING light while it plays), its sentence under it in the legend
+    /// grey, a Console switch and an edit key at the end.
+    private var consoleBody: some View {
         let lib = model.library
         let names = rule.play.compactMap { model.preset($0)?.name }
-        HStack(alignment: .center, spacing: layout.controlGap) {
+        let shape = RoundedRectangle(cornerRadius: 2, style: .continuous)
+        return HStack(alignment: .center, spacing: layout.controlGap) {
+            VStack(alignment: .leading, spacing: Space.xxs) {
+                ReflowStack(rowAlignment: .center, columnAlignment: .leading, spacing: Space.xs) {
+                    Label {
+                        Text(RuleText.short(rule, in: lib) + " \u{2192} " + (names.count == 1 ? names[0] : "\(names.count) styles"))
+                            .lineLimit(2)
+                    } icon: {
+                        Image(systemName: RuleText.symbol(rule, in: lib)).foregroundStyle(ConsoleInk.legend)
+                    }
+                    .textRole(.consoleBodySmallEmphasis)
+                    .foregroundStyle(ConsoleInk.ink)
+                    .padding(.horizontal, Space.xs)
+                    .padding(.vertical, Space.xxs)
+                    .background(shape.fill(active ? ConsoleInk.signal.opacity(0.16) : ConsoleInk.keyFace))
+                    .overlay(shape.strokeBorder(active ? ConsoleInk.signal : ConsoleInk.hairline, lineWidth: 1))
+                    .opacity(rule.enabled ? 1 : 0.55)
+                    if active {
+                        ConsoleLED(on: true, color: ConsoleInk.signal, label: "Playing")
+                    }
+                }
+                Text("When " + RuleText.condition(rule.when, in: lib))
+                    .textRole(.consoleBodySmall).foregroundStyle(ConsoleInk.legend).wrapping()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            ConsoleSwitch(isOn: Binding(get: { rule.enabled }, set: { model.setRuleEnabled(rule.id, $0) }))
+                .accessibilityLabel("\(rule.name) on")
+            Button(action: edit) {
+                Image(systemName: "pencil").scaledFont { .scaled(points: 11, $0, weight: .semibold) }
+            }
+            .buttonStyle(.keycap(padding: HubMetrics.squareKey))
+            .help("Change this rule").accessibilityLabel("Edit \(rule.name)")
+        }
+        .padding(.bottom, Space.s)
+        .overlay(alignment: .bottom) { ConsoleHairline() }
+    }
+
+    private var classicBody: some View {
+        let lib = model.library
+        let names = rule.play.compactMap { model.preset($0)?.name }
+        return HStack(alignment: .center, spacing: layout.controlGap) {
             VStack(alignment: .leading, spacing: layout.labelGap) {
                 HStack(spacing: Space.xs) {
                     Label {
@@ -245,6 +299,7 @@ struct RuleDraft: Equatable {
 struct RuleSentenceEditor: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
     @Binding var draft: RuleDraft
     let onDone: () -> Void
     @State private var problem: String?
@@ -254,8 +309,8 @@ struct RuleSentenceEditor: View {
         let info = lib.signalInfo(draft.signal)
         VStack(alignment: .leading, spacing: layout.controlGap) {
             FlowLayout(spacing: layout.controlGap, lineSpacing: layout.controlGap, alignment: .leading) {
-                Text("When").textRole(.body)
-                Menu(info?.name ?? "Signal") {
+                Text("When").textRole(console ? .consoleBody : .body)
+                Menu {
                     Section("Built in") {
                         ForEach(BuiltInSignals.all, id: \.id) { b in
                             Button(b.name) { pick(b.id) }
@@ -265,45 +320,60 @@ struct RuleSentenceEditor: View {
                     if !mine.isEmpty {
                         Section("Yours") { ForEach(mine) { s in Button(s.name) { pick(s.key) } } }
                     }
-                }
+                } label: { RuleMenuLabel(title: info?.name ?? "Signal") }
+                .modifier(RuleMenuStyle())
                 .fixedSize()
                 valueControls(info)
-                Menu(timeLabel) {
+                Menu {
                     Button("any time") { draft.timeOfDay = nil }
                     Button("by day") { draft.timeOfDay = "day" }
                     Button("only at night") { draft.timeOfDay = "night" }
-                }
+                } label: { RuleMenuLabel(title: timeLabel) }
+                .modifier(RuleMenuStyle())
                 .fixedSize()
-                Text("play").textRole(.body)
-                Menu(draft.style.flatMap { model.preset($0)?.name } ?? "Style") {
+                Text("play").textRole(console ? .consoleBody : .body)
+                Menu {
                     StyleMenuItems(current: draft.style) { draft.style = $0 }
-                }
+                } label: { RuleMenuLabel(title: draft.style.flatMap { model.preset($0)?.name } ?? "Style") }
+                .modifier(RuleMenuStyle())
                 .fixedSize()
             }
             if !draft.extraClauses.isEmpty {
                 Text("…and \(draft.extraClauses.count) more test\(draft.extraClauses.count == 1 ? "" : "s"), kept as they are.")
-                    .textRole(.caption).foregroundStyle(.secondary).wrapping()
+                    .textRole(console ? .consoleBodySmall : .caption).foregroundStyle(.secondary).wrapping()
             }
             TextField("Name (optional)", text: $draft.name)
-                .textFieldStyle(.roundedBorder)
+                .modifier(RuleFieldStyle())
             if let problem {
-                Text(problem).textRole(.caption).foregroundStyle(.orange).wrapping()
+                Text(problem).textRole(console ? .consoleBodySmall : .caption)
+                    .foregroundStyle(console ? ConsoleInk.signalInk : .orange).wrapping()
             }
             HStack(spacing: layout.controlGap) {
                 if lib.rules?.contains(where: { $0.id == draft.id }) == true {
                     Button(scaled: "Delete") { model.deleteRule(draft.id); onDone() }
+                        .modifier(RuleKeyStyle())
                 }
                 Spacer(minLength: 0)
                 Button(scaled: "Cancel") { onDone() }
+                    .modifier(RuleKeyStyle())
                 Button(scaled: "Save") {
                     if let why = model.saveRule(draft.rule(in: lib)) { problem = why } else { onDone() }
                 }
+                .modifier(RuleKeyStyle(tint: .signal))
                 .keyboardShortcut(.defaultAction)
                 .disabled(draft.style == nil)
             }
         }
         .padding(layout.controlGap)
-        .background(RoundedRectangle(cornerRadius: Radius.s, style: .continuous).fill(Color.primary.opacity(0.05)))
+        .background {
+            if console {
+                // Console: a module on the surface colour with a hairline edge
+                RoundedRectangle(cornerRadius: 4, style: .continuous).fill(ConsoleInk.surface)
+                    .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous).strokeBorder(ConsoleInk.hairline, lineWidth: 1))
+            } else {
+                RoundedRectangle(cornerRadius: Radius.s, style: .continuous).fill(Color.primary.opacity(0.05))
+            }
+        }
     }
 
     private var timeLabel: String {
@@ -322,26 +392,28 @@ struct RuleSentenceEditor: View {
     private func valueControls(_ info: (name: String, type: SignalValueType, unit: String?, range: ClosedRange<Double>?, options: [String]?)?) -> some View {
         switch info?.type ?? .number {
         case .number:
-            Menu(draft.op == .lt ? "is below" : "is above") {
+            Menu {
                 Button("is above") { draft.op = .gt }
                 Button("is below") { draft.op = .lt }
-            }
+            } label: { RuleMenuLabel(title: draft.op == .lt ? "is below" : "is above") }
+            .modifier(RuleMenuStyle())
             .fixedSize()
             HStack(spacing: Space.xxs) {
                 TextField("Value", value: $draft.number, format: .number)
-                    .textFieldStyle(.roundedBorder)
+                    .modifier(RuleFieldStyle())
                     .frame(width: layout.scaled(64))
-                if let u = info?.unit, !u.isEmpty { Text(u).textRole(.body).foregroundStyle(.secondary) }
+                if let u = info?.unit, !u.isEmpty { Text(u).textRole(console ? .consoleBody : .body).foregroundStyle(.secondary) }
             }
         case .bool:
-            Menu(draft.yes ? "is yes" : "is no") {
+            Menu {
                 Button("is yes") { draft.yes = true }
                 Button("is no") { draft.yes = false }
-            }
+            } label: { RuleMenuLabel(title: draft.yes ? "is yes" : "is no") }
+            .modifier(RuleMenuStyle())
             .fixedSize()
         case .string:
             if let opts = info?.options {
-                Menu(draft.words.count > 1 ? "is one of" : "is") {
+                Menu {
                     ForEach(opts, id: \.self) { o in
                         Toggle(RuleText.word(o), isOn: Binding(
                             get: { draft.words.contains(o) },
@@ -349,16 +421,90 @@ struct RuleSentenceEditor: View {
                                 if on { draft.words.insert(o) } else if draft.words.count > 1 { draft.words.remove(o) }
                             }))
                     }
-                }
+                } label: { RuleMenuLabel(title: draft.words.count > 1 ? "is one of" : "is") }
+                .modifier(RuleMenuStyle())
                 .fixedSize()
                 Text(draft.words.sorted().map(RuleText.word).joined(separator: " or "))
-                    .textRole(.body).foregroundStyle(.secondary)
+                    .textRole(console ? .consoleBody : .body).foregroundStyle(.secondary)
             } else {
-                Text("is").textRole(.body)
+                Text("is").textRole(console ? .consoleBody : .body)
                 TextField("Word", text: $draft.text)
-                    .textFieldStyle(.roundedBorder)
+                    .modifier(RuleFieldStyle())
                     .frame(width: layout.scaled(96))
             }
         }
+    }
+}
+
+// MARK: - Console pieces
+
+/// Console: the popover on the panel colour with the Console inks (Classic: the popover's own).
+private struct WhenConsolePanel: ViewModifier {
+    @Environment(\.console) private var console
+    func body(content: Content) -> some View {
+        if console {
+            content
+                .background(ConsoleInk.panel)
+                .presentationBackground(ConsoleInk.panel)
+                .foregroundStyle(ConsoleInk.ink, ConsoleInk.legend)
+        } else {
+            content
+        }
+    }
+}
+
+/// A pop-up's title: Classic's plain title (the stock pop-up draws its own arrows); Console's
+/// title and up-down chevron on a key (ConsoleMenuPicker's look).
+private struct RuleMenuLabel: View {
+    let title: String
+    @Environment(\.console) private var console
+    var body: some View {
+        if console {
+            HStack(spacing: Space.xs) {
+                Text(title).textRole(.consoleBody).lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(ConsoleInk.legend)
+            }
+        } else {
+            Text(title)
+        }
+    }
+}
+
+/// Console: a pop-up as a grey key (its own chevron, no stock indicator).
+private struct RuleMenuStyle: ViewModifier {
+    @Environment(\.console) private var console
+    func body(content: Content) -> some View {
+        if console {
+            content
+                .menuStyle(.button)
+                .buttonStyle(.keycap(padding: HubMetrics.smallKey))
+                .menuIndicator(.hidden)
+        } else {
+            content
+        }
+    }
+}
+
+/// Console: a button as a key (`tint` for Save); Classic's stock button.
+private struct RuleKeyStyle: ViewModifier {
+    var tint: ConsoleKeycapStyle.Tint = .plain
+    @Environment(\.console) private var console
+    func body(content: Content) -> some View {
+        if console {
+            content.buttonStyle(.keycap(tint, padding: HubMetrics.smallKey))
+                .environment(\.consoleSettings, true)   // Button(scaled:) prints a key legend
+        } else {
+            content
+        }
+    }
+}
+
+/// A text field: the stock rounded field (Classic); the inspector's recessed well (Console).
+private struct RuleFieldStyle: ViewModifier {
+    @Environment(\.console) private var console
+    func body(content: Content) -> some View {
+        if console { content.modifier(InspectorTextFieldStyle()) } else { content.textFieldStyle(.roundedBorder) }
     }
 }

@@ -1464,6 +1464,10 @@ private struct SourceEditorContent: View {
     private var accent: Color { console ? ConsoleInk.signal : Color.accentColor }
     /// Between parameter rows (Console: rows carry their own rules and padding).
     private var rowGap: CGFloat { console ? 0 : layout.inspectorRowGap }
+    /// A picture's corners: Classic's small radius; Console's well corners.
+    private var pictureRadius: CGFloat { console ? HubMetrics.wellRadius : Radius.s }
+    /// The drop zone's corners.
+    private var zoneRadius: CGFloat { console ? HubMetrics.wellRadius : Radius.m }
 
     var body: some View {
         VStack(alignment: .leading, spacing: layout.itemGap) {
@@ -1503,8 +1507,11 @@ private struct SourceEditorContent: View {
                     .aspectRatio(16.0 / 10.0, contentMode: .fit)
                     .fixedSize(horizontal: false, vertical: true)
                     .overlay(SourceSwatch(source: source))
-                    .clipShape(RoundedRectangle(cornerRadius: Radius.s, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: Radius.s, style: .continuous)
+                    .clipShape(RoundedRectangle(cornerRadius: pictureRadius, style: .continuous))
+                    // Console: a hairline edge, as every picture on the panel
+                    .overlay(RoundedRectangle(cornerRadius: pictureRadius, style: .continuous)
+                        .strokeBorder(console ? ConsoleInk.hairline : .clear, lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: pictureRadius, style: .continuous)
                         .strokeBorder(dropTargeted ? accent : .clear, lineWidth: 2))
                     .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
                         loadDroppedImages(providers) { urls in model.importSlideshowPhotos(urls) }
@@ -1571,14 +1578,14 @@ private struct SourceEditorContent: View {
     }
 
     private var mediaControls: some View {
-        let zone = RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
+        let zone = RoundedRectangle(cornerRadius: zoneRadius, style: .continuous)
         return VStack(alignment: .leading, spacing: layout.itemGap) {
             Button { importing = true } label: {
                 VStack(spacing: layout.controlGap) {
                     if let filename = source.mediaFilename {
                         SourceSwatch(source: source)
                             .aspectRatio(16.0 / 10.0, contentMode: .fit)
-                            .clipShape(RoundedRectangle(cornerRadius: Radius.concentric(Radius.m, inset: Space.s),
+                            .clipShape(RoundedRectangle(cornerRadius: console ? 2 : Radius.concentric(Radius.m, inset: Space.s),
                                                         style: .continuous))
                         Text(filename)
                             .modifier(InspectorNote())

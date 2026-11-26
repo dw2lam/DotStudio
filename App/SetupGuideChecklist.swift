@@ -2,6 +2,8 @@
 //  when inactive, display sleep, open at login, music permission), the onboarding step's
 //  "Open System Settings" button, and the floating panel's content (SetupGuidePanelView: the
 //  setup card from SetupGuideCard.swift over the checklist). State: SetupGuide.swift.
+//  Console (\.console, injected by SetupGuidePanel): the checklist as ruled rows with square
+//  status marks, keys for its actions, a Console switch for Open at login, and Done as a key.
 
 import SwiftUI
 
@@ -35,6 +37,7 @@ struct SetupOpenSettingsButton: View {
 struct SetupChecklist: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
     @ObservedObject var guide: SetupGuideModel
     @ObservedObject private var music = MusicNow.shared
     var commitPhrase: String
@@ -47,17 +50,24 @@ struct SetupChecklist: View {
 
     var body: some View {
         let rows = self.rows
-        VStack(alignment: .leading, spacing: layout.controlGap) {
+        let done = rows.filter { $0 == .done }.count
+        VStack(alignment: .leading, spacing: console ? Space.xs : layout.controlGap) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Checklist").textRole(.headline)
+                if console {
+                    // Console: a printed legend over the ruled list, the count as a readout.
+                    Text("Checklist").textRole(.legend).foregroundStyle(ConsoleInk.legend)
+                        .accessibilityAddTraits(.isHeader)
+                } else {
+                    Text("Checklist").textRole(.headline)
+                }
                 Spacer(minLength: layout.controlGap)
-                let done = rows.filter { $0 == .done }.count
                 Text("\(done) of \(rows.count) done")
-                    .textRole(.caption)
-                    .foregroundStyle(.secondary)
+                    .textRole(console ? .legend : .caption)
+                    .foregroundStyle(console ? AnyShapeStyle(done == rows.count ? ConsoleInk.ink : ConsoleInk.legend)
+                                             : AnyShapeStyle(.secondary))
                     .accessibilityLabel("\(done) of \(rows.count) items done")
             }
-            VStack(spacing: 0) {
+            let list = VStack(spacing: 0) {
                 installRow
                 chooseRow
                 idleRow
@@ -65,11 +75,16 @@ struct SetupChecklist: View {
                 loginRow
                 if showsMusicRow { musicRow }
             }
-            .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(.background.secondary))
-            .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).strokeBorder(Color.primary.opacity(0.07)))
+            if console {
+                list.overlay(alignment: .top) { ConsoleHairline() }
+            } else {
+                list
+                    .background(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(.background.secondary))
+                    .overlay(RoundedRectangle(cornerRadius: Radius.m, style: .continuous).strokeBorder(Color.primary.opacity(0.07)))
+            }
             Text("Ticks itself as you go.")
-                .textRole(.caption)
-                .foregroundStyle(.secondary)
+                .textRole(console ? .consoleBodySmall : .caption)
+                .foregroundStyle(console ? AnyShapeStyle(ConsoleInk.legend) : AnyShapeStyle(.secondary))
                 .wrapping()
         }
         .animation(.easeOut(duration: 0.2), value: s)
@@ -94,8 +109,8 @@ struct SetupChecklist: View {
                      detail: s.installed ? "DotStudio is in your screen savers."
                                          : "Adds DotStudio, then opens System Settings.") {
             if !s.installed && showsInstallButton {
-                Button { model.installScreensaver(); guide.refresh() } label: { Text("Install").textRole(.body) }
-                    .buttonStyle(.borderedProminent)
+                Button { model.installScreensaver(); guide.refresh() } label: { ChecklistKeyLabel(title: "Install", classicRole: .body) }
+                    .modifier(ChecklistActionStyle(classic: .prominent, consoleTint: .signal))
                     .keyboardShortcut(.defaultAction)
                     .accessibilityHint("Installs the DotStudio screensaver")
             }
@@ -159,8 +174,8 @@ struct SetupChecklist: View {
     }
 
     private var lockScreenLink: some View {
-        Button { SystemSettingsLink.openLockScreen() } label: { Text("Lock Screen Settings\u{2026}").textRole(.body) }
-            .buttonStyle(.link)
+        Button { SystemSettingsLink.openLockScreen() } label: { ChecklistKeyLabel(title: "Lock Screen Settings\u{2026}") }
+            .modifier(ChecklistActionStyle(classic: .link))
             .accessibilityHint("Opens System Settings at Lock Screen")
     }
 
@@ -228,18 +243,24 @@ struct SetupChecklist: View {
             detail = "Keeps your wallpaper and music going after a restart."
         }
         return ChecklistRow(state: loginState, title: "Open DotStudio at login", detail: detail) {
-            Toggle("Open DotStudio at login", isOn: $guide.wantsLogin)
-                .toggleStyle(.switch)
-                .labelsHidden()
-                .adaptiveControlSize(.small)
-                .accessibilityLabel("Open DotStudio at login")
+            if console {
+                ConsoleSwitch(isOn: $guide.wantsLogin)
+                    .accessibilityLabel("Open DotStudio at login")
+            } else {
+                Toggle("Open DotStudio at login", isOn: $guide.wantsLogin)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .adaptiveControlSize(.small)
+                    .accessibilityLabel("Open DotStudio at login")
+            }
         } extra: {
             if s.login == .requiresApproval {
-                Button { LoginItem.openLoginItemsSettings() } label: { Text("Open Login Items\u{2026}").textRole(.body) }
-                    .buttonStyle(.link)
+                Button { LoginItem.openLoginItemsSettings() } label: { ChecklistKeyLabel(title: "Open Login Items\u{2026}") }
+                    .modifier(ChecklistActionStyle(classic: .link))
                     .accessibilityHint("Opens System Settings at Login Items")
             } else if let e = guide.loginError {
-                Text(e).textRole(.caption).foregroundStyle(.orange).wrapping()
+                Text(e).textRole(console ? .consoleBodySmall : .caption)
+                    .foregroundStyle(console ? ConsoleInk.signalInk : .orange).wrapping()
             }
         }
     }
@@ -272,7 +293,8 @@ struct SetupChecklist: View {
         }
         return ChecklistRow(state: musicState, title: title, detail: detail) {
             if let denied {
-                Button { music.allowControl(denied.source) } label: { Text("Allow\u{2026}").textRole(.body) }
+                Button { music.allowControl(denied.source) } label: { ChecklistKeyLabel(title: "Allow\u{2026}") }
+                    .modifier(ChecklistActionStyle(classic: .standard))
                     .accessibilityHint("Opens System Settings at Privacy & Security, Automation")
             }
         }
@@ -301,7 +323,10 @@ enum ChecklistState: Equatable {
 /// trailing edge (under the text at large sizes) plus extra content under the detail.
 struct ChecklistRow<Action: View, Extra: View>: View {
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
     @ScaledLength(relativeTo: .headline) private var mark: CGFloat = 20
+    @ScaledLength(relativeTo: .body) private var square: CGFloat = 20
+    @ScaledLength(relativeTo: .body) private var squareGlyph: CGFloat = 10
     let state: ChecklistState
     var first = false
     let title: String
@@ -317,6 +342,64 @@ struct ChecklistRow<Action: View, Extra: View>: View {
     }
 
     var body: some View {
+        if console { consoleBody } else { classicBody }
+    }
+
+    /// Console: a ruled row (the hairline under it; the list draws the one on top) — a small
+    /// square for the state (green with a tick when done, amber with ! for attention, a grey
+    /// key-face square to do or for information, an orange-edged one turning on when you
+    /// continue), the title in the text face and the detail in the legend grey, the action as
+    /// a key or a Console switch at the end.
+    private var consoleBody: some View {
+        HStack(alignment: .top, spacing: Space.s) {
+            consoleMark
+            VStack(alignment: .leading, spacing: Space.xs) {
+                AdaptiveStack(rowAlignment: .top, columnAlignment: .leading, spacing: layout.controlGap) {
+                    text.frame(maxWidth: .infinity, alignment: .leading)
+                    action().fixedSize()
+                }
+                extra()
+            }
+        }
+        .padding(.vertical, Space.s)
+        .padding(.horizontal, Space.xs)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .bottom) { ConsoleHairline() }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var consoleMark: some View {
+        let shape = RoundedRectangle(cornerRadius: 2, style: .continuous)
+        return ZStack {
+            switch state {
+            case .done:
+                shape.fill(ConsoleInk.green)
+                Image(systemName: "checkmark").font(.system(size: squareGlyph, weight: .bold))
+                    .foregroundStyle(ConsoleInk.onSignal)
+            case .warning:
+                shape.fill(ConsoleInk.amber)
+                Image(systemName: "exclamationmark").font(.system(size: squareGlyph, weight: .bold))
+                    .foregroundStyle(ConsoleInk.onSignal)
+            case .info:
+                shape.fill(ConsoleInk.keyFace)
+                shape.strokeBorder(ConsoleInk.hairline, lineWidth: 1)
+                Image(systemName: "info").font(.system(size: squareGlyph, weight: .bold))
+                    .foregroundStyle(ConsoleInk.legend)
+            case .pending:
+                shape.fill(ConsoleInk.well)
+                shape.strokeBorder(ConsoleInk.signal, lineWidth: 1.5)
+                shape.fill(ConsoleInk.signal).padding(square * 0.32)
+            case .todo:
+                shape.fill(ConsoleInk.keyFace)
+                shape.strokeBorder(ConsoleInk.hairline, lineWidth: 1)
+            }
+        }
+        .frame(width: square, height: square)
+        .contentTransition(.symbolEffect(.replace))
+        .accessibilityHidden(true)
+    }
+
+    private var classicBody: some View {
         HStack(alignment: .top, spacing: layout.itemGap) {
             stateMark
             VStack(alignment: .leading, spacing: layout.controlGap) {
@@ -337,13 +420,14 @@ struct ChecklistRow<Action: View, Extra: View>: View {
     }
 
     private var text: some View {
-        VStack(alignment: .leading, spacing: layout.labelGap) {
+        VStack(alignment: .leading, spacing: console ? 2 : layout.labelGap) {
             Text(title)
-                .textRole(.bodyEmphasis)
+                .textRole(console ? .consoleTitle : .bodyEmphasis)
+                .modifier(ConsoleOnlyInk(primary: ConsoleInk.ink))
                 .wrapping()
             Text(detail)
-                .textRole(.caption)
-                .foregroundStyle(.secondary)
+                .textRole(console ? .consoleBodySmall : .caption)
+                .foregroundStyle(console ? AnyShapeStyle(ConsoleInk.legend) : AnyShapeStyle(.secondary))
                 .wrapping()
         }
         .accessibilityElement(children: .combine)
@@ -373,12 +457,64 @@ struct ChecklistRow<Action: View, Extra: View>: View {
     }
 }
 
+/// Console's inks (ink, and the legend grey as `.secondary`); Classic keeps what it inherits.
+private struct ConsoleOnlyInk: ViewModifier {
+    let primary: Color
+    var secondary: Color? = nil
+    @Environment(\.console) private var console
+    func body(content: Content) -> some View {
+        if !console {
+            content
+        } else if let secondary {
+            content.foregroundStyle(primary, secondary)
+        } else {
+            content.foregroundStyle(primary)
+        }
+    }
+}
+
+/// A checklist action's title: Classic's role-sized text; Console's key legend (mono caps).
+private struct ChecklistKeyLabel: View {
+    let title: String
+    var classicRole: TextRole = .body
+    @Environment(\.console) private var console
+    var body: some View {
+        if console {
+            Text(title).textRole(.consoleKey).lineLimit(1).fixedSize()
+        } else {
+            Text(title).textRole(classicRole)
+        }
+    }
+}
+
+/// A checklist action's button: Classic's link / prominent / stock button as before; Console's
+/// small key (the orange one for the step's main action).
+private struct ChecklistActionStyle: ViewModifier {
+    enum Classic { case link, prominent, standard }
+    let classic: Classic
+    var consoleTint: ConsoleKeycapStyle.Tint = .plain
+    @Environment(\.console) private var console
+
+    func body(content: Content) -> some View {
+        if console {
+            content.buttonStyle(.keycap(consoleTint, padding: HubMetrics.smallKey))
+        } else {
+            switch classic {
+            case .link: content.buttonStyle(.link)
+            case .prominent: content.buttonStyle(.borderedProminent)
+            case .standard: content
+            }
+        }
+    }
+}
+
 // MARK: - The floating panel
 
 /// SetupGuidePanel's content: the setup card (SetupGuideCard.swift) and the checklist, Done at
 /// the foot. The picture goes beside the steps once the panel is dragged (or rendered) wide.
 struct SetupGuidePanelView: View {
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
     @ObservedObject var guide: SetupGuideModel
     /// The coach marks (SetupCoach.swift); UI shots pass a pinned one.
     @ObservedObject var coach: SetupCoach = .shared
@@ -408,18 +544,32 @@ struct SetupGuidePanelView: View {
                 .scrollBounceBehavior(.basedOnSize)
                 HStack {
                     Spacer()
-                    Button(action: onDone) { Text("Done").textRole(.body) }
-                        .adaptiveControlSize(.large)
+                    doneButton
                         .keyboardShortcut(guide.snapshot.status == .ready ? .defaultAction : .cancelAction)
                         .accessibilityHint("Closes the guide and applies Open at login")
                 }
                 .padding(.horizontal, layout.cardPadding + Space.xxs)
                 .padding(.vertical, Space.s)
-                .background(alignment: .top) { Divider() }
+                .background(alignment: .top) { if console { ConsoleHairline() } else { Divider() } }
             }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        // Console: the panel colour (as Settings' pane and the popovers), its text in the inks.
+        .background(console ? ConsoleInk.panel : Color(nsColor: .windowBackgroundColor))
+        .modifier(ConsoleOnlyInk(primary: ConsoleInk.ink, secondary: ConsoleInk.legend))
         .onAppear { guide.begin() }
         .onDisappear { guide.end() }
+    }
+
+    /// Done: Classic's large button; Console's key, orange once everything's set (it's then
+    /// the Return key — before that, the card's Open System Settings is the orange one).
+    @ViewBuilder private var doneButton: some View {
+        if console {
+            Button(action: onDone) { Text("Done").textRole(.consoleKey) }
+                .buttonStyle(.keycap(guide.snapshot.status == .ready ? .signal : .plain,
+                                     padding: EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16)))
+        } else {
+            Button(action: onDone) { Text("Done").textRole(.body) }
+                .adaptiveControlSize(.large)
+        }
     }
 }

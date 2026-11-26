@@ -428,15 +428,25 @@ private struct SectionHeader: View {
 }
 
 /// The Source editor in a popover: card padding, and a width that grows with the text.
+/// Console: on the panel colour (as the MCP popover), not the popover's material.
 private struct SourcePopover: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.layout) private var layout
+    @Environment(\.console) private var console
 
     var body: some View {
         let range = layout.popoverWidth
-        SourceEditor(source: model.sourceBinding, model: model)
+        let editor = SourceEditor(source: model.sourceBinding, model: model)
             .padding(layout.cardPadding)
             .frame(width: min(max(layout.scaled(320), range.lowerBound), range.upperBound))
+        if console {
+            editor
+                .background(ConsoleInk.panel)
+                .presentationBackground(ConsoleInk.panel)
+                .foregroundStyle(ConsoleInk.ink, ConsoleInk.legend)
+        } else {
+            editor
+        }
     }
 }
 
