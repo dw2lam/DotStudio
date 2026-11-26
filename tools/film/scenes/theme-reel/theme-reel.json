@@ -1,0 +1,10 @@
+{
+  "scene": "theme-reel",
+  "variant": "day",
+  "loop": {"seconds": 8, "fps": 30},
+  "params": {"theme": "retro", "tone": "light", "parts": "SET-BY-render-all.sh", "fstop": 0.08, "view": "Standard"},
+  "render": {"engine": "eevee", "res": [960, 600], "samples": 64, "exposure": 0.0, "motion_blur": false},
+  "look": {"bloom": {"strength": 0.05, "threshold": 1.6, "size": 0.6}, "vignette": 0.16},
+  "stills": [{"name": "poster", "camera": "hero", "frame": 1}],
+  "animation": {"camera": "hero", "engine": "eevee", "res": [960, 600], "samples": 64}
+}
