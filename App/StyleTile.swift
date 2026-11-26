@@ -914,10 +914,11 @@ enum HubMetrics {
     static let panelRadius: CGFloat = 6
     /// A picture's well, a key, the search well.
     static let wellRadius: CGFloat = 4
-    /// A small key's padding (Customize, Preview, the hover bar's keys).
-    static let smallKey = EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8)
+    /// A small key's padding (Customize, Preview, the hover bar's keys): 6 × 10 around an
+    /// 11.5 pt legend — about 27 pt of face (4 × 8 and 22 pt before 2026-11-26).
+    static let smallKey = EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10)
     /// An icon-only small key ("…").
-    static let squareKey = EdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6)
+    static let squareKey = EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8)
     /// The keycap's skirt (Console.swift): the room it takes under every key's face.
     static let keySkirt: CGFloat = 4
 }
@@ -932,7 +933,7 @@ struct HubKeyLabel: View {
     var body: some View {
         HStack(spacing: Space.xxs) {
             if let symbol { glyph(symbol) }
-            Text(text).textRole(.legend)
+            Text(text).textRole(.consoleKeySmall)
             if let trailingSymbol { glyph(trailingSymbol) }
         }
         .lineLimit(1)
@@ -940,7 +941,7 @@ struct HubKeyLabel: View {
     }
 
     private func glyph(_ name: String) -> some View {
-        Image(systemName: name).scaledFont { .scaled(points: 9.5, $0, weight: .bold) }
+        Image(systemName: name).scaledFont { .scaled(points: 10.5, $0, weight: .bold) }
     }
 }
 
