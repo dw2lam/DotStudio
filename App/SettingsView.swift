@@ -438,7 +438,7 @@ struct GeneralSettingsSection: View {
     @State private var loginStatus = LoginItem.status()
     @State private var loginError: String?
     @AppStorage(MenuBarIcon.key) private var menuBarIcon: MenuBarIcon = .standard
-    @AppStorage(Appearance.key) private var appearance: Appearance = .classic
+    @AppStorage(Appearance.key) private var appearance: Appearance = Appearance.defaultChoice
     @Environment(\.consoleSettings) private var console
     @AppStorage(ColorMode.key) private var colorMode: ColorMode = .auto
 

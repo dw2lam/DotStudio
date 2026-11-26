@@ -30,6 +30,9 @@ enum Appearance: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String { self == .classic ? "Classic" : "Retro" }
     static let key = "appearance"
+    /// The theme until someone picks one: Retro since the 2026-11 redesign (owner: "switch to
+    /// the new theme by default"). A saved choice — Classic included — is always kept.
+    static let defaultChoice: Appearance = .console
     /// DEV / offscreen renders: DOTSTUDIO_APPEARANCE=console|classic wins over the saved choice
     /// (UIShots never writes the user's own preference).
     static let forced: Appearance? = ProcessInfo.processInfo.environment["DOTSTUDIO_APPEARANCE"].flatMap(Appearance.init)

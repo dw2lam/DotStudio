@@ -10,7 +10,7 @@ struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     /// Settings › General › Appearance (Console.swift; issue #6).
-    @AppStorage(Appearance.key) private var appearance: Appearance = .classic
+    @AppStorage(Appearance.key) private var appearance: Appearance = Appearance.defaultChoice
     @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var hero

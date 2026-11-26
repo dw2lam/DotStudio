@@ -268,7 +268,7 @@ final class SetupGuideModel: ObservableObject {
 /// as ContentView) and tells the panel when it changes, so an open guide follows Settings ›
 /// General › Appearance.
 private struct SetupGuidePanelAppearance<Content: View>: View {
-    @AppStorage(Appearance.key) private var appearance: Appearance = .classic
+    @AppStorage(Appearance.key) private var appearance: Appearance = Appearance.defaultChoice
     var onConsole: (Bool) -> Void
     @ViewBuilder var content: () -> Content
 
@@ -283,7 +283,7 @@ private struct SetupGuidePanelAppearance<Content: View>: View {
 extension Appearance {
     /// The saved choice (Settings › General › Appearance), read outside a view.
     static var saved: Appearance {
-        UserDefaults.standard.string(forKey: key).flatMap(Appearance.init) ?? .classic
+        UserDefaults.standard.string(forKey: key).flatMap(Appearance.init) ?? Appearance.defaultChoice
     }
 }
 
