@@ -733,7 +733,9 @@ enum UIShots {
         s.append(Screen(name: "dest-when-sentence", frame: .fit(width: 440, minHeight: 120),
                         prepare: { st in SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.night, active: true) },
                         view: { st in AnyView(RuleSentenceEditor(draft: .constant(RuleDraft(st.model.library.rules![1], in: st.model.library)),
-                                                                 onDone: {}).padding(16).background(Color(nsColor: .windowBackgroundColor))) }))
+                                                                 onDone: {}).padding(16)
+                                .background(Appearance.effective(saved: .classic) == .console ? ConsoleInk.panel
+                                                                                               : Color(nsColor: .windowBackgroundColor))) }))
 
         // The DotStudio menu-bar menu, laid out as a plain column (menus can't render offscreen):
         // wallpaper off, playing, paused, a rotating screensaver playlist, and not set up
