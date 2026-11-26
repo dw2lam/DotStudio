@@ -184,10 +184,18 @@ extension TextRole {
     static let consoleBody = TextRole(style: .body, points: 13, face: ConsoleFace.text)
     /// Small body (a deck's one-line "what it is", hints): 12 pt.
     static let consoleBodySmall = TextRole(style: .callout, points: 12, face: ConsoleFace.text)
-    /// A key's legend / a row's value: 11 pt mono, tracked.
-    static let consoleKey = TextRole(style: .caption, points: 11, tracking: 0.5, uppercase: true, face: ConsoleFace.monoSemibold)
-    /// A row's value in mono, not uppercased ("1 style", "Same on all"): 11.5 pt.
-    static let consoleValue = TextRole(style: .caption, points: 11.5, monospacedDigits: true, face: ConsoleFace.mono)
+    /// A key's legend: 12 pt mono caps, tracked (11 pt before 2026-11-26 — the owner found the
+    /// keys a touch small).
+    static let consoleKey = TextRole(style: .caption, points: 12, tracking: 0.5, uppercase: true, face: ConsoleFace.monoSemibold)
+    /// A small key's legend (Customize, Preview, the hover bar's keys — HubKeyLabel): 11.5 pt
+    /// mono caps, a step over the printed legends so a key reads as something to press.
+    static let consoleKeySmall = TextRole(style: .caption, points: 11.5, tracking: 0.6, uppercase: true, face: ConsoleFace.monoSemibold)
+    /// A row's value in mono, not uppercased ("1 style", "Same on all"): 12 pt.
+    static let consoleValue = TextRole(style: .caption, points: 12, monospacedDigits: true, face: ConsoleFace.mono)
+    /// A deck's name ("Screensaver", "Wallpaper"): 22 pt display — the tile's own title.
+    static let consoleTileTitle = TextRole(style: .title2, points: 22, face: ConsoleFace.display)
+    /// What a deck plays now ("Liquid Chrome"): 15 pt Instrument Sans medium, a step under the title.
+    static let consoleNowPlaying = TextRole(style: .body, points: 15, face: ConsoleFace.textMedium)
 
     /// Tiny printed legends: 10 pt mono caps, tracked 0.8.
     static let legend = TextRole(style: .caption2, points: 10, tracking: 0.8, uppercase: true, face: ConsoleFace.monoSemibold)
@@ -255,7 +263,10 @@ struct ConsoleKeycapStyle: ButtonStyle {
     var latched = false
     var cornerRadius: CGFloat = 4
     /// Inner padding; nil = the label sets its own size (icon keys use a fixed frame).
-    var padding: EdgeInsets? = EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
+    var padding: EdgeInsets? = ConsoleKeycapStyle.standardPadding
+    /// A standard key's padding: 8 × 14 around its legend (6 × 12 before 2026-11-26), so a
+    /// one-line key's face is about 30 pt tall, plus its skirt.
+    static let standardPadding = EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14)
 
     func makeBody(configuration: Configuration) -> some View {
         ConsoleKeycapBody(configuration: configuration, tint: tint, latched: latched,
@@ -334,10 +345,10 @@ extension ButtonStyle where Self == ConsoleKeycapStyle {
     static var keycap: ConsoleKeycapStyle { ConsoleKeycapStyle() }
     /// A Console key: tint, latched, corner radius, padding.
     static func keycap(_ tint: ConsoleKeycapStyle.Tint = .plain, latched: Bool = false, cornerRadius: CGFloat = 4,
-                           padding: EdgeInsets? = EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)) -> ConsoleKeycapStyle {
+                           padding: EdgeInsets? = ConsoleKeycapStyle.standardPadding) -> ConsoleKeycapStyle {
         ConsoleKeycapStyle(tint: tint, latched: latched, cornerRadius: cornerRadius, padding: padding)
     }
-    /// A square icon key (32 × 32, like the header's + / AI / settings keys).
+    /// A square icon key: no padding, its label sets the size (the editor's header keys).
     static var iconKeycap: ConsoleKeycapStyle { ConsoleKeycapStyle(padding: EdgeInsets()) }
 }
 

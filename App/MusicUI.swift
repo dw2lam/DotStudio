@@ -366,8 +366,8 @@ struct MusicTransport: View {
     @Environment(\.console) private var console
     @ScaledLength(relativeTo: .callout) private var glyph: CGFloat = 12
     @ScaledLength(relativeTo: .callout) private var hit: CGFloat = 16
-    @ScaledLength(relativeTo: .caption) private var key: CGFloat = 20
-    @ScaledLength(relativeTo: .caption) private var keyGlyph: CGFloat = 9
+    @ScaledLength(relativeTo: .caption) private var key: CGFloat = 24
+    @ScaledLength(relativeTo: .caption) private var keyGlyph: CGFloat = 10.5
 
     var body: some View {
         if console {

@@ -730,14 +730,14 @@ extension ToolbarContent {
     }
 }
 
-/// A header keycap's glyph (back, ▶): the design's 32 pt square key (with its skirt).
+/// A header keycap's glyph (back, ▶): a 32 pt square face (36 pt with its skirt; 28 + 4 before 2026-11-26).
 private struct HeaderKeyGlyph: View {
     let systemImage: String
-    @ScaledLength(relativeTo: .body) private var side: CGFloat = 28
+    @ScaledLength(relativeTo: .body) private var side: CGFloat = 32
 
     var body: some View {
         Image(systemName: systemImage)
-            .font(.system(size: 12, weight: .semibold))
+            .font(.system(size: 13.5, weight: .semibold))
             .frame(width: side, height: side)
             .contentShape(Rectangle())
     }
@@ -746,11 +746,11 @@ private struct HeaderKeyGlyph: View {
 /// The header's ••• key: a Menu can't take the keycap ButtonStyle, so its face is drawn.
 private struct HeaderMenuKey: View {
     @State private var hovering = false
-    @ScaledLength(relativeTo: .body) private var side: CGFloat = 28
+    @ScaledLength(relativeTo: .body) private var side: CGFloat = 32
 
     var body: some View {
         Image(systemName: "ellipsis")
-            .font(.system(size: 12, weight: .semibold))
+            .font(.system(size: 13.5, weight: .semibold))
             .foregroundStyle(hovering ? ConsoleInk.signalInk : ConsoleInk.ink)
             .frame(width: side, height: side)
             .consoleKeyFace(hovering: hovering)

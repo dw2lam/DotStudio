@@ -474,7 +474,10 @@ private struct FilterBar: View {
     private static let chipSpace = "filterChipsScroll"
 
     /// Narrower in compact windows, wider in wide ones; grows with the text.
-    private var searchWidth: CGFloat { layout.scaled(layout.widthClass.pick(208, 240, 288)) }
+    private var searchWidth: CGFloat {
+        // Console: a step wider for its larger mono text (12 pt since 2026-11-26).
+        layout.scaled(console ? layout.widthClass.pick(216, 264, 304) : layout.widthClass.pick(208, 240, 288))
+    }
 
     private var chips: some View {
         HStack(spacing: layout.controlGap) {
@@ -598,6 +601,7 @@ private struct FilterChip: View {
     @Environment(\.layout) private var layout
     @Environment(\.console) private var console
     @ScaledLength(relativeTo: .callout) private var height: CGFloat = GalleryControl.height
+    @ScaledLength(relativeTo: .callout) private var consoleHeight: CGFloat = GalleryControl.consoleHeight
     let filter: GalleryFilter
     let count: Int?
     let selected: Bool
@@ -623,11 +627,11 @@ private struct FilterChip: View {
             }
             .textRole(.consoleKey)
             .lineLimit(1)
-            .frame(minHeight: height - HubMetrics.keySkirt)
+            .frame(minHeight: consoleHeight - HubMetrics.keySkirt)
             .fixedSize()
         }
         .buttonStyle(.keycap(selected ? .signal : .plain,
-                             padding: EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12)))
+                             padding: EdgeInsets(top: 0, leading: 14, bottom: 0, trailing: 14)))
         .accessibilityLabel(count.map { "\(filter.title), \($0)" } ?? filter.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
@@ -912,19 +916,19 @@ private struct HubWordmark: View {
     }
 }
 
-/// A header key's glyph: 16 pt square, so every key is the same 32 pt square (the keycap's
-/// 8 pt padding around it).
+/// A header key's glyph: 20 pt square, so every key is the same 36 pt square (the keycap's
+/// 8 pt padding around it; 32 pt before 2026-11-26).
 private struct HubIconLabelStyle: LabelStyle {
-    @ScaledLength(relativeTo: .body) private var box: CGFloat = 16
+    @ScaledLength(relativeTo: .body) private var box: CGFloat = 20
     func makeBody(configuration: Configuration) -> some View {
         configuration.icon
-            .scaledFont { .scaled(points: 14, $0, weight: .medium) }
+            .scaledFont { .scaled(points: 15, $0, weight: .medium) }
             .frame(width: box, height: box)
     }
 }
 
 private extension View {
-    /// A Console header key: a 32 pt square keycap around the item's icon.
+    /// A Console header key: a 36 pt square keycap around the item's icon.
     func hubHeaderKey() -> some View {
         labelStyle(HubIconLabelStyle())
             .buttonStyle(.keycap(padding: EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8)))

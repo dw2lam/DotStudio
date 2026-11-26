@@ -89,7 +89,7 @@ struct ConsoleMenuPicker<Value: Hashable>: View {
                     .textRole(.consoleBody)
                     .lineLimit(1)
                 Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(ConsoleInk.legend)
             }
         }
@@ -266,8 +266,8 @@ struct ConsoleSwitch: View {
     @Binding var isOn: Bool
     @Environment(\.isEnabled) private var enabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @ScaledLength(relativeTo: .body) private var width: CGFloat = 40
-    @ScaledLength(relativeTo: .body) private var height: CGFloat = 20
+    @ScaledLength(relativeTo: .body) private var width: CGFloat = 46
+    @ScaledLength(relativeTo: .body) private var height: CGFloat = 24
 
     var body: some View {
         let inset: CGFloat = 3
@@ -332,7 +332,7 @@ struct ConsoleSegments<Value: Hashable>: View {
                         .fixedSize()
                         .frame(maxWidth: fills || stacked ? .infinity : nil)
                 }
-                .buttonStyle(.keycap(on ? tint : .plain, padding: EdgeInsets(top: 4, leading: 9, bottom: 4, trailing: 9)))
+                .buttonStyle(.keycap(on ? tint : .plain, padding: EdgeInsets(top: 6, leading: 11, bottom: 6, trailing: 11)))
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
         }
@@ -488,10 +488,10 @@ struct ConsoleSlider: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var scheme
     @State private var dragging = false
-    @ScaledLength(relativeTo: .body) private var thumbHeight: CGFloat = 20
+    @ScaledLength(relativeTo: .body) private var thumbHeight: CGFloat = 24
     @ScaledLength(relativeTo: .caption) private var readoutWidth: CGFloat = 44
 
-    private let thumbWidth: CGFloat = 14
+    private let thumbWidth: CGFloat = 16
     private let track: CGFloat = 10
     private var span: Double { max(range.upperBound - range.lowerBound, 1e-9) }
     private var fraction: CGFloat { CGFloat(min(max((value - range.lowerBound) / span, 0), 1)) }

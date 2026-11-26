@@ -28,8 +28,8 @@ extension TextRole {
     /// Small mono names that aren't legends (a theme's name under its swatch, a colour's name
     /// beside its well): 10 pt mono, tracked, NOT uppercased — the design's label-sm.
     static let consoleCaption = TextRole(style: .caption2, points: 10, tracking: 0, face: ConsoleFace.monoSemibold)
-    /// A big key's legend (Add Effect, the destination keys): 12 pt mono caps, the design's label-lg.
-    static let consoleKeyLarge = TextRole(style: .callout, points: 12, tracking: 0.4, uppercase: true, face: ConsoleFace.monoSemibold)
+    /// A big key's legend (Add Effect, the destination keys): 12.5 pt mono caps (the design's label-lg, a half step up).
+    static let consoleKeyLarge = TextRole(style: .callout, points: 12.5, tracking: 0.4, uppercase: true, face: ConsoleFace.monoSemibold)
 }
 
 // MARK: - Scaled insets
@@ -215,9 +215,9 @@ struct InspectorFader: View {
 
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @ScaledLength(relativeTo: .caption) private var track: CGFloat = 8
-    @ScaledLength(relativeTo: .caption) private var thumbWidth: CGFloat = 14
-    @ScaledLength(relativeTo: .caption) private var thumbHeight: CGFloat = 18
+    @ScaledLength(relativeTo: .caption) private var track: CGFloat = 9
+    @ScaledLength(relativeTo: .caption) private var thumbWidth: CGFloat = 16
+    @ScaledLength(relativeTo: .caption) private var thumbHeight: CGFloat = 22
     @ScaledLength(relativeTo: .caption) private var readout: CGFloat = 40
     @GestureState private var dragging = false
     @State private var hovering = false
@@ -411,9 +411,9 @@ struct InspectorSwitch: View {
     let label: String
     @Binding var isOn: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @ScaledLength(relativeTo: .caption) private var width: CGFloat = 40
-    @ScaledLength(relativeTo: .caption) private var height: CGFloat = 20
-    @ScaledLength(relativeTo: .caption) private var knob: CGFloat = 14
+    @ScaledLength(relativeTo: .caption) private var width: CGFloat = 46
+    @ScaledLength(relativeTo: .caption) private var height: CGFloat = 24
+    @ScaledLength(relativeTo: .caption) private var knob: CGFloat = 18
 
     var body: some View {
         Button {
@@ -454,7 +454,7 @@ struct ConsoleMenuKeyLabel: View {
     let text: String
     var dim = false
     @State private var hovering = false
-    @ScaledLength(relativeTo: .caption) private var minHeight: CGFloat = 22
+    @ScaledLength(relativeTo: .caption) private var minHeight: CGFloat = 28
 
     var body: some View {
         HStack(spacing: Space.xs) {
@@ -614,7 +614,7 @@ struct InspectorSegments<Value: Hashable>: View {
     let options: [(title: String, value: Value)]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The keys' margins grow with their legends (consoleKey is a caption-relative role).
-    @ScaledInsets(relativeTo: .caption) private var padding = EdgeInsets(top: 5, leading: 8, bottom: 5, trailing: 8)
+    @ScaledInsets(relativeTo: .caption) private var padding = EdgeInsets(top: 7, leading: 10, bottom: 7, trailing: 10)
 
     var body: some View {
         ConsoleEqualGrid(spacing: Space.xxs, rowSpacing: Space.xxs, allowed: [options.count, 2, 1]) {
@@ -707,7 +707,7 @@ struct InspectorSmallButton: View {
     var fixed = true
     let action: () -> Void
     @Environment(\.console) private var console
-    @ScaledInsets(relativeTo: .caption) private var keyPadding = EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10)
+    @ScaledInsets(relativeTo: .caption) private var keyPadding = EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
 
     var body: some View {
         if console {
