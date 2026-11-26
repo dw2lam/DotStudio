@@ -14,6 +14,11 @@ struct ContentView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var hero
+    /// The one-time What's New sheet after an update (Changelog.swift).
+    @ObservedObject private var whatsNew = WhatsNew.Center.shared
+    /// This window is on screen (not a login launch's window being put away): checked a moment
+    /// after it appears, before What's New may show on it.
+    @State private var windowOnScreen = false
 
     /// Offscreen UI renders (Shots.swift) must never present the sheet or touch the flag.
     private static let isRenderingShots = ProcessInfo.processInfo.environment["DOTSTUDIO_UI_SHOTS"] != nil
@@ -97,6 +102,21 @@ struct ContentView: View {
                 }
             }
         }
+        // What's New: once per update, when the window is free — never over the welcome sheet,
+        // Settings or an alert (it waits for them to close).
+        .background {
+            GeometryReader { geo in
+                Color.clear.sheet(isPresented: Binding(get: { whatsNew.isPending && whatsNewCanShow },
+                                                       set: { if !$0 { whatsNew.dismiss() } })) {
+                    WhatsNewSheet(releases: whatsNew.releases, windowSize: geo.size,
+                                  onContinue: { whatsNew.dismiss() },
+                                  onSeeAll: { whatsNew.showAllUpdates(model: model) })
+                        .environment(\.console, isConsole)
+                        .adaptiveLayout()
+                        .onAppear { whatsNew.markShown() }
+                }
+            }
+        }
         .onAppear {
             // At launch this runs inside the launch's first Apple event, before the app
             // activates: the earliest point to become a Dock app (or, for a login launch on an
@@ -107,6 +127,10 @@ struct ContentView: View {
             AppPresence.shared.register(openMainWindow: open)
             WallpaperController.shared.registerOpenMainWindow(open)
             if DemoHooks.isActive { DemoHooks.apply(to: model) } else { presentOnboardingIfNeeded() }
+            // Decided before onboarding can finish: a first run (onboarding not done yet)
+            // records the version and shows nothing.
+            whatsNew.decideIfNeeded(priorUse: hasCompletedOnboarding)
+            watchWindowOnScreen()
         }
         .onChange(of: model.storeAlert == nil) { _, clear in
             if clear { presentOnboardingIfNeeded() }   // wait out a launch-time library alert
@@ -115,6 +139,24 @@ struct ContentView: View {
         // here would sit behind the sheet. Exactly one of the two presenters is active.
         .alert(item: Binding(get: { model.showOnboarding ? nil : model.storeAlert },
                              set: { model.storeAlert = $0 })) { $0.alert }
+    }
+
+    /// What's New may present on this window now.
+    private var whatsNewCanShow: Bool {
+        windowOnScreen && !model.showOnboarding && model.settingsPane == nil && model.storeAlert == nil
+    }
+
+    /// A login launch into the menu bar puts its window away right after launch (AppPresence):
+    /// What's New waits for a window that stays on screen — this one, or the next one opened.
+    private func watchWindowOnScreen(attempt: Int = 0) {
+        guard whatsNew.isPending, !windowOnScreen, attempt < 20 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0.8 : 0.5)) {
+            if AppPresence.shared.mainWindows().contains(where: { $0.isVisible && !$0.isMiniaturized }) {
+                windowOnScreen = true
+            } else {
+                watchWindowOnScreen(attempt: attempt + 1)
+            }
+        }
     }
 
     private func presentOnboardingIfNeeded() {

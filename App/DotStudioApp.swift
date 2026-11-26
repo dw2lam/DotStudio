@@ -50,6 +50,7 @@ struct DotStudioApp: App {
         SignalKeychain.runSelfTestIfRequested()   // DOTSTUDIO_KEYCHAIN_SELFTEST: one test item, then exits
         ClickProbe.runIfRequested()   // DOTSTUDIO_CLICK_PROBE: the gallery's click paths, headless, then exits
         SetupCoach.runSelfTestIfRequested()   // DOTSTUDIO_COACH_SELFTEST: the coach overlay's click-through checks, then exits
+        WhatsNew.runSelfTestIfRequested()     // DOTSTUDIO_WHATSNEW_SELFTEST: changelog parser + the once-only rule, then exits
         if ProcessInfo.processInfo.environment["DOTSTUDIO_MIGRATE_ONLY"] != nil {
             // Headless migration check (pair with DOTSTUDIO_STORE_DIR): migrates library.json
             // the way a launch does, saves it, prints a summary, exits.
