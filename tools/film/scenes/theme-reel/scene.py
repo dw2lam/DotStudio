@@ -16,11 +16,14 @@ elements lift out in reverse, last in first out, and the chassis is empty again 
 
 Modes (params.mode):
     loop    the 8 s film above (Settings' Theme films); the camera sways a few degrees
-    scroll  ONE-WAY, for the site's scroll: empty -> assembled, no lift-out; every element has its
-            own landing frame, spread evenly (assembled by 72 %); the camera starts flat, straight
-            from above (framed like the flat still), and tilts down and back into the 3/4 view,
-            eased, by 90 % — the last frames hold the 3D frame, the same as the 3D hero still.
-            Framed closer than the films (SCROLL_FILL)
+    scroll  ONE-WAY, for the site (6 s, 180 frames, played as a video): empty -> assembled, no
+            lift-out. It opens on a close-up of the bare chassis — low and near, the window's top
+            left corner (its title bar and the empty Screensaver socket) filling the frame — and
+            pulls back in one slow eased move (dolly out, rise, swing round) that opens out into
+            the 3/4 view by 88 %; the last 12 % hold the 3D frame, the same as the 3D hero still
+            (SCROLL_FILL). The elements land as the camera reveals them, nearest the close-up
+            first, each on a short drop while it fades in. A little depth of field at the
+            close-up only, gone by the middle of the move
     flat    the assembled app straight from above, orthographic (the flat product shot)
 
 The shot (tools/film/README.md's rules apply; see render-all.sh):
@@ -113,11 +116,19 @@ HEIGHT_FILL = 0.74
 SCROLL_FILL = 0.88
 SCROLL_HEIGHT_FILL = 0.90
 FLAT_FILL = SCROLL_FILL
-# the scroll sequence's camera: flat and straight from above at the top of the page, tilting down
-# and back into the 3/4 view as the page scrolls (owner: "Flat → tilts into 3D … as it goes down
-# and back"), eased, done at TILT_END of the sequence; the rest holds the 3D frame (= the 3D still)
-FLAT_ELEVATION = 89.5       # straight down (a hair off 90°, so "up" stays the window's top)
-TILT_END = 0.9
+# the scroll sequence's camera (owner: "start from a very close-up shot of the blank thing and then
+# slowly expand into the parts going onto it … dramatically"): a close-up of the empty chassis's
+# top left corner (CLOSE_AT, in assembly points: the title bar and the Screensaver socket's corner),
+# low (CLOSE_EL) from the front left (CLOSE_AZ), CLOSE_WIDTH units of the board across the frame;
+# then one eased pull-back to the 3/4 frame, done at MOVE_END of the sequence. The distance moves
+# in log space (an even "expansion"); the look point and the lens shift follow so the close-up's
+# corner slides steadily from the frame's centre to its place in the final frame.
+CLOSE_AT = (60.0, 75.0)
+CLOSE_AZ = -68.0
+CLOSE_EL = 22.0
+CLOSE_WIDTH = 2.2
+MOVE_END = 0.88
+CLOSE_FSTOP = 4.0           # the close-up's depth of field (none from the middle of the move)
 
 
 # ---------------------------------------------------------------- materials
@@ -460,6 +471,7 @@ def build(ctx):
     alu = aluminium("Aluminium", L.get("metal", (0.8, 0.8, 0.79)))
 
     extent = []
+    half = {}           # element root's name -> its half width, half height (the scroll's reveal)
 
     def element(e, name, depth_t, seat_top, side):
         """One element: an empty at its seat (the top of its slab), its slab and its picture."""
@@ -468,6 +480,7 @@ def build(ctx):
         cx, cy = xy((x0 + x1) / 2, (y0 + y1) / 2)
         top = seat_top + depth_t
         root = G.empty("El_" + name, coll, (cx, cy, top))
+        half[root.name] = (w / 2, h / 2)
         r = min(e["radius"] * PT, 0.5 * min(w, h) - 1e-4)
         s = rounded_slab("Slab_" + name, w - 0.002, h - 0.002, depth_t + SEAT, r, side, coll,
                          bevel=min(0.012, depth_t * 0.4))
@@ -486,6 +499,7 @@ def build(ctx):
         cx, cy = xy((x0 + x1) / 2, (y0 + y1) / 2)
         R = 0.5 * (x1 - x0) * PT * 0.94
         root = G.empty("Dial_" + name, coll, (cx, cy, seat_top))
+        half[root.name] = (R, R)
         root.scale = (R / 0.33,) * 3
         cap = [v / 255 for v in e.get("cap", (240, 240, 236))]
         bright = 0.2126 * cap[0] + 0.7152 * cap[1] + 0.0722 * cap[2]
@@ -499,6 +513,7 @@ def build(ctx):
 
     # the chassis: each module's base rests on the field
     items = []          # (root, rest z, kind, level) in landing order
+    parent = []         # per item: the index of the item it sits on (None: on the chassis)
     for m in man["modules"]:
         d = BASE.get(m["name"], 0.12)
         base, mtop = element(m, "M_" + m["name"], d - SEAT, 0.0, wside)
@@ -508,15 +523,20 @@ def build(ctx):
                 if classic:
                     continue
                 items.append((dial(c, nm, mtop), mtop, "dial", 1))
+                parent.append(None)
                 continue
             root, ctop = element(c, nm, THICK[0], mtop - SEAT, side1)
             items.append((root, ctop, c["kind"], 1))
+            parent.append(None)
+            pi = len(items) - 1
             for j, k in enumerate(c.get("children", [])):
                 if k["kind"] == "dial":
                     items.append((dial(k, f"{nm}_{j}", ctop), ctop, "dial", 2))
+                    parent.append(pi)
                     continue
                 kr, ktop = element(k, f"{nm}_{j}", THICK[1], ctop - SEAT, side2)
                 items.append((kr, ktop, k["kind"], 2))
+                parent.append(pi)
     N = len(items)
     print(f"REEL elements: {N} ({sum(1 for it in items if it[2] == 'dial')} dials)", flush=True)
 
@@ -608,6 +628,36 @@ def build(ctx):
         dist, dvec, cd.shift_x, cd.shift_y = fit(AZIMUTH, ELEVATION)
         print(f"REEL camera: distance {dist:.1f}, shift {cd.shift_x:.3f} {cd.shift_y:.3f}", flush=True)
 
+        if mode == "scroll":
+            # the close-up -> the 3/4 frame (see CLOSE_AT): one eased move (cosine ease in and
+            # out); distance in log space; the look point goes from the close-up's corner to the
+            # centre and the shift from 0 to the final one so that the corner's place on screen
+            # moves linearly with the ease (w = s * d / dist keeps its offset ∝ s); no roll
+            sx1, sy1 = cd.shift_x, cd.shift_y
+            fx, fy = xy(*CLOSE_AT)
+            focus = Vector((fx, fy, BASE["window"] - SEAT))
+            d0 = CLOSE_WIDTH * LENS / 36.0
+            cd.dof.use_dof = True
+
+            def scroll_cam(t):
+                x = min(max(t / (MOVE_END * S), 0.0), 1.0)
+                s = 0.5 - 0.5 * math.cos(math.pi * x)
+                d = d0 * (dist / d0) ** s
+                w = s * d / dist
+                look = focus.lerp(centre, w)
+                pos = look + d * direction(CLOSE_AZ + (AZIMUTH - CLOSE_AZ) * s,
+                                           CLOSE_EL + (ELEVATION - CLOSE_EL) * s)
+                # depth of field: CLOSE_FSTOP at the close-up, opening to none (f/128) by s = 0.5
+                k = min(s / 0.5, 1.0)
+                fstop = CLOSE_FSTOP * (128.0 / CLOSE_FSTOP) ** (k * k * (3 - 2 * k))
+                return pos, look, sx1 * s, sy1 * s, fstop
+
+            def on_screen(t, p):
+                """p's place in the frame at t (±1 = the frame's edges)."""
+                pos, look, sx, sy, _ = scroll_cam(t)
+                (u, v), = project(pos, look, [p])
+                return u - 2 * sx, v - 2 * sy * aspect
+
     # ---------------------------------------------------------------- motion
     # landing times: evenly spaced, in landing order (each card, then what sits on it)
     if mode == "loop":
@@ -619,6 +669,42 @@ def build(ctx):
     land = [T0 + (T1 - T0) * i / max(N - 1, 1) for i in range(N)]
     if mode == "flat":
         land = [-10.0] * N
+    if mode == "scroll":
+        # in the order the camera reveals them: an element lands a beat after its centre comes
+        # well into the frame (nearest the close-up first), at least GAP after the one before
+        # and after what it sits on; all seated (with their spring) before the hold
+        # (revealed: its centre, or an eighth of it, inside the frame's inner 80 %)
+        # — but never more than MAXGAP after the one before (the next ones then land at the
+        # frame's edge as it opens out, instead of a pause)
+        T0, GAP, LAG, AFTER, MAXGAP = 0.9, 0.045, 0.12, 0.14, 0.3
+        LAST = MOVE_END * S - 0.5
+        frames = [lp.t(f) for f in range(1, lp.frames + 1)]
+
+        def reveal(i):
+            root = items[i][0]
+            c, (hw, hh) = Vector(root.location), half[root.name]
+            pts = [c + Vector((hw * a / 2.5, hh * b / 2.5, 0)) for a in range(-2, 3) for b in range(-2, 3)]
+            for t in frames:
+                inside = [abs(u) < 0.8 and abs(v) < 0.8 for u, v in (on_screen(t, p) for p in pts)]
+                if inside[12] or sum(inside) >= 3:
+                    return t
+            return frames[-1]
+
+        rv = [reveal(i) for i in range(N)]
+        rv = [rv[i] if parent[i] is None else max(rv[i], rv[parent[i]]) for i in range(N)]
+        fx, fy = focus.x, focus.y
+        order = sorted(range(N), key=lambda i: (rv[i], items[i][3], (items[i][0].location.x - fx) ** 2
+                                                + (items[i][0].location.y - fy) ** 2))
+        land = [0.0] * N
+        prev = T0 - GAP
+        for i in order:
+            land[i] = min(max(T0, rv[i] + LAG, prev + GAP,
+                              land[parent[i]] + AFTER if parent[i] is not None else 0.0), prev + MAXGAP)
+            prev = land[i]
+        hi = max(land)
+        if hi > LAST:          # too late for the hold: squeeze the schedule (order kept)
+            land = [T0 + (l - T0) * (LAST - T0) / (hi - T0) for l in land]
+        print("REEL landing: " + " ".join(f"{land[i]:.2f}" for i in order), flush=True)
     lift = None if LIFT0 is None else [LIFT0 + (LIFT1 - LIFT0) * (N - 1 - i) / max(N - 1, 1) for i in range(N)]
 
     def bounce(s, kind):
@@ -660,18 +746,12 @@ def build(ctx):
             cam.location = pos
             G.look_at(cam, pos, centre)
         elif mode == "scroll":
-            # flat -> 3/4: azimuth and elevation eased together (smootherstep), the frame re-fitted
-            # every frame so the object stays the same size in it; no roll (up = the window's top)
-            x = min(max(t / (TILT_END * S), 0.0), 1.0)
-            s = x * x * x * (x * (6 * x - 15) + 10)
-            # a little more room mid-move (the projected bounds change shape as it tilts), the
-            # tight framing only at the start and the end
-            d, dv, sx, sy = fit(AZIMUTH * s, FLAT_ELEVATION + (ELEVATION - FLAT_ELEVATION) * s,
-                                loosen=0.08 * math.sin(math.pi * s))
-            pos = centre + d * dv
+            pos, look, sx, sy, fstop = scroll_cam(t)
             cam.location = pos
-            G.look_at(cam, pos, centre)
+            G.look_at(cam, pos, look)
             cd.shift_x, cd.shift_y = sx, sy
+            cd.dof.focus_distance = (look - pos).length
+            cd.dof.aperture_fstop = fstop
         for i, (root, rest, kind, lvl) in enumerate(items):
             dz, vis = zpos(i, t)
             if i == press_i and mode == "loop":
@@ -690,7 +770,7 @@ def build(ctx):
     ids = ([cam] if dvec is not None else []) + [it[0] for it in items]
     fading = [[ob for ob in it[0].children_recursive if ob.type == "MESH"] for it in items]
     if mode == "scroll":
-        ids += [(cd, "shift_x"), (cd, "shift_y")]
+        ids += [(cd, "shift_x"), (cd, "shift_y"), (cd, "dof.focus_distance"), (cd, "dof.aperture_fstop")]
         add_fade(scene, exclude=("FloorMat",))
         ids += [(ob, '["fade"]') for obs in fading for ob in obs]
     lp.bake(ids, pose, props=("location", "rotation_euler"))

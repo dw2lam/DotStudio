@@ -18,9 +18,10 @@
 #     --hero DIR         also the hero stills, per variant: DIR/<variant>-flat.png (the assembled
 #                        app straight from above, orthographic) and DIR/<variant>-3d.png (3/4, the
 #                        scroll sequence's last frame); --hero-res (3840x2400), --hero-samples (1024)
-#     --scroll DIR       also the one-way scroll assembly, per variant: DIR/<variant>/####.png
-#                        (150 frames, empty -> assembled, camera locked) and DIR/<variant>-webp/
-#                        (WebP, quality 80); --scroll-res (1920x1200), --scroll-samples (384)
+#     --scroll DIR       also the one-way assembly for the site, per variant: DIR/<variant>/####.png
+#                        (180 frames = 6 s at 30 fps, close-up of the empty chassis -> assembled 3/4)
+#                        and the site's WebPs DIR/<variant>-webp/hi/000.webp… (1600 px, q80) and
+#                        …/lo/ (800 px, q72); --scroll-res (1920x1200), --scroll-samples (384)
 #     --remote HOST      render on another machine over ssh (a GPU box): see below
 #     --remote-blender P Blender there (default /home/stallion/blender/blender)
 #     --remote-device D  Cycles' GPU backend there (default OPTIX; CUDA, HIP, METAL…)
@@ -248,18 +249,22 @@ for v in $VARIANTS; do
   if [[ -n $HERO ]]; then
     t0=$SECONDS
     blender $v flat "$HERO/$v-flat.png" --mode flat -- --still @OUT --frame 1 --res $HERO_RES --samples $HERO_SAMPLES || exit 1
-    blender $v 3d "$HERO/$v-3d.png" --mode scroll -- --still @OUT --frame 150 --res $HERO_RES --samples $HERO_SAMPLES || exit 1
+    blender $v 3d "$HERO/$v-3d.png" --mode scroll -- --still @OUT --frame 180 --res $HERO_RES --samples $HERO_SAMPLES || exit 1
     echo "hero ${v}: $(( SECONDS - t0 )) s"
   fi
   if [[ -n $SCROLL ]]; then
     t0=$SECONDS
     blender $v scroll "$SCROLL/$v" --mode scroll -- --anim @OUT --res $SCROLL_RES --samples $SCROLL_SAMPLES || exit 1
     echo "scroll ${v}: $(( SECONDS - t0 )) s"
-    # the web copy: WebP frames (quality 80) for a scroll-scrubbed sequence
+    # the site's copies: WebP frames 000.webp… at 1600 px (q80) and 800 px (q72)
     python3 -I -c "import sys, glob, os; from PIL import Image
-src, dst = sys.argv[1], sys.argv[2]; os.makedirs(dst, exist_ok=True)
-for f in sorted(glob.glob(os.path.join(src, '[0-9]' * 4 + '.png'))):
-    Image.open(f).convert('RGB').save(os.path.join(dst, os.path.basename(f)[:-4] + '.webp'), quality=80, method=6)" \
+src, dst = sys.argv[1], sys.argv[2]
+for sub, w, q in (('hi', 1600, 80), ('lo', 800, 72)):
+    os.makedirs(os.path.join(dst, sub), exist_ok=True)
+    for i, f in enumerate(sorted(glob.glob(os.path.join(src, '[0-9]' * 4 + '.png')))):
+        im = Image.open(f).convert('RGB')
+        im.resize((w, round(im.height * w / im.width)), Image.LANCZOS).save(
+            os.path.join(dst, sub, f'{i:03d}.webp'), quality=q, method=6)" \
       "$SCROLL/$v" "$SCROLL/$v-webp"
     du -sh "$SCROLL/$v" "$SCROLL/$v-webp" | awk '{print "   " $1, $2}'
   fi
