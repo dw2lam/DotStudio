@@ -163,7 +163,7 @@ blender() {
   local V=$WORK/$v
   if [[ -n $REMOTE ]]; then
     python3 -I "$HERE/spec.py" "$HERE/theme-reel.json" "$v" "$RD/work/$v" "$V/spec-$tag.json" \
-      --engine "$ENGINE" --device "$RDEVICE" ${DENOISER:+--denoiser $DENOISER} "${sargs[@]}" || return 1
+      --engine "$ENGINE" --device "$RDEVICE" ${=DENOISER:+--denoiser $DENOISER} "${sargs[@]}" || return 1
     rsync -a --exclude 'frames*' --exclude 'spec*.json' --exclude '*.mov' "$V/" "$REMOTE:$RD/work/$v/" || return 1
     rsync -a "$V/spec-$tag.json" "$REMOTE:$RD/work/$v/spec-$tag.json" || return 1
     local rout=$RD/out/$v-$tag
@@ -222,7 +222,7 @@ blender() {
     fi
     ssh -o BatchMode=yes "$REMOTE" "rm -rf '$rout'" || return 1
   else
-    python3 -I "$HERE/spec.py" "$HERE/theme-reel.json" "$v" "$V" "$V/spec-$tag.json" --engine "$ENGINE" ${DENOISER:+--denoiser $DENOISER} "${sargs[@]}" || return 1
+    python3 -I "$HERE/spec.py" "$HERE/theme-reel.json" "$v" "$V" "$V/spec-$tag.json" --engine "$ENGINE" ${=DENOISER:+--denoiser $DENOISER} "${sargs[@]}" || return 1
     rargs=("${(@)rargs//@OUT/$out}")
     wait_for_blender
     # the same watched tries as on a remote machine (see above)
@@ -269,7 +269,7 @@ for v in $VARIANTS; do
   if [[ -n $SCROLL ]]; then
     t0=$SECONDS
     blender $v scroll "$SCROLL/$v" --mode scroll -- --anim @OUT --res $SCROLL_RES --samples $SCROLL_SAMPLES \
-      ${SFRAMES:+--frames $SFRAMES} ${PAUSE:+--pause $PAUSE} || exit 1
+      ${=SFRAMES:+--frames $SFRAMES} ${=PAUSE:+--pause $PAUSE} || exit 1
     echo "scroll ${v}: $(( SECONDS - t0 )) s"
     # the site's copies: WebP frames 000.webp… at 1920 px (q88) and 960 px (q80)
     python3 -I -c "import sys, glob, os; from PIL import Image
