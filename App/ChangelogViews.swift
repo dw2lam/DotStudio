@@ -7,7 +7,9 @@
 //                             release name in the display face, an orange "continue" key.
 //    • ReleaseNotesSection  — Settings › Updates › Release Notes: every release, newest first,
 //                             one collapsible row each; the installed one marked and open.
-//    • ChangelogReleaseBody — a release's sections and bullets (both of the above).
+//    • ChangelogReleaseBody — a release's clip (if it has one) and its sections and bullets
+//                             (both of the above).
+//    • ChangelogClip        — a release's bundled film (WhatsNewClip, Changelog.swift).
 
 import SwiftUI
 import AppKit
@@ -75,6 +77,7 @@ struct ChangelogReleaseBody: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? Space.s : Space.m) {
+            ChangelogClip(release: release, compact: compact)
             ForEach(release.sections) { section in
                 VStack(alignment: .leading, spacing: compact ? Space.xxs + 2 : Space.xs) {
                     if let heading = section.heading { header(heading, section) }
@@ -107,6 +110,41 @@ struct ChangelogReleaseBody: View {
             }
             .labelStyle(ChangelogHeaderLabelStyle())
             .accessibilityAddTraits(.isHeader)
+        }
+    }
+}
+
+/// A release's clip (its media line, mapped by WhatsNewClip to a bundled film) at the top of
+/// its notes: muted and looping, 16:10 at the notes' width (narrower in Settings' rows), in the
+/// light or dark the app wears; the poster under Reduce Motion and in renders (BundledFilm).
+/// Retro: a screen set in a recessed well. Classic: rounded media with a hairline edge.
+/// Nothing when the release has no clip — the media line's URL is never loaded.
+private struct ChangelogClip: View {
+    let release: Changelog.Release
+    var compact = false
+    @Environment(\.console) private var console
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        if let name = WhatsNewClip.filmName(for: release, dark: scheme == .dark) {
+            Group {
+                if console {
+                    BundledFilm(name: name, fallback: ConsoleInk.panel)
+                        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                        .padding(compact ? 4 : 6)
+                        .consoleWell(cornerRadius: compact ? 5 : 7)
+                } else {
+                    let shape = RoundedRectangle(cornerRadius: compact ? Radius.s : Radius.m, style: .continuous)
+                    BundledFilm(name: name, fallback: Color.primary.opacity(0.05))
+                        .clipShape(shape)
+                        .overlay(shape.strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+                }
+            }
+            .frame(maxWidth: compact ? 440 : .infinity, alignment: .leading)
+            .padding(.bottom, compact ? 0 : Space.xxs)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(release.media?.alt ?? "")
+            .accessibilityAddTraits(.isImage)
         }
     }
 }
