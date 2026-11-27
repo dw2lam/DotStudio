@@ -6,6 +6,10 @@
 //                         Forgiving: unknown headings are just section names, a non-version
 //                         "## Unreleased" (or any other) block is skipped, prose and "> " notes
 //                         become items, wrapped lines join their bullet. Never touches the network.
+//    • Release.media    — an optional image line in a release (`![alt](url)`, standard Markdown so
+//                         GitHub's release notes show it): kept on the release, never drawn as
+//                         text. The app never loads the URL — WhatsNewClip maps it to a film
+//                         bundled in the app (a tiny table, version → film), else shows nothing.
 //    • AppVersion       — numeric version compare ("1.6.10" > "1.6.9").
 //    • WhatsNew         — what to show at launch (a pure function, self-tested) and the main
 //                         window's state for the sheet (WhatsNew.Center). ChangelogViews.swift
@@ -91,8 +95,18 @@ struct Changelog: Equatable {
         /// A date from the heading ("2026-11-24"), if it has one.
         let date: String?
         var sections: [Section] = []
+        /// The release's image line, if it has one (the first; later ones are dropped).
+        var media: Media?
 
         var isEmpty: Bool { sections.allSatisfy { $0.items.isEmpty } }
+    }
+
+    /// A release's picture: `![Retro, assembled](https://…/media/whatsnew/1.7.0.webp)`.
+    struct Media: Equatable {
+        /// The alt text (the clip's accessibility label in the app).
+        var alt: String
+        /// As written; the app only reads its name (WhatsNewClip), never fetches it.
+        var url: String
     }
 
     /// Newest first, as in the file.
@@ -200,6 +214,14 @@ extension Changelog {
             guard current != nil else { continue }
             if trimmed.allSatisfy({ $0 == "-" || $0 == "*" || $0 == "_" }) && trimmed.count >= 3 { continue }   // rule
 
+            // An image line: the release's media (checked before the wrapped-line rule, so it
+            // never joins the bullet above it)
+            if let media = imageLine(trimmed) {
+                if current!.media == nil { current!.media = media }
+                blankSinceItem = true
+                continue
+            }
+
             // Bullets: "- ", "* ", "+ ", "1. "
             if let body = bulletBody(trimmed) {
                 addItem(Item(id: newID(), kind: .bullet, text: body), depth: indent / 2)
@@ -237,6 +259,16 @@ extension Changelog {
         let rest = s.dropFirst(hashes)
         return rest.isEmpty || rest.first == " " ? hashes : nil
     }
+
+    /// `![alt](url)` or `![alt](url "title")`, alone on a line.
+    static func imageLine(_ s: String) -> Media? {
+        guard s.hasPrefix("!["),
+              let m = imagePattern.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)),
+              let alt = Range(m.range(at: 1), in: s), let url = Range(m.range(at: 2), in: s) else { return nil }
+        return Media(alt: stripInline(String(s[alt])), url: String(s[url]))
+    }
+    private static let imagePattern = try! NSRegularExpression(
+        pattern: #"^!\[([^\]]*)\]\(\s*<?([^\s<>()]+)>?(?:\s+"[^"]*")?\s*\)$"#)
 
     private static func bulletBody(_ s: String) -> String? {
         for marker in ["- ", "* ", "+ "] where s.hasPrefix(marker) {
@@ -278,6 +310,34 @@ extension Changelog {
         s.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "__", with: "")
             .replacingOccurrences(of: "`", with: "")
             .trimmingCharacters(in: .whitespaces)
+    }
+}
+
+// MARK: - Clips
+
+/// A release's clip in the app. The media line names a picture on the web for GitHub
+/// (`…/whatsnew/<version>.webp`); the app never fetches it but plays a film it bundles: the
+/// name after `whatsnew/` (the version) looked up here. No media line, another kind of name or
+/// no row → no clip.
+enum WhatsNewClip {
+    /// `whatsnew/<version>` → a bundled film's base name; the app plays `<base>-light` or
+    /// `<base>-dark` (.mov, with a .jpg poster) for the appearance it wears. A release with its
+    /// own clip bundles the film and adds a row.
+    static let films: [String: String] = [
+        "1.7.0": "theme-retro",        // Retro, assembled (App/ThemeFilms)
+    ]
+
+    /// The bundled film's base name for a media line, or nil.
+    static func film(for media: Changelog.Media?) -> String? {
+        guard let media, let url = URL(string: media.url) else { return nil }
+        let parts = url.path.split(separator: "/")
+        guard parts.count >= 2, parts[parts.count - 2] == "whatsnew", let last = parts.last else { return nil }
+        return films[(String(last) as NSString).deletingPathExtension]
+    }
+
+    /// The film for a release in light or dark: "theme-retro-dark".
+    static func filmName(for release: Changelog.Release, dark: Bool) -> String? {
+        film(for: release.media).map { "\($0)-\(dark ? "dark" : "light")" }
     }
 }
 
@@ -473,6 +533,57 @@ extension WhatsNew {
               && drift.releases.first?.sections.first?.items.first?.children.count == 1, "star bullets, nesting, numbered")
         check(drift.releases[1].sections.first?.items.first?.text == "Some prose that wraps.", "prose lines join")
         check(drift.releases[2].isEmpty && drift.releases[2].title == "Empty", "an empty release keeps its title")
+
+        // Media lines: kept on the release, never an item; mapped to a bundled film or nothing
+        if let r170 = bundled.release(for: "1.7.0") {
+            check(r170.media == Changelog.Media(alt: "Retro, assembled",
+                                                url: "https://dotstudio.davidlam.online/media/whatsnew/1.7.0.webp"),
+                  "1.7.0's media line parses (alt + URL)")
+            func texts(_ items: [Changelog.Item]) -> [String] { items.flatMap { [$0.text] + texts($0.children) } }
+            check(!r170.sections.flatMap { texts($0.items) }.contains { $0.contains("![") || $0.contains("whatsnew") },
+                  "the media line isn't shown as a bullet or prose")
+            check(r170.sections.first?.heading == "New", "1.7.0 still opens on New (no heading-less section for the image)")
+            check(WhatsNewClip.filmName(for: r170, dark: true) == "theme-retro-dark"
+                  && WhatsNewClip.filmName(for: r170, dark: false) == "theme-retro-light", "1.7.0 → theme-retro-light/-dark")
+            for dark in [false, true] {
+                let name = WhatsNewClip.filmName(for: r170, dark: dark) ?? "?"
+                check(Bundle.main.url(forResource: name, withExtension: "jpg") != nil
+                      && Bundle.main.url(forResource: name, withExtension: "mov") != nil, "\(name).mov + .jpg are bundled")
+            }
+        } else { check(false, "1.7.0 found") }
+        check(bundled.releases.allSatisfy { $0.media == nil || WhatsNewClip.film(for: $0.media) != nil },
+              "every bundled media line maps to a bundled film")
+        if let r168 = bundled.release(for: "1.6.8") {
+            check(r168.media == nil && WhatsNewClip.filmName(for: r168, dark: false) == nil, "no media line → no clip")
+        }
+        let pictures = Changelog.parse("""
+        ## 3.0.0 — Pictures
+        ![Some clip](https://example.com/media/whatsnew/9.9.9.webp)
+        ### New
+        - a bullet
+        ![Second](media/whatsnew/1.7.0.webp)
+        - another
+        ## 2.9.0 — Titled
+        ![Titled](<media/whatsnew/1.7.0.webp> "a title")
+        - x
+        ## 2.8.0 — Not an image
+        - ![inline](a.webp) in a bullet stays a bullet
+
+        Text with ![an inline image](b.webp) is prose
+        """)
+        if pictures.releases.count == 3 {
+            let (p3, p2, p1) = (pictures.releases[0], pictures.releases[1], pictures.releases[2])
+            check(p3.media?.alt == "Some clip" && p3.sections.count == 1 && p3.sections[0].items.count == 2,
+                  "media line under the heading; a later image line dropped, not joined to the bullet")
+            check(p3.sections[0].items[0].text == "a bullet", "an image line ends the bullet above it")
+            check(WhatsNewClip.film(for: p3.media) == nil, "unknown whatsnew/<version> → no clip")
+            check(p2.media?.url == "media/whatsnew/1.7.0.webp" && WhatsNewClip.film(for: p2.media) == "theme-retro",
+                  "<url> \"title\" form; a relative URL maps too")
+            check(p1.media == nil && p1.sections.first?.items.count == 2, "inline images stay in their text")
+        } else { check(false, "media fixture parses (\(pictures.releases.count) releases)") }
+        check(WhatsNewClip.film(for: Changelog.Media(alt: "", url: "https://x.example/media/1.7.0.webp")) == nil,
+              "not under whatsnew/ → no clip")
+        check(WhatsNewClip.film(for: nil) == nil, "no media → no clip")
 
         // Versions
         check(AppVersion.compare("1.6.10", "1.6.9") == .orderedDescending, "1.6.10 > 1.6.9")

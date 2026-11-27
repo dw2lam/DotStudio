@@ -9,6 +9,7 @@
 //  A card plays its film muted and looping, in the light or dark the app wears now; under Reduce
 //  Motion, in offscreen renders, or without the film, it shows the poster. The films are props:
 //  a click anywhere on a card picks its theme, and they pause whenever the pane isn't on screen.
+//  BundledFilm (poster + looping film) is shared with the What's New clips (ChangelogViews.swift).
 
 import SwiftUI
 import AppKit
@@ -60,18 +61,28 @@ struct ThemePictureChoices: View {
     }
 }
 
-/// One theme's film (16:10), in the app's light or dark: the poster, and the looping film over it
-/// once it plays.
+/// One theme's film (16:10), in the app's light or dark.
 private struct ThemeFilm: View {
     let theme: Appearance
     @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        BundledFilm(name: "theme-\(theme == .console ? "retro" : "classic")-\(scheme == .dark ? "dark" : "light")",
+                    fallback: theme == .console ? ConsoleInk.panel : Color(nsColor: .windowBackgroundColor))
+            .accessibilityHidden(true)
+    }
+}
+
+/// A film bundled in the app (<name>.mov + its <name>.jpg poster), 16:10, filling its width:
+/// the poster, and the muted looping film over it while it's on screen. The poster alone under
+/// Reduce Motion, in a headless render, or without the film; `fallback` without either. The
+/// theme cards and the What's New clips (ChangelogViews.swift) use it.
+struct BundledFilm: View {
+    let name: String
+    var fallback: Color = .clear
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// On screen (the pane is showing): the film plays only then.
     @State private var shown = false
-
-    private var name: String {
-        "theme-\(theme == .console ? "retro" : "classic")-\(scheme == .dark ? "dark" : "light")"
-    }
 
     var body: some View {
         let film = reduceMotion || Appearance.isHeadlessRun ? nil : Bundle.main.url(forResource: name, withExtension: "mov")
@@ -82,7 +93,7 @@ private struct ThemeFilm: View {
                     if let poster = Self.poster(name) {
                         Image(nsImage: poster).resizable().aspectRatio(contentMode: .fill)
                     } else {
-                        (theme == .console ? ConsoleInk.panel : Color(nsColor: .windowBackgroundColor))
+                        fallback
                     }
                     if let film {
                         LoopingFilm(url: film, playing: shown)
@@ -93,7 +104,6 @@ private struct ThemeFilm: View {
             .onAppear { shown = true }
             .onDisappear { shown = false }
             .allowsHitTesting(false)
-            .accessibilityHidden(true)
     }
 
     private static var posters: [String: NSImage] = [:]
@@ -108,7 +118,8 @@ private struct ThemeFilm: View {
 }
 
 /// A muted, seamlessly looping film in an AVPlayerLayer (fills its frame; no controls, no
-/// audio). Plays while `playing` and its window is visible; pauses otherwise.
+/// audio). Plays while `playing`, its window is visible and it isn't scrolled out of view;
+/// pauses otherwise.
 private struct LoopingFilm: NSViewRepresentable {
     let url: URL
     let playing: Bool
@@ -133,7 +144,7 @@ private struct LoopingFilm: NSViewRepresentable {
         private let player = AVQueuePlayer()
         private let playerLayer = AVPlayerLayer()
         private var looper: AVPlayerLooper?
-        private var occlusion: NSObjectProtocol?
+        private var observers: [NSObjectProtocol] = []
         private(set) var url: URL?
         var wantsToPlay = false { didSet { update() } }
 
@@ -159,6 +170,7 @@ private struct LoopingFilm: NSViewRepresentable {
             CATransaction.setDisableActions(true)
             playerLayer.frame = bounds
             CATransaction.commit()
+            update()
         }
 
         func load(_ url: URL) {
@@ -174,25 +186,34 @@ private struct LoopingFilm: NSViewRepresentable {
             looper?.disableLooping()
             looper = nil
             player.removeAllItems()
-            if let occlusion { NotificationCenter.default.removeObserver(occlusion) }
-            occlusion = nil
+            unobserve()
+        }
+
+        private func unobserve() {
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers = []
         }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            if let occlusion { NotificationCenter.default.removeObserver(occlusion) }
-            occlusion = nil
+            unobserve()
             if let window {
-                // a hidden, minimised or covered Settings window: no film decoding behind it
-                occlusion = NotificationCenter.default.addObserver(
-                    forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
-                ) { [weak self] _ in self?.update() }
+                let center = NotificationCenter.default
+                // a hidden, minimised or covered window: no film decoding behind it
+                observers.append(center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification,
+                                                    object: window, queue: .main) { [weak self] _ in self?.update() })
+                // scrolled out of its scroll view (the What's New sheet, Settings): paused too
+                if let clip = enclosingScrollView?.contentView {
+                    clip.postsBoundsChangedNotifications = true
+                    observers.append(center.addObserver(forName: NSView.boundsDidChangeNotification,
+                                                        object: clip, queue: .main) { [weak self] _ in self?.update() })
+                }
             }
             update()
         }
 
         private func update() {
-            let visible = window?.occlusionState.contains(.visible) ?? false
+            let visible = (window?.occlusionState.contains(.visible) ?? false) && !visibleRect.isEmpty
             if wantsToPlay && visible && looper != nil {
                 if player.rate == 0 { player.play() }
             } else if player.rate != 0 {

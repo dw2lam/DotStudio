@@ -2,6 +2,8 @@
 
 ## 1.7.0 — Retro
 
+![Retro, assembled](https://dotstudio.davidlam.online/media/whatsnew/1.7.0.webp)
+
 ### New
 - **Retro, the new look.** DotStudio now looks and feels like a small piece of hardware:
   aluminium dials with coloured caps, slim keys that press down, green switches, and panels
