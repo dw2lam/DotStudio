@@ -16,9 +16,11 @@ elements lift out in reverse, last in first out, and the chassis is empty again 
 
 Modes (params.mode):
     loop    the 8 s film above (Settings' Theme films); the camera sways a few degrees
-    scroll  ONE-WAY: empty -> assembled, no lift-out; every element has its own landing frame,
-            spread evenly; the camera is locked (scrubbing back and forth looks right); the last
-            frames hold the assembled app — the same frame as the 3D hero still
+    scroll  ONE-WAY, for the site's scroll: empty -> assembled, no lift-out; every element has its
+            own landing frame, spread evenly (assembled by 72 %); the camera starts flat, straight
+            from above (framed like the flat still), and tilts down and back into the 3/4 view,
+            eased, by 90 % — the last frames hold the 3D frame, the same as the 3D hero still.
+            Framed closer than the films (SCROLL_FILL)
     flat    the assembled app straight from above, orthographic (the flat product shot)
 
 The shot (tools/film/README.md's rules apply; see render-all.sh):
@@ -94,6 +96,9 @@ BASE = {"window": 0.30, "inspector": 0.26}
 THICK = (0.08, 0.055)
 SEAT = 0.015
 DROP = 16.0                 # how far above its seat an element starts its fall (out of frame)
+# the scroll sequence: the camera starts straight above, so a long fall would come at the lens —
+# there an element arrives in screen space instead: a short drop onto its seat while it fades in
+SCROLL_DROP = 0.5
 PARK = -40.0                # where an element waits (under the floor) before it falls / after it lifts out
 
 # The camera: a long lens, 3/4 from the front-right and above; the object fills FILL of the frame's
@@ -102,9 +107,17 @@ LENS = 135.0
 AZIMUTH = 20.0
 ELEVATION = 47.0
 SWAY = 3.0                  # loop only: degrees of azimuth, one slow sine over the loop
-FILL = 0.72
+FILL = 0.72                 # the films (Settings): generous negative space
 HEIGHT_FILL = 0.74
-FLAT_FILL = 0.80
+# the site's pictures, closer (owner: "more zoomed in"): the scroll sequence, the flat and 3D stills
+SCROLL_FILL = 0.88
+SCROLL_HEIGHT_FILL = 0.90
+FLAT_FILL = SCROLL_FILL
+# the scroll sequence's camera: flat and straight from above at the top of the page, tilting down
+# and back into the 3/4 view as the page scrolls (owner: "Flat → tilts into 3D … as it goes down
+# and back"), eased, done at TILT_END of the sequence; the rest holds the 3D frame (= the 3D still)
+FLAT_ELEVATION = 89.5       # straight down (a hair off 90°, so "up" stays the window's top)
+TILT_END = 0.9
 
 
 # ---------------------------------------------------------------- materials
@@ -317,6 +330,85 @@ def pool_image(ng, L, w, h):
 
 
 
+# ---------------------------------------------------------------- the close-up (site hero)
+
+def closeup(scene, coll, L):
+    """params.mode "closeup": the site's hero still — Retro's hardware huge and close, on black.
+    A dark anodised panel with a row of four machined dials (blue, green, white, orange caps,
+    knurled aluminium, pointers, printed scale dots), three smaller dials behind, and a row of slim
+    keycaps in front (one orange); a low camera on a long lens, the row cropping off the frame's
+    edges; a strip rim from behind, a warm key from the left falling off to black, a cool kicker.
+    (No printed scale dots: at this angle they read as debris.)
+    Render 16:9 (e.g. --res 3840x2160). Returns the camera."""
+    top = 0.3
+    panel = rounded_slab("CPanel", 7.6, 4.8, top, 0.12, flat("CPanelMat", lin(0x111113), 0.55,
+                                                              **{"Coat Weight": 0.12, "Coat Roughness": 0.25}),
+                         coll, bevel=0.02)
+    panel.location = (0, 0.25, top)
+    alu = aluminium("CAlu", L.get("metal", (0.7, 0.7, 0.69)))
+    tick = flat("CTick", lin(0x77757A), 0.5)
+
+    def dial(name, x, y, scale, cap, ptr, angle, dots=True):
+        root = G.empty(name, coll, (x, y, top))
+        root.scale = (scale,) * 3
+        root.rotation_euler = (0, 0, math.radians(angle))
+        knob(name, 0.33, 0.30, lin(cap), ptr, alu, coll, root)
+        R = 0.33 * scale
+        for k in range(11 if dots else 0):      # the printed scale: 11 dots over 270°
+            a = math.radians(225 - 27 * k)
+            d = ring_mesh(f"{name}Tick{k}", [(0.02 * scale, 0.0), (0.02 * scale, 0.004)], tick, coll)
+            d.location = (x + 1.45 * R * math.cos(a), y + 1.45 * R * math.sin(a), top)
+
+    for i, (cap, ptr, ang) in enumerate(((0x0088E8, (1, 1, 1), 40), (0x00BD5F, (0.01, 0.02, 0.01), -35),
+                                         (0xF4F4EF, (0.02, 0.02, 0.02), 75), (0xFF7300, (0.02, 0.01, 0.0), -60))):
+        # no printed scale here: from this low angle the arcs are mostly hidden behind the knobs and
+        # what's left reads as loose dots between them (owner: neat arcs or nothing)
+        dial(f"CD{i}", -1.95 + 1.3 * i, 0.35, 1.35, cap, ptr, ang, dots=False)
+    for i, (cap, ang) in enumerate(((0xF4F4EF, 20), (0x3A3A3E, -50), (0x3A3A3E, 65))):
+        dial(f"CB{i}", -1.3 + 1.3 * i, 1.75, 0.85, cap, (0.02, 0.02, 0.02) if cap != 0x3A3A3E else (0.9, 0.9, 0.9), ang, dots=False)
+    graphite = M.principled("CKey", lin(0x2A2A2D), 0.42, **{"Coat Weight": 0.35, "Coat Roughness": 0.2})
+    orange = M.principled("CKeyOrange", lin(0xFF7300), 0.38, **{"Coat Weight": 0.35, "Coat Roughness": 0.2})
+    for i, x in enumerate((-1.6, -0.55, 0.5, 1.55)):
+        k = rounded_slab(f"CKey{i}", 0.84, 0.36, 0.16, 0.07, orange if i == 2 else graphite, coll, bevel=0.035)
+        k.location = (x, -1.05, top + 0.14)
+
+    def area(name, size, size_y, energy, color, loc, target, spread=None):
+        ld = bpy.data.lights.new(name, "AREA")
+        ld.shape = "RECTANGLE"
+        ld.size, ld.size_y = size, size_y
+        ld.energy, ld.color = energy, color
+        if spread:
+            ld.spread = math.radians(spread)
+        ob = bpy.data.objects.new(name, ld)
+        coll.objects.link(ob)
+        ob.location = loc
+        G.look_at(ob, loc, target)
+
+    aim = Vector((0.1, 0.3, 0.6))
+    area("CRim", 10.0, 0.6, 220, (1.0, 1.0, 1.0), (0.0, 7.0, 3.2), aim)
+    area("CKeyLight", 2.5, 2.5, 140, (1.0, 0.95, 0.88), (-6.5, -3.0, 3.2), aim + Vector((-1.2, 0, 0)), spread=32)
+    area("CKick", 0.6, 6.0, 45, (0.85, 0.92, 1.0), (6.5, 1.0, 1.8), aim)
+    area("CTop", 8.0, 8.0, 2, (1.0, 1.0, 1.0), (0.0, 0.0, 10.0), aim)
+
+    cd = bpy.data.cameras.new("Closeup")
+    cd.lens = 180
+    cd.sensor_width = 36
+    cd.sensor_fit = "HORIZONTAL"
+    cd.clip_start, cd.clip_end = 1.0, 500.0
+    cd.dof.use_dof = True
+    cd.dof.aperture_fstop = 2.4
+    cam = bpy.data.objects.new("Closeup", cd)
+    coll.objects.link(cam)
+    target = Vector((0.15, 0.1, 0.55))
+    el, az = math.radians(17), math.radians(-18)
+    pos = target + 22.0 * Vector((math.sin(az) * math.cos(el), -math.cos(az) * math.cos(el), math.sin(el)))
+    cam.location = pos
+    G.look_at(cam, pos, target)
+    cd.dof.focus_distance = (pos - Vector((0.0, 0.35, 0.6))).length       # the front dial row
+    scene.camera = cam
+    return cam
+
+
 # ---------------------------------------------------------------- the set
 
 def build(ctx):
@@ -354,6 +446,9 @@ def build(ctx):
     # the floor: a shadow catcher (the field itself is composited)
     floor = G.plane_uv("Floor", 400, 400, flat("FloorMat", (0.8, 0.8, 0.8), 0.9), coll, (0, 0, 0))
     floor.is_shadow_catcher = True
+
+    if mode == "closeup":
+        return output(scene, P, L, cutout, closeup(scene, coll, L))
 
     wside = flat("WindowSide", lin(L["window_side"]), 0.5)
     if classic:      # Classic's cards stand on clear glass: their edges catch the light
@@ -495,18 +590,22 @@ def build(ctx):
             return [((p - pos).dot(r) / (p - pos).dot(f) * k, (p - pos).dot(u) / (p - pos).dot(f) * k * aspect)
                     for p in pts]
 
-        # fit: the distance that makes the object FILL the width (or HEIGHT_FILL the height), then a
-        # lens shift that centres its projected bounds
-        dvec = direction(AZIMUTH, ELEVATION)
-        dist = 80.0
-        for _ in range(6):
-            pr = project(centre + dist * dvec, centre, extent)
+        fw, fh = (FILL, HEIGHT_FILL) if mode == "loop" else (SCROLL_FILL, SCROLL_HEIGHT_FILL)
+
+        def fit(az, el, loosen=0.0):
+            """The distance that makes the assembled object fill fw of the width (or fh of the
+            height) from this direction, and the lens shift that centres its projected bounds."""
+            dv = direction(az, el)
+            d = 80.0
+            for _ in range(7):
+                pr = project(centre + d * dv, centre, extent)
+                xs, ys = [p[0] for p in pr], [p[1] for p in pr]
+                d *= max((max(xs) - min(xs)) / (2 * (fw - loosen)), (max(ys) - min(ys)) / (2 * (fh - loosen)))
+            pr = project(centre + d * dv, centre, extent)
             xs, ys = [p[0] for p in pr], [p[1] for p in pr]
-            dist *= max((max(xs) - min(xs)) / (2 * FILL), (max(ys) - min(ys)) / (2 * HEIGHT_FILL))
-        pr = project(centre + dist * dvec, centre, extent)
-        xs, ys = [p[0] for p in pr], [p[1] for p in pr]
-        cd.shift_x = (max(xs) + min(xs)) / 4
-        cd.shift_y = (max(ys) + min(ys)) / 4 / aspect
+            return d, dv, (max(xs) + min(xs)) / 4, (max(ys) + min(ys)) / 4 / aspect
+
+        dist, dvec, cd.shift_x, cd.shift_y = fit(AZIMUTH, ELEVATION)
         print(f"REEL camera: distance {dist:.1f}, shift {cd.shift_x:.3f} {cd.shift_y:.3f}", flush=True)
 
     # ---------------------------------------------------------------- motion
@@ -515,7 +614,7 @@ def build(ctx):
         T0, T1, FALL = 0.45, 4.5, 0.40
         LIFT0, LIFT1, RISE = 6.4, 7.25, 0.30
     else:                       # scroll: one way; flat: everything seated from the start
-        T0, T1, FALL = 0.30, S - 0.75, 0.34
+        T0, T1, FALL = 0.30, 0.72 * S, 0.30       # assembled well before the camera settles
         LIFT0 = LIFT1 = RISE = None
     land = [T0 + (T1 - T0) * i / max(N - 1, 1) for i in range(N)]
     if mode == "flat":
@@ -536,7 +635,7 @@ def build(ctx):
             return PARK, False
         if t < L0:
             p = (t - (L0 - FALL)) / FALL
-            return DROP * (1 - p * p), True
+            return (SCROLL_DROP if mode == "scroll" else DROP) * (1 - p * p), True
         if lift is not None and t >= lift[i]:
             q = (t - lift[i]) / RISE
             return (DROP * q * q, True) if q < 1 else (PARK, False)
@@ -555,11 +654,24 @@ def build(ctx):
         return a
 
     def pose(t):
-        if dvec is not None:
-            sway = SWAY * math.sin(math.tau * t / S) if mode == "loop" else 0.0
+        if mode == "loop":
+            sway = SWAY * math.sin(math.tau * t / S)
             pos = centre + dist * direction(AZIMUTH + sway, ELEVATION)
             cam.location = pos
             G.look_at(cam, pos, centre)
+        elif mode == "scroll":
+            # flat -> 3/4: azimuth and elevation eased together (smootherstep), the frame re-fitted
+            # every frame so the object stays the same size in it; no roll (up = the window's top)
+            x = min(max(t / (TILT_END * S), 0.0), 1.0)
+            s = x * x * x * (x * (6 * x - 15) + 10)
+            # a little more room mid-move (the projected bounds change shape as it tilts), the
+            # tight framing only at the start and the end
+            d, dv, sx, sy = fit(AZIMUTH * s, FLAT_ELEVATION + (ELEVATION - FLAT_ELEVATION) * s,
+                                loosen=0.08 * math.sin(math.pi * s))
+            pos = centre + d * dv
+            cam.location = pos
+            G.look_at(cam, pos, centre)
+            cd.shift_x, cd.shift_y = sx, sy
         for i, (root, rest, kind, lvl) in enumerate(items):
             dz, vis = zpos(i, t)
             if i == press_i and mode == "loop":
@@ -570,11 +682,58 @@ def build(ctx):
             root.location.z = rest + dz if vis else PARK
             if kind == "dial":
                 root.rotation_euler = (0, 0, dial_angle(dial_i.index(i), i, t))
+            if mode == "scroll":     # fades in over the first 60 % of its short drop
+                f = smoothstep(land[i] - FALL, land[i] - 0.4 * FALL, t)
+                for ob in fading[i]:
+                    ob["fade"] = f
 
     ids = ([cam] if dvec is not None else []) + [it[0] for it in items]
+    fading = [[ob for ob in it[0].children_recursive if ob.type == "MESH"] for it in items]
+    if mode == "scroll":
+        ids += [(cd, "shift_x"), (cd, "shift_y")]
+        add_fade(scene, exclude=("FloorMat",))
+        ids += [(ob, '["fade"]') for obs in fading for ob in obs]
     lp.bake(ids, pose, props=("location", "rotation_euler"))
+    return output(scene, P, L, cutout, cam)
 
-    # ---------------------------------------------------------------- output
+
+def add_fade(scene, exclude=()):
+    """Every material's alpha times the object's "fade" property (an object attribute, 1 unless
+    keyed), and every mesh object gets fade = 1: the scroll sequence fades elements in."""
+    for ob in scene.objects:
+        if ob.type == "MESH":
+            ob["fade"] = 1.0
+    for mat in bpy.data.materials:
+        if mat.name in exclude or not mat.node_tree:
+            continue
+        nt, ln = mat.node_tree.nodes, mat.node_tree.links
+        b = nt.get("Principled BSDF")
+        if b is None:
+            continue
+        at = nt.new("ShaderNodeAttribute")
+        at.attribute_type = "OBJECT"
+        at.attribute_name = "fade"
+        alpha = b.inputs["Alpha"]
+        if alpha.is_linked:
+            src = alpha.links[0].from_socket
+            mul = nt.new("ShaderNodeMath")
+            mul.operation = "MULTIPLY"
+            ln.new(src, mul.inputs[0])
+            ln.new(at.outputs["Fac"], mul.inputs[1])
+            ln.new(mul.outputs[0], alpha)
+        else:
+            mul = nt.new("ShaderNodeMath")
+            mul.operation = "MULTIPLY"
+            mul.inputs[0].default_value = alpha.default_value
+            ln.new(at.outputs["Fac"], mul.inputs[1])
+            ln.new(mul.outputs[0], alpha)
+        _cutout(mat)
+
+
+# ---------------------------------------------------------------- output
+
+def output(scene, P, L, cutout, cam):
+    """The render's colour, device and compositor (the field), set at render time."""
     view = P.get("view", "Standard")
     # Cycles on another machine (params.cycles_device: OPTIX, CUDA, HIP…): dsfilm.render asks for
     # Metal, which fails off a Mac and leaves the CPU; pick the GPU backend here (render.setup's
@@ -620,6 +779,12 @@ def build(ctx):
             if device:
                 put(sc.cycles, "device", "GPU")
             put(sc.cycles, "adaptive_threshold", 0.005)
+            # one tile (dsfilm tiles at 1024 px for a 24 GB Mac; a GPU box doesn't need it): a hang
+            # on stallion came right after a frame's second tile; and on NVIDIA, OptiX's own
+            # denoiser on the GPU instead of OIDN
+            put(sc.cycles, "use_auto_tile", False)
+            if device == "OPTIX":
+                put(sc.cycles, "denoiser", "OPTIX")
             put(sc.cycles, "texture_limit_render", "OFF")    # the UI pictures stay sharp
             put(sc.cycles, "blur_glossy", 0.5)
     bpy.app.handlers.render_pre.append(_out)

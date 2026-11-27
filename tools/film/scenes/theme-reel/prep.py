@@ -160,9 +160,37 @@ def rrect_mask(w, h, r, ss=4):
     return np.asarray(im.resize((w, h), Image.LANCZOS)).astype(np.float32) / 255
 
 
+def with_labels(found, diff, thr, scale, H):
+    """A style tile (a thumbnail-shaped part inside a box) takes the name printed under it, so the
+    picture and its label land together as one card (and no label sits over an empty socket)."""
+    rects = [(sl[0].start, sl[0].stop, sl[1].start, sl[1].stop) for sl, _ in found]
+    out = []
+    for k, (sl, sub) in enumerate(found):
+        y0, y1, x0, x1 = rects[k]
+        w, h = x1 - x0, y1 - y0
+        if 1.4 < w / h < 1.85 and w < 260 * scale:
+            last, yy, limit = None, y1, min(H, y1 + int(30 * scale))
+            while yy < limit:
+                if (diff[yy, x0:x1] > thr).any():
+                    last = yy
+                elif last is not None and yy - last > 3 * scale:
+                    break
+                yy += 1
+            if last is not None:
+                y2 = min(H, last + 1 + int(5 * scale))
+                if all(not (o[0] < y2 and o[1] > y1 and o[2] < x1 and o[3] > x0)
+                       for j, o in enumerate(rects) if j != k):
+                    sub2 = np.ones((y2 - y0, w), bool)
+                    sub2[:h] = sub
+                    sl, sub = (slice(y0, y2), slice(x0, x1)), sub2
+        out.append((sl, sub))
+    return out
+
+
 def socket_colour(g):
     lum = (0.2126 * g[0] + 0.7152 * g[1] + 0.0722 * g[2]) / 255
-    return g * (0.92 if lum > 0.35 else 0.62)
+    # a shallow recess, not a hole: an empty tile socket mustn't read as a black picture
+    return g * (0.95 if lum > 0.35 else 0.80)
 
 
 def take_apart(px, scale, name, theme, out_dir, offset, debug, depth=0, ground_rgb=None, prefix="e"):
@@ -184,6 +212,8 @@ def take_apart(px, scale, name, theme, out_dir, offset, debug, depth=0, ground_r
     inner = erode(alpha, int(4 * scale) + 1)
     found = components((diff > thr) & inner, scale, min_side, min_fill, close=close, parent_shape=(H, W))
     found.sort(key=lambda c: (c[0][0].start // int(40 * scale), c[0][1].start))
+    if depth == 1:
+        found = with_labels(found, diff, thr, scale, H)
     entries = []
     orig = px.copy()
     for k, (sl, sub) in enumerate(found):

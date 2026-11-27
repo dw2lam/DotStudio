@@ -14,7 +14,7 @@
 #     --samples N        the films' samples (default: the spec's 512)
 #     --res WxH          the films' render size (default: the spec's 1600x1000)
 #     --size W:H         the app copies' size (default 1280:800: crisp at 2x in Settings)
-#     --quality Q        HEVC quality for encode.py (default 55; aim ≤ ~3 MB a film)
+#     --quality Q        HEVC quality for encode.py (default 70: ~2.5 MB a film, text stays crisp)
 #     --hero DIR         also the hero stills, per variant: DIR/<variant>-flat.png (the assembled
 #                        app straight from above, orthographic) and DIR/<variant>-3d.png (3/4, the
 #                        scroll sequence's last frame); --hero-res (3840x2400), --hero-samples (1024)
@@ -24,6 +24,11 @@
 #     --remote HOST      render on another machine over ssh (a GPU box): see below
 #     --remote-blender P Blender there (default /home/stallion/blender/blender)
 #     --remote-device D  Cycles' GPU backend there (default OPTIX; CUDA, HIP, METAL…)
+#     --remote-root DIR  where the remote work folder goes (default /tmp; e.g. an external drive
+#                        on a Mac: /Volumes/<drive>) — only <DIR>/dotstudio-reel-<timestamp> is
+#                        ever written or removed there
+#     --threads N       Blender's CPU threads (default 8: the GPU does the work; a box under full
+#                        GPU + CPU load has dropped off the network)
 #
 # Output: App/ThemeFilms/theme-<variant>.mov (HEVC, 1280x800, 8 s at 30 fps, seamless loop) and
 # theme-<variant>.jpg (the poster: the assembled app, frame POSTER of the loop — shown under Reduce
@@ -33,10 +38,12 @@
 # shown on screen; the capture runs offscreen against a throwaway library and home.
 #
 # Rendering on another machine (--remote HOST, e.g. `--remote stallion`, a Linux box with an RTX
-# 4090: Cycles + OptiX): the capture and the encode stay here (they need the app and
-# VideoToolbox). The script makes ONE folder on HOST, /tmp/dotstudio-reel-<timestamp>, copies
+# 4090: Cycles + OptiX; or another Mac with --remote-device METAL): the capture and the encode stay
+# here (they need the app and VideoToolbox). The script makes ONE folder on HOST,
+# <remote root>/dotstudio-reel-<timestamp>, copies
 # tools/film and each variant's work folder (parts, spec) into it with rsync, renders there with
-# the same headless, nice'd Blender command (one at a time, after the GPU is idle), copies the
+# the same headless, nice'd Blender command (one at a time, after the GPU is idle — NVIDIA — or the
+# Mac's load is low and no Blender runs — Metal), copies the
 # results back, and when it ends — finished, failed or interrupted — kills the Blender it started
 # and deletes that folder, so nothing is left on HOST. HOST needs Blender 5.1+, rsync and key-based
 # ssh from this Mac (`ssh HOST true` without a prompt); nothing is installed there.
@@ -47,10 +54,10 @@ REPO=${HERE:h:h:h:h}
 FILM=$REPO/tools/film
 VARIANTS=(classic-light classic-dark retro-light retro-dark)
 WORK=${TMPDIR:-/tmp}/theme-reel
-BUILD=1; CAPTURE=1; FILMS=1; ENGINE=cycles; SAMPLES=""; RES=""; SIZE=1280:800; QUALITY=55
+BUILD=1; CAPTURE=1; FILMS=1; ENGINE=cycles; SAMPLES=""; RES=""; SIZE=1280:800; QUALITY=70
 HERO=""; HERO_RES=3840x2400; HERO_SAMPLES=1024; SCROLL=""; SCROLL_RES=1920x1200; SCROLL_SAMPLES=384
 POSTER=147                       # the loop's frame the poster is cut from: assembled, before the hold's moves
-REMOTE=""; RBLENDER=/home/stallion/blender/blender; RDEVICE=OPTIX
+REMOTE=""; RBLENDER=/home/stallion/blender/blender; RDEVICE=OPTIX; THREADS=8; RROOT=/tmp
 B=${BLENDER:-/Applications/Blender.app/Contents/MacOS/Blender}
 while (( $# )); do
   case $1 in
@@ -73,6 +80,8 @@ while (( $# )); do
     --remote) REMOTE=$2; shift 2;;
     --remote-blender) RBLENDER=$2; shift 2;;
     --remote-device) RDEVICE=$2; shift 2;;
+    --remote-root) RROOT=${2%/}; shift 2;;
+    --threads) THREADS=$2; shift 2;;
     *) echo "unknown option $1"; exit 2;;
   esac
 done
@@ -92,13 +101,15 @@ if (( CAPTURE )); then
 fi
 
 if [[ -n $REMOTE ]]; then
-  RD=/tmp/dotstudio-reel-$(date +%Y%m%d%H%M%S)
+  RD=$RROOT/dotstudio-reel-$(date +%Y%m%d%H%M%S)
   cleanup() {
     # our Blender (by the pid it was started with — never by scanning other processes' command
-    # lines, which hangs on a process stuck exiting), then the folder
+    # lines, which hangs on a process stuck exiting; its name from /proc on Linux, ps on a Mac),
+    # then the folder
     ssh -o BatchMode=yes "$REMOTE" "p=\$(cat '$RD/blender.pid' 2>/dev/null); \
-      [ -n \"\$p\" ] && [ \"\$(cat /proc/\$p/comm 2>/dev/null)\" = blender ] && kill \$p; rm -rf '$RD'; \
-      ls /tmp | grep -c dotstudio-reel || true" | sed 's/^/remote dotstudio-reel folders left: /'
+      if [ -n \"\$p\" ]; then c=\$(cat /proc/\$p/comm 2>/dev/null || ps -p \$p -o comm= 2>/dev/null); \
+        case \"\$c\" in *[Bb]lender) kill \$p;; esac; fi; rm -rf '$RD'; \
+      ls '$RROOT' | grep -c dotstudio-reel || true" | sed 's/^/remote dotstudio-reel folders left: /'
   }
   trap cleanup EXIT INT TERM
   ssh -o BatchMode=yes "$REMOTE" "mkdir -p '$RD/work'"
@@ -109,7 +120,14 @@ wait_for_blender() {     # one Blender at a time on this Mac
   while pgrep -x Blender >/dev/null; do sleep 5; done
 }
 
-wait_for_gpu() {         # a shared GPU: start only when it's idle
+wait_for_gpu() {         # a shared machine: start only when it's idle
+  if [[ $RDEVICE == METAL ]]; then
+    # a Mac: no other Blender running, and a quiet 1-minute load average
+    while ! ssh -o BatchMode=yes "$REMOTE" '! pgrep -x Blender >/dev/null && [ $(sysctl -n vm.loadavg | awk "{printf \"%d\", \$2}") -lt 4 ]'; do
+      echo "   (Mac busy, waiting)"; sleep 30
+    done
+    return
+  fi
   while (( $(ssh -o BatchMode=yes "$REMOTE" 'nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null || echo 0' | head -1) > 10 )); do
     echo "   (GPU busy, waiting)"; sleep 30
   done
@@ -136,14 +154,50 @@ blender() {
     local rout=$RD/out/$v-$tag
     [[ $out == *.png ]] && rout=$rout.png
     rargs=("${(@)rargs//@OUT/$rout}")
+    ssh -o BatchMode=yes "$REMOTE" "mkdir -p '$RD/out'" || return 1
+    # frames already here (an earlier, interrupted run): send them, so --anim resumes after them
+    if [[ $out != *.png && -d $out ]] && (( $(ls "$out" | wc -l) )); then
+      rsync -a "$out/" "$REMOTE:$rout/" || return 1
+      echo "   (resuming after $(ls "$out" | wc -l | tr -d ' ') frames)"
+    fi
     wait_for_gpu
-    # up to 3 tries: Blender 5.3 has crashed (segfault) at random on this box, and --anim resumes
-    ssh -o BatchMode=yes "$REMOTE" "mkdir -p '$RD/out' && cd '$RD' && for try in 1 2 3; do \
-      nice -n 10 '$RBLENDER' -b --factory-startup --python film/run.py -- work/$v/spec-$tag.json \
-        ${(j: :)${(@q)rargs}} > work/$v/$tag.log 2>&1 & \
-      echo \$! > blender.pid; wait \$!; rc=\$?; rm -f blender.pid; [ \$rc = 0 ] && break; \
-      echo \"   (Blender exited \$rc, try \$try)\"; done; \
-      grep -E '^RESULT' work/$v/$tag.log || { tail -20 work/$v/$tag.log; false; }" || return 1
+    # Up to 3 tries, each started DETACHED there (nohup; on a Mac also `caffeinate -i -w PID`, so
+    # the machine stays awake while it runs and an idle sleep or a dropped ssh doesn't stop it)
+    # and watched from here with short ssh polls: Blender 5.3 has crashed (segfault) and hung
+    # (after a frame's samples, one CPU thread spinning) at random. A try whose log hasn't moved
+    # for 5 minutes is killed (our own PID only) and the next resumes from the last saved frame
+    # (--anim skips frames on disk). A poll that can't reach HOST is retried for 20 minutes
+    # before giving up (the render goes on meanwhile).
+    local try p state fails ok=0
+    for try in 1 2 3; do
+      p=$(ssh -o BatchMode=yes "$REMOTE" "cd '$RD' && { nohup nice -n 10 '$RBLENDER' -b -t $THREADS --factory-startup \
+        --python film/run.py -- work/$v/spec-$tag.json ${(j: :)${(@q)rargs}} > work/$v/$tag.log 2>&1 < /dev/null & \
+        p=\$!; echo \$p > blender.pid; \
+        command -v caffeinate >/dev/null && { nohup caffeinate -i -w \$p > /dev/null 2>&1 < /dev/null & }; echo \$p; }") || return 1
+      fails=0
+      while true; do
+        sleep 20
+        # alive|dead, and seconds since the log last moved
+        state=$(ssh -o BatchMode=yes -o ConnectTimeout=20 "$REMOTE" "cd '$RD' && \
+          if kill -0 $p 2>/dev/null; then a=alive; else a=dead; fi; \
+          echo \$a \$(( \$(date +%s) - \$(stat -c %Y work/$v/$tag.log 2>/dev/null || stat -f %m work/$v/$tag.log) ))" 2>/dev/null) || {
+          (( ++fails > 60 )) && { echo "   ($REMOTE unreachable for 20 min)"; return 1; }
+          continue
+        }
+        fails=0
+        [[ $state == dead* ]] && break
+        if (( ${state#alive } > 300 )); then
+          echo "   (Blender $p: no progress for 5 min, killing it, try $try)"
+          ssh -o BatchMode=yes "$REMOTE" "kill $p; sleep 10; kill -9 $p 2>/dev/null; true"
+        fi
+      done
+      if ssh -o BatchMode=yes "$REMOTE" "cd '$RD' && rm -f blender.pid && grep -E '^RESULT' work/$v/$tag.log | grep -q '\"ok\":true'"; then
+        ok=1; break
+      fi
+      echo "   (Blender stopped without a result, try $try)"
+    done
+    ssh -o BatchMode=yes "$REMOTE" "cd '$RD' && { grep -E '^RESULT' work/$v/$tag.log || tail -20 work/$v/$tag.log; }"
+    (( ok )) || return 1
     if [[ $out == *.png ]]; then
       mkdir -p "${out:h}"
       rsync -a "$REMOTE:$rout" "$out" || return 1
@@ -156,7 +210,22 @@ blender() {
     python3 -I "$HERE/spec.py" "$HERE/theme-reel.json" "$v" "$V" "$V/spec-$tag.json" --engine "$ENGINE" "${sargs[@]}" || return 1
     rargs=("${(@)rargs//@OUT/$out}")
     wait_for_blender
-    nice -n 10 "$B" -b --factory-startup --python "$FILM/run.py" -- "$V/spec-$tag.json" "${rargs[@]}" | grep -E '^RESULT' || return 1
+    # the same watched tries as on a remote machine (see above)
+    local log=$V/$tag.log p rc=1 try
+    for try in 1 2 3; do
+      nice -n 10 "$B" -b -t $THREADS --factory-startup --python "$FILM/run.py" -- "$V/spec-$tag.json" "${rargs[@]}" > "$log" 2>&1 &
+      p=$!
+      while kill -0 $p 2>/dev/null; do
+        sleep 20
+        if (( $(date +%s) - $(stat -f %m "$log") > 300 )); then
+          echo "   (Blender $p: no progress for 5 min, killing it, try $try)"; kill $p 2>/dev/null || true; sleep 10; kill -9 $p 2>/dev/null || true
+        fi
+      done
+      wait $p && rc=0 || rc=$?
+      (( rc == 0 )) && break
+      echo "   (Blender exited $rc, try $try)"
+    done
+    grep -E '^RESULT' "$log" || { tail -20 "$log"; return 1; }
   fi
 }
 
