@@ -19,12 +19,15 @@ Modes (params.mode):
     scroll  ONE-WAY, for the site (6 s, 180 frames, played as a video): empty -> assembled, no
             lift-out. It opens on a close-up of the bare chassis — low and near, the window's top
             left corner (its title bar and the empty Screensaver socket) filling the frame — and
-            pulls back in one slow eased move (dolly out, rise, swing round) that opens out into
-            the 3/4 view by 88 %; the last 12 % hold the 3D frame, the same as the 3D hero still
-            (SCROLL_FILL). The elements land as the camera reveals them, nearest the close-up
-            first, each on a short drop while it fades in. A little depth of field at the
-            close-up only, gone by the middle of the move
+            pulls back in one slow eased move (dolly out, rise, swing round); half way it carries
+            on rising, without a break, into the flat view straight from above (framed like the
+            flat still, SCROLL_FILL), reached at 88 %; the last 12 % hold it. The elements land as
+            the camera reveals them, nearest the close-up first, each on a short drop while it
+            fades in; a soft orange hairline of light runs round the window's edge from its top
+            left corner, in step with the assembly, closing the loop as the last element lands.
+            A little depth of field at the close-up only, gone by the middle of the move
     flat    the assembled app straight from above, orthographic (the flat product shot)
+    3d      the assembled app in the 3/4 view (the 3D product shot)
 
 The shot (tools/film/README.md's rules apply; see render-all.sh):
 - a long lens (near-orthographic), a 3/4 view from above, the object centred with generous
@@ -46,6 +49,9 @@ Params (the spec's "params"; render-all.sh writes one spec per variant):
     view   the view transform (default Standard: the UI's own colours)
     cutout true: no field — a transparent RGBA picture with the shadow in its alpha
     fstop  optional depth of field (default none: the shot is sharp)
+    frame_parts  another variant's prepared folder whose layout frames the shot: its size, its
+           modules' rects and its camera fit (so Retro light's final frame lines up pixel for pixel
+           with Retro dark's: their captures differ by a few points)
 """
 import json
 import math
@@ -129,6 +135,17 @@ CLOSE_EL = 22.0
 CLOSE_WIDTH = 2.2
 MOVE_END = 0.88
 CLOSE_FSTOP = 4.0           # the close-up's depth of field (none from the middle of the move)
+# half way through the pull-back (s = BRANCH), the camera leaves it and carries on — position,
+# speed and acceleration continuous (a quintic per channel) — into the flat view from above
+BRANCH = 0.5
+FLAT_ELEVATION = 89.5       # straight down (a hair off 90°, so "up" stays the window's top)
+# the edge light: a hairline tube on the window's top edge, inset past its bevel; a soft halo
+# added in the compositor from an AOV (only the tube's own pixels), so it never blooms the UI
+GLOW_RGB = 0xFF8A3D         # the app's orange (#FF7300), a touch softer and warmer
+GLOW_R = 0.004              # tube radius (units: under 1 px at the final frame's 1920)
+GLOW_INSET = 0.014
+GLOW_EMIT = {"dark": 1.1, "light": 2.0}
+GLOW_HALO = {"dark": ((3.0, 0.4), (11.0, 0.3)), "light": ((3.0, 0.9), (11.0, 0.55))}   # (px at 1920, gain)
 
 
 # ---------------------------------------------------------------- materials
@@ -279,7 +296,7 @@ def knob(name, R, H, cap_rgb, pointer_rgb, alu, coll, root):
 
 # ---------------------------------------------------------------- the field (compositor)
 
-def field_compositor(scene, L):
+def field_compositor(scene, L, halo=None):
     """Lays the transparent render over the field: out = render + field x (1 - alpha) (the render is
     premultiplied; the shadow catcher's shadow is in its alpha). The field is the exact colour (in
     linear light; the Standard view gives the sRGB value back); in dark, a faint pool of light under
@@ -315,7 +332,23 @@ def field_compositor(scene, L):
     add.inputs[0].default_value = 1.0
     ng.links.new(mul.outputs[2], add.inputs[6])
     ng.links.new(rl.outputs["Image"], add.inputs[7])
-    ng.links.new(add.outputs[2], out.inputs[0])
+    last = add.outputs[2]
+    if halo and rl.outputs.get("edge") is not None:
+        # the edge light's halo: its own pixels (the AOV), blurred at two sizes, added on top
+        for k, (px, gain) in enumerate(halo):
+            bl = ng.nodes.new("CompositorNodeBlur")
+            bl.name = f"Halo{k}"
+            bl["halo_px"] = px
+            ng.links.new(rl.outputs["edge"], bl.inputs["Image"])
+            g = ng.nodes.new("ShaderNodeMix")
+            g.data_type = "RGBA"
+            g.blend_type = "ADD"
+            g.inputs[0].default_value = gain
+            ng.links.new(last, g.inputs[6])
+            ng.links.new(bl.outputs["Image"], g.inputs[7])
+            last = g.outputs[2]
+        print(f"REEL edge halo: {halo}", flush=True)
+    ng.links.new(last, out.inputs[0])
     return ng
 
 
@@ -437,7 +470,15 @@ def build(ctx):
     S = lp.seconds
     coll = ctx.coll("Reel")
     scene = ctx.scene
-    AW, AH = man["size"]
+    ref = None
+    if P.get("frame_parts"):
+        with open(os.path.join(P["frame_parts"], "parts.json")) as f:
+            ref = json.load(f)
+        for m in man["modules"]:
+            for rm in ref["modules"]:
+                if rm["name"] == m["name"]:
+                    m["rect"], m["radius"] = rm["rect"], rm["radius"]
+    AW, AH = (ref or man)["size"]
 
     def xy(px, py):                  # assembly points (origin top left, y down) -> Blender x, y
         return (px - AW / 2) * PT, (AH / 2 - py) * PT
@@ -517,6 +558,8 @@ def build(ctx):
     for m in man["modules"]:
         d = BASE.get(m["name"], 0.12)
         base, mtop = element(m, "M_" + m["name"], d - SEAT, 0.0, wside)
+        if m["name"] == "window":
+            win = (m["rect"], m["radius"], mtop)
         for i, c in enumerate(m["children"]):
             nm = f"{m['name'][0]}{i}"
             if c["kind"] == "dial":
@@ -539,6 +582,8 @@ def build(ctx):
                 parent.append(pi)
     N = len(items)
     print(f"REEL elements: {N} ({sum(1 for it in items if it[2] == 'dial')} dials)", flush=True)
+    if ref is not None:
+        extent = frame_points(ref, classic, xy)
 
     # ---------------------------------------------------------------- light
     def area(name, size, energy, color, loc, target, size_y=None, spread=None):
@@ -639,18 +684,47 @@ def build(ctx):
             d0 = CLOSE_WIDTH * LENS / 36.0
             cd.dof.use_dof = True
 
-            def scroll_cam(t):
-                x = min(max(t / (MOVE_END * S), 0.0), 1.0)
+            def pull(t):
+                """The pull-back towards the 3/4 frame as channels: az, el, ln d, look xyz, shift."""
+                x = t / (MOVE_END * S)
                 s = 0.5 - 0.5 * math.cos(math.pi * x)
                 d = d0 * (dist / d0) ** s
                 w = s * d / dist
                 look = focus.lerp(centre, w)
-                pos = look + d * direction(CLOSE_AZ + (AZIMUTH - CLOSE_AZ) * s,
-                                           CLOSE_EL + (ELEVATION - CLOSE_EL) * s)
+                return [CLOSE_AZ + (AZIMUTH - CLOSE_AZ) * s, CLOSE_EL + (ELEVATION - CLOSE_EL) * s,
+                        math.log(d), look.x, look.y, look.z, sx1 * s, sy1 * s], s
+
+            # the branch: where the pull-back is at s = BRANCH, with its speed and acceleration
+            tb = MOVE_END * S * math.acos(1 - 2 * BRANCH) / math.pi
+            te, h = MOVE_END * S, 1e-3
+            c0_, c1_, c2_ = pull(tb - h)[0], pull(tb)[0], pull(tb + h)[0]
+            vel = [(b - a) / (2 * h) for a, b in zip(c0_, c2_)]
+            acc = [(a - 2 * m + b) / (h * h) for a, m, b in zip(c0_, c1_, c2_)]
+            dfl, _, sxf, syf = fit(0.0, FLAT_ELEVATION)
+            end = [0.0, FLAT_ELEVATION, math.log(dfl), centre.x, centre.y, centre.z, sxf, syf]
+            print(f"REEL branch at {tb:.2f} s; flat: distance {dfl:.1f}, shift {sxf:.3f} {syf:.3f}", flush=True)
+
+            def scroll_cam(t):
+                if t <= tb:
+                    ch, s = pull(max(t, 0.0))
+                else:
+                    T = te - tb
+                    u = min((t - tb) / T, 1.0)
+                    u3, u4, u5 = u ** 3, u ** 4, u ** 5
+                    h0 = 1 - 10 * u3 + 15 * u4 - 6 * u5
+                    h1 = u - 6 * u3 + 8 * u4 - 3 * u5
+                    h2 = 0.5 * u * u - 1.5 * u3 + 1.5 * u4 - 0.5 * u5
+                    h5 = 10 * u3 - 15 * u4 + 6 * u5
+                    ch = [h0 * p0 + h1 * v * T + h2 * a * T * T + h5 * p1
+                          for p0, v, a, p1 in zip(c1_, vel, acc, end)]
+                    s = 1.0
+                az, el, ld, lx, ly, lz, sx, sy = ch
+                look = Vector((lx, ly, lz))
+                pos = look + math.exp(ld) * direction(az, el)
                 # depth of field: CLOSE_FSTOP at the close-up, opening to none (f/128) by s = 0.5
                 k = min(s / 0.5, 1.0)
                 fstop = CLOSE_FSTOP * (128.0 / CLOSE_FSTOP) ** (k * k * (3 - 2 * k))
-                return pos, look, sx1 * s, sy1 * s, fstop
+                return pos, look, sx, sy, fstop
 
             def on_screen(t, p):
                 """p's place in the frame at t (±1 = the frame's edges)."""
@@ -667,7 +741,7 @@ def build(ctx):
         T0, T1, FALL = 0.30, 0.72 * S, 0.30       # assembled well before the camera settles
         LIFT0 = LIFT1 = RISE = None
     land = [T0 + (T1 - T0) * i / max(N - 1, 1) for i in range(N)]
-    if mode == "flat":
+    if mode in ("flat", "3d"):
         land = [-10.0] * N
     if mode == "scroll":
         # in the order the camera reveals them: an element lands a beat after its centre comes
@@ -705,6 +779,31 @@ def build(ctx):
         if hi > LAST:          # too late for the hold: squeeze the schedule (order kept)
             land = [T0 + (l - T0) * (LAST - T0) / (hi - T0) for l in land]
         print("REEL landing: " + " ".join(f"{land[i]:.2f}" for i in order), flush=True)
+
+        # the edge light's progress: the share of elements landed (piecewise linear through the
+        # landings, from when the first starts to fall), smoothed over ±0.25 s so the light runs
+        # evenly, and scaled so that it closes the loop exactly as the last element lands
+        ls = sorted(land)
+        knots = [(ls[0] - FALL, 0.0)] + [(l, (k + 1) / N) for k, l in enumerate(ls)]
+
+        def landed(t):
+            if t <= knots[0][0]:
+                return 0.0
+            for (ta, a), (tb_, b) in zip(knots, knots[1:]):
+                if t <= tb_:
+                    return a + (b - a) * (t - ta) / max(tb_ - ta, 1e-6)
+            return 1.0
+
+        def smooth(t):
+            return sum(landed(t + 0.25 * (k / 4 - 1)) for k in range(9)) / 9
+
+        g_end = smooth(ls[-1])
+
+        def glow_progress(t):
+            return 1.0 if t >= ls[-1] else min(max(smooth(t) / g_end, 0.0), 1.0)
+
+        glow = edge_glow(scene, coll, win, xy, tone)
+        print(f"REEL edge light closes at {ls[-1]:.2f} s (frame {ls[-1] * lp.fps + 1:.1f})", flush=True)
     lift = None if LIFT0 is None else [LIFT0 + (LIFT1 - LIFT0) * (N - 1 - i) / max(N - 1, 1) for i in range(N)]
 
     def bounce(s, kind):
@@ -745,6 +844,10 @@ def build(ctx):
             pos = centre + dist * direction(AZIMUTH + sway, ELEVATION)
             cam.location = pos
             G.look_at(cam, pos, centre)
+        elif mode == "3d":
+            pos = centre + dist * dvec
+            cam.location = pos
+            G.look_at(cam, pos, centre)
         elif mode == "scroll":
             pos, look, sx, sy, fstop = scroll_cam(t)
             cam.location = pos
@@ -752,6 +855,7 @@ def build(ctx):
             cd.shift_x, cd.shift_y = sx, sy
             cd.dof.focus_distance = (look - pos).length
             cd.dof.aperture_fstop = fstop
+            glow.bevel_factor_end = glow_progress(t)
         for i, (root, rest, kind, lvl) in enumerate(items):
             dz, vis = zpos(i, t)
             if i == press_i and mode == "loop":
@@ -770,11 +874,98 @@ def build(ctx):
     ids = ([cam] if dvec is not None else []) + [it[0] for it in items]
     fading = [[ob for ob in it[0].children_recursive if ob.type == "MESH"] for it in items]
     if mode == "scroll":
-        ids += [(cd, "shift_x"), (cd, "shift_y"), (cd, "dof.focus_distance"), (cd, "dof.aperture_fstop")]
+        ids += [(cd, "shift_x"), (cd, "shift_y"), (cd, "dof.focus_distance"), (cd, "dof.aperture_fstop"),
+                (glow, "bevel_factor_end")]
         add_fade(scene, exclude=("FloorMat",))
         ids += [(ob, '["fade"]') for obs in fading for ob in obs]
     lp.bake(ids, pose, props=("location", "rotation_euler"))
-    return output(scene, P, L, cutout, cam)
+    return output(scene, P, L, cutout, cam, halo=GLOW_HALO[tone] if mode == "scroll" else None)
+
+
+def frame_points(man, classic, xy):
+    """The points build() fits the camera to (each element's top corners, each dial's top), from
+    a manifest alone — for params.frame_parts."""
+    pts = []
+
+    def rect(e, top):
+        x0, y0, x1, y1 = e["rect"]
+        w, h = (x1 - x0) * PT, (y1 - y0) * PT
+        cx, cy = xy((x0 + x1) / 2, (y0 + y1) / 2)
+        pts.extend(Vector((cx + sx * w / 2, cy + sy * h / 2, top)) for sx in (-1, 1) for sy in (-1, 1))
+
+    def knob(e, seat):
+        x0, y0, x1, y1 = e["rect"]
+        cx, cy = xy((x0 + x1) / 2, (y0 + y1) / 2)
+        R = 0.5 * (x1 - x0) * PT * 0.94
+        pts.extend(Vector((cx + sx * R, cy + sy * R, seat + 0.36 * R / 0.33)) for sx in (-1, 1) for sy in (-1, 1))
+
+    for m in man["modules"]:
+        mtop = BASE.get(m["name"], 0.12) - SEAT
+        rect(m, mtop)
+        for c in m["children"]:
+            if c["kind"] == "dial":
+                if not classic:
+                    knob(c, mtop)
+                continue
+            ctop = mtop - SEAT + THICK[0]
+            rect(c, ctop)
+            for k in c.get("children", []):
+                if k["kind"] == "dial":
+                    knob(k, ctop)
+                else:
+                    rect(k, ctop - SEAT + THICK[1])
+    return pts
+
+
+def edge_glow(scene, coll, win, xy, tone):
+    """The edge light: a hairline emissive tube round the window's top edge, starting at its top
+    left corner and running clockwise (along the top first); returns its curve, whose
+    bevel_factor_end (0–1, by length) is how far round it is lit. It also writes the AOV "edge"
+    the compositor's halo is made from."""
+    (x0, y0, x1, y1), r, top = win
+    ax, ay = xy(x0, y1)
+    bx, by = xy(x1, y0)
+    seg = 12
+    pts = G.rrect(ax + GLOW_INSET, ay + GLOW_INSET, bx - GLOW_INSET, by - GLOW_INSET,
+                  r * PT - GLOW_INSET, seg=seg)[::-1]           # clockwise seen from above
+    i0 = len(pts) - 1 - (2 * (seg + 1) + seg // 2)              # the top left arc's middle
+    pts = pts[i0:] + pts[:i0]
+    pts.append(pts[0])
+    cu = bpy.data.curves.new("EdgeGlow", "CURVE")
+    cu.dimensions = "3D"
+    sp = cu.splines.new("POLY")
+    sp.points.add(len(pts) - 1)
+    z = top + 0.004
+    for q, (x, y) in zip(sp.points, pts):
+        q.co = (x, y, z, 1.0)
+    cu.bevel_depth = GLOW_R
+    cu.bevel_resolution = 3
+    cu.use_fill_caps = True
+    cu.bevel_factor_mapping_end = "SPLINE"
+    cu.bevel_factor_end = 0.0
+    mat = bpy.data.materials.new("EdgeGlowMat")
+    mat.use_nodes = True
+    nt = mat.node_tree
+    for n in list(nt.nodes):
+        nt.nodes.remove(n)
+    em = nt.nodes.new("ShaderNodeEmission")
+    em.inputs["Color"].default_value = (*lin(GLOW_RGB), 1.0)
+    em.inputs["Strength"].default_value = GLOW_EMIT[tone]
+    out = nt.nodes.new("ShaderNodeOutputMaterial")
+    nt.links.new(em.outputs[0], out.inputs["Surface"])
+    aov = nt.nodes.new("ShaderNodeOutputAOV")
+    aov.aov_name = "edge"
+    aov.inputs["Color"].default_value = (*lin(GLOW_RGB), 1.0)
+    cu.materials.append(mat)
+    ob = bpy.data.objects.new("EdgeGlow", cu)
+    coll.objects.link(ob)
+    try:
+        ob.visible_shadow = False
+    except Exception:
+        pass
+    a = scene.view_layers[0].aovs.add()
+    a.name, a.type = "edge", "COLOR"
+    return cu
 
 
 def add_fade(scene, exclude=()):
@@ -812,7 +1003,7 @@ def add_fade(scene, exclude=()):
 
 # ---------------------------------------------------------------- output
 
-def output(scene, P, L, cutout, cam):
+def output(scene, P, L, cutout, cam, halo=None):
     """The render's colour, device and compositor (the field), set at render time."""
     view = P.get("view", "Standard")
     # Cycles on another machine (params.cycles_device: OPTIX, CUDA, HIP…): dsfilm.render asks for
@@ -828,7 +1019,7 @@ def output(scene, P, L, cutout, cam):
                 dv.use = dv.type != "CPU"
         except Exception as e:
             print("cycles device:", e)
-    comp = None if cutout else field_compositor(scene, L)
+    comp = None if cutout else field_compositor(scene, L, halo)
 
     def put(owner, attr, value):
         # only when it changes: writing a render setting (even the same value) makes Cycles drop
@@ -848,8 +1039,13 @@ def output(scene, P, L, cutout, cam):
         put(sc.render.image_settings, "color_depth", "8")    # dithered (render.dither_intensity)
         put(sc.render.image_settings, "color_mode", "RGBA" if cutout else "RGB")
         if comp is not None:
-            pool_image(comp, L, sc.render.resolution_x * sc.render.resolution_percentage // 100,
-                       sc.render.resolution_y * sc.render.resolution_percentage // 100)
+            rx = sc.render.resolution_x * sc.render.resolution_percentage // 100
+            pool_image(comp, L, rx, sc.render.resolution_y * sc.render.resolution_percentage // 100)
+            for n in comp.nodes:          # the halo's blur sizes are px at 1920 wide
+                if n.name.startswith("Halo"):
+                    px = n["halo_px"] * rx / 1920
+                    if tuple(n.inputs["Size"].default_value) != (px, px):
+                        n.inputs["Size"].default_value = (px, px)
             if sc.compositing_node_group != comp:
                 sc.compositing_node_group = comp
             put(sc.render, "use_compositing", True)

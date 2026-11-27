@@ -16,10 +16,11 @@
 #     --size W:H         the app copies' size (default 1280:800: crisp at 2x in Settings)
 #     --quality Q        HEVC quality for encode.py (default 70: ~2.5 MB a film, text stays crisp)
 #     --hero DIR         also the hero stills, per variant: DIR/<variant>-flat.png (the assembled
-#                        app straight from above, orthographic) and DIR/<variant>-3d.png (3/4, the
-#                        scroll sequence's last frame); --hero-res (3840x2400), --hero-samples (1024)
+#                        app straight from above, orthographic) and DIR/<variant>-3d.png (the 3/4
+#                        view); --hero-res (3840x2400), --hero-samples (1024)
 #     --scroll DIR       also the one-way assembly for the site, per variant: DIR/<variant>/####.png
-#                        (180 frames = 6 s at 30 fps, close-up of the empty chassis -> assembled 3/4)
+#                        (180 frames = 6 s at 30 fps, close-up of the empty chassis -> assembled,
+#                        flat from above, the orange edge light closed)
 #                        and the site's WebPs DIR/<variant>-webp/hi/000.webp… (1600 px, q80) and
 #                        …/lo/ (800 px, q72); --scroll-res (1920x1200), --scroll-samples (384)
 #     --remote HOST      render on another machine over ssh (a GPU box): see below
@@ -249,7 +250,7 @@ for v in $VARIANTS; do
   if [[ -n $HERO ]]; then
     t0=$SECONDS
     blender $v flat "$HERO/$v-flat.png" --mode flat -- --still @OUT --frame 1 --res $HERO_RES --samples $HERO_SAMPLES || exit 1
-    blender $v 3d "$HERO/$v-3d.png" --mode scroll -- --still @OUT --frame 180 --res $HERO_RES --samples $HERO_SAMPLES || exit 1
+    blender $v 3d "$HERO/$v-3d.png" --mode 3d -- --still @OUT --frame 1 --res $HERO_RES --samples $HERO_SAMPLES || exit 1
     echo "hero ${v}: $(( SECONDS - t0 )) s"
   fi
   if [[ -n $SCROLL ]]; then
