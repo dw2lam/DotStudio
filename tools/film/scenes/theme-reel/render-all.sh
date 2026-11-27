@@ -113,7 +113,8 @@ if [[ -n $REMOTE ]]; then
         case \"\$c\" in *[Bb]lender) kill \$p;; esac; fi; rm -rf '$RD'; \
       ls '$RROOT' | grep -c dotstudio-reel || true" | sed 's/^/remote dotstudio-reel folders left: /'
   }
-  trap cleanup EXIT INT TERM
+  trap cleanup EXIT
+  trap 'exit 130' INT TERM      # (cleanup as a signal trap would clean up and render on)
   ssh -o BatchMode=yes "$REMOTE" "mkdir -p '$RD/work'"
   rsync -a --exclude '__pycache__' "$FILM/" "$REMOTE:$RD/film/"
 fi

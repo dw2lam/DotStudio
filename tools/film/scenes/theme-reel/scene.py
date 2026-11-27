@@ -23,8 +23,9 @@ Modes (params.mode):
             on rising, without a break, into the flat view straight from above (framed like the
             flat still, SCROLL_FILL), reached at 88 %; the last 12 % hold it. The elements land as
             the camera reveals them, nearest the close-up first, each on a short drop while it
-            fades in; a soft orange hairline of light runs round the window's edge from its top
-            left corner, in step with the assembly, closing the loop as the last element lands.
+            fades in; a soft orange glow spills out from under the window onto the field, growing
+            both ways round it from the bottom centre in step with the assembly, the two ends
+            meeting at the top as the last element lands.
             A little depth of field at the close-up only, gone by the middle of the move
     flat    the assembled app straight from above, orthographic (the flat product shot)
     3d      the assembled app in the 3/4 view (the 3D product shot)
@@ -139,13 +140,16 @@ CLOSE_FSTOP = 4.0           # the close-up's depth of field (none from the middl
 # speed and acceleration continuous (a quintic per channel) — into the flat view from above
 BRANCH = 0.5
 FLAT_ELEVATION = 89.5       # straight down (a hair off 90°, so "up" stays the window's top)
-# the edge light: a hairline tube on the window's top edge, inset past its bevel; a soft halo
-# added in the compositor from an AOV (only the tube's own pixels), so it never blooms the UI
+# the under-glow: orange light spilling out from under the window onto the field — a ribbon on
+# the floor round the window's footprint, from under its edge out to GLOW_W, emitting with a soft
+# falloff ((1 - d / GLOW_W) ** GLOW_FALL) and otherwise fully transparent, seen by the camera
+# only (it lights nothing, casts nothing): an additive glow on either field. It grows both ways
+# from the bottom centre; GLOW_SOFT is how soft its two leading ends are (share of half the loop)
 GLOW_RGB = 0xFF8A3D         # the app's orange (#FF7300), a touch softer and warmer
-GLOW_R = 0.004              # tube radius (units: under 1 px at the final frame's 1920)
-GLOW_INSET = 0.014
-GLOW_EMIT = {"dark": 1.1, "light": 2.0}
-GLOW_HALO = {"dark": ((3.0, 0.4), (11.0, 0.3)), "light": ((3.0, 0.9), (11.0, 0.55))}   # (px at 1920, gain)
+GLOW_W = 1.3                # units (~130 px at the final frame's 1920; most of it within ~40)
+GLOW_FALL = 3.2
+GLOW_K = {"dark": 0.07, "light": 0.40}      # emission at the edge
+GLOW_SOFT = 0.12
 
 
 # ---------------------------------------------------------------- materials
@@ -296,7 +300,7 @@ def knob(name, R, H, cap_rgb, pointer_rgb, alu, coll, root):
 
 # ---------------------------------------------------------------- the field (compositor)
 
-def field_compositor(scene, L, halo=None):
+def field_compositor(scene, L):
     """Lays the transparent render over the field: out = render + field x (1 - alpha) (the render is
     premultiplied; the shadow catcher's shadow is in its alpha). The field is the exact colour (in
     linear light; the Standard view gives the sRGB value back); in dark, a faint pool of light under
@@ -332,23 +336,7 @@ def field_compositor(scene, L, halo=None):
     add.inputs[0].default_value = 1.0
     ng.links.new(mul.outputs[2], add.inputs[6])
     ng.links.new(rl.outputs["Image"], add.inputs[7])
-    last = add.outputs[2]
-    if halo and rl.outputs.get("edge") is not None:
-        # the edge light's halo: its own pixels (the AOV), blurred at two sizes, added on top
-        for k, (px, gain) in enumerate(halo):
-            bl = ng.nodes.new("CompositorNodeBlur")
-            bl.name = f"Halo{k}"
-            bl["halo_px"] = px
-            ng.links.new(rl.outputs["edge"], bl.inputs["Image"])
-            g = ng.nodes.new("ShaderNodeMix")
-            g.data_type = "RGBA"
-            g.blend_type = "ADD"
-            g.inputs[0].default_value = gain
-            ng.links.new(last, g.inputs[6])
-            ng.links.new(bl.outputs["Image"], g.inputs[7])
-            last = g.outputs[2]
-        print(f"REEL edge halo: {halo}", flush=True)
-    ng.links.new(last, out.inputs[0])
+    ng.links.new(add.outputs[2], out.inputs[0])
     return ng
 
 
@@ -802,7 +790,7 @@ def build(ctx):
         def glow_progress(t):
             return 1.0 if t >= ls[-1] else min(max(smooth(t) / g_end, 0.0), 1.0)
 
-        glow = edge_glow(scene, coll, win, xy, tone)
+        glow = under_glow(coll, win, xy, tone)
         print(f"REEL edge light closes at {ls[-1]:.2f} s (frame {ls[-1] * lp.fps + 1:.1f})", flush=True)
     lift = None if LIFT0 is None else [LIFT0 + (LIFT1 - LIFT0) * (N - 1 - i) / max(N - 1, 1) for i in range(N)]
 
@@ -855,7 +843,7 @@ def build(ctx):
             cd.shift_x, cd.shift_y = sx, sy
             cd.dof.focus_distance = (look - pos).length
             cd.dof.aperture_fstop = fstop
-            glow.bevel_factor_end = glow_progress(t)
+            glow["glow"] = glow_progress(t) * (1 + GLOW_SOFT)
         for i, (root, rest, kind, lvl) in enumerate(items):
             dz, vis = zpos(i, t)
             if i == press_i and mode == "loop":
@@ -875,11 +863,11 @@ def build(ctx):
     fading = [[ob for ob in it[0].children_recursive if ob.type == "MESH"] for it in items]
     if mode == "scroll":
         ids += [(cd, "shift_x"), (cd, "shift_y"), (cd, "dof.focus_distance"), (cd, "dof.aperture_fstop"),
-                (glow, "bevel_factor_end")]
+                (glow, '["glow"]')]
         add_fade(scene, exclude=("FloorMat",))
         ids += [(ob, '["fade"]') for obs in fading for ob in obs]
     lp.bake(ids, pose, props=("location", "rotation_euler"))
-    return output(scene, P, L, cutout, cam, halo=GLOW_HALO[tone] if mode == "scroll" else None)
+    return output(scene, P, L, cutout, cam)
 
 
 def frame_points(man, classic, xy):
@@ -917,55 +905,113 @@ def frame_points(man, classic, xy):
     return pts
 
 
-def edge_glow(scene, coll, win, xy, tone):
-    """The edge light: a hairline emissive tube round the window's top edge, starting at its top
-    left corner and running clockwise (along the top first); returns its curve, whose
-    bevel_factor_end (0–1, by length) is how far round it is lit. It also writes the AOV "edge"
-    the compositor's halo is made from."""
-    (x0, y0, x1, y1), r, top = win
+def under_glow(coll, win, xy, tone):
+    """The under-glow (see GLOW_W): a ribbon on the floor round the window's footprint. Its UVs:
+    u = how far round from the bottom centre (0 there, 1 at the top centre, both ways), v = the
+    distance out from the window's edge (negative under it). The object's "glow" property (keyed)
+    is how far round it is lit, times 1 + GLOW_SOFT; returns the object."""
+    (x0, y0, x1, y1), r, _ = win
     ax, ay = xy(x0, y1)
     bx, by = xy(x1, y0)
-    seg = 12
-    pts = G.rrect(ax + GLOW_INSET, ay + GLOW_INSET, bx - GLOW_INSET, by - GLOW_INSET,
-                  r * PT - GLOW_INSET, seg=seg)[::-1]           # clockwise seen from above
-    i0 = len(pts) - 1 - (2 * (seg + 1) + seg // 2)              # the top left arc's middle
-    pts = pts[i0:] + pts[:i0]
-    pts.append(pts[0])
-    cu = bpy.data.curves.new("EdgeGlow", "CURVE")
-    cu.dimensions = "3D"
-    sp = cu.splines.new("POLY")
-    sp.points.add(len(pts) - 1)
-    z = top + 0.004
-    for q, (x, y) in zip(sp.points, pts):
-        q.co = (x, y, z, 1.0)
-    cu.bevel_depth = GLOW_R
-    cu.bevel_resolution = 3
-    cu.use_fill_caps = True
-    cu.bevel_factor_mapping_end = "SPLINE"
-    cu.bevel_factor_end = 0.0
-    mat = bpy.data.materials.new("EdgeGlowMat")
+    r = r * PT
+
+    def outline(o, seg=16, n=24):
+        """The footprint's outline grown by o: anticlockwise from the bottom centre, a vertex at
+        the top centre (n even), the same count for every o."""
+        X0, Y0, X1, Y1, R = ax - o, ay - o, bx + o, by + o, max(r + o, 0.01)
+        mx = (X0 + X1) / 2
+        pts = []
+
+        def line(p, q, k, last=False):
+            for i in range(k + (1 if last else 0)):
+                pts.append((p[0] + (q[0] - p[0]) * i / k, p[1] + (q[1] - p[1]) * i / k))
+
+        def arc(cx, cy, a0):
+            for i in range(seg + 1):
+                t = math.radians(a0 + 90 * i / seg)
+                pts.append((cx + R * math.cos(t), cy + R * math.sin(t)))
+
+        line((mx, Y0), (X1 - R, Y0), n // 2)
+        arc(X1 - R, Y0 + R, -90)
+        line((X1, Y0 + R), (X1, Y1 - R), n)
+        arc(X1 - R, Y1 - R, 0)
+        line((X1 - R, Y1), (X0 + R, Y1), n)
+        arc(X0 + R, Y1 - R, 90)
+        line((X0, Y1 - R), (X0, Y0 + R), n)
+        arc(X0 + R, Y0 + R, 180)
+        line((X0 + R, Y0), (mx, Y0), n // 2)
+        # drop the duplicates where a line meets an arc (each arc repeats its line's end)
+        out = []
+        for q in pts:
+            if not out or (abs(q[0] - out[-1][0]) > 1e-7 or abs(q[1] - out[-1][1]) > 1e-7):
+                out.append(q)
+        return out
+
+    mid = outline(0.0)
+    L = [0.0]
+    for p, q in zip(mid, mid[1:] + mid[:1]):
+        L.append(L[-1] + math.dist(p, q))
+    total = L[-1]
+    u = [2 * min(l, total - l) / total for l in L[:-1]]
+    inner, outer = outline(-0.06), outline(GLOW_W)
+    assert len(inner) == len(outer) == len(mid), (len(inner), len(outer), len(mid))
+    bm = bmesh.new()
+    z = 0.002
+    vi = [bm.verts.new((x, y, z)) for x, y in inner]
+    vo = [bm.verts.new((x, y, z)) for x, y in outer]
+    uvl = bm.loops.layers.uv.new("UVMap")
+    n = len(mid)
+    for i in range(n):
+        j = (i + 1) % n
+        f = bm.faces.new((vi[i], vi[j], vo[j], vo[i]))
+        for lo, (uu, vv) in zip(f.loops, ((u[i], -0.06), (u[j], -0.06), (u[j], GLOW_W), (u[i], GLOW_W))):
+            lo[uvl].uv = (uu, vv)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    mat = bpy.data.materials.new("UnderGlowMat")
     mat.use_nodes = True
-    nt = mat.node_tree
-    for n in list(nt.nodes):
-        nt.nodes.remove(n)
-    em = nt.nodes.new("ShaderNodeEmission")
+    nt, ln = mat.node_tree.nodes, mat.node_tree.links
+    for nd in list(nt):
+        nt.remove(nd)
+    tc = nt.new("ShaderNodeTexCoord")
+    sep = nt.new("ShaderNodeSeparateXYZ")
+    ln.new(tc.outputs["UV"], sep.inputs[0])
+    # falloff out from the edge: (1 - clamp(v / W)) ** FALL
+    dv = nt.new("ShaderNodeMath"); dv.operation = "DIVIDE"; dv.use_clamp = True
+    ln.new(sep.outputs["Y"], dv.inputs[0]); dv.inputs[1].default_value = GLOW_W
+    inv = nt.new("ShaderNodeMath"); inv.operation = "SUBTRACT"; inv.inputs[0].default_value = 1.0
+    ln.new(dv.outputs[0], inv.inputs[1])
+    pw = nt.new("ShaderNodeMath"); pw.operation = "POWER"; pw.inputs[1].default_value = GLOW_FALL
+    ln.new(inv.outputs[0], pw.inputs[0])
+    # how far round: lit where u < e - SOFT, dark where u > e, smooth between
+    at = nt.new("ShaderNodeAttribute"); at.attribute_type = "OBJECT"; at.attribute_name = "glow"
+    lo_ = nt.new("ShaderNodeMath"); lo_.operation = "SUBTRACT"; lo_.inputs[1].default_value = GLOW_SOFT
+    ln.new(at.outputs["Fac"], lo_.inputs[0])
+    mr = nt.new("ShaderNodeMapRange"); mr.interpolation_type = "SMOOTHSTEP"; mr.clamp = True
+    ln.new(sep.outputs["X"], mr.inputs["Value"])
+    ln.new(at.outputs["Fac"], mr.inputs["From Min"])
+    ln.new(lo_.outputs[0], mr.inputs["From Max"])
+    mr.inputs["To Min"].default_value, mr.inputs["To Max"].default_value = 0.0, 1.0
+    m1 = nt.new("ShaderNodeMath"); m1.operation = "MULTIPLY"
+    ln.new(pw.outputs[0], m1.inputs[0]); ln.new(mr.outputs["Result"], m1.inputs[1])
+    m2 = nt.new("ShaderNodeMath"); m2.operation = "MULTIPLY"; m2.inputs[1].default_value = GLOW_K[tone]
+    ln.new(m1.outputs[0], m2.inputs[0])
+    em = nt.new("ShaderNodeEmission")
     em.inputs["Color"].default_value = (*lin(GLOW_RGB), 1.0)
-    em.inputs["Strength"].default_value = GLOW_EMIT[tone]
-    out = nt.nodes.new("ShaderNodeOutputMaterial")
-    nt.links.new(em.outputs[0], out.inputs["Surface"])
-    aov = nt.nodes.new("ShaderNodeOutputAOV")
-    aov.aov_name = "edge"
-    aov.inputs["Color"].default_value = (*lin(GLOW_RGB), 1.0)
-    cu.materials.append(mat)
-    ob = bpy.data.objects.new("EdgeGlow", cu)
-    coll.objects.link(ob)
-    try:
-        ob.visible_shadow = False
-    except Exception:
-        pass
-    a = scene.view_layers[0].aovs.add()
-    a.name, a.type = "edge", "COLOR"
-    return cu
+    ln.new(m2.outputs[0], em.inputs["Strength"])
+    tr = nt.new("ShaderNodeBsdfTransparent")
+    add = nt.new("ShaderNodeAddShader")
+    ln.new(em.outputs[0], add.inputs[0]); ln.new(tr.outputs[0], add.inputs[1])
+    out = nt.new("ShaderNodeOutputMaterial")
+    ln.new(add.outputs[0], out.inputs["Surface"])
+    ob = G.from_bm("UnderGlow", bm, mat, coll)
+    for k in ("visible_diffuse", "visible_glossy", "visible_transmission", "visible_volume_scatter",
+              "visible_shadow"):
+        try:
+            setattr(ob, k, False)
+        except Exception:
+            pass
+    ob["glow"] = 0.0
+    return ob
 
 
 def add_fade(scene, exclude=()):
@@ -1003,7 +1049,7 @@ def add_fade(scene, exclude=()):
 
 # ---------------------------------------------------------------- output
 
-def output(scene, P, L, cutout, cam, halo=None):
+def output(scene, P, L, cutout, cam):
     """The render's colour, device and compositor (the field), set at render time."""
     view = P.get("view", "Standard")
     # Cycles on another machine (params.cycles_device: OPTIX, CUDA, HIP…): dsfilm.render asks for
@@ -1019,7 +1065,7 @@ def output(scene, P, L, cutout, cam, halo=None):
                 dv.use = dv.type != "CPU"
         except Exception as e:
             print("cycles device:", e)
-    comp = None if cutout else field_compositor(scene, L, halo)
+    comp = None if cutout else field_compositor(scene, L)
 
     def put(owner, attr, value):
         # only when it changes: writing a render setting (even the same value) makes Cycles drop
@@ -1039,13 +1085,8 @@ def output(scene, P, L, cutout, cam, halo=None):
         put(sc.render.image_settings, "color_depth", "8")    # dithered (render.dither_intensity)
         put(sc.render.image_settings, "color_mode", "RGBA" if cutout else "RGB")
         if comp is not None:
-            rx = sc.render.resolution_x * sc.render.resolution_percentage // 100
-            pool_image(comp, L, rx, sc.render.resolution_y * sc.render.resolution_percentage // 100)
-            for n in comp.nodes:          # the halo's blur sizes are px at 1920 wide
-                if n.name.startswith("Halo"):
-                    px = n["halo_px"] * rx / 1920
-                    if tuple(n.inputs["Size"].default_value) != (px, px):
-                        n.inputs["Size"].default_value = (px, px)
+            pool_image(comp, L, sc.render.resolution_x * sc.render.resolution_percentage // 100,
+                       sc.render.resolution_y * sc.render.resolution_percentage // 100)
             if sc.compositing_node_group != comp:
                 sc.compositing_node_group = comp
             put(sc.render, "use_compositing", True)
