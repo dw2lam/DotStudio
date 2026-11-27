@@ -296,7 +296,7 @@ def main(src, dst, debug=False):
             # when the cut-off element stands on it (Classic's tiles)
             if kids and not low:
                 # the box runs off the bottom but its last row is whole: cut a margin below it
-                cut = min(cut, int(max(k["rect"][3] for k in kids) * scale) + int(5 * scale))
+                cut = min(cut, int(max(k["rect"][3] for k in kids) * scale) + int(2 * scale))
                 continue
             if low:
                 x0, x1 = int(card["rect"][0] * scale) + 4 * scale, int(card["rect"][2] * scale) - 4 * scale

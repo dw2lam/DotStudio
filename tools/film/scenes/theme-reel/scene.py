@@ -23,7 +23,11 @@ Modes (params.mode):
             on rising, without a break, into the flat view straight from above (framed like the
             flat still, SCROLL_FILL), reached at 88 %; the last 12 % hold it. The elements land as
             the camera reveals them, nearest the close-up first, each on a short drop while it
-            fades in. A little depth of field at the close-up only, gone by the middle of the move
+            fades in; seated, it sits nearly flush (SEATED_PROUD). As the camera settles into the
+            flat view (the last UNLIT_SECONDS of the move) the light dims away while the UI turns
+            to its own unlit colours, the shadows fade, the parts sink flush and the lens lengthens
+            to near-orthographic: the held frame is the app itself, a straight screenshot (window
+            and editor) on the field. A little depth of field at the close-up only, gone by the middle of the move
     flat    the assembled app straight from above, orthographic (the flat product shot)
     3d      the assembled app in the 3/4 view (the 3D product shot)
 
@@ -104,6 +108,10 @@ LOOKS = {
 BASE = {"window": 0.30, "inspector": 0.26}
 THICK = (0.08, 0.055)
 SEAT = 0.015
+# the site's pictures (scroll, flat, 3d): a seated element sinks into its socket so only this share
+# of its thickness stands proud — nearly flush, as the app looks (it keeps its full thickness while
+# it drops in)
+SEATED_PROUD = 1 / 3
 DROP = 16.0                 # how far above its seat an element starts its fall (out of frame)
 # the scroll sequence: the camera starts straight above, so a long fall would come at the lens —
 # there an element arrives in screen space instead: a short drop onto its seat while it fades in
@@ -135,6 +143,14 @@ CLOSE_EL = 22.0
 CLOSE_WIDTH = 2.2
 MOVE_END = 0.88
 CLOSE_FSTOP = 4.0           # the close-up's depth of field (none from the middle of the move)
+# the end of the scroll sequence: over the last UNLIT_SECONDS of the move, the lights and the world
+# dim to nothing, every UI picture cross-fades to its captured colours unlit (emission 1 under the
+# Standard view = the same sRGB), the shadows fade out of the field (compositor), the parts sink to
+# UNLIT_PROUD and the knobs give way to their pictures, and the lens goes to UNLIT_LENS (the
+# distance with it: the same framing, near-orthographic) — the final frame reads as a screenshot
+UNLIT_SECONDS = 1.4
+UNLIT_PROUD = 0.003
+UNLIT_LENS = 700.0
 # half way through the pull-back (s = BRANCH), the camera leaves it and carries on — position,
 # speed and acceleration continuous (a quintic per channel) — into the flat view from above
 BRANCH = 0.5
@@ -185,6 +201,21 @@ def ui_mat(name, path, L, classic):
         _glassy(mat)
     else:
         ln.new(t.outputs["Alpha"], b.inputs["Alpha"])
+    # the unlit branch: the picture's own colour as emission (alpha x the object's fade), mixed in
+    # by scene["unlit"] (0 unless the scroll's end keys it)
+    out = next(n for n in nt if n.bl_idname == "ShaderNodeOutputMaterial")
+    un = nt.new("ShaderNodeAttribute"); un.attribute_type = "VIEW_LAYER"; un.attribute_name = "unlit"
+    fd = nt.new("ShaderNodeAttribute"); fd.attribute_type = "OBJECT"; fd.attribute_name = "fade"
+    am = nt.new("ShaderNodeMath"); am.operation = "MULTIPLY"
+    ln.new(t.outputs["Alpha"], am.inputs[0]); ln.new(fd.outputs["Fac"], am.inputs[1])
+    em = nt.new("ShaderNodeEmission"); em.inputs["Strength"].default_value = 1.0
+    ln.new(t.outputs["Color"], em.inputs["Color"])
+    tr = nt.new("ShaderNodeBsdfTransparent")
+    cut_ = nt.new("ShaderNodeMixShader")
+    ln.new(am.outputs[0], cut_.inputs[0]); ln.new(tr.outputs[0], cut_.inputs[1]); ln.new(em.outputs[0], cut_.inputs[2])
+    mx = nt.new("ShaderNodeMixShader")
+    ln.new(un.outputs["Fac"], mx.inputs[0]); ln.new(b.outputs[0], mx.inputs[1]); ln.new(cut_.outputs[0], mx.inputs[2])
+    ln.new(mx.outputs[0], out.inputs["Surface"])
     _cutout(mat)
     return mat
 
@@ -323,7 +354,25 @@ def field_compositor(scene, L):
     add.data_type = "RGBA"
     add.blend_type = "ADD"
     add.inputs[0].default_value = 1.0
-    ng.links.new(mul.outputs[2], add.inputs[6])
+    field_term = mul.outputs[2]
+    if rl.outputs.get("Shadow Catcher") is not None:
+        # the shadows as their own multiplier on the field, faded by the unlit end ("Unlit",
+        # set each frame from scene["unlit"])
+        unl = ng.nodes.new("ShaderNodeMath")
+        unl.name, unl.operation = "Unlit", "ADD"
+        unl.inputs[0].default_value = unl.inputs[1].default_value = 0.0
+        sh = ng.nodes.new("ShaderNodeMix")
+        sh.data_type = "RGBA"
+        ng.links.new(unl.outputs[0], sh.inputs[0])
+        ng.links.new(rl.outputs["Shadow Catcher"], sh.inputs[6])
+        sh.inputs[7].default_value = (1.0, 1.0, 1.0, 1.0)
+        m2 = ng.nodes.new("ShaderNodeMix")
+        m2.data_type, m2.blend_type = "RGBA", "MULTIPLY"
+        m2.inputs[0].default_value = 1.0
+        ng.links.new(mul.outputs[2], m2.inputs[6])
+        ng.links.new(sh.outputs[2], m2.inputs[7])
+        field_term = m2.outputs[2]
+    ng.links.new(field_term, add.inputs[6])
     ng.links.new(rl.outputs["Image"], add.inputs[7])
     ng.links.new(add.outputs[2], out.inputs[0])
     return ng
@@ -489,6 +538,7 @@ def build(ctx):
     alu = aluminium("Aluminium", L.get("metal", (0.8, 0.8, 0.79)))
 
     extent = []
+    dial_pics = {}      # a dial root's name -> its captured picture (the scroll's unlit end)
     half = {}           # element root's name -> its half width, half height (the scroll's reveal)
 
     def element(e, name, depth_t, seat_top, side):
@@ -524,6 +574,12 @@ def build(ctx):
         blueish = cap[2] > cap[0] + 0.25
         ptr = (1, 1, 1) if blueish else (0.02, 0.02, 0.02)
         knob("Knob_" + name, 0.33, 0.30, lin(tuple(cap)), ptr, alu, coll, root)
+        if mode == "scroll" and e.get("png"):
+            w, h = (x1 - x0) * PT, (y1 - y0) * PT
+            pic = G.plane_uv("DialPic_" + name, w, h,
+                             ui_mat("UI_Dial_" + name, os.path.join(parts_dir, e["png"]), L, False),
+                             coll, (cx, cy, seat_top + 0.002))
+            dial_pics[root.name] = pic
         for sx in (-1, 1):
             for sy in (-1, 1):
                 extent.append(Vector((cx + sx * R, cy + sy * R, seat_top + 0.36 * R / 0.33)))
@@ -557,6 +613,14 @@ def build(ctx):
                 parent.append(pi)
     N = len(items)
     print(f"REEL elements: {N} ({sum(1 for it in items if it[2] == 'dial')} dials)", flush=True)
+    if mode in ("scroll", "flat", "3d"):
+        sink = []
+        for i, (root, rest, kind, lvl) in enumerate(items):
+            own = 0.0 if kind == "dial" else (1 - SEATED_PROUD) * THICK[lvl - 1]
+            sink.append(own + (sink[parent[i]] if parent[i] is not None else 0.0))
+        items = [(root, rest - k, kind, lvl) for (root, rest, kind, lvl), k in zip(items, sink)]
+        for root, rest, _, _ in items:
+            root.location.z = rest
     if ref is not None:
         extent = frame_points(ref, classic, xy)
 
@@ -574,8 +638,10 @@ def build(ctx):
         coll.objects.link(ob)
         ob.location = loc
         G.look_at(ob, loc, target)
+        lights.append(ob)
         return ob
 
+    lights = []
     centre = sum(extent, Vector()) / len(extent)
     c0 = Vector((centre.x, centre.y, 0.3))
     if L["rig"] == "soft":
@@ -707,6 +773,34 @@ def build(ctx):
                 (u, v), = project(pos, look, [p])
                 return u - 2 * sx, v - 2 * sy * aspect
 
+    if mode == "scroll":
+        u0, u1 = MOVE_END * S - UNLIT_SECONDS, MOVE_END * S
+        lit = [(ob.data, ob.data.energy) for ob in lights]
+        world_k = bg.inputs["Strength"].default_value
+        flush = []           # how far each part sinks at the end (with what it sits on)
+        for i, (root, rest, kind, lvl) in enumerate(items):
+            # (a seated part stands THICK x SEATED_PROUD - SEAT above what it sits on)
+            own = 0.0 if kind == "dial" else max(SEATED_PROUD * THICK[lvl - 1] - SEAT - UNLIT_PROUD, 0.0)
+            flush.append(own + (flush[parent[i]] if parent[i] is not None else 0.0))
+        scene["unlit"] = 0.0
+        try:                 # the shadows as a pass of their own (the compositor fades them)
+            scene.view_layers[0].cycles.use_pass_shadow_catcher = True
+        except Exception as e:
+            print("shadow catcher pass:", e)
+
+        def unlit_k(t):
+            return smoothstep(u0, u1, t)
+
+        def unlit_pose(t, look):
+            k = unlit_k(t)
+            scene["unlit"] = k
+            for ld, e in lit:
+                ld.energy = e * (1 - k)
+            bg.inputs["Strength"].default_value = world_k * (1 - k)
+            lens = LENS * (UNLIT_LENS / LENS) ** k
+            cam.location = look + (cam.location - look) * (lens / LENS)
+            cd.lens = lens
+
     # ---------------------------------------------------------------- motion
     # landing times: evenly spaced, in landing order (each card, then what sits on it)
     if mode == "loop":
@@ -805,6 +899,7 @@ def build(ctx):
             cd.shift_x, cd.shift_y = sx, sy
             cd.dof.focus_distance = (look - pos).length
             cd.dof.aperture_fstop = fstop
+            unlit_pose(t, look)
         for i, (root, rest, kind, lvl) in enumerate(items):
             dz, vis = zpos(i, t)
             if i == press_i and mode == "loop":
@@ -817,6 +912,13 @@ def build(ctx):
                 root.rotation_euler = (0, 0, dial_angle(dial_i.index(i), i, t))
             if mode == "scroll":     # fades in over the first 60 % of its short drop
                 f = smoothstep(land[i] - FALL, land[i] - 0.4 * FALL, t)
+                k = unlit_k(t)
+                if kind == "dial":   # the unlit end: the knob gives way to its picture
+                    f *= 1 - k
+                    if root.name in dial_pics:
+                        dial_pics[root.name]["fade"] = k
+                elif vis:            # …and the parts sink flush
+                    root.location.z -= k * flush[i]
                 for ob in fading[i]:
                     ob["fade"] = f
 
@@ -824,6 +926,8 @@ def build(ctx):
     fading = [[ob for ob in it[0].children_recursive if ob.type == "MESH"] for it in items]
     if mode == "scroll":
         ids += [(cd, "shift_x"), (cd, "shift_y"), (cd, "dof.focus_distance"), (cd, "dof.aperture_fstop")]
+        ids += [(cd, "lens"), (scene, '["unlit"]'), (bg.inputs["Strength"], "default_value")]
+        ids += [(ob.data, "energy") for ob in lights] + [(ob, '["fade"]') for ob in dial_pics.values()]
         add_fade(scene, exclude=("FloorMat",))
         ids += [(ob, '["fade"]') for obs in fading for ob in obs]
     lp.bake(ids, pose, props=("location", "rotation_euler"))
@@ -938,6 +1042,9 @@ def output(scene, P, L, cutout, cam):
         if comp is not None:
             pool_image(comp, L, sc.render.resolution_x * sc.render.resolution_percentage // 100,
                        sc.render.resolution_y * sc.render.resolution_percentage // 100)
+            un = comp.nodes.get("Unlit")
+            if un is not None:
+                un.inputs[0].default_value = float(sc.get("unlit", 0.0))
             if sc.compositing_node_group != comp:
                 sc.compositing_node_group = comp
             put(sc.render, "use_compositing", True)
