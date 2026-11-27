@@ -1,26 +1,46 @@
-"""Theme reel: Settings › General › Theme's films — one theme's real UI as an exploded, floating
-stack in depth, shot like a product film.
+"""Theme reel: Settings › General › Theme's films — the app assembling itself, shot like a hardware
+maker's product film: one object, centred, sharp, on a plain seamless field.
 
-The parts are the app's own UI, captured offscreen by UIShots (capture.sh) and prepared by prep.py:
-the window is the base of the stack; the Screensaver & Wallpaper deck, a row of style tiles, the
-editor's inspector and a row of keys float above it, each a picture on a real slab with rounded
-corners and a little thickness (Classic's glass cards are frosted glass that refracts what's
-behind). At the front, built as real geometry, each theme's hero: Retro's panel of machined
-aluminium dials with coloured caps (knurled edges, a spun face, printed scale and legends) that
-turn; Classic's switch and slider on a frosted glass plate (the switch flips on and off, its track
-turning accent blue; the slider moves). The shot racks focus from the hero to the deck and back.
+The object is the app as it shows — the window, with the editor's inspector docked at its right —
+taken apart by prep.py into every visible element (found in the real UI captured offscreen by
+capture.sh): the toolbar keys, the Screensaver and Wallpaper cards with their screens and keys, the
+sync key, the filter box with its search field and chips, the Scenes box with each style tile, the
+inspector's header, readouts and swatch — and, on Retro, the inspector's dials as real machined
+aluminium knobs (knurled body, spun face, coloured cap, engraved index). Each element is its
+picture on a slab with rounded corners and a little thickness; under it, its parent shows a socket.
+
+The film: the empty chassis (window and inspector, their sockets bare) rests on the field; one by
+one, evenly, every element drops in from above and seats with a small press and spring, like a
+keycap (the dials seat, then turn); the assembled app holds (dials turn, a key presses); then the
+elements lift out in reverse, last in first out, and the chassis is empty again — a seamless loop.
+
+Modes (params.mode):
+    loop    the 8 s film above (Settings' Theme films); the camera sways a few degrees
+    scroll  ONE-WAY: empty -> assembled, no lift-out; every element has its own landing frame,
+            spread evenly; the camera is locked (scrubbing back and forth looks right); the last
+            frames hold the assembled app — the same frame as the 3D hero still
+    flat    the assembled app straight from above, orthographic (the flat product shot)
+
+The shot (tools/film/README.md's rules apply; see render-all.sh):
+- a long lens (near-orthographic), a 3/4 view from above, the object centred with generous
+  negative space; the frame is fitted to the object (distance + lens shift), not hand-placed;
+- crisp: no depth of field;
+- the field is composited, not lit: the render is transparent over a shadow catcher, and the
+  compositor lays it over the field's exact colour — light grey #e3e3e1 in light, black in dark
+  (with a faint pool of light under the object) — so the films sit seamlessly on the site's bands;
+- light: soft, large overhead light on grey; on black a low-key rig (a strip rim from behind, a
+  key from the side) so edges and knurls catch the light and the UI glows.
 
 Params (the spec's "params"; render-all.sh writes one spec per variant):
     theme  "classic" | "retro"
     tone   "light" | "dark"
-    parts  folder with prep.py's output (window.png, deck.png, …, parts.json)
-    font   the legends' font file (default: the repo's App/Fonts/HankenGrotesk-Medium.ttf)
+    parts  folder with prep.py's output (m-window.png, e-*.png, parts.json)
+    mode   "loop" (default) | "scroll" | "flat"
+    font   unused (kept for older specs)
     cycles_device  Cycles' GPU backend off a Mac (OPTIX, CUDA, HIP…)
-    fstop, view    the lens (default 0.08) and the view transform (default Standard)
-
-Everything that moves is periodic in the loop (8 s): the camera's orbit, dolly and roll, the
-parts' float, the key light's drift, the rack focus (front, to the back, and front again), the
-dials' turns and the switch and slider (eased moves that come back to where they started).
+    view   the view transform (default Standard: the UI's own colours)
+    cutout true: no field — a transparent RGBA picture with the shadow in its alpha
+    fstop  optional depth of field (default none: the shot is sharp)
 """
 import json
 import math
@@ -39,9 +59,6 @@ VARIANTS = ["day"]          # the lighting preset is unused (the look comes from
 CAMERAS = ["hero"]
 
 PT = 0.01                   # one point of UI = 0.01 Blender units (the window is 12.8 wide)
-# the Retro legends' type (Hanken Grotesk, the app's own); params.font overrides (a copy travels with
-# the work folder when Blender runs on another Mac)
-FONT = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "App", "Fonts", "HankenGrotesk-Medium.ttf")
 
 
 def lin(hex_or_rgb):
@@ -53,42 +70,41 @@ def lin(hex_or_rgb):
     return tuple(v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in c)
 
 
-# Per variant: the set's colours and light. Sides are the slabs' edges (the panel colour, a step
-# down); "rim" is the theme's accent light from behind.
+# Per variant: the field (composited), the studio (world: what glossy parts reflect, and a soft
+# fill), the light rig, and the slabs' sides. "pool": dark only — a faint lift of the black field
+# under the object (its centre colour).
 LOOKS = {
-    "retro-light": dict(backdrop=0xC9C9C3, world=0xE4E4DE, world_k=0.35, side=0xE6E6E0, window_side=0xD6D6D0,
-                        rim=(1.0, 0.42, 0.04), rim_k=1.0, key_k=1.0, key_tint=(1.0, 0.97, 0.92), ui_emit=0.30,
-                        coat=0.12, ui_rough=0.55, panel=0xF3F3EE, legend=0x525257, tick=0x7A7A7E,
-                        metal=(0.80, 0.80, 0.79), exposure=0.0),
-    "retro-dark": dict(backdrop=0x0C0C0E, world=0x18181B, world_k=0.35, side=0x232326, window_side=0x1A1A1D,
-                       rim=(1.0, 0.40, 0.02), rim_k=1.8, key_k=0.8, key_tint=(0.92, 0.95, 1.0), ui_emit=0.55,
-                       coat=0.12, ui_rough=0.55, panel=0x1B1B1E, legend=0xACAAAE, tick=0x78767A,
-                       metal=(0.62, 0.62, 0.61), exposure=0.3),
-    "classic-light": dict(backdrop=0xBFCADB, world=0xE8EEF7, world_k=0.35, side=0xF2F3F6, window_side=0xE4E6EA,
-                          rim=(0.25, 0.55, 1.0), rim_k=1.2, key_k=1.0, key_tint=(0.97, 0.98, 1.0), ui_emit=0.30,
-                          coat=0.5, ui_rough=0.35, frost=0xEEF2F8, glass=0xF4F7FC, exposure=0.0),
-    "classic-dark": dict(backdrop=0x090B12, world=0x121624, world_k=0.4, side=0x2A2B30, window_side=0x222327,
-                         rim=(0.20, 0.50, 1.0), rim_k=2.2, key_k=0.8, key_tint=(0.92, 0.95, 1.0), ui_emit=0.55,
-                         coat=0.5, ui_rough=0.35, frost=0x34363E, glass=0x5A6070, exposure=0.3),
+    "retro-light": dict(field=0xE3E3E1, world=0xE3E3E1, world_k=0.45, rig="soft", light_k=1.0,
+                        side=0xDDDDD6, window_side=0xD0D0C9, ui_emit=0.30, coat=0.10, ui_rough=0.55,
+                        metal=(0.80, 0.80, 0.79)),
+    "retro-dark": dict(field=0x000000, pool=0x161618, world=0x0A0A0B, world_k=0.25, rig="dramatic", light_k=1.0,
+                       side=0x232326, window_side=0x1A1A1D, ui_emit=0.55, coat=0.10, ui_rough=0.55,
+                       metal=(0.66, 0.66, 0.65)),
+    "classic-light": dict(field=0xE3E3E1, world=0xE6E7EA, world_k=0.45, rig="soft", light_k=1.0,
+                          side=0xE9EAEE, window_side=0xDADCE0, ui_emit=0.30, coat=0.40, ui_rough=0.35,
+                          glass=0xF4F7FC),
+    "classic-dark": dict(field=0x000000, pool=0x15161A, world=0x0A0B0E, world_k=0.25, rig="dramatic", light_k=1.0,
+                         side=0x2A2B30, window_side=0x222327, ui_emit=0.55, coat=0.40, ui_rough=0.35,
+                         glass=0x5A6070),
 }
 
-# Where each part floats: centre (x, y) and height z above the window, in Blender units. The
-# deck and tiles sit over where they live in the window, lifted; the inspector hangs off the
-# window's right edge; the keys (and Retro's dials) float nearest the camera.
-STACK = {
-    "window": (0.0, 0.0, 0.0),
-    "deck": (-0.3, 2.9, 0.8),
-    "tiles": (0.4, -1.2, 1.6),
-    "inspector": (4.7, 0.3, 2.5),
-    "keys": (-2.7, -4.0, 3.0),
-}
-# The hero at the front, where the shot opens in focus: Retro's dial panel; Classic's switch and
-# slider on a frosted glass plate.
-DIALS_AT = (2.4, -4.8, 4.2)
-DIALS_SCALE = 0.85
-CORNER = {"retro": {"window": 14, "default": 6},
-          "classic": {"window": 14, "deck": 24, "tiles": 14, "inspector": 12, "keys": 12, "default": 10}}
-FOCUS_BACK = (0.0, 2.4, 0.8)    # the rack focus: from the front part (dials / keys) to the deck
+# Thickness (Blender units): a module's base (rests on the field), a level-1 element, a level-2
+# element; an element sits SEAT deep in its parent's top (its socket).
+BASE = {"window": 0.30, "inspector": 0.26}
+THICK = (0.08, 0.055)
+SEAT = 0.015
+DROP = 16.0                 # how far above its seat an element starts its fall (out of frame)
+PARK = -40.0                # where an element waits (under the floor) before it falls / after it lifts out
+
+# The camera: a long lens, 3/4 from the front-right and above; the object fills FILL of the frame's
+# width (or HEIGHT_FILL of its height), centred by lens shift.
+LENS = 135.0
+AZIMUTH = 20.0
+ELEVATION = 47.0
+SWAY = 3.0                  # loop only: degrees of azimuth, one slow sine over the loop
+FILL = 0.72
+HEIGHT_FILL = 0.74
+FLAT_FILL = 0.80
 
 
 # ---------------------------------------------------------------- materials
@@ -237,20 +253,68 @@ def knob(name, R, H, cap_rgb, pointer_rgb, alu, coll, root):
     return root
 
 
-def text(name, s, size, mat, coll, loc, parent, font=FONT):
-    cu = bpy.data.curves.new(name, "FONT")
-    cu.body = s
-    cu.size = size
-    cu.align_x = "CENTER"
-    cu.align_y = "CENTER"
-    if font and os.path.exists(font):
-        cu.font = bpy.data.fonts.load(os.path.abspath(font), check_existing=True)
-    ob = bpy.data.objects.new(name, cu)
-    coll.objects.link(ob)
-    ob.data.materials.append(mat)
-    ob.location = loc
-    ob.parent = parent
-    return ob
+# ---------------------------------------------------------------- the field (compositor)
+
+def field_compositor(scene, L):
+    """Lays the transparent render over the field: out = render + field x (1 - alpha) (the render is
+    premultiplied; the shadow catcher's shadow is in its alpha). The field is the exact colour (in
+    linear light; the Standard view gives the sRGB value back); in dark, a faint pool of light under
+    the object (a soft ellipse) falls off to pure black at the edges."""
+    ng = bpy.data.node_groups.new("Field", "CompositorNodeTree")
+    ng.interface.new_socket("Image", in_out="OUTPUT", socket_type="NodeSocketColor")
+    rl = ng.nodes.new("CompositorNodeRLayers")
+    out = ng.nodes.new("NodeGroupOutput")
+    field = (*lin(L["field"]), 1.0)
+    bg = None
+    if L.get("pool") is not None:
+        # the pool as a picture made once (a soft elliptical falloff, smoothstep), not a per-frame
+        # blur: a 400 px blur in the compositor costs seconds a frame
+        node = ng.nodes.new("CompositorNodeImage")
+        node.name = "Pool"
+        bg = node.outputs["Image"]
+    inv = ng.nodes.new("ShaderNodeMath")
+    inv.operation = "SUBTRACT"
+    inv.inputs[0].default_value = 1.0
+    ng.links.new(rl.outputs["Alpha"], inv.inputs[1])
+    mul = ng.nodes.new("ShaderNodeMix")
+    mul.data_type = "RGBA"
+    mul.blend_type = "MULTIPLY"
+    mul.inputs[0].default_value = 1.0
+    if bg is not None:
+        ng.links.new(bg, mul.inputs[6])
+    else:
+        mul.inputs[6].default_value = field
+    ng.links.new(inv.outputs[0], mul.inputs[7])
+    add = ng.nodes.new("ShaderNodeMix")
+    add.data_type = "RGBA"
+    add.blend_type = "ADD"
+    add.inputs[0].default_value = 1.0
+    ng.links.new(mul.outputs[2], add.inputs[6])
+    ng.links.new(rl.outputs["Image"], add.inputs[7])
+    ng.links.new(add.outputs[2], out.inputs[0])
+    return ng
+
+
+def pool_image(ng, L, w, h):
+    """Fills the compositor's Pool node with the dark field's pool at the render's size (made once
+    per size, at render time: the size is only final then)."""
+    node = ng.nodes.get("Pool")
+    if node is None or (node.image is not None and tuple(node.image.size) == (w, h)):
+        return
+    import numpy as np
+    y, x = np.mgrid[0:h, 0:w].astype(np.float32)
+    d = np.sqrt(((x + 0.5) / w - 0.5) ** 2 / 0.48 ** 2 + ((y + 0.5) / h - 0.47) ** 2 / 0.42 ** 2)
+    k = np.clip(1.0 - d, 0.0, 1.0)
+    k = k * k * (3 - 2 * k)
+    pool, f0 = np.array(lin(L["pool"]), np.float32), np.array(lin(L["field"]), np.float32)
+    px = np.empty((h, w, 4), np.float32)
+    px[..., :3] = f0 + (pool - f0) * k[..., None]
+    px[..., 3] = 1.0
+    im = bpy.data.images.new(f"Pool{w}x{h}", w, h, alpha=False, float_buffer=True)
+    im.colorspace_settings.name = "Linear Rec.709"
+    im.pixels.foreach_set(px[::-1].ravel())         # Blender's rows run bottom-up
+    node.image = im
+
 
 
 # ---------------------------------------------------------------- the set
@@ -258,19 +322,24 @@ def text(name, s, size, mat, coll, loc, parent, font=FONT):
 def build(ctx):
     P = ctx.params
     theme, tone = P.get("theme", "retro"), P.get("tone", "light")
-    key = f"{theme}-{tone}"
-    L = LOOKS[key]
+    L = LOOKS[f"{theme}-{tone}"]
     classic = theme == "classic"
+    cutout = bool(P.get("cutout"))
+    mode = P.get("mode", "loop")
     parts_dir = P["parts"]
     with open(os.path.join(parts_dir, "parts.json")) as f:
-        manifest = json.load(f)["parts"]
-    ctx.light["exposure"] = L["exposure"]        # no daylight preset here: the set's own exposure
+        man = json.load(f)
+    ctx.light["exposure"] = 0.0      # the field is composited at its exact value: no view exposure
     lp = ctx.loop
     S = lp.seconds
     coll = ctx.coll("Reel")
     scene = ctx.scene
+    AW, AH = man["size"]
 
-    # world: a soft ambient in the set's colour
+    def xy(px, py):                  # assembly points (origin top left, y down) -> Blender x, y
+        return (px - AW / 2) * PT, (AH / 2 - py) * PT
+
+    # world: the studio — what glossy parts reflect, and a soft fill
     world = bpy.data.worlds.new("World")
     scene.world = world
     world.use_nodes = True
@@ -282,214 +351,230 @@ def build(ctx):
     except Exception:
         pass
 
-    # backdrop: a seamless floor under the stack (no horizon: the camera looks down on it)
-    bd = G.plane_uv("Backdrop", 120, 120, flat("Backdrop", lin(L["backdrop"]), 0.85), coll, (0, 0, -1.4))
+    # the floor: a shadow catcher (the field itself is composited)
+    floor = G.plane_uv("Floor", 400, 400, flat("FloorMat", (0.8, 0.8, 0.8), 0.9), coll, (0, 0, 0))
+    floor.is_shadow_catcher = True
 
-    if classic:
-        # Classic's cards stand on clear glass: their edges catch the light and refract what's under
-        side = flat("Side", lin(L["glass"]), 0.12, **{"Transmission Weight": 1.0, "IOR": 1.45})
-        _glassy(side)
-    else:
-        side = flat("Side", lin(L["side"]), 0.45, **{"Coat Weight": 0.2})
     wside = flat("WindowSide", lin(L["window_side"]), 0.5)
-    corner = CORNER[theme]
-    roots = {}
-    for name, (x, y, z) in STACK.items():
-        info = manifest[name]
-        w, h = info["size"][0] * PT, info["size"][1] * PT
-        root = G.empty("Part_" + name, coll, (x, y, z))
-        roots[name] = root
-        pic = G.plane_uv("Pic_" + name, w, h, ui_mat("UI_" + name, os.path.join(parts_dir, name + ".png"), L, classic),
-                         coll, (0, 0, 0.002))
+    if classic:      # Classic's cards stand on clear glass: their edges catch the light
+        side1 = flat("Side1", lin(L["glass"]), 0.15, **{"Transmission Weight": 1.0, "IOR": 1.45})
+        _glassy(side1)
+    else:
+        side1 = flat("Side1", lin(L["side"]), 0.45, **{"Coat Weight": 0.2})
+    side2 = flat("Side2", lin(L["side"]), 0.4, **{"Coat Weight": 0.25})
+    alu = aluminium("Aluminium", L.get("metal", (0.8, 0.8, 0.79)))
+
+    extent = []
+
+    def element(e, name, depth_t, seat_top, side):
+        """One element: an empty at its seat (the top of its slab), its slab and its picture."""
+        x0, y0, x1, y1 = e["rect"]
+        w, h = (x1 - x0) * PT, (y1 - y0) * PT
+        cx, cy = xy((x0 + x1) / 2, (y0 + y1) / 2)
+        top = seat_top + depth_t
+        root = G.empty("El_" + name, coll, (cx, cy, top))
+        r = min(e["radius"] * PT, 0.5 * min(w, h) - 1e-4)
+        s = rounded_slab("Slab_" + name, w - 0.002, h - 0.002, depth_t + SEAT, r, side, coll,
+                         bevel=min(0.012, depth_t * 0.4))
+        s.parent = root
+        pic = G.plane_uv("Pic_" + name, w, h, ui_mat("UI_" + name, os.path.join(parts_dir, e["png"]), L, False),
+                         coll, (0, 0, 0.0015))
         pic.parent = root
-        rad = corner.get(name, corner["default"]) * PT
-        depth = 0.16 if name == "window" else 0.07
-        for i, body in enumerate(info["bodies"]):
-            if body["glass"]:
-                continue                       # frosted in the picture's own material
-            x0, y0, x1, y1 = [v * PT for v in body["rect"]]
-            inset = 0.6 * PT
-            bw, bh = x1 - x0 - 2 * inset, y1 - y0 - 2 * inset
-            r = min(rad, 0.5 * min(bw, bh)) if (x1 - x0) > 1.0 else min(4 * PT * 1.5, 0.5 * min(bw, bh))
-            s = rounded_slab(f"Slab_{name}_{i}", bw, bh, depth, r, wside if name == "window" else side, coll)
-            s.location = ((x0 + x1) / 2 - w / 2, h / 2 - (y0 + y1) / 2, 0.0)
-            s.parent = root
+        for sx in (-1, 1):
+            for sy in (-1, 1):
+                extent.append(Vector((cx + sx * w / 2, cy + sy * h / 2, top)))
+        return root, top
 
-    # Retro: the dials, real
-    dial_roots = []
-    if not classic:
-        droot = G.empty("Dials", coll, DIALS_AT)
-        droot.scale = (DIALS_SCALE,) * 3
-        roots["dials"] = droot
-        panel = rounded_slab("DialPanel", 5.0, 1.95, 0.14, 0.09, flat("DialPanelMat", lin(L["panel"]), 0.55,
-                                                                       **{"Coat Weight": 0.15}), coll)
-        panel.parent = droot
-        alu = aluminium("Aluminium", L["metal"])
-        caps = [(0x0088E8, (1, 1, 1)), (0x00BD5F, (0.01, 0.02, 0.01)), (0xFBFBF7, (0.02, 0.02, 0.02)),
-                (0xFF7300, (0.02, 0.01, 0.0))]
-        legends = ["speed", "glow", "size", "level"]
-        legend_mat = flat("Legend", lin(L["legend"]), 0.6)
-        tick_mat = flat("Tick", lin(L["tick"]), 0.6)
-        R, H = 0.33, 0.34
-        for i, ((capc, ptr), lg) in enumerate(zip(caps, legends)):
-            cx = -1.8 + 1.2 * i
-            kr = G.empty(f"Knob{i}", coll, (cx, 0.14, 0.0), parent=droot)
-            knob(f"Knob{i}", R, H, lin(capc) if capc != 0xFBFBF7 else lin(0xF4F4EF), ptr, alu, coll, kr)
-            dial_roots.append(kr)
-            for k in range(11):        # the printed scale: 11 dots over 270°
-                a = math.radians(225 - 27 * k)
-                d = G.box(f"Tick{i}_{k}", (0.03, 0.03, 0.004),
-                          (cx + 0.48 * math.cos(a), 0.14 + 0.48 * math.sin(a), 0.002), tick_mat, coll)
-                d.parent = droot
-            text(f"Legend{i}", lg, 0.15, legend_mat, coll, (cx, -0.62, 0.003), droot, P.get("font", FONT))
+    def dial(e, name, seat_top):
+        """A Retro dial: the machined knob, scaled to the dial's size, seated in its socket."""
+        x0, y0, x1, y1 = e["rect"]
+        cx, cy = xy((x0 + x1) / 2, (y0 + y1) / 2)
+        R = 0.5 * (x1 - x0) * PT * 0.94
+        root = G.empty("Dial_" + name, coll, (cx, cy, seat_top))
+        root.scale = (R / 0.33,) * 3
+        cap = [v / 255 for v in e.get("cap", (240, 240, 236))]
+        bright = 0.2126 * cap[0] + 0.7152 * cap[1] + 0.0722 * cap[2]
+        blueish = cap[2] > cap[0] + 0.25
+        ptr = (1, 1, 1) if blueish else (0.02, 0.02, 0.02)
+        knob("Knob_" + name, 0.33, 0.30, lin(tuple(cap)), ptr, alu, coll, root)
+        for sx in (-1, 1):
+            for sy in (-1, 1):
+                extent.append(Vector((cx + sx * R, cy + sy * R, seat_top + 0.36 * R / 0.33)))
+        return root
 
-    # Classic: its controls, real — a switch and a slider on a frosted glass plate
-    controls = None
-    if classic:
-        croot = G.empty("Controls", coll, DIALS_AT)
-        croot.scale = (DIALS_SCALE,) * 3
-        roots["dials"] = croot
-        plate = M.principled("GlassPlate", lin(L["glass"]), 0.32, **{"Transmission Weight": 1.0, "IOR": 1.45,
-                                                                     "Coat Weight": 0.6, "Coat Roughness": 0.05})
-        _glassy(plate)
-        rounded_slab("Plate", 4.6, 1.6, 0.12, 0.42, plate, coll, bevel=0.03).parent = croot
-        accent = lin(0x0A84FF if tone == "dark" else 0x007AFF)
-        groove = lin(0x48484C if tone == "dark" else 0xD6D6DB)
-        white = M.principled("KnobWhite", lin(0xFBFBFD), 0.3, **{"Coat Weight": 0.6, "Coat Roughness": 0.1})
-        # the switch: a capsule track whose colour runs grey -> accent as it turns on, a white knob
-        track_mat = M.principled("SwitchTrack", groove, 0.35, **{"Coat Weight": 0.5, "Coat Roughness": 0.08})
-        nt, ln = M._nodes(track_mat)
-        mix = nt.new("ShaderNodeMix")
-        mix.data_type = "RGBA"
-        mix.inputs[6].default_value = (*groove, 1)
-        mix.inputs[7].default_value = (*accent, 1)
-        ln.new(mix.outputs[2], nt.get("Principled BSDF").inputs["Base Color"])
-        sx = -1.2
-        track = rounded_slab("SwitchTrack", 1.3, 0.74, 0.06, 0.37, track_mat, coll, bevel=0.02)
-        track.location = (sx, 0, 0.06)
-        track.parent = croot
-        sknob = ring_mesh("SwitchKnob", [(0.3, 0.0), (0.31, 0.04), (0.30, 0.07), (0.26, 0.088)], white, coll)
-        G.smooth_by_angle(sknob, 60)
-        sknob.parent = croot
-        # the slider: a groove, an accent fill from its left end, a white knob
-        rx0, rlen = 0.0, 1.9
-        rail = rounded_slab("SliderRail", rlen, 0.11, 0.03, 0.055, M.principled("Rail", groove, 0.4), coll, bevel=0.01)
-        rail.location = (rx0 + rlen / 2, 0, 0.03)
-        rail.parent = croot
-        froot = G.empty("SliderFillRoot", coll, (rx0, 0, 0.032), parent=croot)
-        fill = rounded_slab("SliderFill", 1.0, 0.11, 0.032, 0.05, M.principled("Fill", accent, 0.3), coll, bevel=0.0)
-        fill.location = (0.5, 0, 0)
-        fill.parent = froot
-        lknob = ring_mesh("SliderKnob", [(0.19, 0.0), (0.2, 0.03), (0.19, 0.055), (0.16, 0.068)], white, coll)
-        G.smooth_by_angle(lknob, 60)
-        lknob.parent = croot
-        controls = dict(mix=mix.inputs[0], sknob=sknob, sx=sx, froot=froot, lknob=lknob, rx0=rx0, rlen=rlen)
+    # the chassis: each module's base rests on the field
+    items = []          # (root, rest z, kind, level) in landing order
+    for m in man["modules"]:
+        d = BASE.get(m["name"], 0.12)
+        base, mtop = element(m, "M_" + m["name"], d - SEAT, 0.0, wside)
+        for i, c in enumerate(m["children"]):
+            nm = f"{m['name'][0]}{i}"
+            if c["kind"] == "dial":
+                if classic:
+                    continue
+                items.append((dial(c, nm, mtop), mtop, "dial", 1))
+                continue
+            root, ctop = element(c, nm, THICK[0], mtop - SEAT, side1)
+            items.append((root, ctop, c["kind"], 1))
+            for j, k in enumerate(c.get("children", [])):
+                if k["kind"] == "dial":
+                    items.append((dial(k, f"{nm}_{j}", ctop), ctop, "dial", 2))
+                    continue
+                kr, ktop = element(k, f"{nm}_{j}", THICK[1], ctop - SEAT, side2)
+                items.append((kr, ktop, k["kind"], 2))
+    N = len(items)
+    print(f"REEL elements: {N} ({sum(1 for it in items if it[2] == 'dial')} dials)", flush=True)
 
     # ---------------------------------------------------------------- light
-    def area(name, size, energy, color, loc, target, shape="RECTANGLE", size_y=None):
+    def area(name, size, energy, color, loc, target, size_y=None, spread=None):
         ld = bpy.data.lights.new(name, "AREA")
-        ld.shape = shape
+        ld.shape = "RECTANGLE"
         ld.size = size
-        if size_y:
-            ld.size_y = size_y
-        ld.energy = energy
+        ld.size_y = size_y or size
+        ld.energy = energy * L["light_k"]
         ld.color = color
-        try:
-            ld.use_shadow_jitter = True
-        except Exception:
-            pass
+        if spread:
+            ld.spread = math.radians(spread)
         ob = bpy.data.objects.new(name, ld)
         coll.objects.link(ob)
         ob.location = loc
         G.look_at(ob, loc, target)
         return ob
 
-    tgt = Vector((0.8, -1.3, 1.8))
-    key_l = area("Key", 9.0, 1500 * L["key_k"], L["key_tint"], (-7.5, 6.0, 15.0), tgt, size_y=6.0)
-    area("Fill", 14.0, 400 * L["key_k"], (1, 1, 1), (10.0, -12.0, 9.0), tgt)
-    area("Rim", 12.0, 900 * L["rim_k"], L["rim"], (2.0, 16.0, 3.5), (0.0, 0.0, 1.0), size_y=3.0)
+    centre = sum(extent, Vector()) / len(extent)
+    c0 = Vector((centre.x, centre.y, 0.3))
+    if L["rig"] == "soft":
+        # one big soft source overhead (a little behind), a gentle soft key from the front-left for
+        # shape, and a faint kicker from behind so edges hold a line on the grey
+        area("Top", 30.0, 2000, (1.0, 1.0, 1.0), (c0.x - 2.0, c0.y + 4.0, 26.0), c0, size_y=20.0)
+        area("Key", 8.0, 1100, (1.0, 0.985, 0.96), (c0.x - 14.0, c0.y + 6.0, 13.0), c0)
+        area("Kick", 18.0, 240, (1.0, 1.0, 1.0), (c0.x + 2.0, c0.y + 18.0, 5.0), c0, size_y=2.5)
+    else:
+        # low key on black: a long strip rim from behind and above, a smaller key from the left with
+        # a limited spread (its light falls off across the object), a cool strip kicker on the
+        # right, and a dim overhead so the UI's own light reads as light
+        area("Rim", 28.0, 2200, (1.0, 1.0, 1.0), (c0.x, c0.y + 15.0, 7.5), c0, size_y=1.4)
+        area("Key", 4.0, 900, (1.0, 0.97, 0.93), (c0.x - 14.0, c0.y - 6.0, 11.0), c0, spread=70)
+        area("Kick", 1.6, 420, (0.86, 0.92, 1.0), (c0.x + 15.0, c0.y + 1.0, 4.5), c0, size_y=12.0)
+        area("Top", 30.0, 520, (1.0, 1.0, 1.0), (c0.x, c0.y + 2.0, 26.0), c0, size_y=20.0)
 
     # ---------------------------------------------------------------- camera
     cd = bpy.data.cameras.new("Hero")
-    cd.lens = 50
     cd.sensor_width = 36
-    cd.dof.use_dof = True
-    cd.dof.aperture_fstop = P.get("fstop", 0.08)
-    cd.dof.aperture_blades = 0
+    cd.sensor_fit = "HORIZONTAL"
+    cd.clip_start = 1.0
+    cd.clip_end = 3000.0
+    if P.get("fstop"):
+        cd.dof.use_dof = True
+        cd.dof.aperture_fstop = P["fstop"]
     cam = bpy.data.objects.new("Hero", cd)
     coll.objects.link(cam)
     scene.camera = cam
+    aspect = 1.6                              # the films and stills are 16:10
 
-    front = Vector(DIALS_AT)
-    back = Vector(FOCUS_BACK)
+    def direction(az, el):
+        az, el = math.radians(az), math.radians(el)
+        return Vector((math.sin(az) * math.cos(el), -math.cos(az) * math.cos(el), math.sin(el)))
 
-    def cam_at(t):
-        u = math.tau * t / S
-        az = math.radians(26 + 5.0 * math.sin(u))
-        el = math.radians(49 + 3.0 * math.sin(u + 1.3))
-        dist = 18.0 - 0.5 * math.cos(u)
-        look = tgt + Vector((0.25 * math.sin(u), 0.15 * math.cos(u), 0))
-        pos = look + dist * Vector((math.sin(az) * math.cos(el), -math.cos(az) * math.cos(el), math.sin(el)))
-        return pos, look, 1.2 * math.sin(u + 0.6)
+    if mode == "flat":
+        # straight down, orthographic: the flat app as a product shot
+        cd.type = "ORTHO"
+        xs, ys = [p.x for p in extent], [p.y for p in extent]
+        cd.ortho_scale = max((max(xs) - min(xs)) / FLAT_FILL, (max(ys) - min(ys)) * aspect / FLAT_FILL)
+        cam.location = ((max(xs) + min(xs)) / 2, (max(ys) + min(ys)) / 2, 80.0)
+        cam.rotation_euler = (0, 0, 0)
+        dist, dvec = None, None
+    else:
+        cd.lens = LENS
 
-    def rack(t):
-        # front -> back (2.2–3.5 s), hold, back -> front (5.9–7.2 s)
-        return smoothstep(2.2, 3.5, t) - smoothstep(5.9, 7.2, t)
+        def project(pos, look, pts):
+            f = (look - pos).normalized()
+            r = f.cross(Vector((0, 0, 1))).normalized()
+            u = r.cross(f)
+            k = LENS / 18
+            return [((p - pos).dot(r) / (p - pos).dot(f) * k, (p - pos).dot(u) / (p - pos).dot(f) * k * aspect)
+                    for p in pts]
 
-    float_ph = {"window": 0.0, "deck": 0.9, "tiles": 2.1, "inspector": 3.3, "keys": 4.4, "dials": 5.3}
-    base = {n: Vector(r.location) for n, r in roots.items()}
+        # fit: the distance that makes the object FILL the width (or HEIGHT_FILL the height), then a
+        # lens shift that centres its projected bounds
+        dvec = direction(AZIMUTH, ELEVATION)
+        dist = 80.0
+        for _ in range(6):
+            pr = project(centre + dist * dvec, centre, extent)
+            xs, ys = [p[0] for p in pr], [p[1] for p in pr]
+            dist *= max((max(xs) - min(xs)) / (2 * FILL), (max(ys) - min(ys)) / (2 * HEIGHT_FILL))
+        pr = project(centre + dist * dvec, centre, extent)
+        xs, ys = [p[0] for p in pr], [p[1] for p in pr]
+        cd.shift_x = (max(xs) + min(xs)) / 4
+        cd.shift_y = (max(ys) + min(ys)) / 4 / aspect
+        print(f"REEL camera: distance {dist:.1f}, shift {cd.shift_x:.3f} {cd.shift_y:.3f}", flush=True)
 
-    # the dials' turns: (time, value 0..1) keys, eased between; the last value equals the first
-    turns = [
-        [(0.0, 0.30), (0.9, 0.30), (1.7, 0.78), (4.4, 0.78), (5.2, 0.22), (7.1, 0.22), (7.8, 0.30)],
-        [(0.0, 0.55), (1.6, 0.55), (2.4, 0.18), (5.0, 0.18), (5.9, 0.85), (7.3, 0.85), (8.0, 0.55)],
-        [(0.0, 0.70), (2.7, 0.70), (3.5, 0.40), (6.0, 0.40), (6.8, 0.70), (8.0, 0.70)],
-        [(0.0, 0.20), (0.4, 0.20), (1.3, 0.62), (3.9, 0.62), (4.7, 0.95), (6.4, 0.95), (7.4, 0.20), (8.0, 0.20)],
-    ]
+    # ---------------------------------------------------------------- motion
+    # landing times: evenly spaced, in landing order (each card, then what sits on it)
+    if mode == "loop":
+        T0, T1, FALL = 0.45, 4.5, 0.40
+        LIFT0, LIFT1, RISE = 6.4, 7.25, 0.30
+    else:                       # scroll: one way; flat: everything seated from the start
+        T0, T1, FALL = 0.30, S - 0.75, 0.34
+        LIFT0 = LIFT1 = RISE = None
+    land = [T0 + (T1 - T0) * i / max(N - 1, 1) for i in range(N)]
+    if mode == "flat":
+        land = [-10.0] * N
+    lift = None if LIFT0 is None else [LIFT0 + (LIFT1 - LIFT0) * (N - 1 - i) / max(N - 1, 1) for i in range(N)]
 
-    # Classic's slider: the same kind of eased moves
-    slide = [(0.0, 0.25), (1.6, 0.25), (2.5, 0.82), (4.3, 0.82), (5.1, 0.45), (6.5, 0.45), (7.5, 0.25), (8.0, 0.25)]
+    def bounce(s, kind):
+        """The seat: a small press below rest and a damped spring back (a keycap seating)."""
+        if s < 0 or s > 0.4:
+            return 0.0
+        depth = 0.022 if kind in ("dial", "key", "press") else 0.03
+        return -depth * math.exp(-s / 0.06) * math.sin(math.pi * s / 0.075)
 
-    def value(keys, t):
-        t = t % S
-        for (t0, v0), (t1, v1) in zip(keys, keys[1:]):
-            if t0 <= t <= t1:
-                return v0 + (v1 - v0) * smoothstep(t0, t1, t)
-        return keys[-1][1]
+    def zpos(i, t):
+        """(z offset above rest, visible) of item i at t."""
+        L0 = land[i]
+        if t < L0 - FALL:
+            return PARK, False
+        if t < L0:
+            p = (t - (L0 - FALL)) / FALL
+            return DROP * (1 - p * p), True
+        if lift is not None and t >= lift[i]:
+            q = (t - lift[i]) / RISE
+            return (DROP * q * q, True) if q < 1 else (PARK, False)
+        return bounce(t - L0, items[i][2]), True
+
+    press_i = next((i for i, it in enumerate(items) if it[2] == "press"), None)
+    dial_i = [i for i, it in enumerate(items) if it[2] == "dial"]
+    a_start = [math.radians(v) for v in (40, -25, 70, -60, 15, -80, 55, -10, 30)]
+
+    def dial_angle(k, i, t):
+        a = a_start[k % len(a_start)]
+        a += math.radians(-75) * smoothstep(land[i] + 0.15, land[i] + 0.75, t)       # seats, then turns
+        if mode == "loop":                                                          # the hold: turn again
+            t0 = 4.9 + 0.12 * k
+            a += math.radians(60 if k % 2 else -50) * smoothstep(t0, t0 + 0.6, t)
+        return a
 
     def pose(t):
-        pos, look, roll = cam_at(t)
-        cam.location = pos
-        G.look_at(cam, pos, look, roll=roll)
-        f = rack(t)
-        cd.dof.focus_distance = (pos - front).length * (1 - f) + (pos - back).length * f
-        u = math.tau * t / S
-        for n, r in roots.items():
-            ph = float_ph.get(n, 0.0)
-            amp = 0.0 if n == "window" else 0.07
-            r.location = base[n] + Vector((0, 0, amp * math.sin(u + ph)))
-            tilt = 0.0 if n == "window" else math.radians(0.8)
-            r.rotation_euler = (tilt * math.sin(u + ph + 0.7), tilt * math.cos(u + ph), 0)
-        for kr, keys in zip(dial_roots, turns):
-            kr.rotation_euler = (0, 0, math.radians(135 - 270 * value(keys, t)))
-        if controls:
-            c = controls
-            on = smoothstep(0.9, 1.25, t) - smoothstep(4.9, 5.25, t)       # the switch: on, then off
-            c["mix"].default_value = on
-            c["sknob"].location = (c["sx"] + 0.28 * (2 * on - 1), 0, 0.06 + 0.06)
-            sv = value(slide, t)
-            c["froot"].scale = (max(sv * c["rlen"], 0.06), 1, 1)
-            c["lknob"].location = (c["rx0"] + sv * c["rlen"], 0, 0.06)
-        # the key light drifts, so the sheen moves across the glossy parts
-        key_l.location = Vector((-7.5 + 2.5 * math.sin(u + 0.4), 6.0 + 1.5 * math.cos(u), 15.0))
-        G.look_at(key_l, key_l.location, tgt)
+        if dvec is not None:
+            sway = SWAY * math.sin(math.tau * t / S) if mode == "loop" else 0.0
+            pos = centre + dist * direction(AZIMUTH + sway, ELEVATION)
+            cam.location = pos
+            G.look_at(cam, pos, centre)
+        for i, (root, rest, kind, lvl) in enumerate(items):
+            dz, vis = zpos(i, t)
+            if i == press_i and mode == "loop":
+                dz -= 0.03 * (smoothstep(5.55, 5.62, t) - smoothstep(5.78, 5.93, t))
+            # parked: under the floor (the shadow catcher hides it from the camera, the lights and
+            # every reflection) — never hidden or scaled to nothing: changing what's visible makes
+            # Cycles rebuild the scene, seconds a frame
+            root.location.z = rest + dz if vis else PARK
+            if kind == "dial":
+                root.rotation_euler = (0, 0, dial_angle(dial_i.index(i), i, t))
 
-    ids = [cam, (cd, "dof.focus_distance"), key_l] + list(roots.values()) + dial_roots
-    if controls:
-        ids += [controls["sknob"], controls["lknob"], (controls["froot"], "scale"), (controls["mix"], "default_value")]
+    ids = ([cam] if dvec is not None else []) + [it[0] for it in items]
     lp.bake(ids, pose, props=("location", "rotation_euler"))
 
-    # colour: the UI's own colours, unbent (the toolkit's AgX look is for photoreal scenes)
+    # ---------------------------------------------------------------- output
     view = P.get("view", "Standard")
     # Cycles on another machine (params.cycles_device: OPTIX, CUDA, HIP…): dsfilm.render asks for
     # Metal, which fails off a Mac and leaves the CPU; pick the GPU backend here (render.setup's
@@ -500,23 +585,42 @@ def build(ctx):
             prefs = bpy.context.preferences.addons["cycles"].preferences
             prefs.compute_device_type = device
             prefs.get_devices()
-            for d in prefs.devices:
-                d.use = d.type != "CPU"
+            for dv in prefs.devices:
+                dv.use = dv.type != "CPU"
         except Exception as e:
             print("cycles device:", e)
+    comp = None if cutout else field_compositor(scene, L)
 
-    def _view(sc, *_):
-        sc.view_settings.view_transform = view
+    def put(owner, attr, value):
+        # only when it changes: writing a render setting (even the same value) makes Cycles drop
+        # its persistent data, and every frame would reload all the UI pictures
+        if getattr(owner, attr) != value:
+            setattr(owner, attr, value)
+
+    def _out(sc, *_):
+        put(sc.view_settings, "view_transform", view)
         try:
-            sc.view_settings.look = "None"
+            put(sc.view_settings, "look", "None")
         except TypeError:
             pass
-        if device and sc.render.engine == "CYCLES":
-            sc.cycles.device = "GPU"
-    bpy.app.handlers.render_pre.append(_view)
-    try:
-        scene.eevee.use_bokeh_jittered = True
-        scene.eevee.bokeh_max_size = 200
-    except Exception:
-        pass
+        put(sc.view_settings, "exposure", 0.0)
+        put(sc.render, "film_transparent", True)
+        put(sc.render, "use_persistent_data", True)           # ~60 UI pictures: load them once
+        put(sc.render.image_settings, "color_depth", "8")    # dithered (render.dither_intensity)
+        put(sc.render.image_settings, "color_mode", "RGBA" if cutout else "RGB")
+        if comp is not None:
+            pool_image(comp, L, sc.render.resolution_x * sc.render.resolution_percentage // 100,
+                       sc.render.resolution_y * sc.render.resolution_percentage // 100)
+            if sc.compositing_node_group != comp:
+                sc.compositing_node_group = comp
+            put(sc.render, "use_compositing", True)
+        else:
+            put(sc.render, "use_compositing", False)
+        if sc.render.engine == "CYCLES":
+            if device:
+                put(sc.cycles, "device", "GPU")
+            put(sc.cycles, "adaptive_threshold", 0.005)
+            put(sc.cycles, "texture_limit_render", "OFF")    # the UI pictures stay sharp
+            put(sc.cycles, "blur_glossy", 0.5)
+    bpy.app.handlers.render_pre.append(_out)
     return {"cameras": {"hero": cam}}

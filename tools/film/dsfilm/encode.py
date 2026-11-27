@@ -1,6 +1,6 @@
 """Encoding (plain python3 + ffmpeg; no Blender needed).
 
-    python3 -I tools/film/dsfilm/encode.py FRAMES_DIR OUT_BASE [--fps 24] [--quality 62] [--no-preview]
+    python3 -I tools/film/dsfilm/encode.py FRAMES_DIR OUT_BASE [--fps 24] [--quality 62] [--no-preview] [--size W:H]
         -> OUT_BASE.mov            HEVC Main10 (hvc1), VideoToolbox, constant quality: the app's clip
            OUT_BASE-preview.mp4    H.264 1280x800 preview (not with --no-preview)
     python3 -I tools/film/dsfilm/encode.py --web FRAMES_DIR OUT_BASE [--size 1280:800] [--max-mb 4]
@@ -32,9 +32,10 @@ def _input(frames_dir, fps):
     return ["-framerate", str(fps), "-start_number", str(first), "-i", os.path.join(frames_dir, "%04d.png")], len(fs)
 
 
-def encode(frames_dir, out_base, fps=24, vignette=0.0, grain=0, quality=62, preview_size="1280:800", preview=True):
+def encode(frames_dir, out_base, fps=24, vignette=0.0, grain=0, quality=62, preview_size="1280:800", preview=True,
+           size=None):
     inp, _ = _input(frames_dir, fps)
-    vf = []
+    vf = [f"scale={size}:flags=lanczos"] if size else []
     if vignette:
         vf.append(f"vignette=angle={vignette}:mode=forward")
     if grain:
@@ -115,7 +116,7 @@ if __name__ == "__main__":
         kw = _opts(a, {"--fps": int, "--size": str, "--max-mb": float})
         print(web(a[1], a[2], **kw))
     else:
-        kw = _opts(a, {"--fps": int, "--vignette": float, "--grain": float, "--quality": int})
+        kw = _opts(a, {"--fps": int, "--vignette": float, "--grain": float, "--quality": int, "--size": str})
         if "--no-preview" in a:
             a.remove("--no-preview")
             kw["preview"] = False

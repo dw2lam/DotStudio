@@ -1,10 +1,12 @@
 //  AppearancePicker.swift — Settings › General › Theme: Classic and Retro as short films, one card
-//  each (owner, 2026-11-26: "cinematic and 3D layering of each theme"). Each film is the theme's
-//  real UI — the window, the Screensaver & Wallpaper deck, style tiles, the inspector, keys —
-//  pulled apart into a floating stack and shot in Blender with a slow camera and a rack focus;
-//  Retro's dials are machined aluminium knobs that turn. The films are made by
-//  tools/film/scenes/theme-reel/render-all.sh and ship in App/ThemeFilms (theme-<classic|retro>-
-//  <light|dark>.mov + a .jpg poster of the first frame).
+//  each (owner, 2026-11-26: "cinematic and 3D layering of each theme"; then "they all layer in,
+//  just snapping into place"). Each film is the theme's real UI as a product shot on a plain field
+//  (light grey in light, black in dark): the empty window and inspector, then every element — the
+//  toolbar keys, the cards and their screens and keys, the filter chips, each style tile, the
+//  inspector's parts — drops in and seats with a small press, Retro's dials as machined aluminium
+//  knobs that seat and turn; the app holds, then lifts apart again (a seamless loop). The films are
+//  made by tools/film/scenes/theme-reel/render-all.sh and ship in App/ThemeFilms (theme-<classic|
+//  retro>-<light|dark>.mov + a .jpg poster of the assembled app).
 //
 //  A card plays its film muted and looping, in the light or dark the app wears now; under Reduce
 //  Motion, in offscreen renders, or without the film, it shows the poster. The films are props:
