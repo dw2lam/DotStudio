@@ -151,6 +151,13 @@ CLOSE_FSTOP = 4.0           # the close-up's depth of field (none from the middl
 UNLIT_SECONDS = 1.4
 UNLIT_PROUD = 0.003
 UNLIT_LENS = 700.0
+# …and each window (the main window, the editor) keeps a soft macOS-like window shadow on the field,
+# blended in as the lit shadows fade: a decal under it (two blurred copies of its outline, the
+# wide one dropped a little), alpha WINDOW_SHADOW[tone] at its densest
+WINDOW_SHADOW = {"dark": 0.75, "light": 0.42}
+SHADOW_DROP = 0.10          # units the wide shadow sits below the window (~14 px at 2560)
+SHADOW_BLUR = (0.04, 0.24)  # sigma of the contact and the wide shadow, units
+SHADOW_MIX = (0.35, 0.65)   # their shares
 # half way through the pull-back (s = BRANCH), the camera leaves it and carries on — position,
 # speed and acceleration continuous (a quintic per channel) — into the flat view from above
 BRANCH = 0.5
@@ -783,6 +790,11 @@ def build(ctx):
             own = 0.0 if kind == "dial" else max(SEATED_PROUD * THICK[lvl - 1] - SEAT - UNLIT_PROUD, 0.0)
             flush.append(own + (flush[parent[i]] if parent[i] is not None else 0.0))
         scene["unlit"] = 0.0
+        for m in man["modules"]:
+            x0_, y0_, x1_, y1_ = m["rect"]
+            cx_, cy_ = xy((x0_ + x1_) / 2, (y0_ + y1_) / 2)
+            window_shadow("Shadow_" + m["name"], cx_, cy_, (x1_ - x0_) * PT, (y1_ - y0_) * PT,
+                          m.get("radius", 10) * PT, coll, tone)
         try:                 # the shadows as a pass of their own (the compositor fades them)
             scene.view_layers[0].cycles.use_pass_shadow_catcher = True
         except Exception as e:
@@ -967,6 +979,63 @@ def frame_points(man, classic, xy):
                 else:
                     rect(k, ctop - SEAT + THICK[1])
     return pts
+
+
+def window_shadow(name, cx, cy, w, h, r, coll, tone):
+    """The unlit end's window shadow (see WINDOW_SHADOW): a plane on the floor under a window, its
+    alpha a soft shadow of the window's rounded outline made here with numpy, black, shown by
+    scene["unlit"]; seen by the camera only. Returns the object."""
+    import numpy as np
+    ppu, margin = 100, 1.0
+    W, H = int(round((w + 2 * margin) * ppu)), int(round((h + 2 * margin) * ppu))
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    px, py = (xx + 0.5) / ppu - (w / 2 + margin), (H - yy - 0.5) / ppu - (h / 2 + margin)   # y up
+
+    def outline(dy):
+        qx = np.maximum(np.abs(px) - (w / 2 - r), 0)
+        qy = np.maximum(np.abs(py - dy) - (h / 2 - r), 0)
+        return (np.sqrt(qx * qx + qy * qy) <= r).astype(np.float32)
+
+    def blur(a, sigma):
+        k = max(1, int(round(np.sqrt(12 * (sigma * ppu) ** 2 / 3 + 1))) | 1)
+        for _ in range(3):                         # three box passes ~ a gaussian
+            for ax in (0, 1):
+                pad = [(k // 2 + 1, k // 2) if i == ax else (0, 0) for i in range(2)]
+                c = np.cumsum(np.pad(a, pad, mode="edge"), axis=ax)
+                a = (np.take(c, range(k, c.shape[ax]), axis=ax) - np.take(c, range(0, c.shape[ax] - k), axis=ax)) / k
+        return a
+
+    alpha = SHADOW_MIX[0] * blur(outline(0.0), SHADOW_BLUR[0]) + SHADOW_MIX[1] * blur(outline(-SHADOW_DROP), SHADOW_BLUR[1])
+    alpha = np.clip(alpha * WINDOW_SHADOW[tone], 0, 1)
+    px_ = np.zeros((H, W, 4), np.float32)
+    px_[..., 3] = alpha
+    im = bpy.data.images.new(name + "Img", W, H, alpha=True, float_buffer=True)
+    im.colorspace_settings.name = "Non-Color"
+    im.pixels.foreach_set(px_[::-1].ravel())       # rows bottom-up
+    im.pack()
+    mat = bpy.data.materials.new(name + "Mat")
+    mat.use_nodes = True
+    nt, ln = mat.node_tree.nodes, mat.node_tree.links
+    for n in list(nt):
+        nt.remove(n)
+    tx = nt.new("ShaderNodeTexImage"); tx.image = im; tx.extension = "CLIP"; tx.interpolation = "Linear"
+    un = nt.new("ShaderNodeAttribute"); un.attribute_type = "VIEW_LAYER"; un.attribute_name = "unlit"
+    mu = nt.new("ShaderNodeMath"); mu.operation = "MULTIPLY"
+    ln.new(tx.outputs["Alpha"], mu.inputs[0]); ln.new(un.outputs["Fac"], mu.inputs[1])
+    em = nt.new("ShaderNodeEmission"); em.inputs["Color"].default_value = (0, 0, 0, 1); em.inputs["Strength"].default_value = 0.0
+    tr = nt.new("ShaderNodeBsdfTransparent")
+    mx = nt.new("ShaderNodeMixShader")
+    ln.new(mu.outputs[0], mx.inputs[0]); ln.new(tr.outputs[0], mx.inputs[1]); ln.new(em.outputs[0], mx.inputs[2])
+    out = nt.new("ShaderNodeOutputMaterial")
+    ln.new(mx.outputs[0], out.inputs["Surface"])
+    _cutout(mat)
+    ob = G.plane_uv(name, W / ppu, H / ppu, mat, coll, (cx, cy, 0.0008))
+    for k in ("visible_diffuse", "visible_glossy", "visible_transmission", "visible_volume_scatter", "visible_shadow"):
+        try:
+            setattr(ob, k, False)
+        except Exception:
+            pass
+    return ob
 
 
 def add_fade(scene, exclude=()):
