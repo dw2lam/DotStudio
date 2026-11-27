@@ -10,7 +10,8 @@ Headless only (never opens the Blender UI):
     --still FILE          one still (with --camera, --frame)
     --build-sequence DIR  the camera's "how it's made" stills: 1-clay, 2-materials (fast flat
                           light), 3-raytraced (no post), 4-graded (look + preview grain)
-    --anim DIR            frames DIR/####.png, resumable (existing frames are skipped); --frames A-B
+    --anim DIR            frames DIR/####.png, resumable (existing frames are skipped); --frames A-B;
+                          --pause S sleeps S seconds after each frame (lets a hot machine cool)
     --camera NAME, --frame N, --engine cycles|eevee, --res WxH, --samples N, --no-post
     --save FILE.blend     save the built scene
 
@@ -164,6 +165,8 @@ def main():
             avg = sum(done_t[-24:]) / len(done_t[-24:])
             emit("PROGRESS", {"stage": "frame", "frame": f, "done": f - a + 1, "of": b - a + 1,
                               "frame_s": round(dt, 2), "eta_s": round(avg * left)})
+            if opt("--pause") and left:
+                time.sleep(float(opt("--pause")))
         outputs.append(d)
         timings["frames_rendered"] = len(done_t)
         if done_t:

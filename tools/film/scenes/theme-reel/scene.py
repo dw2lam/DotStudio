@@ -16,12 +16,20 @@ elements lift out in reverse, last in first out, and the chassis is empty again 
 
 Modes (params.mode):
     loop    the 8 s film above (Settings' Theme films); the camera sways a few degrees
-    scroll  ONE-WAY, for the site's scroll: empty -> assembled, no lift-out; every element has its
-            own landing frame, spread evenly (assembled by 72 %); the camera starts flat, straight
-            from above (framed like the flat still), and tilts down and back into the 3/4 view,
-            eased, by 90 % — the last frames hold the 3D frame, the same as the 3D hero still.
-            Framed closer than the films (SCROLL_FILL)
+    scroll  ONE-WAY, for the site (6 s, 180 frames, played as a video): empty -> assembled, no
+            lift-out. It opens on a close-up of the bare chassis — low and near, the window's top
+            left corner (its title bar and the empty Screensaver socket) filling the frame — and
+            pulls back in one slow eased move (dolly out, rise, swing round); half way it carries
+            on rising, without a break, into the flat view straight from above (framed like the
+            flat still, SCROLL_FILL), reached at 88 %; the last 12 % hold it. The elements land as
+            the camera reveals them, nearest the close-up first, each on a short drop while it
+            fades in; seated, it sits nearly flush (SEATED_PROUD). As the camera settles into the
+            flat view (the last UNLIT_SECONDS of the move) the light dims away while the UI turns
+            to its own unlit colours, the shadows fade, the parts sink flush and the lens lengthens
+            to near-orthographic: the held frame is the app itself, a straight screenshot (window
+            and editor) on the field. A little depth of field at the close-up only, gone by the middle of the move
     flat    the assembled app straight from above, orthographic (the flat product shot)
+    3d      the assembled app in the 3/4 view (the 3D product shot)
 
 The shot (tools/film/README.md's rules apply; see render-all.sh):
 - a long lens (near-orthographic), a 3/4 view from above, the object centred with generous
@@ -43,6 +51,12 @@ Params (the spec's "params"; render-all.sh writes one spec per variant):
     view   the view transform (default Standard: the UI's own colours)
     cutout true: no field — a transparent RGBA picture with the shadow in its alpha
     fstop  optional depth of field (default none: the shot is sharp)
+    cycles_hybrid  true: Cycles renders on the CPU alongside the GPU (benchmarks; off by default)
+    denoiser  Cycles' denoiser for every machine (OPENIMAGEDENOISE, on the GPU), so the halves of a
+           render split across a Mac and an NVIDIA box match (default: OIDN; OptiX's on OPTIX)
+    frame_parts  another variant's prepared folder whose layout frames the shot: its size, its
+           modules' rects and its camera fit (so Retro light's final frame lines up pixel for pixel
+           with Retro dark's: their captures differ by a few points)
 """
 import json
 import math
@@ -95,6 +109,11 @@ LOOKS = {
 BASE = {"window": 0.30, "inspector": 0.26}
 THICK = (0.08, 0.055)
 SEAT = 0.015
+# the site's pictures (scroll, flat, 3d): a seated element sinks into its socket so only this share
+# of its thickness stands proud — nearly flush, as the app looks (it keeps its full thickness while
+# it drops in)
+SEATED_PROUD = 1 / 3
+MIN_PROUD = 0.0006          # scroll: a shown part's top never comes closer than this to what it sits on
 DROP = 16.0                 # how far above its seat an element starts its fall (out of frame)
 # the scroll sequence: the camera starts straight above, so a long fall would come at the lens —
 # there an element arrives in screen space instead: a short drop onto its seat while it fades in
@@ -113,11 +132,38 @@ HEIGHT_FILL = 0.74
 SCROLL_FILL = 0.88
 SCROLL_HEIGHT_FILL = 0.90
 FLAT_FILL = SCROLL_FILL
-# the scroll sequence's camera: flat and straight from above at the top of the page, tilting down
-# and back into the 3/4 view as the page scrolls (owner: "Flat → tilts into 3D … as it goes down
-# and back"), eased, done at TILT_END of the sequence; the rest holds the 3D frame (= the 3D still)
+# the scroll sequence's camera (owner: "start from a very close-up shot of the blank thing and then
+# slowly expand into the parts going onto it … dramatically"): a close-up of the empty chassis's
+# top left corner (CLOSE_AT, in assembly points: the title bar and the Screensaver socket's corner),
+# low (CLOSE_EL) from the front left (CLOSE_AZ), CLOSE_WIDTH units of the board across the frame;
+# then one eased pull-back to the 3/4 frame, done at MOVE_END of the sequence. The distance moves
+# in log space (an even "expansion"); the look point and the lens shift follow so the close-up's
+# corner slides steadily from the frame's centre to its place in the final frame.
+CLOSE_AT = (60.0, 75.0)
+CLOSE_AZ = -68.0
+CLOSE_EL = 22.0
+CLOSE_WIDTH = 2.2
+MOVE_END = 0.88
+CLOSE_FSTOP = 4.0           # the close-up's depth of field (none from the middle of the move)
+# the end of the scroll sequence: over the last UNLIT_SECONDS of the move, the lights and the world
+# dim to nothing, every UI picture cross-fades to its captured colours unlit (emission 1 under the
+# Standard view = the same sRGB), the shadows fade out of the field (compositor), the parts sink to
+# UNLIT_PROUD and the knobs give way to their pictures, and the lens goes to UNLIT_LENS (the
+# distance with it: the same framing, near-orthographic) — the final frame reads as a screenshot
+UNLIT_SECONDS = 1.4
+UNLIT_PROUD = 0.003
+UNLIT_LENS = 700.0
+# …and each window (the main window, the editor) keeps a soft macOS-like window shadow on the field,
+# blended in as the lit shadows fade: a decal under it (two blurred copies of its outline, the
+# wide one dropped a little), alpha WINDOW_SHADOW[tone] at its densest
+WINDOW_SHADOW = {"dark": 0.75, "light": 0.42}
+SHADOW_DROP = 0.10          # units the wide shadow sits below the window (~14 px at 2560)
+SHADOW_BLUR = (0.04, 0.24)  # sigma of the contact and the wide shadow, units
+SHADOW_MIX = (0.35, 0.65)   # their shares
+# half way through the pull-back (s = BRANCH), the camera leaves it and carries on — position,
+# speed and acceleration continuous (a quintic per channel) — into the flat view from above
+BRANCH = 0.5
 FLAT_ELEVATION = 89.5       # straight down (a hair off 90°, so "up" stays the window's top)
-TILT_END = 0.9
 
 
 # ---------------------------------------------------------------- materials
@@ -132,7 +178,7 @@ def ui_mat(name, path, L, classic):
     t = nt.new("ShaderNodeTexImage")
     t.image = M.load_image(path)
     t.extension = "CLIP"
-    t.interpolation = "Cubic"
+    t.interpolation = "Linear"     # (Cycles' Cubic is a smoothing B-spline: soft UI text)
     ln.new(t.outputs["Color"], b.inputs["Base Color"])
     ln.new(t.outputs["Color"], b.inputs["Emission Color"])
     b.inputs["Emission Strength"].default_value = L["ui_emit"]
@@ -164,6 +210,21 @@ def ui_mat(name, path, L, classic):
         _glassy(mat)
     else:
         ln.new(t.outputs["Alpha"], b.inputs["Alpha"])
+    # the unlit branch: the picture's own colour as emission (alpha x the object's fade), mixed in
+    # by scene["unlit"] (0 unless the scroll's end keys it)
+    out = next(n for n in nt if n.bl_idname == "ShaderNodeOutputMaterial")
+    un = nt.new("ShaderNodeAttribute"); un.attribute_type = "VIEW_LAYER"; un.attribute_name = "unlit"
+    fd = nt.new("ShaderNodeAttribute"); fd.attribute_type = "OBJECT"; fd.attribute_name = "fade"
+    am = nt.new("ShaderNodeMath"); am.operation = "MULTIPLY"
+    ln.new(t.outputs["Alpha"], am.inputs[0]); ln.new(fd.outputs["Fac"], am.inputs[1])
+    em = nt.new("ShaderNodeEmission"); em.inputs["Strength"].default_value = 1.0
+    ln.new(t.outputs["Color"], em.inputs["Color"])
+    tr = nt.new("ShaderNodeBsdfTransparent")
+    cut_ = nt.new("ShaderNodeMixShader")
+    ln.new(am.outputs[0], cut_.inputs[0]); ln.new(tr.outputs[0], cut_.inputs[1]); ln.new(em.outputs[0], cut_.inputs[2])
+    mx = nt.new("ShaderNodeMixShader")
+    ln.new(un.outputs["Fac"], mx.inputs[0]); ln.new(b.outputs[0], mx.inputs[1]); ln.new(cut_.outputs[0], mx.inputs[2])
+    ln.new(mx.outputs[0], out.inputs["Surface"])
     _cutout(mat)
     return mat
 
@@ -302,7 +363,25 @@ def field_compositor(scene, L):
     add.data_type = "RGBA"
     add.blend_type = "ADD"
     add.inputs[0].default_value = 1.0
-    ng.links.new(mul.outputs[2], add.inputs[6])
+    field_term = mul.outputs[2]
+    if rl.outputs.get("Shadow Catcher") is not None:
+        # the shadows as their own multiplier on the field, faded by the unlit end ("Unlit",
+        # set each frame from scene["unlit"])
+        unl = ng.nodes.new("ShaderNodeMath")
+        unl.name, unl.operation = "Unlit", "ADD"
+        unl.inputs[0].default_value = unl.inputs[1].default_value = 0.0
+        sh = ng.nodes.new("ShaderNodeMix")
+        sh.data_type = "RGBA"
+        ng.links.new(unl.outputs[0], sh.inputs[0])
+        ng.links.new(rl.outputs["Shadow Catcher"], sh.inputs[6])
+        sh.inputs[7].default_value = (1.0, 1.0, 1.0, 1.0)
+        m2 = ng.nodes.new("ShaderNodeMix")
+        m2.data_type, m2.blend_type = "RGBA", "MULTIPLY"
+        m2.inputs[0].default_value = 1.0
+        ng.links.new(mul.outputs[2], m2.inputs[6])
+        ng.links.new(sh.outputs[2], m2.inputs[7])
+        field_term = m2.outputs[2]
+    ng.links.new(field_term, add.inputs[6])
     ng.links.new(rl.outputs["Image"], add.inputs[7])
     ng.links.new(add.outputs[2], out.inputs[0])
     return ng
@@ -426,7 +505,15 @@ def build(ctx):
     S = lp.seconds
     coll = ctx.coll("Reel")
     scene = ctx.scene
-    AW, AH = man["size"]
+    ref = None
+    if P.get("frame_parts"):
+        with open(os.path.join(P["frame_parts"], "parts.json")) as f:
+            ref = json.load(f)
+        for m in man["modules"]:
+            for rm in ref["modules"]:
+                if rm["name"] == m["name"]:
+                    m["rect"], m["radius"] = rm["rect"], rm["radius"]
+    AW, AH = (ref or man)["size"]
 
     def xy(px, py):                  # assembly points (origin top left, y down) -> Blender x, y
         return (px - AW / 2) * PT, (AH / 2 - py) * PT
@@ -460,6 +547,8 @@ def build(ctx):
     alu = aluminium("Aluminium", L.get("metal", (0.8, 0.8, 0.79)))
 
     extent = []
+    dial_pics = {}      # a dial root's name -> its captured picture (the scroll's unlit end)
+    half = {}           # element root's name -> its half width, half height (the scroll's reveal)
 
     def element(e, name, depth_t, seat_top, side):
         """One element: an empty at its seat (the top of its slab), its slab and its picture."""
@@ -468,6 +557,7 @@ def build(ctx):
         cx, cy = xy((x0 + x1) / 2, (y0 + y1) / 2)
         top = seat_top + depth_t
         root = G.empty("El_" + name, coll, (cx, cy, top))
+        half[root.name] = (w / 2, h / 2)
         r = min(e["radius"] * PT, 0.5 * min(w, h) - 1e-4)
         s = rounded_slab("Slab_" + name, w - 0.002, h - 0.002, depth_t + SEAT, r, side, coll,
                          bevel=min(0.012, depth_t * 0.4))
@@ -486,12 +576,19 @@ def build(ctx):
         cx, cy = xy((x0 + x1) / 2, (y0 + y1) / 2)
         R = 0.5 * (x1 - x0) * PT * 0.94
         root = G.empty("Dial_" + name, coll, (cx, cy, seat_top))
+        half[root.name] = (R, R)
         root.scale = (R / 0.33,) * 3
         cap = [v / 255 for v in e.get("cap", (240, 240, 236))]
         bright = 0.2126 * cap[0] + 0.7152 * cap[1] + 0.0722 * cap[2]
         blueish = cap[2] > cap[0] + 0.25
         ptr = (1, 1, 1) if blueish else (0.02, 0.02, 0.02)
         knob("Knob_" + name, 0.33, 0.30, lin(tuple(cap)), ptr, alu, coll, root)
+        if mode == "scroll" and e.get("png"):
+            w, h = (x1 - x0) * PT, (y1 - y0) * PT
+            pic = G.plane_uv("DialPic_" + name, w, h,
+                             ui_mat("UI_Dial_" + name, os.path.join(parts_dir, e["png"]), L, False),
+                             coll, (cx, cy, seat_top + 0.002))
+            dial_pics[root.name] = pic
         for sx in (-1, 1):
             for sy in (-1, 1):
                 extent.append(Vector((cx + sx * R, cy + sy * R, seat_top + 0.36 * R / 0.33)))
@@ -499,6 +596,8 @@ def build(ctx):
 
     # the chassis: each module's base rests on the field
     items = []          # (root, rest z, kind, level) in landing order
+    parent = []         # per item: the index of the item it sits on (None: on the chassis)
+    seat_on = []        # per item: the top of the module it stands in
     for m in man["modules"]:
         d = BASE.get(m["name"], 0.12)
         base, mtop = element(m, "M_" + m["name"], d - SEAT, 0.0, wside)
@@ -508,17 +607,36 @@ def build(ctx):
                 if classic:
                     continue
                 items.append((dial(c, nm, mtop), mtop, "dial", 1))
+                parent.append(None)
+                seat_on.append(mtop)
                 continue
             root, ctop = element(c, nm, THICK[0], mtop - SEAT, side1)
             items.append((root, ctop, c["kind"], 1))
+            parent.append(None)
+            seat_on.append(mtop)
+            pi = len(items) - 1
             for j, k in enumerate(c.get("children", [])):
                 if k["kind"] == "dial":
                     items.append((dial(k, f"{nm}_{j}", ctop), ctop, "dial", 2))
+                    parent.append(pi)
+                    seat_on.append(mtop)
                     continue
                 kr, ktop = element(k, f"{nm}_{j}", THICK[1], ctop - SEAT, side2)
                 items.append((kr, ktop, k["kind"], 2))
+                parent.append(pi)
+                seat_on.append(mtop)
     N = len(items)
     print(f"REEL elements: {N} ({sum(1 for it in items if it[2] == 'dial')} dials)", flush=True)
+    if mode in ("scroll", "flat", "3d"):
+        sink = []
+        for i, (root, rest, kind, lvl) in enumerate(items):
+            own = 0.0 if kind == "dial" else (1 - SEATED_PROUD) * THICK[lvl - 1]
+            sink.append(own + (sink[parent[i]] if parent[i] is not None else 0.0))
+        items = [(root, rest - k, kind, lvl) for (root, rest, kind, lvl), k in zip(items, sink)]
+        for root, rest, _, _ in items:
+            root.location.z = rest
+    if ref is not None:
+        extent = frame_points(ref, classic, xy)
 
     # ---------------------------------------------------------------- light
     def area(name, size, energy, color, loc, target, size_y=None, spread=None):
@@ -534,8 +652,10 @@ def build(ctx):
         coll.objects.link(ob)
         ob.location = loc
         G.look_at(ob, loc, target)
+        lights.append(ob)
         return ob
 
+    lights = []
     centre = sum(extent, Vector()) / len(extent)
     c0 = Vector((centre.x, centre.y, 0.3))
     if L["rig"] == "soft":
@@ -608,6 +728,98 @@ def build(ctx):
         dist, dvec, cd.shift_x, cd.shift_y = fit(AZIMUTH, ELEVATION)
         print(f"REEL camera: distance {dist:.1f}, shift {cd.shift_x:.3f} {cd.shift_y:.3f}", flush=True)
 
+        if mode == "scroll":
+            # the close-up -> the 3/4 frame (see CLOSE_AT): one eased move (cosine ease in and
+            # out); distance in log space; the look point goes from the close-up's corner to the
+            # centre and the shift from 0 to the final one so that the corner's place on screen
+            # moves linearly with the ease (w = s * d / dist keeps its offset ∝ s); no roll
+            sx1, sy1 = cd.shift_x, cd.shift_y
+            fx, fy = xy(*CLOSE_AT)
+            focus = Vector((fx, fy, BASE["window"] - SEAT))
+            d0 = CLOSE_WIDTH * LENS / 36.0
+            cd.dof.use_dof = True
+
+            def pull(t):
+                """The pull-back towards the 3/4 frame as channels: az, el, ln d, look xyz, shift."""
+                x = t / (MOVE_END * S)
+                s = 0.5 - 0.5 * math.cos(math.pi * x)
+                d = d0 * (dist / d0) ** s
+                w = s * d / dist
+                look = focus.lerp(centre, w)
+                return [CLOSE_AZ + (AZIMUTH - CLOSE_AZ) * s, CLOSE_EL + (ELEVATION - CLOSE_EL) * s,
+                        math.log(d), look.x, look.y, look.z, sx1 * s, sy1 * s], s
+
+            # the branch: where the pull-back is at s = BRANCH, with its speed and acceleration
+            tb = MOVE_END * S * math.acos(1 - 2 * BRANCH) / math.pi
+            te, h = MOVE_END * S, 1e-3
+            c0_, c1_, c2_ = pull(tb - h)[0], pull(tb)[0], pull(tb + h)[0]
+            vel = [(b - a) / (2 * h) for a, b in zip(c0_, c2_)]
+            acc = [(a - 2 * m + b) / (h * h) for a, m, b in zip(c0_, c1_, c2_)]
+            dfl, _, sxf, syf = fit(0.0, FLAT_ELEVATION)
+            end = [0.0, FLAT_ELEVATION, math.log(dfl), centre.x, centre.y, centre.z, sxf, syf]
+            print(f"REEL branch at {tb:.2f} s; flat: distance {dfl:.1f}, shift {sxf:.3f} {syf:.3f}", flush=True)
+
+            def scroll_cam(t):
+                if t <= tb:
+                    ch, s = pull(max(t, 0.0))
+                else:
+                    T = te - tb
+                    u = min((t - tb) / T, 1.0)
+                    u3, u4, u5 = u ** 3, u ** 4, u ** 5
+                    h0 = 1 - 10 * u3 + 15 * u4 - 6 * u5
+                    h1 = u - 6 * u3 + 8 * u4 - 3 * u5
+                    h2 = 0.5 * u * u - 1.5 * u3 + 1.5 * u4 - 0.5 * u5
+                    h5 = 10 * u3 - 15 * u4 + 6 * u5
+                    ch = [h0 * p0 + h1 * v * T + h2 * a * T * T + h5 * p1
+                          for p0, v, a, p1 in zip(c1_, vel, acc, end)]
+                    s = 1.0
+                az, el, ld, lx, ly, lz, sx, sy = ch
+                look = Vector((lx, ly, lz))
+                pos = look + math.exp(ld) * direction(az, el)
+                # depth of field: CLOSE_FSTOP at the close-up, opening to none (f/128) by s = 0.5
+                k = min(s / 0.5, 1.0)
+                fstop = CLOSE_FSTOP * (128.0 / CLOSE_FSTOP) ** (k * k * (3 - 2 * k))
+                return pos, look, sx, sy, fstop
+
+            def on_screen(t, p):
+                """p's place in the frame at t (±1 = the frame's edges)."""
+                pos, look, sx, sy, _ = scroll_cam(t)
+                (u, v), = project(pos, look, [p])
+                return u - 2 * sx, v - 2 * sy * aspect
+
+    if mode == "scroll":
+        u0, u1 = MOVE_END * S - UNLIT_SECONDS, MOVE_END * S
+        lit = [(ob.data, ob.data.energy) for ob in lights]
+        world_k = bg.inputs["Strength"].default_value
+        flush = []           # how far each part sinks at the end (with what it sits on)
+        for i, (root, rest, kind, lvl) in enumerate(items):
+            # (a seated part stands THICK x SEATED_PROUD - SEAT above what it sits on)
+            own = 0.0 if kind == "dial" else max(SEATED_PROUD * THICK[lvl - 1] - SEAT - UNLIT_PROUD, 0.0)
+            flush.append(own + (flush[parent[i]] if parent[i] is not None else 0.0))
+        scene["unlit"] = 0.0
+        for m in man["modules"]:
+            x0_, y0_, x1_, y1_ = m["rect"]
+            cx_, cy_ = xy((x0_ + x1_) / 2, (y0_ + y1_) / 2)
+            window_shadow("Shadow_" + m["name"], cx_, cy_, (x1_ - x0_) * PT, (y1_ - y0_) * PT,
+                          m.get("radius", 10) * PT, coll, tone)
+        try:                 # the shadows as a pass of their own (the compositor fades them)
+            scene.view_layers[0].cycles.use_pass_shadow_catcher = True
+        except Exception as e:
+            print("shadow catcher pass:", e)
+
+        def unlit_k(t):
+            return smoothstep(u0, u1, t)
+
+        def unlit_pose(t, look):
+            k = unlit_k(t)
+            scene["unlit"] = k
+            for ld, e in lit:
+                ld.energy = e * (1 - k)
+            bg.inputs["Strength"].default_value = world_k * (1 - k)
+            lens = LENS * (UNLIT_LENS / LENS) ** k
+            cam.location = look + (cam.location - look) * (lens / LENS)
+            cd.lens = lens
+
     # ---------------------------------------------------------------- motion
     # landing times: evenly spaced, in landing order (each card, then what sits on it)
     if mode == "loop":
@@ -617,8 +829,44 @@ def build(ctx):
         T0, T1, FALL = 0.30, 0.72 * S, 0.30       # assembled well before the camera settles
         LIFT0 = LIFT1 = RISE = None
     land = [T0 + (T1 - T0) * i / max(N - 1, 1) for i in range(N)]
-    if mode == "flat":
+    if mode in ("flat", "3d"):
         land = [-10.0] * N
+    if mode == "scroll":
+        # in the order the camera reveals them: an element lands a beat after its centre comes
+        # well into the frame (nearest the close-up first), at least GAP after the one before
+        # and after what it sits on; all seated (with their spring) before the hold
+        # (revealed: its centre, or an eighth of it, inside the frame's inner 80 %)
+        # — but never more than MAXGAP after the one before (the next ones then land at the
+        # frame's edge as it opens out, instead of a pause)
+        T0, GAP, LAG, AFTER, MAXGAP = 0.9, 0.045, 0.12, 0.14, 0.3
+        LAST = MOVE_END * S - 0.5
+        frames = [lp.t(f) for f in range(1, lp.frames + 1)]
+
+        def reveal(i):
+            root = items[i][0]
+            c, (hw, hh) = Vector(root.location), half[root.name]
+            pts = [c + Vector((hw * a / 2.5, hh * b / 2.5, 0)) for a in range(-2, 3) for b in range(-2, 3)]
+            for t in frames:
+                inside = [abs(u) < 0.8 and abs(v) < 0.8 for u, v in (on_screen(t, p) for p in pts)]
+                if inside[12] or sum(inside) >= 3:
+                    return t
+            return frames[-1]
+
+        rv = [reveal(i) for i in range(N)]
+        rv = [rv[i] if parent[i] is None else max(rv[i], rv[parent[i]]) for i in range(N)]
+        fx, fy = focus.x, focus.y
+        order = sorted(range(N), key=lambda i: (rv[i], items[i][3], (items[i][0].location.x - fx) ** 2
+                                                + (items[i][0].location.y - fy) ** 2))
+        land = [0.0] * N
+        prev = T0 - GAP
+        for i in order:
+            land[i] = min(max(T0, rv[i] + LAG, prev + GAP,
+                              land[parent[i]] + AFTER if parent[i] is not None else 0.0), prev + MAXGAP)
+            prev = land[i]
+        hi = max(land)
+        if hi > LAST:          # too late for the hold: squeeze the schedule (order kept)
+            land = [T0 + (l - T0) * (LAST - T0) / (hi - T0) for l in land]
+        print("REEL landing: " + " ".join(f"{land[i]:.2f}" for i in order), flush=True)
     lift = None if LIFT0 is None else [LIFT0 + (LIFT1 - LIFT0) * (N - 1 - i) / max(N - 1, 1) for i in range(N)]
 
     def bounce(s, kind):
@@ -659,19 +907,18 @@ def build(ctx):
             pos = centre + dist * direction(AZIMUTH + sway, ELEVATION)
             cam.location = pos
             G.look_at(cam, pos, centre)
-        elif mode == "scroll":
-            # flat -> 3/4: azimuth and elevation eased together (smootherstep), the frame re-fitted
-            # every frame so the object stays the same size in it; no roll (up = the window's top)
-            x = min(max(t / (TILT_END * S), 0.0), 1.0)
-            s = x * x * x * (x * (6 * x - 15) + 10)
-            # a little more room mid-move (the projected bounds change shape as it tilts), the
-            # tight framing only at the start and the end
-            d, dv, sx, sy = fit(AZIMUTH * s, FLAT_ELEVATION + (ELEVATION - FLAT_ELEVATION) * s,
-                                loosen=0.08 * math.sin(math.pi * s))
-            pos = centre + d * dv
+        elif mode == "3d":
+            pos = centre + dist * dvec
             cam.location = pos
             G.look_at(cam, pos, centre)
+        elif mode == "scroll":
+            pos, look, sx, sy, fstop = scroll_cam(t)
+            cam.location = pos
+            G.look_at(cam, pos, look)
             cd.shift_x, cd.shift_y = sx, sy
+            cd.dof.focus_distance = (look - pos).length
+            cd.dof.aperture_fstop = fstop
+            unlit_pose(t, look)
         for i, (root, rest, kind, lvl) in enumerate(items):
             dz, vis = zpos(i, t)
             if i == press_i and mode == "loop":
@@ -684,17 +931,124 @@ def build(ctx):
                 root.rotation_euler = (0, 0, dial_angle(dial_i.index(i), i, t))
             if mode == "scroll":     # fades in over the first 60 % of its short drop
                 f = smoothstep(land[i] - FALL, land[i] - 0.4 * FALL, t)
+                k = unlit_k(t)
+                if kind == "dial":   # the unlit end: the knob gives way to its picture
+                    f *= 1 - k
+                    if root.name in dial_pics:
+                        dial_pics[root.name]["fade"] = k
+                elif vis:            # …and the parts sink flush
+                    root.location.z -= k * flush[i]
+                if vis and kind != "dial":
+                    # never into what it sits on: a seated part stands only ~1 cm proud, less than
+                    # its press and its parent's spring, which would hide it for a frame or two
+                    under = items[parent[i]][0].location.z if parent[i] is not None else seat_on[i]
+                    if root.location.z < under + MIN_PROUD:
+                        root.location.z = under + MIN_PROUD
                 for ob in fading[i]:
                     ob["fade"] = f
 
     ids = ([cam] if dvec is not None else []) + [it[0] for it in items]
     fading = [[ob for ob in it[0].children_recursive if ob.type == "MESH"] for it in items]
     if mode == "scroll":
-        ids += [(cd, "shift_x"), (cd, "shift_y")]
+        ids += [(cd, "shift_x"), (cd, "shift_y"), (cd, "dof.focus_distance"), (cd, "dof.aperture_fstop")]
+        ids += [(cd, "lens"), (scene, '["unlit"]'), (bg.inputs["Strength"], "default_value")]
+        ids += [(ob.data, "energy") for ob in lights] + [(ob, '["fade"]') for ob in dial_pics.values()]
         add_fade(scene, exclude=("FloorMat",))
         ids += [(ob, '["fade"]') for obs in fading for ob in obs]
     lp.bake(ids, pose, props=("location", "rotation_euler"))
     return output(scene, P, L, cutout, cam)
+
+
+def frame_points(man, classic, xy):
+    """The points build() fits the camera to (each element's top corners, each dial's top), from
+    a manifest alone — for params.frame_parts."""
+    pts = []
+
+    def rect(e, top):
+        x0, y0, x1, y1 = e["rect"]
+        w, h = (x1 - x0) * PT, (y1 - y0) * PT
+        cx, cy = xy((x0 + x1) / 2, (y0 + y1) / 2)
+        pts.extend(Vector((cx + sx * w / 2, cy + sy * h / 2, top)) for sx in (-1, 1) for sy in (-1, 1))
+
+    def knob(e, seat):
+        x0, y0, x1, y1 = e["rect"]
+        cx, cy = xy((x0 + x1) / 2, (y0 + y1) / 2)
+        R = 0.5 * (x1 - x0) * PT * 0.94
+        pts.extend(Vector((cx + sx * R, cy + sy * R, seat + 0.36 * R / 0.33)) for sx in (-1, 1) for sy in (-1, 1))
+
+    for m in man["modules"]:
+        mtop = BASE.get(m["name"], 0.12) - SEAT
+        rect(m, mtop)
+        for c in m["children"]:
+            if c["kind"] == "dial":
+                if not classic:
+                    knob(c, mtop)
+                continue
+            ctop = mtop - SEAT + THICK[0]
+            rect(c, ctop)
+            for k in c.get("children", []):
+                if k["kind"] == "dial":
+                    knob(k, ctop)
+                else:
+                    rect(k, ctop - SEAT + THICK[1])
+    return pts
+
+
+def window_shadow(name, cx, cy, w, h, r, coll, tone):
+    """The unlit end's window shadow (see WINDOW_SHADOW): a plane on the floor under a window, its
+    alpha a soft shadow of the window's rounded outline made here with numpy, black, shown by
+    scene["unlit"]; seen by the camera only. Returns the object."""
+    import numpy as np
+    ppu, margin = 100, 1.0
+    W, H = int(round((w + 2 * margin) * ppu)), int(round((h + 2 * margin) * ppu))
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    px, py = (xx + 0.5) / ppu - (w / 2 + margin), (H - yy - 0.5) / ppu - (h / 2 + margin)   # y up
+
+    def outline(dy):
+        qx = np.maximum(np.abs(px) - (w / 2 - r), 0)
+        qy = np.maximum(np.abs(py - dy) - (h / 2 - r), 0)
+        return (np.sqrt(qx * qx + qy * qy) <= r).astype(np.float32)
+
+    def blur(a, sigma):
+        k = max(1, int(round(np.sqrt(12 * (sigma * ppu) ** 2 / 3 + 1))) | 1)
+        for _ in range(3):                         # three box passes ~ a gaussian
+            for ax in (0, 1):
+                pad = [(k // 2 + 1, k // 2) if i == ax else (0, 0) for i in range(2)]
+                c = np.cumsum(np.pad(a, pad, mode="edge"), axis=ax)
+                a = (np.take(c, range(k, c.shape[ax]), axis=ax) - np.take(c, range(0, c.shape[ax] - k), axis=ax)) / k
+        return a
+
+    alpha = SHADOW_MIX[0] * blur(outline(0.0), SHADOW_BLUR[0]) + SHADOW_MIX[1] * blur(outline(-SHADOW_DROP), SHADOW_BLUR[1])
+    alpha = np.clip(alpha * WINDOW_SHADOW[tone], 0, 1)
+    px_ = np.zeros((H, W, 4), np.float32)
+    px_[..., 3] = alpha
+    im = bpy.data.images.new(name + "Img", W, H, alpha=True, float_buffer=True)
+    im.colorspace_settings.name = "Non-Color"
+    im.pixels.foreach_set(px_[::-1].ravel())       # rows bottom-up
+    im.pack()
+    mat = bpy.data.materials.new(name + "Mat")
+    mat.use_nodes = True
+    nt, ln = mat.node_tree.nodes, mat.node_tree.links
+    for n in list(nt):
+        nt.remove(n)
+    tx = nt.new("ShaderNodeTexImage"); tx.image = im; tx.extension = "CLIP"; tx.interpolation = "Linear"
+    un = nt.new("ShaderNodeAttribute"); un.attribute_type = "VIEW_LAYER"; un.attribute_name = "unlit"
+    mu = nt.new("ShaderNodeMath"); mu.operation = "MULTIPLY"
+    ln.new(tx.outputs["Alpha"], mu.inputs[0]); ln.new(un.outputs["Fac"], mu.inputs[1])
+    em = nt.new("ShaderNodeEmission"); em.inputs["Color"].default_value = (0, 0, 0, 1); em.inputs["Strength"].default_value = 0.0
+    tr = nt.new("ShaderNodeBsdfTransparent")
+    mx = nt.new("ShaderNodeMixShader")
+    ln.new(mu.outputs[0], mx.inputs[0]); ln.new(tr.outputs[0], mx.inputs[1]); ln.new(em.outputs[0], mx.inputs[2])
+    out = nt.new("ShaderNodeOutputMaterial")
+    ln.new(mx.outputs[0], out.inputs["Surface"])
+    _cutout(mat)
+    ob = G.plane_uv(name, W / ppu, H / ppu, mat, coll, (cx, cy, 0.0008))
+    for k in ("visible_diffuse", "visible_glossy", "visible_transmission", "visible_volume_scatter", "visible_shadow"):
+        try:
+            setattr(ob, k, False)
+        except Exception:
+            pass
+    return ob
 
 
 def add_fade(scene, exclude=()):
@@ -745,7 +1099,7 @@ def output(scene, P, L, cutout, cam):
             prefs.compute_device_type = device
             prefs.get_devices()
             for dv in prefs.devices:
-                dv.use = dv.type != "CPU"
+                dv.use = dv.type != "CPU" or bool(P.get("cycles_hybrid"))   # hybrid: the CPU too
         except Exception as e:
             print("cycles device:", e)
     comp = None if cutout else field_compositor(scene, L)
@@ -770,6 +1124,9 @@ def output(scene, P, L, cutout, cam):
         if comp is not None:
             pool_image(comp, L, sc.render.resolution_x * sc.render.resolution_percentage // 100,
                        sc.render.resolution_y * sc.render.resolution_percentage // 100)
+            un = comp.nodes.get("Unlit")
+            if un is not None:
+                un.inputs[0].default_value = float(sc.get("unlit", 0.0))
             if sc.compositing_node_group != comp:
                 sc.compositing_node_group = comp
             put(sc.render, "use_compositing", True)
@@ -783,7 +1140,10 @@ def output(scene, P, L, cutout, cam):
             # on stallion came right after a frame's second tile; and on NVIDIA, OptiX's own
             # denoiser on the GPU instead of OIDN
             put(sc.cycles, "use_auto_tile", False)
-            if device == "OPTIX":
+            if P.get("denoiser"):           # e.g. OPENIMAGEDENOISE on every machine of a split render
+                put(sc.cycles, "denoiser", P["denoiser"])
+                put(sc.cycles, "denoising_use_gpu", True)
+            elif device == "OPTIX":
                 put(sc.cycles, "denoiser", "OPTIX")
             put(sc.cycles, "texture_limit_render", "OFF")    # the UI pictures stay sharp
             put(sc.cycles, "blur_glossy", 0.5)

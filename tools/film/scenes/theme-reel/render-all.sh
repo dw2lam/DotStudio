@@ -16,11 +16,13 @@
 #     --size W:H         the app copies' size (default 1280:800: crisp at 2x in Settings)
 #     --quality Q        HEVC quality for encode.py (default 70: ~2.5 MB a film, text stays crisp)
 #     --hero DIR         also the hero stills, per variant: DIR/<variant>-flat.png (the assembled
-#                        app straight from above, orthographic) and DIR/<variant>-3d.png (3/4, the
-#                        scroll sequence's last frame); --hero-res (3840x2400), --hero-samples (1024)
-#     --scroll DIR       also the one-way scroll assembly, per variant: DIR/<variant>/####.png
-#                        (150 frames, empty -> assembled, camera locked) and DIR/<variant>-webp/
-#                        (WebP, quality 80); --scroll-res (1920x1200), --scroll-samples (384)
+#                        app straight from above, orthographic) and DIR/<variant>-3d.png (the 3/4
+#                        view); --hero-res (3840x2400), --hero-samples (1024)
+#     --scroll DIR       also the one-way assembly for the site, per variant: DIR/<variant>/####.png
+#                        (180 frames = 6 s at 30 fps, close-up of the empty chassis -> assembled,
+#                        flat from above, the orange edge light closed)
+#                        and the site's WebPs DIR/<variant>-webp/hi/000.webp… (1920 px, q88) and
+#                        …/lo/ (960 px, q80); --scroll-res (2560x1600), --scroll-samples (512)
 #     --remote HOST      render on another machine over ssh (a GPU box): see below
 #     --remote-blender P Blender there (default /home/stallion/blender/blender)
 #     --remote-device D  Cycles' GPU backend there (default OPTIX; CUDA, HIP, METAL…)
@@ -29,6 +31,12 @@
 #                        ever written or removed there
 #     --threads N       Blender's CPU threads (default 8: the GPU does the work; a box under full
 #                        GPU + CPU load has dropped off the network)
+#     --nice N           Blender's niceness (default 10)
+#     --pause S          sleep S seconds after each frame (a machine that crashes under load)
+#     --scroll-frames A-B  only these frames of the scroll assembly (a render split across machines:
+#                        one run per machine, each with its own --work and --scroll)
+#     --denoiser D       the same denoiser on every machine (OPENIMAGEDENOISE: OIDN on the GPU)
+#     --skip-prep        use WORK/<variant> as prepared (parts copied in, not re-cut)
 #
 # Output: App/ThemeFilms/theme-<variant>.mov (HEVC, 1280x800, 8 s at 30 fps, seamless loop) and
 # theme-<variant>.jpg (the poster: the assembled app, frame POSTER of the loop — shown under Reduce
@@ -55,9 +63,10 @@ FILM=$REPO/tools/film
 VARIANTS=(classic-light classic-dark retro-light retro-dark)
 WORK=${TMPDIR:-/tmp}/theme-reel
 BUILD=1; CAPTURE=1; FILMS=1; ENGINE=cycles; SAMPLES=""; RES=""; SIZE=1280:800; QUALITY=70
-HERO=""; HERO_RES=3840x2400; HERO_SAMPLES=1024; SCROLL=""; SCROLL_RES=1920x1200; SCROLL_SAMPLES=384
+HERO=""; HERO_RES=3840x2400; HERO_SAMPLES=1024; SCROLL=""; SCROLL_RES=2560x1600; SCROLL_SAMPLES=512
 POSTER=147                       # the loop's frame the poster is cut from: assembled, before the hold's moves
 REMOTE=""; RBLENDER=/home/stallion/blender/blender; RDEVICE=OPTIX; THREADS=8; RROOT=/tmp
+NICE=10; PAUSE=""; SFRAMES=""; DENOISER=""; PREP=1
 B=${BLENDER:-/Applications/Blender.app/Contents/MacOS/Blender}
 while (( $# )); do
   case $1 in
@@ -82,6 +91,11 @@ while (( $# )); do
     --remote-device) RDEVICE=$2; shift 2;;
     --remote-root) RROOT=${2%/}; shift 2;;
     --threads) THREADS=$2; shift 2;;
+    --nice) NICE=$2; shift 2;;
+    --pause) PAUSE=$2; shift 2;;
+    --scroll-frames) SFRAMES=$2; shift 2;;
+    --denoiser) DENOISER=$2; shift 2;;
+    --skip-prep) PREP=0; shift;;
     *) echo "unknown option $1"; exit 2;;
   esac
 done
@@ -111,7 +125,8 @@ if [[ -n $REMOTE ]]; then
         case \"\$c\" in *[Bb]lender) kill \$p;; esac; fi; rm -rf '$RD'; \
       ls '$RROOT' | grep -c dotstudio-reel || true" | sed 's/^/remote dotstudio-reel folders left: /'
   }
-  trap cleanup EXIT INT TERM
+  trap cleanup EXIT
+  trap 'exit 130' INT TERM      # (cleanup as a signal trap would clean up and render on)
   ssh -o BatchMode=yes "$REMOTE" "mkdir -p '$RD/work'"
   rsync -a --exclude '__pycache__' "$FILM/" "$REMOTE:$RD/film/"
 fi
@@ -148,7 +163,7 @@ blender() {
   local V=$WORK/$v
   if [[ -n $REMOTE ]]; then
     python3 -I "$HERE/spec.py" "$HERE/theme-reel.json" "$v" "$RD/work/$v" "$V/spec-$tag.json" \
-      --engine "$ENGINE" --device "$RDEVICE" "${sargs[@]}" || return 1
+      --engine "$ENGINE" --device "$RDEVICE" ${=DENOISER:+--denoiser $DENOISER} "${sargs[@]}" || return 1
     rsync -a --exclude 'frames*' --exclude 'spec*.json' --exclude '*.mov' "$V/" "$REMOTE:$RD/work/$v/" || return 1
     rsync -a "$V/spec-$tag.json" "$REMOTE:$RD/work/$v/spec-$tag.json" || return 1
     local rout=$RD/out/$v-$tag
@@ -170,7 +185,7 @@ blender() {
     # before giving up (the render goes on meanwhile).
     local try p state fails ok=0
     for try in 1 2 3; do
-      p=$(ssh -o BatchMode=yes "$REMOTE" "cd '$RD' && { nohup nice -n 10 '$RBLENDER' -b -t $THREADS --factory-startup \
+      p=$(ssh -o BatchMode=yes "$REMOTE" "cd '$RD' && { nohup nice -n $NICE '$RBLENDER' -b -t $THREADS --factory-startup \
         --python film/run.py -- work/$v/spec-$tag.json ${(j: :)${(@q)rargs}} > work/$v/$tag.log 2>&1 < /dev/null & \
         p=\$!; echo \$p > blender.pid; \
         command -v caffeinate >/dev/null && { nohup caffeinate -i -w \$p > /dev/null 2>&1 < /dev/null & }; echo \$p; }") || return 1
@@ -207,13 +222,13 @@ blender() {
     fi
     ssh -o BatchMode=yes "$REMOTE" "rm -rf '$rout'" || return 1
   else
-    python3 -I "$HERE/spec.py" "$HERE/theme-reel.json" "$v" "$V" "$V/spec-$tag.json" --engine "$ENGINE" "${sargs[@]}" || return 1
+    python3 -I "$HERE/spec.py" "$HERE/theme-reel.json" "$v" "$V" "$V/spec-$tag.json" --engine "$ENGINE" ${=DENOISER:+--denoiser $DENOISER} "${sargs[@]}" || return 1
     rargs=("${(@)rargs//@OUT/$out}")
     wait_for_blender
     # the same watched tries as on a remote machine (see above)
     local log=$V/$tag.log p rc=1 try
     for try in 1 2 3; do
-      nice -n 10 "$B" -b -t $THREADS --factory-startup --python "$FILM/run.py" -- "$V/spec-$tag.json" "${rargs[@]}" > "$log" 2>&1 &
+      nice -n $NICE "$B" -b -t $THREADS --factory-startup --python "$FILM/run.py" -- "$V/spec-$tag.json" "${rargs[@]}" > "$log" 2>&1 &
       p=$!
       while kill -0 $p 2>/dev/null; do
         sleep 20
@@ -232,7 +247,7 @@ blender() {
 for v in $VARIANTS; do
   echo "== $v"
   V=$WORK/$v
-  python3 -I "$HERE/prep.py" "$WORK/parts/$v" "$V"
+  (( PREP )) && python3 -I "$HERE/prep.py" "$WORK/parts/$v" "$V"
   if (( FILMS )); then
     t0=$SECONDS
     blender $v loop "$V/frames" ${SAMPLES:+--samples $SAMPLES} -- --anim @OUT ${RES:+--res $RES} || exit 1
@@ -248,18 +263,23 @@ for v in $VARIANTS; do
   if [[ -n $HERO ]]; then
     t0=$SECONDS
     blender $v flat "$HERO/$v-flat.png" --mode flat -- --still @OUT --frame 1 --res $HERO_RES --samples $HERO_SAMPLES || exit 1
-    blender $v 3d "$HERO/$v-3d.png" --mode scroll -- --still @OUT --frame 150 --res $HERO_RES --samples $HERO_SAMPLES || exit 1
+    blender $v 3d "$HERO/$v-3d.png" --mode 3d -- --still @OUT --frame 1 --res $HERO_RES --samples $HERO_SAMPLES || exit 1
     echo "hero ${v}: $(( SECONDS - t0 )) s"
   fi
   if [[ -n $SCROLL ]]; then
     t0=$SECONDS
-    blender $v scroll "$SCROLL/$v" --mode scroll -- --anim @OUT --res $SCROLL_RES --samples $SCROLL_SAMPLES || exit 1
+    blender $v scroll "$SCROLL/$v" --mode scroll -- --anim @OUT --res $SCROLL_RES --samples $SCROLL_SAMPLES \
+      ${=SFRAMES:+--frames $SFRAMES} ${=PAUSE:+--pause $PAUSE} || exit 1
     echo "scroll ${v}: $(( SECONDS - t0 )) s"
-    # the web copy: WebP frames (quality 80) for a scroll-scrubbed sequence
+    # the site's copies: WebP frames 000.webp… at 1920 px (q88) and 960 px (q80)
     python3 -I -c "import sys, glob, os; from PIL import Image
-src, dst = sys.argv[1], sys.argv[2]; os.makedirs(dst, exist_ok=True)
-for f in sorted(glob.glob(os.path.join(src, '[0-9]' * 4 + '.png'))):
-    Image.open(f).convert('RGB').save(os.path.join(dst, os.path.basename(f)[:-4] + '.webp'), quality=80, method=6)" \
+src, dst = sys.argv[1], sys.argv[2]
+for sub, w, q in (('hi', 1920, 88), ('lo', 960, 80)):
+    os.makedirs(os.path.join(dst, sub), exist_ok=True)
+    for i, f in enumerate(sorted(glob.glob(os.path.join(src, '[0-9]' * 4 + '.png')))):
+        im = Image.open(f).convert('RGB')
+        im.resize((w, round(im.height * w / im.width)), Image.LANCZOS).save(
+            os.path.join(dst, sub, f'{i:03d}.webp'), quality=q, method=6)" \
       "$SCROLL/$v" "$SCROLL/$v-webp"
     du -sh "$SCROLL/$v" "$SCROLL/$v-webp" | awk '{print "   " $1, $2}'
   fi

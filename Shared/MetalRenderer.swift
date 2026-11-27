@@ -256,6 +256,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         self.device = device
         self.queue = queue
         self.store = store
+        // DOTSTUDIO_UI_CLOCK=2026-11-26T15:00:00-05:00: render as if the wall clock read that
+        // (UI captures: daylight thumbnails whatever the hour they're taken)
+        if let s = ProcessInfo.processInfo.environment["DOTSTUDIO_UI_CLOCK"],
+           let d = ISO8601DateFormatter().date(from: s) {
+            clockOverride = d
+        }
         let t0 = CFAbsoluteTimeGetCurrent()
 
         // Load the metallib from THIS class's bundle. In the app that's the app

@@ -63,6 +63,7 @@ import SwiftUI
 ///   DOTSTUDIO_APPEARANCE=console          the Console look (issue #6); default Classic — a
 ///                                         render never reads the saved Settings choice
 ///   DOTSTUDIO_UI_SETTLE=0.6               seconds each render settles before capture
+///   DOTSTUDIO_UI_SCALE=3                  pixels per point of the PNGs (default: the display's)
 ///   DOTSTUDIO_UI_CHROME=1                 main-window screens in a titled window, captured with
 ///                                         its title bar and toolbar (New, MCP, Settings…)
 ///   DOTSTUDIO_UI_LIST=1                   print the screen names and exit
@@ -1137,7 +1138,19 @@ enum UIShots {
                 // (with chrome: the window's frame view — the title bar and toolbar over the content)
                 let target: NSView = chrome ? (host.superview ?? host) : host
                 target.layoutSubtreeIfNeeded()
-                guard let rep = target.bitmapImageRepForCachingDisplay(in: target.bounds) else { return false }
+                guard var rep = target.bitmapImageRepForCachingDisplay(in: target.bounds) else { return false }
+                // DOTSTUDIO_UI_SCALE: a bitmap at that many pixels per point instead of the
+                // display's (the same colour space), e.g. 3 for the theme films' close-ups
+                if let s = UIShots.env["DOTSTUDIO_UI_SCALE"].flatMap(Double.init), s > 0,
+                   let big = NSBitmapImageRep(bitmapDataPlanes: nil,
+                                              pixelsWide: Int((target.bounds.width * s).rounded()),
+                                              pixelsHigh: Int((target.bounds.height * s).rounded()),
+                                              bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                              colorSpaceName: .calibratedRGB, bytesPerRow: 0, bitsPerPixel: 0)?
+                       .retagging(with: rep.colorSpace) {
+                    big.size = target.bounds.size
+                    rep = big
+                }
                 target.cacheDisplay(in: target.bounds, to: rep)
                 guard let png = rep.representation(using: .png, properties: [:]) else { return false }
                 return (try? png.write(to: url)) != nil
