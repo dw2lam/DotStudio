@@ -324,7 +324,7 @@ enum WhatsNewClip {
     /// `<base>-dark` (.mov, with a .jpg poster) for the appearance it wears. A release with its
     /// own clip bundles the film and adds a row.
     static let films: [String: String] = [
-        "1.7.0": "theme-retro",        // Retro, assembled (App/ThemeFilms)
+        "1.7.0": "whatsnew-1.7.0-retro", // Retro, assembled (App/ThemeFilms; the Theme picker keeps its own films)
     ]
 
     /// The bundled film's base name for a media line, or nil.
@@ -335,7 +335,7 @@ enum WhatsNewClip {
         return films[(String(last) as NSString).deletingPathExtension]
     }
 
-    /// The film for a release in light or dark: "theme-retro-dark".
+    /// The film for a release in light or dark: "whatsnew-1.7.0-retro-dark".
     static func filmName(for release: Changelog.Release, dark: Bool) -> String? {
         film(for: release.media).map { "\($0)-\(dark ? "dark" : "light")" }
     }
@@ -543,8 +543,8 @@ extension WhatsNew {
             check(!r170.sections.flatMap { texts($0.items) }.contains { $0.contains("![") || $0.contains("whatsnew") },
                   "the media line isn't shown as a bullet or prose")
             check(r170.sections.first?.heading == "New", "1.7.0 still opens on New (no heading-less section for the image)")
-            check(WhatsNewClip.filmName(for: r170, dark: true) == "theme-retro-dark"
-                  && WhatsNewClip.filmName(for: r170, dark: false) == "theme-retro-light", "1.7.0 → theme-retro-light/-dark")
+            check(WhatsNewClip.filmName(for: r170, dark: true) == "whatsnew-1.7.0-retro-dark"
+                  && WhatsNewClip.filmName(for: r170, dark: false) == "whatsnew-1.7.0-retro-light", "1.7.0 → whatsnew-1.7.0-retro-light/-dark")
             for dark in [false, true] {
                 let name = WhatsNewClip.filmName(for: r170, dark: dark) ?? "?"
                 check(Bundle.main.url(forResource: name, withExtension: "jpg") != nil
@@ -577,7 +577,7 @@ extension WhatsNew {
                   "media line under the heading; a later image line dropped, not joined to the bullet")
             check(p3.sections[0].items[0].text == "a bullet", "an image line ends the bullet above it")
             check(WhatsNewClip.film(for: p3.media) == nil, "unknown whatsnew/<version> → no clip")
-            check(p2.media?.url == "media/whatsnew/1.7.0.webp" && WhatsNewClip.film(for: p2.media) == "theme-retro",
+            check(p2.media?.url == "media/whatsnew/1.7.0.webp" && WhatsNewClip.film(for: p2.media) == "whatsnew-1.7.0-retro",
                   "<url> \"title\" form; a relative URL maps too")
             check(p1.media == nil && p1.sections.first?.items.count == 2, "inline images stay in their text")
         } else { check(false, "media fixture parses (\(pictures.releases.count) releases)") }
