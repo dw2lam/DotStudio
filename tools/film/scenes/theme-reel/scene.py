@@ -51,6 +51,7 @@ Params (the spec's "params"; render-all.sh writes one spec per variant):
     view   the view transform (default Standard: the UI's own colours)
     cutout true: no field — a transparent RGBA picture with the shadow in its alpha
     fstop  optional depth of field (default none: the shot is sharp)
+    cycles_hybrid  true: Cycles renders on the CPU alongside the GPU (benchmarks; off by default)
     denoiser  Cycles' denoiser for every machine (OPENIMAGEDENOISE, on the GPU), so the halves of a
            render split across a Mac and an NVIDIA box match (default: OIDN; OptiX's on OPTIX)
     frame_parts  another variant's prepared folder whose layout frames the shot: its size, its
@@ -112,6 +113,7 @@ SEAT = 0.015
 # of its thickness stands proud — nearly flush, as the app looks (it keeps its full thickness while
 # it drops in)
 SEATED_PROUD = 1 / 3
+MIN_PROUD = 0.0006          # scroll: a shown part's top never comes closer than this to what it sits on
 DROP = 16.0                 # how far above its seat an element starts its fall (out of frame)
 # the scroll sequence: the camera starts straight above, so a long fall would come at the lens —
 # there an element arrives in screen space instead: a short drop onto its seat while it fades in
@@ -595,6 +597,7 @@ def build(ctx):
     # the chassis: each module's base rests on the field
     items = []          # (root, rest z, kind, level) in landing order
     parent = []         # per item: the index of the item it sits on (None: on the chassis)
+    seat_on = []        # per item: the top of the module it stands in
     for m in man["modules"]:
         d = BASE.get(m["name"], 0.12)
         base, mtop = element(m, "M_" + m["name"], d - SEAT, 0.0, wside)
@@ -605,19 +608,23 @@ def build(ctx):
                     continue
                 items.append((dial(c, nm, mtop), mtop, "dial", 1))
                 parent.append(None)
+                seat_on.append(mtop)
                 continue
             root, ctop = element(c, nm, THICK[0], mtop - SEAT, side1)
             items.append((root, ctop, c["kind"], 1))
             parent.append(None)
+            seat_on.append(mtop)
             pi = len(items) - 1
             for j, k in enumerate(c.get("children", [])):
                 if k["kind"] == "dial":
                     items.append((dial(k, f"{nm}_{j}", ctop), ctop, "dial", 2))
                     parent.append(pi)
+                    seat_on.append(mtop)
                     continue
                 kr, ktop = element(k, f"{nm}_{j}", THICK[1], ctop - SEAT, side2)
                 items.append((kr, ktop, k["kind"], 2))
                 parent.append(pi)
+                seat_on.append(mtop)
     N = len(items)
     print(f"REEL elements: {N} ({sum(1 for it in items if it[2] == 'dial')} dials)", flush=True)
     if mode in ("scroll", "flat", "3d"):
@@ -931,6 +938,12 @@ def build(ctx):
                         dial_pics[root.name]["fade"] = k
                 elif vis:            # …and the parts sink flush
                     root.location.z -= k * flush[i]
+                if vis and kind != "dial":
+                    # never into what it sits on: a seated part stands only ~1 cm proud, less than
+                    # its press and its parent's spring, which would hide it for a frame or two
+                    under = items[parent[i]][0].location.z if parent[i] is not None else seat_on[i]
+                    if root.location.z < under + MIN_PROUD:
+                        root.location.z = under + MIN_PROUD
                 for ob in fading[i]:
                     ob["fade"] = f
 
@@ -1086,7 +1099,7 @@ def output(scene, P, L, cutout, cam):
             prefs.compute_device_type = device
             prefs.get_devices()
             for dv in prefs.devices:
-                dv.use = dv.type != "CPU"
+                dv.use = dv.type != "CPU" or bool(P.get("cycles_hybrid"))   # hybrid: the CPU too
         except Exception as e:
             print("cycles device:", e)
     comp = None if cutout else field_compositor(scene, L)
