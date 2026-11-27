@@ -827,6 +827,7 @@ enum UIShots {
     /// The window is opaque (the stack's base); every other part has nothing around it.
     private static func themeLayerScreens() -> [Screen] {
         let playing: (Stage) -> Void = { st in
+            if DemoHooks.demoDisplay { DisplayRoster.shared.setDemo(true) }
             st.lineup(st.playlist)
             WallpaperSlot.shared.set(st.model.library.presets.first { $0.name == "Golden Hour" }?.id ?? st.wallpaper)
         }

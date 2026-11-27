@@ -6,9 +6,18 @@
 #     -> OUT_DIR/<classic|retro>-<light|dark>/<window|deck|tiles|inspector|keys>.png
 #
 # Offscreen only (never shown), in a throwaway library and home: the real library is never touched.
-# DOTSTUDIO_UI_SCALE=3 in the environment captures at 3 px per point (sharp close-ups). Scroll bars
+# DOTSTUDIO_UI_SCALE=3 in the environment captures at 3 px per point (sharp close-ups; 6 with
+# prep.py --hires for the scroll's close camera). Scroll bars
 # are the overlay kind whatever the Mac's setting (a legacy scroller narrows the layout by 17 pt).
+#
+# The same shots whenever and wherever they're taken: the gallery's clocks read 12:54 in daylight
+# (DOTSTUDIO_UI_CLOCK), the screensaver's rotation is on Liquid Chrome (DOTSTUDIO_UI_PLAYBACK_CLOCK)
+# and the cards show their displays rows (DOTSTUDIO_UI_DEMO_DISPLAY: a made-up second display) —
+# each overridable from the environment.
 set -euo pipefail
+export DOTSTUDIO_UI_CLOCK=${DOTSTUDIO_UI_CLOCK:-2026-11-26T15:54:00-05:00}
+export DOTSTUDIO_UI_PLAYBACK_CLOCK=${DOTSTUDIO_UI_PLAYBACK_CLOCK:-2026-11-26T16:04:00-05:00}
+export DOTSTUDIO_UI_DEMO_DISPLAY=${DOTSTUDIO_UI_DEMO_DISPLAY:-1}
 APP=${1:?app binary (…/DotStudio.app/Contents/MacOS/DotStudio)}
 OUT=${2:?output dir}
 mkdir -p "$OUT"

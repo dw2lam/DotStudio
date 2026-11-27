@@ -1,7 +1,11 @@
 """Prepares captured UI parts (capture.sh) for the theme-reel scene: takes the app apart.
 Plain python3 + Pillow + numpy.
 
-    python3 -I prep.py PARTS_DIR/<variant> WORK_DIR/<variant> [--debug]
+    python3 -I prep.py PARTS_DIR/<variant> WORK_DIR/<variant> [--debug] [--hires]
+
+--hires: the capture is at a multiple of 3 px per point (DOTSTUDIO_UI_SCALE=6, 9…): the elements
+are still found at 3 px per point (the picture box-averaged down; every threshold is tuned there)
+and cut from the full picture, for close camera work.
 
 The assembled object is the app as it shows: the window (UIShots' theme-layer-window) with the
 editor's inspector (theme-layer-inspector) docked at its right. Each is a MODULE — a base that rests
@@ -193,9 +197,12 @@ def socket_colour(g):
     return g * (0.95 if lum > 0.35 else 0.80)
 
 
-def take_apart(px, scale, name, theme, out_dir, offset, debug, depth=0, ground_rgb=None, prefix="e"):
+def take_apart(px, scale, name, theme, out_dir, offset, debug, depth=0, ground_rgb=None, prefix="e", hpx=None):
     """Finds px's elements (level 1 on the module's ground, then each element's own), cuts them
-    out, sockets them into px (in place). Returns the elements' manifest entries."""
+    out, sockets them into px (in place). Returns the elements' manifest entries. With hpx (the
+    same picture F times larger, --hires) the elements are found in px but cut from hpx, and the
+    sockets go into both."""
+    F = 1 if hpx is None else hpx.shape[1] // px.shape[1]
     H, W = px.shape[:2]
     alpha = px[..., 3] > 8
     g = ground_rgb if ground_rgb is not None else ground(px, alpha)
@@ -216,6 +223,7 @@ def take_apart(px, scale, name, theme, out_dir, offset, debug, depth=0, ground_r
         found = with_labels(found, diff, thr, scale, H)
     entries = []
     orig = px.copy()
+    horig = hpx.copy() if hpx is not None else None
     for k, (sl, sub) in enumerate(found):
         y0, y1, x0, x1 = sl[0].start, sl[0].stop, sl[1].start, sl[1].stop
         h, w = y1 - y0, x1 - x0
@@ -225,6 +233,10 @@ def take_apart(px, scale, name, theme, out_dir, offset, debug, depth=0, ground_r
         shape = rrect_mask(w, h, r)
         crop = orig[y0:y1, x0:x1].copy()
         crop[..., 3] = (shape * 255).astype(np.uint8)
+        if hpx is not None:
+            hshape = rrect_mask(w * F, h * F, r * F)
+            hcrop = horig[y0 * F:y1 * F, x0 * F:x1 * F].copy()
+            hcrop[..., 3] = (hshape * 255).astype(np.uint8)
         eid = f"{prefix}-{k}"
         e = {"png": eid + ".png", "radius": round(r / scale, 2),
              "rect": [round((offset[0] + x0) / scale, 2), round((offset[1] + y0) / scale, 2),
@@ -239,15 +251,25 @@ def take_apart(px, scale, name, theme, out_dir, offset, debug, depth=0, ground_r
         if depth == 0 and e["kind"] != "dial":
             sub_px = crop.copy()
             sub_px[..., 3] = np.where(shape > 0.5, 255, 0).astype(np.uint8)
+            sub_h = None
+            if hpx is not None:
+                sub_h = hcrop.copy()
+                sub_h[..., 3] = np.where(hshape > 0.5, 255, 0).astype(np.uint8)
             e["children"] = take_apart(sub_px, scale, name, theme, out_dir, (offset[0] + x0, offset[1] + y0), debug,
-                                       depth + 1, prefix=eid)
+                                       depth + 1, prefix=eid, hpx=sub_h)
             crop[..., :3] = sub_px[..., :3]                     # the children's sockets
-        Image.fromarray(crop).save(os.path.join(out_dir, eid + ".png"))
+            if hpx is not None:
+                hcrop[..., :3] = sub_h[..., :3]
+        Image.fromarray(crop if hpx is None else hcrop).save(os.path.join(out_dir, eid + ".png"))
         # the socket in px: the ground a step darker, in the element's own shape
         s = shape[..., None]
         sc = socket_colour(g)
         region = px[y0:y1, x0:x1, :3].astype(np.float32)
         px[y0:y1, x0:x1, :3] = (region * (1 - s) + sc * s).astype(np.uint8)
+        if hpx is not None:
+            hs = hshape[..., None]
+            hregion = hpx[y0 * F:y1 * F, x0 * F:x1 * F, :3].astype(np.float32)
+            hpx[y0 * F:y1 * F, x0 * F:x1 * F, :3] = (hregion * (1 - hs) + sc * hs).astype(np.uint8)
         entries.append(e)
         if debug is not None:
             debug.rectangle([offset[0] + x0, offset[1] + y0, offset[0] + x1, offset[1] + y1],
@@ -274,10 +296,28 @@ def mark_press(modules, work):
             return
 
 
-def main(src, dst, debug=False):
+def down(a, F):
+    """a box-averaged F x smaller (premultiplied, so edges don't darken)."""
+    h, w = a.shape[0] // F, a.shape[1] // F
+    x = a[:h * F, :w * F].astype(np.float32)
+    al = x[..., 3:4] / 255.0
+    x[..., :3] *= al
+    x = x.reshape(h, F, w, F, 4).mean(axis=(1, 3))
+    al = np.maximum(x[..., 3:4] / 255.0, 1e-6)
+    x[..., :3] = np.where(x[..., 3:4] > 0, x[..., :3] / al, 0)
+    return np.clip(x + 0.5, 0, 255).astype(np.uint8)
+
+
+def main(src, dst, debug=False, hires=False):
     os.makedirs(dst, exist_ok=True)
     theme = os.path.basename(os.path.normpath(src)).split("-")[0]
+    hwin = None
     win = np.asarray(Image.open(os.path.join(src, "window.png")).convert("RGBA")).copy()
+    F = 1
+    if hires:
+        # found at 3 px per point, cut at the capture's own (an integer multiple of 3)
+        F = round(win.shape[1] / 1280) // 3
+        hwin, win = win, down(win, F)
     scale = round(win.shape[1] / 1280)
     # the window's ground is its chassis: sampled in the left margin, under the title bar
     chassis = ground(win, (slice(int(70 * scale), int(600 * scale)), slice(int(3 * scale), int(12 * scale))))
@@ -325,13 +365,28 @@ def main(src, dst, debug=False):
         strip = win[cut:cut + int(10 * scale)]
         is_chassis = np.abs(strip[..., :3].astype(np.float32) - g).max(axis=-1) < 7
         strip[is_chassis, :3] = g.astype(np.uint8)
+        if hwin is not None:
+            hbody = hwin[:cut * F]
+            hfoot = np.zeros((pad * F, hwin.shape[1], 4), np.uint8)
+            hfoot[..., :3] = g.astype(np.uint8)
+            hfoot[..., 3] = 255
+            hwin = np.concatenate([hbody, np.repeat(hbody[-2:-1], int(10 * scale) * F, axis=0), hfoot], axis=0)
+            hstrip = hwin[cut * F:(cut + int(10 * scale)) * F]
+            hstrip[np.repeat(np.repeat(is_chassis, F, 0), F, 1), :3] = g.astype(np.uint8)
     r = WINDOW_RADIUS_PT * scale
     shape = rrect_mask(win.shape[1], win.shape[0], r)
     win[..., 3] = (shape * 255).astype(np.uint8)
+    if hwin is not None:
+        hwin[..., 3] = (rrect_mask(hwin.shape[1], hwin.shape[0], r * F) * 255).astype(np.uint8)
 
     ins = np.asarray(Image.open(os.path.join(src, "inspector.png")).convert("RGBA")).copy()
+    hins = None
+    if hwin is not None:
+        hins, ins = ins, down(ins, F)
     a = ins[..., 3] > 8
     ys, xs = np.where(a)
+    if hins is not None:
+        hins = hins[ys.min() * F:(ys.max() + 1) * F, xs.min() * F:(xs.max() + 1) * F].copy()
     ins = ins[ys.min():ys.max() + 1, xs.min():xs.max() + 1].copy()
     ins_r = corner_radius(ins[..., 3] > 128)
 
@@ -341,12 +396,13 @@ def main(src, dst, debug=False):
     dbg = ImageDraw.Draw(dbg_im) if debug else None
     ins_at = (win.shape[1] + DOCK_GAP_PT * scale, 0)
     modules = []
-    for name, px, at, rad in (("window", win, (0, 0), WINDOW_RADIUS_PT), ("inspector", ins, ins_at, ins_r / scale)):
+    for name, px, hp, at, rad in (("window", win, hwin, (0, 0), WINDOW_RADIUS_PT),
+                                  ("inspector", ins, hins, ins_at, ins_r / scale)):
         if debug:
             dbg_im.alpha_composite(Image.fromarray(px), at)
         kids = take_apart(px, scale, name, theme, dst, at, None, prefix=("w" if name == "window" else "i"),
-                          ground_rgb=chassis if name == "window" else None)
-        Image.fromarray(px).save(os.path.join(dst, f"m-{name}.png"))
+                          ground_rgb=chassis if name == "window" else None, hpx=hp)
+        Image.fromarray(px if hp is None else hp).save(os.path.join(dst, f"m-{name}.png"))
         modules.append({"name": name, "png": f"m-{name}.png", "radius": round(rad, 2), "children": kids,
                         "rect": [at[0] / scale, at[1] / scale, (at[0] + px.shape[1]) / scale, (at[1] + px.shape[0]) / scale]})
     mark_press(modules, dst)
@@ -359,7 +415,7 @@ def main(src, dst, debug=False):
                     dbg.rectangle([v * scale for v in k["rect"]], outline=col, width=3)
         dbg_im.convert("RGB").save(os.path.join(dst, "debug.png"))
     with open(os.path.join(dst, "parts.json"), "w") as f:
-        json.dump({"scale": scale, "size": [W / scale, Hh / scale], "modules": modules}, f, indent=1)
+        json.dump({"scale": scale * F, "size": [W / scale, Hh / scale], "modules": modules}, f, indent=1)
     n1 = sum(len(m["children"]) for m in modules)
     n2 = sum(len(c.get("children", [])) for m in modules for c in m["children"])
     print(json.dumps({"modules": len(modules), "level1": n1, "level2": n2,
@@ -368,5 +424,5 @@ def main(src, dst, debug=False):
 
 
 if __name__ == "__main__":
-    args = [a for a in sys.argv[1:] if a != "--debug"]
-    main(args[0], args[1], debug="--debug" in sys.argv)
+    args = [a for a in sys.argv[1:] if a not in ("--debug", "--hires")]
+    main(args[0], args[1], debug="--debug" in sys.argv, hires="--hires" in sys.argv)

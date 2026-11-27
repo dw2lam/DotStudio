@@ -286,6 +286,14 @@ enum DemoHooks {
         return p.count == 2 ? CGSize(width: p[0], height: p[1]) : nil
     }
     static let appearance = env["DOTSTUDIO_DEMO_APPEARANCE"]
+    /// DOTSTUDIO_UI_PLAYBACK_CLOCK=2026-11-26T15:30:00-05:00: what the screensaver's rotation
+    /// shows (the Screensaver card, the tiles' badges) is worked out at that moment, not now —
+    /// UI captures that come out the same whenever they're taken (theme-reel's capture.sh).
+    static let playbackClock = env["DOTSTUDIO_UI_PLAYBACK_CLOCK"].flatMap { ISO8601DateFormatter().date(from: $0) }
+    /// DOTSTUDIO_UI_DEMO_DISPLAY=1: the theme-layer captures have the made-up second display
+    /// (DisplayRoster.demoDisplay) beside the real one, so the cards show their displays rows
+    /// whatever is plugged in.
+    static let demoDisplay = env["DOTSTUDIO_UI_DEMO_DISPLAY"] == "1"
     static var filter = env["DOTSTUDIO_DEMO_FILTER"].flatMap(GalleryFilter.init(demoName:))
     static var search = env["DOTSTUDIO_DEMO_SEARCH"]
     static var hoverName = env["DOTSTUDIO_DEMO_HOVER"]

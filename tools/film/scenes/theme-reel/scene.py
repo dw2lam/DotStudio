@@ -122,7 +122,27 @@ DROP = 16.0                 # how far above its seat an element starts its fall 
 # SCROLL_FALL seconds and seats with a soft press; what sits on a card starts down only once the
 # card is nearly seated
 SCROLL_DROP = 1.1
-SCROLL_FALL = 0.85
+SCROLL_FALL = 1.1
+# …one feature at a time (owner: "as we scroll … highlights the new features … so you can demo each
+# one on the website"): the parts come in by FEATURE, in this order, each feature in a stretch of
+# its own (FEATURE_BASE + FEATURE_PER part seconds, its parts spread over it); the site names the
+# feature while its stretch plays (REEL features prints the stretches, in frames)
+FEATURES = ["screensaver", "keys", "gallery", "clocks", "wallpaper", "dials"]
+FEATURE_START = 0.8
+FEATURE_BASE, FEATURE_PER = 1.1, 0.07
+
+
+def feature_of(module, own, card):
+    """Which of FEATURES a part shows, from where it sits (assembly points)."""
+    if module != "window":
+        return "dials"
+    cx, cy = (card[0] + card[2]) / 2, (card[1] + card[3]) / 2
+    ox, oy = (own[0] + own[2]) / 2, (own[1] + own[3]) / 2
+    if 60 < cy < 345 and card[2] - card[0] > 300:
+        return "screensaver" if cx < 640 else "wallpaper"
+    if cy > 415:                                   # the Scenes box: its last three are the clocks
+        return "clocks" if (ox > 520 and oy > 660 and own != card) else "gallery"
+    return "keys"                                  # the toolbar, sync, the filter keys
 PARK = -40.0                # where an element waits (under the floor) before it falls / after it lifts out
 
 # The camera: a long lens, 3/4 from the front-right and above; the object fills FILL of the frame's
@@ -147,8 +167,9 @@ FLAT_FILL = SCROLL_FILL
 CLOSE_AT = (60.0, 75.0)
 CLOSE_AZ = -68.0
 CLOSE_EL = 22.0
-CLOSE_WIDTH = 2.2
-MOVE_END = 0.88
+CLOSE_WIDTH = 3.0
+MOVE_END = 0.92
+REVEAL = 0.95               # a part counts as in view inside this share of the frame (±1 = its edges)
 CLOSE_FSTOP = 4.0           # the close-up's depth of field (none from the middle of the move)
 # the end of the scroll sequence: over the last UNLIT_SECONDS of the move, the lights and the world
 # dim to nothing, every UI picture cross-fades to its captured colours unlit (emission 1 under the
@@ -168,6 +189,10 @@ SHADOW_MIX = (0.35, 0.65)   # their shares
 # half way through the pull-back (s = BRANCH), the camera leaves it and carries on — position,
 # speed and acceleration continuous (a quintic per channel) — into the flat view from above
 BRANCH = 0.5
+# the pull-back's pace: (share of the move, share of the zoom-out) keys, eased through monotonically —
+# it leaves the close-up promptly once the Screensaver card is in, then opens out so each feature
+# comes into view as its stretch begins (FEATURES), and settles slowly into the flat view
+PACE = [(0.0, 0.0), (0.06, 0.02), (0.22, 0.5), (0.4, 0.68), (0.55, 0.8), (0.7, 0.9), (0.85, 0.97), (1.0, 1.0)]
 FLAT_ELEVATION = 89.5       # straight down (a hair off 90°, so "up" stays the window's top)
 
 
@@ -601,6 +626,7 @@ def build(ctx):
 
     # the chassis: each module's base rests on the field
     items = []          # (root, rest z, kind, level) in landing order
+    where = []          # per item: (module name, its own rect, its card's rect), points
     parent = []         # per item: the index of the item it sits on (None: on the chassis)
     seat_on = []        # per item: the top of the module it stands in
     for m in man["modules"]:
@@ -612,22 +638,26 @@ def build(ctx):
                 if classic:
                     continue
                 items.append((dial(c, nm, mtop), mtop, "dial", 1))
+                where.append((m["name"], c["rect"], c["rect"]))
                 parent.append(None)
                 seat_on.append(mtop)
                 continue
             root, ctop = element(c, nm, THICK[0], mtop - SEAT, side1)
             items.append((root, ctop, c["kind"], 1))
+            where.append((m["name"], c["rect"], c["rect"]))
             parent.append(None)
             seat_on.append(mtop)
             pi = len(items) - 1
             for j, k in enumerate(c.get("children", [])):
                 if k["kind"] == "dial":
                     items.append((dial(k, f"{nm}_{j}", ctop), ctop, "dial", 2))
+                    where.append((m["name"], k["rect"], c["rect"]))
                     parent.append(pi)
                     seat_on.append(mtop)
                     continue
                 kr, ktop = element(k, f"{nm}_{j}", THICK[1], ctop - SEAT, side2)
                 items.append((kr, ktop, k["kind"], 2))
+                where.append((m["name"], k["rect"], c["rect"]))
                 parent.append(pi)
                 seat_on.append(mtop)
     N = len(items)
@@ -744,18 +774,45 @@ def build(ctx):
             d0 = CLOSE_WIDTH * LENS / 36.0
             cd.dof.use_dof = True
 
+            # the pull-back's pace (owner: "zoom out really slowly"): PACE, in log distance
+            px_ = [k[0] for k in PACE]
+            py_ = [k[1] for k in PACE]
+            dl_ = [(py_[j + 1] - py_[j]) / (px_[j + 1] - px_[j]) for j in range(len(PACE) - 1)]
+            m_ = [0.0] * len(PACE)
+            for j in range(1, len(PACE) - 1):
+                if dl_[j - 1] * dl_[j] > 0:
+                    h0, h1 = px_[j] - px_[j - 1], px_[j + 1] - px_[j]
+                    w1, w2 = 2 * h1 + h0, h1 + 2 * h0
+                    m_[j] = (w1 + w2) / (w1 / dl_[j - 1] + w2 / dl_[j])
+
+            def ramp(x):
+                """PACE, eased through monotonically (still at both ends)."""
+                x = min(max(x, 0.0), 1.0)
+                j = min(max(i for i in range(len(PACE) - 1) if px_[i] <= x), len(PACE) - 2)
+                h = px_[j + 1] - px_[j]
+                u = (x - px_[j]) / h
+                return ((2 * u ** 3 - 3 * u * u + 1) * py_[j] + (u ** 3 - 2 * u * u + u) * h * m_[j]
+                        + (-2 * u ** 3 + 3 * u * u) * py_[j + 1] + (u ** 3 - u * u) * h * m_[j + 1])
+
+            def ramp_inv(s_):
+                lo, hi = 0.0, 1.0
+                for _ in range(50):
+                    mid = (lo + hi) / 2
+                    lo, hi = (mid, hi) if ramp(mid) < s_ else (lo, mid)
+                return (lo + hi) / 2
+
             def pull(t):
                 """The pull-back towards the 3/4 frame as channels: az, el, ln d, look xyz, shift."""
-                x = t / (MOVE_END * S)
-                s = 0.5 - 0.5 * math.cos(math.pi * x)
+                x = min(max(t / (MOVE_END * S), 0.0), 1.0)
+                s = ramp(x)
                 d = d0 * (dist / d0) ** s
-                w = s * d / dist
+                w = s                                # the view drifts on towards the middle as it opens
                 look = focus.lerp(centre, w)
                 return [CLOSE_AZ + (AZIMUTH - CLOSE_AZ) * s, CLOSE_EL + (ELEVATION - CLOSE_EL) * s,
                         math.log(d), look.x, look.y, look.z, sx1 * s, sy1 * s], s
 
             # the branch: where the pull-back is at s = BRANCH, with its speed and acceleration
-            tb = MOVE_END * S * math.acos(1 - 2 * BRANCH) / math.pi
+            tb = MOVE_END * S * ramp_inv(BRANCH)
             te, h = MOVE_END * S, 1e-3
             c0_, c1_, c2_ = pull(tb - h)[0], pull(tb)[0], pull(tb + h)[0]
             vel = [(b - a) / (2 * h) for a, b in zip(c0_, c2_)]
@@ -837,13 +894,11 @@ def build(ctx):
     if mode in ("flat", "3d"):
         land = [-10.0] * N
     if mode == "scroll":
-        # in the order the camera reveals them: an element lands a beat after its centre comes
-        # well into the frame (nearest the close-up first), at least GAP after the one before
-        # and after what it sits on; all seated (with their spring) before the hold
-        # (revealed: its centre, or an eighth of it, inside the frame's inner 80 %)
-        # — but never more than MAXGAP after the one before (the next ones then land at the
-        # frame's edge as it opens out, instead of a pause)
-        T0, GAP, LAG, AFTER, MAXGAP = 1.0, 0.13, 0.25, 0.7, 0.5
+        # by feature (FEATURES), each in its stretch: its parts spread over it, cards before what
+        # sits on them (AFTER), nearest the close-up first; never before the camera has the part
+        # in view (LAG after it's revealed: its centre, or an eighth of it, inside the frame's
+        # inner 80 %)
+        GAP, LAG, AFTER = 0.08, 0.2, 0.6
         LAST = MOVE_END * S - UNLIT_SECONDS - 0.3   # all seated before the lights start to dim
         frames = [lp.t(f) for f in range(1, lp.frames + 1)]
 
@@ -852,7 +907,7 @@ def build(ctx):
             c, (hw, hh) = Vector(root.location), half[root.name]
             pts = [c + Vector((hw * a / 2.5, hh * b / 2.5, 0)) for a in range(-2, 3) for b in range(-2, 3)]
             for t in frames:
-                inside = [abs(u) < 0.8 and abs(v) < 0.8 for u, v in (on_screen(t, p) for p in pts)]
+                inside = [abs(u) < REVEAL and abs(v) < REVEAL for u, v in (on_screen(t, p) for p in pts)]
                 if inside[12] or sum(inside) >= 3:
                     return t
             return frames[-1]
@@ -860,17 +915,46 @@ def build(ctx):
         rv = [reveal(i) for i in range(N)]
         rv = [rv[i] if parent[i] is None else max(rv[i], rv[parent[i]]) for i in range(N)]
         fx, fy = focus.x, focus.y
-        order = sorted(range(N), key=lambda i: (rv[i], items[i][3], (items[i][0].location.x - fx) ** 2
-                                                + (items[i][0].location.y - fy) ** 2))
+        feat = [feature_of(*where[i]) for i in range(N)]
+        for name in FEATURES:
+            r_ = sorted(rv[i] for i in range(N) if feat[i] == name)
+            if r_:
+                print(f"REEL reveal {name}: {len(r_)} parts, {r_[0]:.2f}..{r_[len(r_) // 2]:.2f}..{r_[-1]:.2f} s", flush=True)
         land = [0.0] * N
-        prev = T0 - GAP
-        for i in order:
-            land[i] = min(max(T0, rv[i] + LAG, prev + GAP,
-                              land[parent[i]] + AFTER if parent[i] is not None else 0.0), prev + MAXGAP)
-            prev = land[i]
+        t0 = FEATURE_START
+        stretches = []
+        # the features in the order the camera brings them in (by when most of each is in view)
+        med = {n: sorted(rv[i] for i in range(N) if feat[i] == n) for n in FEATURES}
+        seq = sorted((n for n in FEATURES if med[n]), key=lambda n: (n != FEATURES[0], med[n][len(med[n]) // 2]))
+        for name in seq:
+            mine = [i for i in range(N) if feat[i] == name]
+            if not mine:
+                continue
+            mine.sort(key=lambda i: (rv[i], items[i][3], (items[i][0].location.x - fx) ** 2 + (items[i][0].location.y - fy) ** 2))
+            span = FEATURE_BASE + FEATURE_PER * len(mine)
+            step = max(span - FALL, 0.0) / max(len(mine) - 1, 1)
+            first = None
+            prev = -9.0
+            for k, i in enumerate(mine):
+                land[i] = max(t0 + FALL + step * k, rv[i] + LAG, prev + GAP,
+                              land[parent[i]] + AFTER if parent[i] is not None else 0.0)
+                prev = land[i]
+                first = land[i] - FALL if first is None else min(first, land[i] - FALL)
+            # the stretch is the plan; a part the camera hasn't reached yet (the toolbar's keys)
+            # lands when it has, without holding up the next feature
+            stretches.append([name, first, t0 + span])
+            t0 = t0 + span
         hi = max(land)
+        T0 = min(land) - FALL
         if hi > LAST:          # too late for the hold: squeeze the schedule (order kept)
-            land = [T0 + (l - T0) * (LAST - T0) / (hi - T0) for l in land]
+            print(f"REEL squeeze {hi:.2f} -> {LAST:.2f}", flush=True)
+            k = (LAST - T0) / (hi - T0)
+            land = [T0 + (l - T0) * k for l in land]
+            stretches = [[n, T0 + (a - T0) * k, T0 + (b - T0) * k] for n, a, b in stretches]
+        fps = lp.frames / S
+        print("REEL features: " + " ".join(f"{n}:{a:.2f}-{b:.2f}s/f{int(a * fps) + 1}-{int(b * fps) + 1}"
+                                           for n, a, b in stretches), flush=True)
+        order = sorted(range(N), key=lambda i: land[i])
         print("REEL landing: " + " ".join(f"{land[i]:.2f}" for i in order), flush=True)
     lift = None if LIFT0 is None else [LIFT0 + (LIFT1 - LIFT0) * (N - 1 - i) / max(N - 1, 1) for i in range(N)]
 

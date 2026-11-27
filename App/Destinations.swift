@@ -32,7 +32,7 @@ extension AppModel {
     /// (Playback.shownPreset).
     var nowPlayingID: UUID? {
         library.presets.isEmpty ? nil
-            : Playback.shownPreset(in: library, now: Date(), displays: DisplayRoster.shared.displays.map(\.key),
+            : Playback.shownPreset(in: library, now: DemoHooks.playbackClock ?? Date(), displays: DisplayRoster.shared.displays.map(\.key),
                                    live: SignalService.shared.live).id
     }
 
