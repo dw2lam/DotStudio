@@ -8,7 +8,7 @@ PARTS_DIR is the variant's prepared folder (prep.py) as the rendering machine se
 copy in it is used for the Retro legends. --engine/--samples set the animation's engine and
 samples; --device picks Cycles' GPU backend (the scene sets it, as dsfilm.render assumes Metal);
 --cutout renders no field: a transparent picture with the shadow in its alpha (for the site);
---mode picks the scene's mode (scene.py): the looping film, the one-way scroll assembly (360
+--mode picks the scene's mode (scene.py): the looping film, the one-way scroll assembly (900
 frames) or the flat top-down / 3/4 shot; --frame-parts frames the shot by another variant's
 prepared folder (as the rendering machine sees it), so two variants line up pixel for pixel.
 """
@@ -52,7 +52,7 @@ if denoiser:
     spec["params"]["denoiser"] = denoiser
 if mode:
     spec["params"]["mode"] = mode
-    if mode == "scroll":         # the one-way assembly: 360 frames (15 s at 24 fps), scrubbed by the site
-        spec["loop"] = {"seconds": 15, "fps": 24}
+    if mode == "scroll":         # the one-way assembly: 900 frames (15 s at 60 fps), scrubbed by the site
+        spec["loop"] = {"seconds": 15, "fps": 60}
 with open(out, "w") as f:
     json.dump(spec, f, indent=1)
