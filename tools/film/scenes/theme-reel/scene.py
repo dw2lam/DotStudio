@@ -16,14 +16,14 @@ elements lift out in reverse, last in first out, and the chassis is empty again 
 
 Modes (params.mode):
     loop    the 8 s film above (Settings' Theme films); the camera sways a few degrees
-    scroll  ONE-WAY, for the site (6 s, 180 frames, played as a video): empty -> assembled, no
+    scroll  ONE-WAY, for the site (10 s, 240 frames at 24 fps, scrubbed by the page's scroll): empty -> assembled, no
             lift-out. It opens on a close-up of the bare chassis — low and near, the window's top
             left corner (its title bar and the empty Screensaver socket) filling the frame — and
             pulls back in one slow eased move (dolly out, rise, swing round); half way it carries
             on rising, without a break, into the flat view straight from above (framed like the
             flat still, SCROLL_FILL), reached at 88 %; the last 12 % hold it. The elements land as
-            the camera reveals them, nearest the close-up first, each on a short drop while it
-            fades in; seated, it sits nearly flush (SEATED_PROUD). As the camera settles into the
+            the camera reveals them, nearest the close-up first, each lowered onto its seat while it
+            fades in (what sits on a card after the card); seated, it sits nearly flush (SEATED_PROUD). As the camera settles into the
             flat view (the last UNLIT_SECONDS of the move) the light dims away while the UI turns
             to its own unlit colours, the shadows fade, the parts sink flush and the lens lengthens
             to near-orthographic: the held frame is the app itself, a straight screenshot (window
@@ -116,8 +116,13 @@ SEATED_PROUD = 1 / 3
 MIN_PROUD = 0.0006          # scroll: a shown part's top never comes closer than this to what it sits on
 DROP = 16.0                 # how far above its seat an element starts its fall (out of frame)
 # the scroll sequence: the camera starts straight above, so a long fall would come at the lens —
-# there an element arrives in screen space instead: a short drop onto its seat while it fades in
-SCROLL_DROP = 0.5
+# there an element arrives in screen space instead: a drop onto its seat while it fades in — slow
+# enough to see each layer come down (owner, 2026-11-27: "elements slap onto the UI too fast …
+# you can't even see the layering down"): it fades in high, is lowered (eased in and out) over
+# SCROLL_FALL seconds and seats with a soft press; what sits on a card starts down only once the
+# card is nearly seated
+SCROLL_DROP = 1.1
+SCROLL_FALL = 0.85
 PARK = -40.0                # where an element waits (under the floor) before it falls / after it lifts out
 
 # The camera: a long lens, 3/4 from the front-right and above; the object fills FILL of the frame's
@@ -826,7 +831,7 @@ def build(ctx):
         T0, T1, FALL = 0.45, 4.5, 0.40
         LIFT0, LIFT1, RISE = 6.4, 7.25, 0.30
     else:                       # scroll: one way; flat: everything seated from the start
-        T0, T1, FALL = 0.30, 0.72 * S, 0.30       # assembled well before the camera settles
+        T0, T1, FALL = 0.30, 0.72 * S, (SCROLL_FALL if mode == "scroll" else 0.30)
         LIFT0 = LIFT1 = RISE = None
     land = [T0 + (T1 - T0) * i / max(N - 1, 1) for i in range(N)]
     if mode in ("flat", "3d"):
@@ -838,8 +843,8 @@ def build(ctx):
         # (revealed: its centre, or an eighth of it, inside the frame's inner 80 %)
         # — but never more than MAXGAP after the one before (the next ones then land at the
         # frame's edge as it opens out, instead of a pause)
-        T0, GAP, LAG, AFTER, MAXGAP = 0.9, 0.045, 0.12, 0.14, 0.3
-        LAST = MOVE_END * S - 0.5
+        T0, GAP, LAG, AFTER, MAXGAP = 1.0, 0.13, 0.25, 0.7, 0.5
+        LAST = MOVE_END * S - UNLIT_SECONDS - 0.3   # all seated before the lights start to dim
         frames = [lp.t(f) for f in range(1, lp.frames + 1)]
 
         def reveal(i):
@@ -874,6 +879,8 @@ def build(ctx):
         if s < 0 or s > 0.4:
             return 0.0
         depth = 0.022 if kind in ("dial", "key", "press") else 0.03
+        if mode == "scroll":     # lowered, not dropped: a softer press
+            depth *= 0.5
         return -depth * math.exp(-s / 0.06) * math.sin(math.pi * s / 0.075)
 
     def zpos(i, t):
@@ -883,7 +890,9 @@ def build(ctx):
             return PARK, False
         if t < L0:
             p = (t - (L0 - FALL)) / FALL
-            return (SCROLL_DROP if mode == "scroll" else DROP) * (1 - p * p), True
+            if mode == "scroll":     # lowered: eased in and out, so it settles rather than slaps
+                return SCROLL_DROP * (1 - p) * (1 - p) * (1 + 2 * p), True
+            return DROP * (1 - p * p), True
         if lift is not None and t >= lift[i]:
             q = (t - lift[i]) / RISE
             return (DROP * q * q, True) if q < 1 else (PARK, False)
@@ -929,8 +938,8 @@ def build(ctx):
             root.location.z = rest + dz if vis else PARK
             if kind == "dial":
                 root.rotation_euler = (0, 0, dial_angle(dial_i.index(i), i, t))
-            if mode == "scroll":     # fades in over the first 60 % of its short drop
-                f = smoothstep(land[i] - FALL, land[i] - 0.4 * FALL, t)
+            if mode == "scroll":     # fades in over the first half of its drop
+                f = smoothstep(land[i] - FALL, land[i] - 0.5 * FALL, t)
                 k = unlit_k(t)
                 if kind == "dial":   # the unlit end: the knob gives way to its picture
                     f *= 1 - k

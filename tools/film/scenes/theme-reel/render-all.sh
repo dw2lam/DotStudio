@@ -19,7 +19,7 @@
 #                        app straight from above, orthographic) and DIR/<variant>-3d.png (the 3/4
 #                        view); --hero-res (3840x2400), --hero-samples (1024)
 #     --scroll DIR       also the one-way assembly for the site, per variant: DIR/<variant>/####.png
-#                        (180 frames = 6 s at 30 fps, close-up of the empty chassis -> assembled,
+#                        (240 frames = 10 s at 24 fps, close-up of the empty chassis -> assembled,
 #                        flat from above, the orange edge light closed)
 #                        and the site's WebPs DIR/<variant>-webp/hi/000.webp… (1920 px, q88) and
 #                        …/lo/ (960 px, q80); --scroll-res (2560x1600), --scroll-samples (512)
