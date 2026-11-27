@@ -2,7 +2,7 @@
 
     python3 -I spec.py theme-reel.json classic-dark PARTS_DIR OUT.json [--engine cycles]
                        [--samples N] [--device OPTIX|CUDA|METAL|…] [--cutout]
-                       [--mode loop|scroll|flat|3d] [--frame-parts DIR]
+                       [--mode loop|scroll|flat|3d] [--frame-parts DIR] [--denoiser D]
 
 PARTS_DIR is the variant's prepared folder (prep.py) as the rendering machine sees it; the font
 copy in it is used for the Retro legends. --engine/--samples set the animation's engine and
@@ -29,7 +29,7 @@ def opt(name):
 
 
 engine, samples, device, mode = opt("--engine"), opt("--samples"), opt("--device"), opt("--mode")
-frame_parts = opt("--frame-parts")
+frame_parts, denoiser = opt("--frame-parts"), opt("--denoiser")
 cutout = "--cutout" in a
 if cutout:
     a.remove("--cutout")
@@ -48,6 +48,8 @@ if cutout:
     spec["params"]["cutout"] = True
 if frame_parts:
     spec["params"]["frame_parts"] = frame_parts
+if denoiser:
+    spec["params"]["denoiser"] = denoiser
 if mode:
     spec["params"]["mode"] = mode
     if mode == "scroll":         # the one-way assembly: 180 frames (6 s at 30 fps), played as a video

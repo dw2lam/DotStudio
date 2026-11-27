@@ -294,6 +294,10 @@ def main(src, dst, debug=False):
             # walk up from the cut-off row to the first clean line of the ground around it (above a
             # chosen tile's ring, below the full row's labels): a box's own ground, or the chassis
             # when the cut-off element stands on it (Classic's tiles)
+            if kids and not low:
+                # the box runs off the bottom but its last row is whole: cut a margin below it
+                cut = min(cut, int(max(k["rect"][3] for k in kids) * scale) + int(5 * scale))
+                continue
             if low:
                 x0, x1 = int(card["rect"][0] * scale) + 4 * scale, int(card["rect"][2] * scale) - 4 * scale
                 y = int(min(k["rect"][1] for k in low) * scale) - 1

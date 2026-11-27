@@ -23,10 +23,7 @@ Modes (params.mode):
             on rising, without a break, into the flat view straight from above (framed like the
             flat still, SCROLL_FILL), reached at 88 %; the last 12 % hold it. The elements land as
             the camera reveals them, nearest the close-up first, each on a short drop while it
-            fades in; a soft orange glow spills out from under the window onto the field, growing
-            both ways round it from the bottom centre in step with the assembly, the two ends
-            meeting at the top as the last element lands.
-            A little depth of field at the close-up only, gone by the middle of the move
+            fades in. A little depth of field at the close-up only, gone by the middle of the move
     flat    the assembled app straight from above, orthographic (the flat product shot)
     3d      the assembled app in the 3/4 view (the 3D product shot)
 
@@ -50,6 +47,8 @@ Params (the spec's "params"; render-all.sh writes one spec per variant):
     view   the view transform (default Standard: the UI's own colours)
     cutout true: no field — a transparent RGBA picture with the shadow in its alpha
     fstop  optional depth of field (default none: the shot is sharp)
+    denoiser  Cycles' denoiser for every machine (OPENIMAGEDENOISE, on the GPU), so the halves of a
+           render split across a Mac and an NVIDIA box match (default: OIDN; OptiX's on OPTIX)
     frame_parts  another variant's prepared folder whose layout frames the shot: its size, its
            modules' rects and its camera fit (so Retro light's final frame lines up pixel for pixel
            with Retro dark's: their captures differ by a few points)
@@ -140,16 +139,6 @@ CLOSE_FSTOP = 4.0           # the close-up's depth of field (none from the middl
 # speed and acceleration continuous (a quintic per channel) — into the flat view from above
 BRANCH = 0.5
 FLAT_ELEVATION = 89.5       # straight down (a hair off 90°, so "up" stays the window's top)
-# the under-glow: orange light spilling out from under the window onto the field — a ribbon on
-# the floor round the window's footprint, from under its edge out to GLOW_W, emitting with a soft
-# falloff ((1 - d / GLOW_W) ** GLOW_FALL) and otherwise fully transparent, seen by the camera
-# only (it lights nothing, casts nothing): an additive glow on either field. It grows both ways
-# from the bottom centre; GLOW_SOFT is how soft its two leading ends are (share of half the loop)
-GLOW_RGB = 0xFF8A3D         # the app's orange (#FF7300), a touch softer and warmer
-GLOW_W = 1.3                # units (~130 px at the final frame's 1920; most of it within ~40)
-GLOW_FALL = 3.2
-GLOW_K = {"dark": 0.07, "light": 0.40}      # emission at the edge
-GLOW_SOFT = 0.12
 
 
 # ---------------------------------------------------------------- materials
@@ -164,7 +153,7 @@ def ui_mat(name, path, L, classic):
     t = nt.new("ShaderNodeTexImage")
     t.image = M.load_image(path)
     t.extension = "CLIP"
-    t.interpolation = "Cubic"
+    t.interpolation = "Linear"     # (Cycles' Cubic is a smoothing B-spline: soft UI text)
     ln.new(t.outputs["Color"], b.inputs["Base Color"])
     ln.new(t.outputs["Color"], b.inputs["Emission Color"])
     b.inputs["Emission Strength"].default_value = L["ui_emit"]
@@ -546,8 +535,6 @@ def build(ctx):
     for m in man["modules"]:
         d = BASE.get(m["name"], 0.12)
         base, mtop = element(m, "M_" + m["name"], d - SEAT, 0.0, wside)
-        if m["name"] == "window":
-            win = (m["rect"], m["radius"], mtop)
         for i, c in enumerate(m["children"]):
             nm = f"{m['name'][0]}{i}"
             if c["kind"] == "dial":
@@ -767,31 +754,6 @@ def build(ctx):
         if hi > LAST:          # too late for the hold: squeeze the schedule (order kept)
             land = [T0 + (l - T0) * (LAST - T0) / (hi - T0) for l in land]
         print("REEL landing: " + " ".join(f"{land[i]:.2f}" for i in order), flush=True)
-
-        # the edge light's progress: the share of elements landed (piecewise linear through the
-        # landings, from when the first starts to fall), smoothed over ±0.25 s so the light runs
-        # evenly, and scaled so that it closes the loop exactly as the last element lands
-        ls = sorted(land)
-        knots = [(ls[0] - FALL, 0.0)] + [(l, (k + 1) / N) for k, l in enumerate(ls)]
-
-        def landed(t):
-            if t <= knots[0][0]:
-                return 0.0
-            for (ta, a), (tb_, b) in zip(knots, knots[1:]):
-                if t <= tb_:
-                    return a + (b - a) * (t - ta) / max(tb_ - ta, 1e-6)
-            return 1.0
-
-        def smooth(t):
-            return sum(landed(t + 0.25 * (k / 4 - 1)) for k in range(9)) / 9
-
-        g_end = smooth(ls[-1])
-
-        def glow_progress(t):
-            return 1.0 if t >= ls[-1] else min(max(smooth(t) / g_end, 0.0), 1.0)
-
-        glow = under_glow(coll, win, xy, tone)
-        print(f"REEL edge light closes at {ls[-1]:.2f} s (frame {ls[-1] * lp.fps + 1:.1f})", flush=True)
     lift = None if LIFT0 is None else [LIFT0 + (LIFT1 - LIFT0) * (N - 1 - i) / max(N - 1, 1) for i in range(N)]
 
     def bounce(s, kind):
@@ -843,7 +805,6 @@ def build(ctx):
             cd.shift_x, cd.shift_y = sx, sy
             cd.dof.focus_distance = (look - pos).length
             cd.dof.aperture_fstop = fstop
-            glow["glow"] = glow_progress(t) * (1 + GLOW_SOFT)
         for i, (root, rest, kind, lvl) in enumerate(items):
             dz, vis = zpos(i, t)
             if i == press_i and mode == "loop":
@@ -862,8 +823,7 @@ def build(ctx):
     ids = ([cam] if dvec is not None else []) + [it[0] for it in items]
     fading = [[ob for ob in it[0].children_recursive if ob.type == "MESH"] for it in items]
     if mode == "scroll":
-        ids += [(cd, "shift_x"), (cd, "shift_y"), (cd, "dof.focus_distance"), (cd, "dof.aperture_fstop"),
-                (glow, '["glow"]')]
+        ids += [(cd, "shift_x"), (cd, "shift_y"), (cd, "dof.focus_distance"), (cd, "dof.aperture_fstop")]
         add_fade(scene, exclude=("FloorMat",))
         ids += [(ob, '["fade"]') for obs in fading for ob in obs]
     lp.bake(ids, pose, props=("location", "rotation_euler"))
@@ -903,115 +863,6 @@ def frame_points(man, classic, xy):
                 else:
                     rect(k, ctop - SEAT + THICK[1])
     return pts
-
-
-def under_glow(coll, win, xy, tone):
-    """The under-glow (see GLOW_W): a ribbon on the floor round the window's footprint. Its UVs:
-    u = how far round from the bottom centre (0 there, 1 at the top centre, both ways), v = the
-    distance out from the window's edge (negative under it). The object's "glow" property (keyed)
-    is how far round it is lit, times 1 + GLOW_SOFT; returns the object."""
-    (x0, y0, x1, y1), r, _ = win
-    ax, ay = xy(x0, y1)
-    bx, by = xy(x1, y0)
-    r = r * PT
-
-    def outline(o, seg=16, n=24):
-        """The footprint's outline grown by o: anticlockwise from the bottom centre, a vertex at
-        the top centre (n even), the same count for every o."""
-        X0, Y0, X1, Y1, R = ax - o, ay - o, bx + o, by + o, max(r + o, 0.01)
-        mx = (X0 + X1) / 2
-        pts = []
-
-        def line(p, q, k, last=False):
-            for i in range(k + (1 if last else 0)):
-                pts.append((p[0] + (q[0] - p[0]) * i / k, p[1] + (q[1] - p[1]) * i / k))
-
-        def arc(cx, cy, a0):
-            for i in range(seg + 1):
-                t = math.radians(a0 + 90 * i / seg)
-                pts.append((cx + R * math.cos(t), cy + R * math.sin(t)))
-
-        line((mx, Y0), (X1 - R, Y0), n // 2)
-        arc(X1 - R, Y0 + R, -90)
-        line((X1, Y0 + R), (X1, Y1 - R), n)
-        arc(X1 - R, Y1 - R, 0)
-        line((X1 - R, Y1), (X0 + R, Y1), n)
-        arc(X0 + R, Y1 - R, 90)
-        line((X0, Y1 - R), (X0, Y0 + R), n)
-        arc(X0 + R, Y0 + R, 180)
-        line((X0 + R, Y0), (mx, Y0), n // 2)
-        # drop the duplicates where a line meets an arc (each arc repeats its line's end)
-        out = []
-        for q in pts:
-            if not out or (abs(q[0] - out[-1][0]) > 1e-7 or abs(q[1] - out[-1][1]) > 1e-7):
-                out.append(q)
-        return out
-
-    mid = outline(0.0)
-    L = [0.0]
-    for p, q in zip(mid, mid[1:] + mid[:1]):
-        L.append(L[-1] + math.dist(p, q))
-    total = L[-1]
-    u = [2 * min(l, total - l) / total for l in L[:-1]]
-    inner, outer = outline(-0.06), outline(GLOW_W)
-    assert len(inner) == len(outer) == len(mid), (len(inner), len(outer), len(mid))
-    bm = bmesh.new()
-    z = 0.002
-    vi = [bm.verts.new((x, y, z)) for x, y in inner]
-    vo = [bm.verts.new((x, y, z)) for x, y in outer]
-    uvl = bm.loops.layers.uv.new("UVMap")
-    n = len(mid)
-    for i in range(n):
-        j = (i + 1) % n
-        f = bm.faces.new((vi[i], vi[j], vo[j], vo[i]))
-        for lo, (uu, vv) in zip(f.loops, ((u[i], -0.06), (u[j], -0.06), (u[j], GLOW_W), (u[i], GLOW_W))):
-            lo[uvl].uv = (uu, vv)
-    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
-    mat = bpy.data.materials.new("UnderGlowMat")
-    mat.use_nodes = True
-    nt, ln = mat.node_tree.nodes, mat.node_tree.links
-    for nd in list(nt):
-        nt.remove(nd)
-    tc = nt.new("ShaderNodeTexCoord")
-    sep = nt.new("ShaderNodeSeparateXYZ")
-    ln.new(tc.outputs["UV"], sep.inputs[0])
-    # falloff out from the edge: (1 - clamp(v / W)) ** FALL
-    dv = nt.new("ShaderNodeMath"); dv.operation = "DIVIDE"; dv.use_clamp = True
-    ln.new(sep.outputs["Y"], dv.inputs[0]); dv.inputs[1].default_value = GLOW_W
-    inv = nt.new("ShaderNodeMath"); inv.operation = "SUBTRACT"; inv.inputs[0].default_value = 1.0
-    ln.new(dv.outputs[0], inv.inputs[1])
-    pw = nt.new("ShaderNodeMath"); pw.operation = "POWER"; pw.inputs[1].default_value = GLOW_FALL
-    ln.new(inv.outputs[0], pw.inputs[0])
-    # how far round: lit where u < e - SOFT, dark where u > e, smooth between
-    at = nt.new("ShaderNodeAttribute"); at.attribute_type = "OBJECT"; at.attribute_name = "glow"
-    lo_ = nt.new("ShaderNodeMath"); lo_.operation = "SUBTRACT"; lo_.inputs[1].default_value = GLOW_SOFT
-    ln.new(at.outputs["Fac"], lo_.inputs[0])
-    mr = nt.new("ShaderNodeMapRange"); mr.interpolation_type = "SMOOTHSTEP"; mr.clamp = True
-    ln.new(sep.outputs["X"], mr.inputs["Value"])
-    ln.new(at.outputs["Fac"], mr.inputs["From Min"])
-    ln.new(lo_.outputs[0], mr.inputs["From Max"])
-    mr.inputs["To Min"].default_value, mr.inputs["To Max"].default_value = 0.0, 1.0
-    m1 = nt.new("ShaderNodeMath"); m1.operation = "MULTIPLY"
-    ln.new(pw.outputs[0], m1.inputs[0]); ln.new(mr.outputs["Result"], m1.inputs[1])
-    m2 = nt.new("ShaderNodeMath"); m2.operation = "MULTIPLY"; m2.inputs[1].default_value = GLOW_K[tone]
-    ln.new(m1.outputs[0], m2.inputs[0])
-    em = nt.new("ShaderNodeEmission")
-    em.inputs["Color"].default_value = (*lin(GLOW_RGB), 1.0)
-    ln.new(m2.outputs[0], em.inputs["Strength"])
-    tr = nt.new("ShaderNodeBsdfTransparent")
-    add = nt.new("ShaderNodeAddShader")
-    ln.new(em.outputs[0], add.inputs[0]); ln.new(tr.outputs[0], add.inputs[1])
-    out = nt.new("ShaderNodeOutputMaterial")
-    ln.new(add.outputs[0], out.inputs["Surface"])
-    ob = G.from_bm("UnderGlow", bm, mat, coll)
-    for k in ("visible_diffuse", "visible_glossy", "visible_transmission", "visible_volume_scatter",
-              "visible_shadow"):
-        try:
-            setattr(ob, k, False)
-        except Exception:
-            pass
-    ob["glow"] = 0.0
-    return ob
 
 
 def add_fade(scene, exclude=()):
@@ -1100,7 +951,10 @@ def output(scene, P, L, cutout, cam):
             # on stallion came right after a frame's second tile; and on NVIDIA, OptiX's own
             # denoiser on the GPU instead of OIDN
             put(sc.cycles, "use_auto_tile", False)
-            if device == "OPTIX":
+            if P.get("denoiser"):           # e.g. OPENIMAGEDENOISE on every machine of a split render
+                put(sc.cycles, "denoiser", P["denoiser"])
+                put(sc.cycles, "denoising_use_gpu", True)
+            elif device == "OPTIX":
                 put(sc.cycles, "denoiser", "OPTIX")
             put(sc.cycles, "texture_limit_render", "OFF")    # the UI pictures stay sharp
             put(sc.cycles, "blur_glossy", 0.5)
