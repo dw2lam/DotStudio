@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.7.0 — Retro
+
+### New
+- **Retro, the new look.** DotStudio now looks and feels like a small piece of hardware:
+  aluminium dials with coloured caps, slim keys that press down, green switches, and panels
+  set out like a console. It's the new default; Classic is one click away in
+  Settings › General › Theme.
+- **Dials in the editor.** A style's number settings are rotary dials now. Drag up or down,
+  scroll, or use the arrow keys (⌥ for fine steps); double-click to go back to the default.
+  Each turn ticks under your fingers on a trackpad.
+- **Light, Dark or Auto.** Pick the app's look in Settings › General › Mode, in either theme.
+- **Theme films.** Settings › General shows each theme as a short 3D film, so you can see
+  what you're choosing.
+- **What's New.** After an update, DotStudio shows what changed, once. Every release's notes
+  live in Settings › Updates.
+
+### Changed
+- The Screensaver and Wallpaper panels are clean tiles with clear names; the filters and each
+  section sit in their own boxes.
+- The MCP menu is one simple column: add to Claude Desktop, copy the command for Claude Code
+  or other apps, try an example, and the two AI switches.
+- Bigger, easier-to-hit buttons and switches.
+
+### Fixed
+- The window title no longer shows twice.
+- After reordering layers, the colour picker kept editing the layer that used to be in that
+  spot.
+
 ## 1.6.8 — Frame rate, your way
 
 ### New
