@@ -173,8 +173,37 @@ private struct ConsoleHidesWindowTitle: ViewModifier {
     func body(content: Content) -> some View {
         if #available(macOS 15.0, *) {
             content.toolbar(removing: hidden ? .title : nil)
+                .background(TitlebarSeparator(hidden: hidden))
         } else {
             content.background(WindowTitleVisibility(hidden: hidden))
+                .background(TitlebarSeparator(hidden: hidden))
+        }
+    }
+}
+
+/// Console: no separator line under the title bar — the header strip, the pinned filter row's
+/// strip and the window are one surface (owner, 2026-11-27: scrolling to the filter row "redraws
+/// the full-width bar again").
+private struct TitlebarSeparator: NSViewRepresentable {
+    let hidden: Bool
+
+    func makeNSView(context: Context) -> Probe { Probe() }
+
+    func updateNSView(_ v: Probe, context: Context) {
+        v.hidesSeparator = hidden
+        v.apply()
+    }
+
+    final class Probe: NSView {
+        var hidesSeparator = false
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            apply()
+        }
+        func apply() {
+            guard let window else { return }
+            let want: NSTitlebarSeparatorStyle = hidesSeparator ? .none : .automatic
+            if window.titlebarSeparatorStyle != want { window.titlebarSeparatorStyle = want }
         }
     }
 }

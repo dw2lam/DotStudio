@@ -601,9 +601,12 @@ private struct FilterBar: View {
                 let y = g.frame(in: .named(FilterBar.space)).minY
                 let pinned = min(max((150 - y) / 70, 0), 1)   // fully there once under the toolbar
                 if pinned > 0 {
+                    // Console: no hairline — the strip is the chassis, one surface with the
+                    // header above it, so pinning doesn't read as a second bar (the filter box is
+                    // its own panel); Classic keeps its divider.
                     (console ? ConsoleInk.chassis : Color(nsColor: .windowBackgroundColor))
                         .overlay(alignment: .bottom) {
-                            if console { Rectangle().fill(ConsoleInk.hairline).frame(height: 1) } else { Divider() }
+                            if !console { Divider() }
                         }
                         .padding(.top, -(Space.xxl + Space.s))   // up under the toolbar
                         .opacity(pinned)
