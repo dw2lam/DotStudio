@@ -937,7 +937,7 @@ private struct MusicPage: View {
         case .off:
             return "Nothing shows. Turn it on later with the Music key on the Screensaver card."
         case .corner:
-            return "The song sits in a corner. \(paused)"
+            return "The song sits in a compact card. \(paused)"
         case .fullScreen:
             let over = !spec.layout.usesBackdrop ? "The cover fills the screen."
                 : spec.backdrop == .albumArt ? "The song fills the screen, over the album's living art."

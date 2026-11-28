@@ -128,7 +128,7 @@ struct MusicSettingsSection: View {
                 MusicPlayerRow(status: now.spotify, now: now, showsTrack: !showsTrack)
                 MusicPlayerRow(status: now.music, now: now, showsTrack: !showsTrack)
             } else {
-                Text("DotStudio isn't watching Spotify or Apple Music right now — choose Corner or Full Screen below.")
+                Text("DotStudio isn't watching Spotify or Apple Music right now — choose Compact or Full Screen below.")
                     .settingsText(.caption)
                     .foregroundStyle(.secondary)
                     .wrapping()
@@ -137,14 +137,14 @@ struct MusicSettingsSection: View {
                 MusicSettingsNowPlaying(now: now)
             }
             // "Show music", then only the options of the mode picked.
-            VisualSettingRow(title: "Show music", detail: showMusicDetail(spec.displayMode), demo: .music(spec.displayMode)) {
+            VisualSettingRow(title: "Show music", detail: showMusicDetail(spec.displayMode), demo: .music(spec.displayMode, position: spec.corner)) {
                 ScaledSegmentedPicker(title: "Show music", selection: binding(\.displayMode) { $0.setDisplay($1) },
                                       options: MusicSpec.Display.allCases.map { ($0.label, $0) })
                     .fixedSize()
             }
             if spec.displayMode == .corner {
-                LabeledContent("Corner") {
-                    SettingsPopUp(title: "Corner", selection: binding(\.corner) { $0.cardCorner = $1 },
+                LabeledContent("Position") {
+                    SettingsPopUp(title: "Position", selection: binding(\.corner) { $0.cardCorner = $1 },
                                   options: MusicSpec.Corner.allCases.map { ($0.label, $0) })
                 }
                 SettingsValueRow("Size", valueWidth: segmentWidth) {
@@ -187,7 +187,7 @@ struct MusicSettingsSection: View {
             SettingsHeader("Music")
         } footer: {
             VStack(alignment: .leading, spacing: Space.xs) {
-                SettingsNote("While a song plays in Spotify or Apple Music, the screensaver shows it over whatever style is playing — in a corner, or full screen: over the album's living art or your screensaver, softly blurred, or on the cover itself. When the music stops, the screensaver is all that's left.")
+                SettingsNote("While a song plays in Spotify or Apple Music, the screensaver shows it over whatever style is playing — as a compact card (in a corner, an edge’s middle or the centre), or full screen: over the album's living art or your screensaver, softly blurred, or on the cover itself. When the music stops, the screensaver is all that's left.")
                 // What closing the window does (AppPresence.windowClosed), as General says.
                 SettingsNote(presence.menuBarMode
                     ? "DotStudio has to be running to know what's playing — closing its window keeps it in the menu bar."
@@ -201,7 +201,7 @@ struct MusicSettingsSection: View {
     private func showMusicDetail(_ mode: MusicSpec.Display) -> String {
         switch mode {
         case .off: return "The screensaver never shows what's playing."
-        case .corner: return "A small card with the song sits in a corner of the screensaver."
+        case .corner: return "A compact card with the song — in a corner, the middle of an edge, or the centre."
         case .fullScreen: return "The song and its cover fill the screen while it plays."
         }
     }

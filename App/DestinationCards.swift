@@ -840,7 +840,7 @@ struct ScreensaverCard: View {
                           indicator: .menuLED(mode != .off))
         }
         .panelKeyMenu()
-        .help("Show what's playing: while Spotify or Apple Music plays, nothing, the song in a corner of the screensaver, or the song full screen over it — with that mode's options")
+        .help("Show what's playing: while Spotify or Apple Music plays, nothing, the song as a compact card on the screensaver (in a corner, an edge's middle or the centre), or the song full screen over it — with that mode's options")
         .accessibilityLabel("Show what's playing")
         .accessibilityValue(mode.label)
     }
@@ -1087,7 +1087,7 @@ enum MusicDisplayMenu {
             }
         case .corner:
             MenuEntry.divider
-            MenuEntry.section("Corner") {
+            MenuEntry.section("Position") {
                 MusicSpec.Corner.allCases.map { c in
                     MenuEntry.button(c.label, checked: c == spec.corner) { model.updateMusic { $0.cardCorner = c } }
                 }
@@ -1132,7 +1132,7 @@ enum WallpaperMusicMenu {
                     }
                 }
             case .corner:
-                MenuEntry.section("Corner") {
+                MenuEntry.section("Position") {
                     MusicSpec.Corner.allCases.map { c in
                         MenuEntry.button(c.label, checked: c == spec.corner) { model.updateMusic { $0.cardCorner = c } }
                     }

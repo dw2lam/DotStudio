@@ -34,8 +34,8 @@ struct WallpaperDemo: View {
         case lockScreen(on: Bool)
         /// The screensaver changing style (day → sunset) with this crossfade (0 = a cut).
         case crossfade(seconds: Double)
-        /// The screensaver with music: nothing, a corner card, or full screen.
-        case music(MusicSpec.Display)
+        /// The screensaver with music: nothing, a compact card (at its position), or full screen.
+        case music(MusicSpec.Display, position: MusicSpec.Corner = .bottomLeft)
         /// The window closes: DotStudio stays in the menu bar, or quits.
         case menuBarMode(keepsRunning: Bool)
         /// The menu bar, up close, with this icon.
@@ -165,9 +165,9 @@ struct WallpaperDemo: View {
             let k = seconds < 0.05 ? 1 : min(into / seconds, 1)
             let k2 = k * k * (3 - 2 * k)
             beach(&g, r, t: now, sunset: phase < half ? 1 - k2 : k2)
-        case .music(let mode):
+        case .music(let mode, let position):
             beach(&g, r, t: now, sunset: 0.35)
-            musicOverlay(&g, r, mode)
+            musicOverlay(&g, r, mode, position: position)
         case .menuBarMode(let keeps):
             let p = phase
             let open = p < 2.4                       // the window, until its close button is clicked
@@ -494,13 +494,17 @@ struct WallpaperDemo: View {
                with: .color(.white.opacity(0.4)))
     }
 
-    private func musicOverlay(_ g: inout GraphicsContext, _ r: CGRect, _ mode: MusicSpec.Display) {
+    private func musicOverlay(_ g: inout GraphicsContext, _ r: CGRect, _ mode: MusicSpec.Display,
+                              position: MusicSpec.Corner) {
         let art = Gradient(colors: [Color(red: 0.95, green: 0.45, blue: 0.35), Color(red: 0.45, green: 0.25, blue: 0.70)])
         switch mode {
         case .off:
             return
         case .corner:
-            let card = CGRect(x: 8, y: r.height - 30, width: 66, height: 22)
+            let cw: CGFloat = 66, ch: CGFloat = 22, m: CGFloat = 8
+            let cx = position.column < 0 ? m : position.column > 0 ? r.width - m - cw : (r.width - cw) / 2
+            let cy = position.row < 0 ? m : position.row > 0 ? r.height - m - ch : (r.height - ch) / 2
+            let card = CGRect(x: cx, y: cy, width: cw, height: ch)
             g.fill(Path(roundedRect: card, cornerRadius: 5), with: .color(.black.opacity(0.38)))
             let a = CGRect(x: card.minX + 3, y: card.minY + 3, width: 16, height: 16)
             g.fill(Path(roundedRect: a, cornerRadius: 2.5),

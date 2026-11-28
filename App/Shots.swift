@@ -280,6 +280,14 @@ enum UIShots {
                         prepare: { _ in MusicDemo.apply(.denied) }, view: main))
         // Show music: Full Screen with a song showing: the hero shows it over the Album Art
         // backdrop, as the saver does; the row's menu reads Full Screen.
+        // Compact music at the middle positions (added 2026-11-27): the hero's own overlay.
+        for (pos, tag) in [(MusicSpec.Corner.center, "center"), (.topCenter, "top-center"), (.bottomCenter, "bottom-center")] {
+            s.append(Screen(name: "dest-music-compact-\(tag)", frame: .window, prepare: { st in
+                MusicDemo.apply(.playing)
+                var m = st.model.library.musicSettings; m.setDisplay(.corner); m.cardCorner = pos
+                st.model.library.music = m
+            }, view: main))
+        }
         s.append(Screen(name: "dest-music-full", frame: .window, prepare: { st in
             MusicDemo.apply(.playing)
             var m = st.model.library.musicSettings; m.setDisplay(.fullScreen)
@@ -705,6 +713,9 @@ enum UIShots {
         // Full Screen in each layout (Album Art behind) — capture only
         let siteMusic: [(String, (inout MusicSpec) -> Void)] = [
             ("corner-large", { $0.setDisplay(.corner); $0.cardSize = .large }),
+            ("small-center", { $0.setDisplay(.corner); $0.cardCorner = .center }),
+            ("small-top-center", { $0.setDisplay(.corner); $0.cardCorner = .topCenter }),
+            ("small-bottom-center", { $0.setDisplay(.corner); $0.cardCorner = .bottomCenter }),
             ("full-album", { $0.setDisplay(.fullScreen); $0.fullLayout = .album }),
             ("full-stage", { $0.setDisplay(.fullScreen); $0.fullLayout = .stage }),
             ("full-cover", { $0.setDisplay(.fullScreen); $0.fullLayout = .cover }),
@@ -885,7 +896,7 @@ enum UIShots {
                 var m = st.model.library.musicSettings; m.setDisplay(mode)
                 if mode == .fullScreen { m.fullLayout = .stage }
                 st.model.library.music = m
-            }, minWidth: deckKey, highlight: mode == .corner ? "Corner" : "Full") { st in MusicDisplayMenu.entries(st.model) }
+            }, minWidth: deckKey, highlight: mode == .corner ? "Compact" : "Full") { st in MusicDisplayMenu.entries(st.model) }
         }
         shot("displays", width: 760, prepare: { st in
             DisplayRoster.shared.setDemo(true)
@@ -898,7 +909,7 @@ enum UIShots {
         shot("wallpaper-music", prepare: { st in
             WallpaperSlot.shared.set(st.wallpaper)
             st.model.updateMusic { $0.setDisplay(.corner); $0.cardOnWallpaper = true }
-        }, minWidth: deckKey, highlight: "Corner") { st in WallpaperMusicMenu.entries(st.model) }
+        }, minWidth: deckKey, highlight: "Compact") { st in WallpaperMusicMenu.entries(st.model) }
         shot("wallpaper-style", prepare: { WallpaperSlot.shared.set($0.wallpaper) }, minWidth: deckKey, highlight: "Same as") { st in
             DeckMenus.wallpaperStyle(st.model, synced: false, current: WallpaperSlot.shared.styleID, sync: {}, pick: { _ in })
         }

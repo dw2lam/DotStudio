@@ -1083,13 +1083,31 @@ private final class MusicOverlayGroup: CALayer {
             squeeze -= 0.1
             p = planCorner(d, size: size, trueScale: trueScale, maxWidth: right - left, squeeze: squeeze)
         }
-        let isLeft = corner == .bottomLeft || corner == .topLeft
-        let isTop = corner == .topLeft || corner == .topRight
         let s = p.s
-        let x = isLeft ? left : right - p.blockW
-        let artY = isTop ? top : bottom - s
-        // Text centred on the artwork; taller than it, it grows away from the screen's edge.
-        let ty = p.textH <= s ? artY + (s - p.textH) / 2 : (isTop ? artY : artY + s - p.textH)
+        // Left, right, or centred between the margins (the block as wide as what it shows).
+        let x: CGFloat
+        switch corner.column {
+        case -1: x = left
+        case 1: x = right - p.blockW
+        default: x = max(left, ((left + right) - p.blockW) / 2)
+        }
+        let artY: CGFloat
+        switch corner.row {
+        case -1: artY = top
+        case 1: artY = bottom - s
+        default: artY = min(max(top, ((top + bottom) - s) / 2), bottom - s)
+        }
+        // Text centred on the artwork; taller than it, it grows away from the screen's edge
+        // (in the middle row, both ways — clamped inside the margins).
+        var ty: CGFloat
+        if p.textH <= s { ty = artY + (s - p.textH) / 2 }
+        else {
+            switch corner.row {
+            case -1: ty = artY
+            case 1: ty = artY + s - p.textH
+            default: ty = min(max(top, artY + (s - p.textH) / 2), bottom - p.textH)
+            }
+        }
         let blockTop = min(artY, ty), blockBottom = max(artY + s, ty + p.textH)
         let block = CGRect(x: x, y: blockTop, width: p.blockW, height: blockBottom - blockTop)
         debugRects.append(("block", block))
@@ -1118,8 +1136,9 @@ private final class MusicOverlayGroup: CALayer {
     /// edge (no edge to see) and a little dither (no banding in a dark gradient).
     private func addScrim(around block: CGRect, corner: MusicSpec.Corner, unit s: CGFloat) {
         let lean: CGFloat = 0.18
-        let cx = block.midX + (corner == .bottomLeft || corner == .topLeft ? -1 : 1) * block.width * lean
-        let cy = block.midY + (corner == .bottomLeft || corner == .bottomRight ? 1 : -1) * block.height * lean
+        // leaning toward the nearest edges (not at all along a centred axis)
+        let cx = block.midX + CGFloat(corner.column) * block.width * lean
+        let cy = block.midY + CGFloat(corner.row) * block.height * lean
         let rx = block.width * 0.62 + s * 0.55, ry = block.height * 0.62 + s * 0.55
         let reach: CGFloat = 2.2                                   // radii covered by the bitmap
         let r = CGRect(x: cx - rx * reach, y: cy - ry * reach, width: rx * reach * 2, height: ry * reach * 2)

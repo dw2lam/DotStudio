@@ -17,15 +17,38 @@
 import Foundation
 
 struct MusicSpec: Codable, Equatable {
+    /// Where Small music sits: a corner, the top or bottom edge's middle, or the very centre
+    /// (the centre three added 2026-11-27; the type keeps its name from when there were only
+    /// corners, and the stored values are unchanged — an older build reads a new one as Bottom
+    /// Left). Listed in reading order: top row, centre, bottom row.
     enum Corner: String, Codable, CaseIterable, Identifiable {
-        case bottomLeft, bottomRight, topLeft, topRight
+        case topLeft, topCenter, topRight, center, bottomLeft, bottomCenter, bottomRight
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .bottomLeft: return "Bottom Left"
-            case .bottomRight: return "Bottom Right"
             case .topLeft: return "Top Left"
+            case .topCenter: return "Top Center"
             case .topRight: return "Top Right"
+            case .center: return "Center"
+            case .bottomLeft: return "Bottom Left"
+            case .bottomCenter: return "Bottom Center"
+            case .bottomRight: return "Bottom Right"
+            }
+        }
+        /// −1 left, 0 centre, 1 right.
+        var column: Int {
+            switch self {
+            case .topLeft, .bottomLeft: return -1
+            case .topCenter, .center, .bottomCenter: return 0
+            case .topRight, .bottomRight: return 1
+            }
+        }
+        /// −1 top, 0 middle, 1 bottom.
+        var row: Int {
+            switch self {
+            case .topLeft, .topCenter, .topRight: return -1
+            case .center: return 0
+            case .bottomLeft, .bottomCenter, .bottomRight: return 1
             }
         }
         init(from decoder: Decoder) throws {
@@ -75,7 +98,7 @@ struct MusicSpec: Codable, Equatable {
         var label: String {
             switch self {
             case .off: return "Off"
-            case .corner: return "Corner"
+            case .corner: return "Compact"    // "Corner" before it could sit in the middle too ("Small" clashed with Size)
             case .fullScreen: return "Full Screen"
             }
         }

@@ -667,10 +667,11 @@ final class WallpaperController: ObservableObject {
         return WallpaperPacing.profile(for: preset, source: source)
     }
 
-    /// Follow the feed only while it matters and someone can see the desktop: covered,
-    /// locked or paused costs nothing (the overlays keep their last state).
+    /// Follow the feed only while it matters and someone can see the desktop: covered, asleep
+    /// or locked costs nothing (the overlays keep their last state). Paused by the user, the
+    /// picture holds but the music keeps following: the song, its progress and its cover.
     private func updateMusicSubscription() {
-        let run = needsMusic && hardPauseReason == nil && hosts.values.contains(where: isVisible)
+        let run = needsMusic && systemPauseReason == nil && hosts.values.contains(where: isVisible)
         if run, musicToken == nil, !musicSubscribing, let store = model?.store {
             musicSubscribing = true
             musicToken = MusicFeedHub.shared.subscribe(store: store) { [weak self] snap, changed in
@@ -736,8 +737,14 @@ final class WallpaperController: ObservableObject {
     /// draws nothing, so a wallpaper turned on in Low Power never showed a first frame. It
     /// holds a still instead — WallpaperBudget.stillReason.)
     private var hardPauseReason: String? {
-        let s = power.state
         if userPaused { return "Paused" }
+        return systemPauseReason
+    }
+
+    /// A pause nobody chose: asleep, locked, the screensaver up. (The user's own Pause holds the
+    /// picture but not the music: the song on the desktop keeps changing — owner, 2026-11-27.)
+    private var systemPauseReason: String? {
+        let s = power.state
         if s.systemAsleep { return "Paused — Mac asleep" }
         if s.displayAsleep { return "Paused — display asleep" }
         if s.screenLocked { return "Paused — screen locked" }
