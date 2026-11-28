@@ -1005,7 +1005,8 @@ if runChecks {
     let hardening = hardeningChecks(), lapse = lapseChecks(), landscape = meadowLandscapeChecks()
     let custom = customSceneChecks()                           // tools/gallery/CustomChecks.swift
     let clock = clockBoundaryChecks()                          // tools/gallery/ClockChecks.swift
-    exit(live && format && bounce && retirement && hardening && lapse && landscape && custom && clock ? 0 : 1)
+    let adjust = adjustChecks(outDir: outDir)                  // tools/gallery/AdjustChecks.swift
+    exit(live && format && bounce && retirement && hardening && lapse && landscape && custom && clock && adjust ? 0 : 1)
 }
 
 // --video FILE: plays a clip through the live renderer exactly as a Look over a Video source does in

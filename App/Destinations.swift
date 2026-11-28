@@ -117,5 +117,7 @@ extension AppModel {
 
 extension Preset {
     /// The effect that defines the style (the first enabled one).
-    var leadKind: EffectKind? { (effects.first(where: \.enabled) ?? effects.first)?.kind }
+    var leadKind: EffectKind? {   // (the Adjust layer grades a style; it never names one)
+        (effects.first { $0.enabled && !$0.kind.isEditorControl } ?? effects.first)?.kind
+    }
 }

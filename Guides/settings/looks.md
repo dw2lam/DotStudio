@@ -348,3 +348,20 @@ Dreamy soft focus with film grain and an optional color wash.
 | `paper` | Paper Texture | slider | 0 … 1 | 0 |
 
 Colours: `colorA` Shadow {"r":0.12,"g":0.08,"b":0.24}, `colorB` Highlight {"r":1,"g":0.8,"b":0.64}.
+
+### Adjust (`adjust`)
+
+Brightness, contrast, saturation, exposure, highlights, shadows, warmth, tint, vibrance and fade.
+
+| key | label | kind | range / options | default |
+|---|---|---|---|---|
+| `brightness` | Brightness | slider | -100 … 100 | 0 |
+| `contrast` | Contrast | slider | -100 … 100 | 0 |
+| `saturation` | Saturation | slider | -100 … 100 | 0 |
+| `exposure` | Exposure | slider | -3 … 3 | 0 |
+| `highlights` | Highlights | slider | -100 … 100 | 0 |
+| `shadows` | Shadows | slider | -100 … 100 | 0 |
+| `warmth` | Warmth | slider | -100 … 100 | 0 |
+| `tint` | Tint | slider | -100 … 100 | 0 |
+| `vibrance` | Vibrance | slider | -100 … 100 | 0 |
+| `fade` | Fade | slider | 0 … 100 | 0 |

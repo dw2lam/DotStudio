@@ -115,6 +115,10 @@ enum EffectKind: String, Codable, CaseIterable {
     case flowerBloom                                          // Bloom pack (Nature) 79 (Bloom.swift)
     case waddle                                               // Penguin pack (Retro) 80 (Penguin.swift)
 
+    /// The editor's Adjust key (App/AdjustKey.swift): brightness, contrast, saturation… as the
+    /// style's last layer — shown as that one key, not as a row of the stack. Shader id 81.
+    case adjust
+
     /// A scene package the user made (an installed package in <store>/scenes/<id>/, compiled at
     /// runtime by its engine: Shared/CustomScenes.swift). Shader id 90 is its calm stand-in
     /// (Scenes/Custom_cases.h) while the package compiles, or when it can't.
@@ -170,6 +174,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .risograph: return "Risograph"
         case .grainWash: return "Grain Wash"
         case .glass: return "Glass"
+        case .adjust: return "Adjust"
         case .custom: return "Custom Scene"
         default: return SceneCatalog.spec(self)?.name ?? rawValue
         }
@@ -226,6 +231,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .risograph: return "Two-ink riso print with grain and misregistration."
         case .grainWash: return "Dreamy soft focus with film grain and an optional color wash."
         case .glass:     return "Looks through fluted, tiled or liquid glass."
+        case .adjust:    return "Brightness, contrast, saturation, exposure, highlights, shadows, warmth, tint, vibrance and fade."
         case .custom:    return "A scene package of your own, compiled by its engine."
         default: return SceneCatalog.spec(self)?.blurb ?? ""
         }
@@ -243,7 +249,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .edge, .neonEdges, .contour, .wave, .truchet, .toon:         return .lines
         case .glass, .noiseField, .kaleidoscope, .mirror,
              .fisheye, .swirl, .ripple:                                   return .distort
-        case .grainWash, .grain, .bloom, .posterize, .thermal, .vignette: return .colorLight
+        case .grainWash, .grain, .bloom, .posterize, .thermal, .vignette, .adjust: return .colorLight
         default: return .scenes
         }
     }
@@ -290,6 +296,7 @@ enum EffectKind: String, Codable, CaseIterable {
         case .risograph: return 47
         case .grainWash: return 48
         case .glass:     return 49
+        case .adjust:    return 81
         case .edge:      return 12
         case .crosshatch:return 13
         case .contour:   return 14
@@ -432,6 +439,18 @@ enum EffectKind: String, Codable, CaseIterable {
                                  ParamSpec("size", "Size", 10, 200, def: 44),
                                  ParamSpec("refract", "Refraction", 0, 1, def: 0.5),
                                  ParamSpec("frost", "Frost", 0, 1, def: 0.3)]
+        // Adjust: every one bipolar around 0 (no change) but Fade, in the order a photo editor
+        // lists them; the shader's ranges are ±1 (EffectInstance.pack scales them).
+        case .adjust:    return [ParamSpec("brightness", "Brightness", -100, 100, def: 0),
+                                 ParamSpec("contrast", "Contrast", -100, 100, def: 0),
+                                 ParamSpec("saturation", "Saturation", -100, 100, def: 0),
+                                 ParamSpec("exposure", "Exposure", -3, 3, def: 0),
+                                 ParamSpec("highlights", "Highlights", -100, 100, def: 0),
+                                 ParamSpec("shadows", "Shadows", -100, 100, def: 0),
+                                 ParamSpec("warmth", "Warmth", -100, 100, def: 0),
+                                 ParamSpec("tint", "Tint", -100, 100, def: 0),
+                                 ParamSpec("vibrance", "Vibrance", -100, 100, def: 0),
+                                 ParamSpec("fade", "Fade", 0, 100, def: 0)]
         default: return SceneCatalog.spec(self)?.params ?? []
         }
     }
@@ -542,6 +561,10 @@ enum EffectKind: String, Codable, CaseIterable {
     static func available(in category: EffectCategory) -> [EffectKind] {
         allCases.filter { $0.category == category && !$0.isRetired }
     }
+
+    /// Edited from its own control rather than added from the Add-effect picker: Adjust (the
+    /// editor's Adjust key keeps one such layer last in the stack: EffectStackView).
+    var isEditorControl: Bool { self == .adjust }
 }
 
 // MARK: - Uniform packing
@@ -612,6 +635,9 @@ extension EffectInstance {
         case .grainWash: u.p0 = .init(g("soft"), g("grain"), g("tint"), g("halation"))
                          u.p1 = .init(g("paper"), 0, 0, 0)
         case .glass:     u.p0 = .init(g("style"), g("size"), g("refract"), g("frost"))
+        case .adjust:    u.p0 = .init(g("brightness") / 100, g("contrast") / 100, g("saturation") / 100, g("exposure"))
+                         u.p1 = .init(g("highlights") / 100, g("shadows") / 100, g("warmth") / 100, g("tint") / 100)
+                         u.p2 = .init(g("vibrance") / 100, g("fade") / 100, 0, 0)
         case .waddle:    WaddleRig.pack(self, into: &u)              // (toggles as bits: Penguin.swift)
         default:
             // Scene packs: params fill p0.xyzw, p1.xyzw, p2.xyzw in catalog order.

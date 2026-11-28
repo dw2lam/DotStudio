@@ -358,7 +358,7 @@ struct EffectStackView: View {
     init(preset: Binding<Preset>, model: AppModel) {
         _preset = preset
         self.model = model
-        let effects = preset.wrappedValue.effects
+        let effects = preset.wrappedValue.layers
         _expanded = State(initialValue: DemoHooks.expandAllEffects ? Set(effects.map(\.id))
                                         : Set(effects.prefix(1).map(\.id)))
     }
@@ -382,10 +382,11 @@ struct EffectStackView: View {
                 .listRowInsets(rowInsets(vertical: layout.labelGap))
                 .listRowSeparator(.hidden)
 
-            ForEach($preset.effects) { $effect in
+            // (The Adjust layer, last in the stack, isn't a row: the Adjust key edits it.)
+            ForEach($preset.layers) { $effect in
                 EffectRow(effect: $effect,
                           isExpanded: expandedBinding(effect.id),
-                          isFirst: preset.effects.first?.id == effect.id,
+                          isFirst: preset.layers.first?.id == effect.id,
                           onDuplicate: { duplicate(effect.id) },
                           onRemove: { remove(effect.id) },
                           model: model)
@@ -397,23 +398,27 @@ struct EffectStackView: View {
                     .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
                     .alignmentGuide(.listRowSeparatorTrailing) { $0[.trailing] }
             }
-            .onMove { preset.effects.move(fromOffsets: $0, toOffset: $1) }
+            .onMove { preset.layers.move(fromOffsets: $0, toOffset: $1) }
 
             VStack(alignment: .leading, spacing: layout.itemGap) {
-                if preset.effects.isEmpty {
+                if preset.layers.isEmpty {
                     Text("No effects yet — this style shows the source as-is.")
                         .modifier(InspectorNote())
                         .wrapping()
                 }
-                addEffectButton
-                .popover(isPresented: $showAdd, arrowEdge: .leading) {
-                    AddEffectPicker(source: model.library.source, thumbnailer: model.thumbnailer,
-                                    include: { !$0.isScene }) { kind in
-                        let e = EffectInstance(kind)
-                        preset.effects.append(e)
-                        expanded = [e.id]
-                        showAdd = false
+                // Add Effect, and the Adjust key beside it (AdjustKey.swift)
+                HStack(spacing: console ? Space.xs : layout.controlGap) {
+                    addEffectButton
+                    .popover(isPresented: $showAdd, arrowEdge: .leading) {
+                        AddEffectPicker(source: model.library.source, thumbnailer: model.thumbnailer,
+                                        include: { !$0.isScene }) { kind in
+                            let e = EffectInstance(kind)
+                            preset.layers.append(e)      // (under the Adjust layer, which stays last)
+                            expanded = [e.id]
+                            showAdd = false
+                        }
                     }
+                    AdjustKey(preset: $preset)
                 }
             }
             .padding(.top, layout.controlGap)
@@ -462,7 +467,7 @@ struct EffectStackView: View {
             if TileProbe.enabled {
                 Color.clear.onAppear {
                     TileProbe.toggleEffects = {
-                        guard let first = preset.effects.first?.id else { return }
+                        guard let first = preset.layers.first?.id else { return }
                         if expanded.contains(first) { expanded.remove(first) } else { expanded.insert(first) }
                     }
                 }
@@ -483,7 +488,7 @@ struct EffectStackView: View {
                     .help(onAir ?? "Not playing anywhere yet")
             }
         }
-        .help(preset.effects.count > 1 ? "Drag effects to reorder them — the top one runs first" : "")
+        .help(preset.layers.count > 1 ? "Drag effects to reorder them — the top one runs first" : "")
         .accessibilityElement(children: .combine)
         .accessibilityValue(console ? (onAir ?? "") : "")
     }
@@ -1224,6 +1229,9 @@ struct ParamRow: View {
         if key == "angle" || spec.label.lowercased().contains("angle") {
             return String(format: "%.0f°", v * 180 / .pi)
         }
+        if key == "exposure" && spec.min < 0 {   // (Adjust) in stops, signed: fits the readout column
+            return abs(v) < 0.05 ? "0" : String(format: "%+.1f", v)
+        }
         if spec.step >= 1 || spec.max - spec.min >= 20 { return String(format: "%.0f", v) }
         if spec.max <= 1.0 && spec.min >= 0 { return String(format: "%.0f%%", v * 100) }
         return String(format: "%.2f", v)
@@ -1301,12 +1309,20 @@ private struct AddEffectGrid: View {
             : EffectCategory.allCases
         return cats.compactMap { cat in
             let kinds = EffectKind.allCases.filter {
-                $0.category == cat && !$0.isRetired && include($0) &&
+                $0.category == cat && !$0.isRetired && !$0.isEditorControl && include($0) &&
                 (q.isEmpty || $0.displayName.lowercased().contains(q) || cat.rawValue.lowercased().contains(q)
                  || $0.blurb.lowercased().contains(q))
             }
             return kinds.isEmpty ? nil : (cat, kinds)
         }
+    }
+
+    /// The editor's picker, searched for one of Adjust's names (brightness, contrast…).
+    private var adjustHint: Bool {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard selected == nil, q.count >= 3, include(.adjust) else { return false }
+        return EffectKind.adjust.displayName.lowercased().contains(q)
+            || EffectKind.adjust.params.contains { $0.label.lowercased().contains(q) }
     }
 
     var body: some View {
@@ -1322,6 +1338,15 @@ private struct AddEffectGrid: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: layout.sectionGap) {
+                        if adjustHint {
+                            // Brightness, Saturation… aren't effects to add: they're the Adjust key's.
+                            let hint = "Brightness, contrast, saturation and the other basic adjustments are under Adjust, beside Add Effect."
+                            Label { Text(hint) } icon: { Image(systemName: "slider.horizontal.3") }
+                                .modifier(InspectorNote())
+                                .truncating(hint, lines: 3)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                         ForEach(groups, id: \.0) { cat, kinds in
                             VStack(alignment: .leading, spacing: layout.controlGap) {
                                 HStack(spacing: layout.iconGap) {
@@ -1346,7 +1371,7 @@ private struct AddEffectGrid: View {
                                 }
                             }
                         }
-                        if groups.isEmpty {
+                        if groups.isEmpty && !adjustHint {
                             let message = "No effects match “\(query)”."
                             Text(message)
                                 .textRole(.callout).foregroundStyle(.secondary)

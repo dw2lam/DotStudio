@@ -533,6 +533,25 @@ enum UIShots {
             }))
         }
 
+        // The Adjust key (AdjustKey.swift): a scene's editor with a grade set (the key lit, beside
+        // Add Effect), and the popover's sliders untouched and set.
+        let adjust: (Stage, UUID) -> Void = { st, id in
+            let b = st.model.presetBinding(id)
+            for (k, v) in [("brightness", 18.0), ("contrast", 25), ("shadows", 40), ("warmth", 30), ("exposure", 0.33)] {
+                if let spec = EffectKind.adjust.params.first(where: { $0.key == k }) { b.wrappedValue.setAdjust(spec, v) }
+            }
+        }
+        let adjusted: (Stage) -> Void = { adjust($0, $0.look) }
+        // (a popover draws its own material: Classic gets the window's background here; Console paints its panel)
+        let adjustPanel: (Stage) -> AnyView = { st in
+            AnyView(AdjustPanel(preset: st.model.presetBinding(st.look)).background(Color(nsColor: .windowBackgroundColor)))
+        }
+        s.append(Screen(name: "editor-adjust", frame: .window, prepare: { st in adjust(st, st.scene); st.edit(st.scene) }, view: main))
+        s.append(Screen(name: "adjust-panel", frame: .fit(width: 360), prepare: { st in
+            st.model.presetBinding(st.look).wrappedValue.resetAdjust()
+        }, view: { st in adjustPanel(st) }))
+        s.append(Screen(name: "adjust-panel-set", frame: .fit(width: 360), prepare: adjusted, view: { st in adjustPanel(st) }))
+
         // Onboarding sheet, one per step (and per setup state on "Turn It On")
         let sheet = OnboardingView.size
         s.append(Screen(name: "onboarding-1-welcome", frame: .fixed(sheet), view: { _ in
