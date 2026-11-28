@@ -49,9 +49,11 @@ final class UpdateController: NSObject, ObservableObject, SPUUpdaterDelegate {
         controller = SPUStandardUpdaterController(startingUpdater: false,
                                                   updaterDelegate: self,
                                                   userDriverDelegate: nil)
-        // Screenshot/render modes must never touch the network or the feed.
+        // Screenshot/render modes and the headless probes must never touch the network or the
+        // feed (a CI-numbered build would otherwise start Sparkle inside a probe).
         let env = ProcessInfo.processInfo.environment
-        guard env["DOTSTUDIO_SHOTS"] == nil, env["DOTSTUDIO_UI_SHOTS"] == nil else { return }
+        guard env["DOTSTUDIO_SHOTS"] == nil, env["DOTSTUDIO_UI_SHOTS"] == nil,
+              env["DOTSTUDIO_CLICK_PROBE"] == nil, env["DOTSTUDIO_PERF_PROBE"] == nil else { return }
         // Local builds carry project.yml's placeholder build number (CI stamps real ones), so
         // Sparkle would see every published release as newer and "update" a dev build back to
         // an older version — which can't read a newer library (it happened, 2026-11-09).
