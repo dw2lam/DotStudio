@@ -881,6 +881,10 @@ def build(ctx):
             lens = LENS * (UNLIT_LENS / LENS) ** k
             cam.location = look + (cam.location - look) * (lens / LENS)
             cd.lens = lens
+            # focus where the camera now is (it was set before this move: the whole unlit end
+            # came out of focus), and the same physical aperture as the lens lengthens
+            cd.dof.focus_distance = (look - cam.location).length
+            cd.dof.aperture_fstop = cd.dof.aperture_fstop * (lens / LENS)
 
     # ---------------------------------------------------------------- motion
     # landing times: evenly spaced, in landing order (each card, then what sits on it)
@@ -1239,6 +1243,12 @@ def output(scene, P, L, cutout, cam):
             elif device == "OPTIX":
                 put(sc.cycles, "denoiser", "OPTIX")
             put(sc.cycles, "texture_limit_render", "OFF")    # the UI pictures stay sharp
+            # sharpness: Cycles' default pixel filter (1.5 px Blackman-Harris) and the denoiser both
+            # soften the UI's text; filter_width narrows the one, denoise: false drops the other
+            if P.get("filter_width") is not None:
+                put(sc.cycles, "filter_width", float(P["filter_width"]))
+            if P.get("denoise") is False:
+                put(sc.cycles, "use_denoising", False)
             put(sc.cycles, "blur_glossy", 0.5)
     bpy.app.handlers.render_pre.append(_out)
     return {"cameras": {"hero": cam}}
