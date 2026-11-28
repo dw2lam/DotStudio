@@ -17,6 +17,13 @@
   what you're choosing.
 - **What's New.** After an update, DotStudio shows what changed, once. Every release's notes
   live in Settings › Updates.
+- **Adjust.** Brightness, contrast, saturation, exposure, highlights, shadows, warmth, tint,
+  vibrance and fade for any style, from one Adjust key beside Add Effect in the editor.
+- **Music on your wallpaper.** The Wallpaper card has its own Music key: show the song on the
+  live wallpaper too, compact or full screen. Paused, the wallpaper holds its picture but the
+  song keeps changing.
+- **Dropdowns that match.** In the new look every menu opens as its own panel, not a stock
+  macOS menu.
 
 ### Changed
 - The Screensaver and Wallpaper panels are clean tiles with clear names; the filters and each
@@ -24,11 +31,17 @@
 - The MCP menu is one simple column: add to Claude Desktop, copy the command for Claude Code
   or other apps, try an example, and the two AI switches.
 - Bigger, easier-to-hit buttons and switches.
+- Music's Corner is now Compact, and it can sit in any corner, the middle of the top or bottom
+  edge, or the very centre.
+- The wallpaper's Pause key lights amber while it's paused.
+- The window's header shows the dotted DotStudio wordmark and the version.
 
 ### Fixed
 - The window title no longer shows twice.
 - After reordering layers, the colour picker kept editing the layer that used to be in that
   spot.
+- In the new look, the header no longer fills in when you hover it, and no band draws over the
+  filter row as it pins under the header.
 
 ## 1.6.8 — Frame rate, your way
 
