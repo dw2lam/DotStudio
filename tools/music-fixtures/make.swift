@@ -140,4 +140,19 @@ write("short", ["source": "spotify", "title": "Ivy", "artist": "Frank Ocean", "a
                 "position": 100.0, "positionAt": now, "isPlaying": true, "artwork": "art-fern.jpg",
                 "trackID": "spotify:track:fixture-short"])
 write("idle", [:])
+// A real song for a capture (the website's music band): custom.json, only when
+// FIXTURE_COVER=<image file> is set; FIXTURE_TITLE / _ARTIST / _ALBUM / _DURATION / _POSITION /
+// _SOURCE fill in the rest. The cover is copied as it is (never resized: Full Screen's Cover
+// layout draws it across the whole screen).
+let env = ProcessInfo.processInfo.environment
+if let cover = env["FIXTURE_COVER"], !cover.isEmpty {
+    let name = "art-custom." + URL(fileURLWithPath: cover).pathExtension.lowercased()
+    let dest = out.appendingPathComponent(name)
+    try? FileManager.default.removeItem(at: dest)
+    try! FileManager.default.copyItem(at: URL(fileURLWithPath: cover), to: dest)
+    write("custom", ["source": env["FIXTURE_SOURCE"] ?? "spotify", "title": env["FIXTURE_TITLE"] ?? "Untitled",
+                     "artist": env["FIXTURE_ARTIST"] ?? "", "album": env["FIXTURE_ALBUM"] ?? "",
+                     "duration": Double(env["FIXTURE_DURATION"] ?? "") ?? 200, "position": Double(env["FIXTURE_POSITION"] ?? "") ?? 60,
+                     "positionAt": now, "isPlaying": true, "artwork": name, "trackID": "spotify:track:fixture-custom"])
+}
 print("fixtures written to \(out.path)")

@@ -3,6 +3,8 @@
 # player involved. Point DOTSTUDIO_MUSIC_FAKE at one of the JSON files:
 #   playing · long · cjk · emoji · podcast · paused · bright · noart · idle
 #   never-cut-off text: longtitle · longartist · cjklong · emojilong · unbreakable · short
+#   a real song: custom (FIXTURE_COVER=<image> FIXTURE_TITLE=… FIXTURE_ARTIST=… FIXTURE_ALBUM=…
+#                FIXTURE_DURATION=<s> FIXTURE_POSITION=<s> in the environment; see make.swift)
 #
 #   tools/music-fixtures/make.sh /tmp/ds-fixtures
 #   DOTSTUDIO_MUSIC_FAKE=/tmp/ds-fixtures/playing.json DOTSTUDIO_STORE_DIR=$(mktemp -d) \
