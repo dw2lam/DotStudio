@@ -984,11 +984,13 @@ extension SourceSpec {
 /// Console (the Stitch header strip): a hairline after the traffic lights, the orange light,
 /// the name, and the app's real version on a small tag.
 private struct HubWordmark: View {
-    // Just the name (owner, 2026-11-26): no dot, rule or version tag — the version lives in
-    // About DotStudio. Drawn in dots, as the website's wordmark (owner, 2026-11-27: "put this
-    // logo instead of having regular text"): the same 5 × 7 dot grid per letter (Doto's, as
-    // web/src/site/art.tsx Wordmark), letters 6 pitches apart; the dots a little fuller than the
-    // website's (0.74 of the pitch, not 0.6) so they hold up at this small size.
+    // Just the name (owner, 2026-11-26): no dot, rule or version tag. Drawn in dots, as the
+    // website's wordmark (owner, 2026-11-27: "put this logo instead of having regular text"): the
+    // same 5 × 7 dot grid per letter (Doto's, as web/src/site/art.tsx Wordmark), letters 6
+    // pitches apart; the dots a little fuller than the website's (0.74 of the pitch, not 0.6) so
+    // they hold up at this small size. The d's top dot is the signal orange, as on the app icon.
+    // Beside it, top right, the app's own version (major.minor) as a small orange accent, as the
+    // site's hero has it (owner: "each time there's an update, it propagates the version").
     @ScaledLength(relativeTo: .body) private var height: CGFloat = 18
 
     private static let rows: [Character: [String]] = [
@@ -998,33 +1000,65 @@ private struct HubWordmark: View {
         "s": [".....", ".....", ".###.", "#....", ".###.", "....#", "####."],
         "u": [".....", ".....", "#...#", "#...#", "#...#", "#..##", ".##.#"],
         "i": ["..#..", ".....", ".##..", "..#..", "..#..", "..#..", ".###."],
+        // the version's digits, on the same grid
+        "0": [".###.", "#...#", "#..##", "#.#.#", "##..#", "#...#", ".###."],
+        "1": ["..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###."],
+        "2": [".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####"],
+        "3": ["####.", "....#", "....#", ".###.", "....#", "....#", "####."],
+        "4": ["...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#."],
+        "5": ["#####", "#....", "####.", "....#", "....#", "#...#", ".###."],
+        "6": ["..##.", ".#...", "#....", "####.", "#...#", "#...#", ".###."],
+        "7": ["#####", "....#", "...#.", "..#..", ".#...", ".#...", ".#..."],
+        "8": [".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."],
+        "9": [".###.", "#...#", "#...#", ".####", "....#", "...#.", ".##.."],
+        ".": [".", ".", ".", ".", ".", ".", "#"],
     ]
     private static let word = Array("dotstudio")
-    /// The ink in pitches: from the d's left dot to the last o's right dot (8 letters × 6 + 4.6),
-    /// top row to baseline (6.6).
     private static let dot = 0.74
-    private static let inkW = Double(word.count - 1) * 6 + 4 + dot, inkH = 6 + dot
+    /// The app's version as the hero shows it: major.minor ("1.7").
+    private static let version: String = {
+        let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        return v.split(separator: ".").prefix(2).joined(separator: ".")
+    }()
 
-    var body: some View {
-        let pitch = height / Self.inkH
-        Canvas { ctx, _ in
-            var dots = Path(), accent = Path()
-            for (i, ch) in Self.word.enumerated() {
-                for (y, row) in (Self.rows[ch] ?? []).enumerated() {
-                    for (x, c) in row.enumerated() where c == "#" {
-                        let d = Self.dot * pitch
-                        let dot = CGRect(x: Double(i * 6 + x) * pitch, y: Double(y) * pitch, width: d, height: d)
-                        // the d's top dot is the signal orange, as on the app icon
-                        if i == 0 && y == 0 && x == 4 { accent.addEllipse(in: dot) } else { dots.addEllipse(in: dot) }
-                    }
+    /// Dots for `text` at `pitch`, left to right: each glyph its width + 1 pitch apart; the
+    /// width in pitches and the dots (the accent dot apart, if `accent` says which).
+    private static func layout(_ text: [Character], pitch: Double,
+                               accent: ((Int, Int, Int) -> Bool)? = nil) -> (w: Double, dots: Path, lit: Path) {
+        var dots = Path(), lit = Path(), x0 = 0
+        for (i, ch) in text.enumerated() {
+            let g = rows[ch] ?? []
+            let gw = g.first?.count ?? 0
+            for (y, row) in g.enumerated() {
+                for (x, c) in row.enumerated() where c == "#" {
+                    let d = dot * pitch
+                    let r = CGRect(x: Double(x0 + x) * pitch, y: Double(y) * pitch, width: d, height: d)
+                    if accent?(i, x, y) == true { lit.addEllipse(in: r) } else { dots.addEllipse(in: r) }
                 }
             }
-            ctx.fill(dots, with: .color(ConsoleInk.ink))
-            ctx.fill(accent, with: .color(ConsoleInk.signal))
+            x0 += gw + 1
         }
-        .frame(width: Self.inkW * pitch, height: height)
+        return (Double(max(x0 - 1, 0)) - 1 + dot, dots, lit)
+    }
+
+    var body: some View {
+        let pitch = height / (6 + Self.dot)
+        let name = Self.layout(Self.word, pitch: pitch) { i, x, y in i == 0 && y == 0 && x == 4 }
+        let small = pitch * 0.42
+        let ver = Self.layout(Array(Self.version), pitch: small)
+        HStack(alignment: .top, spacing: pitch * 1.4) {
+            Canvas { ctx, _ in
+                ctx.fill(name.dots, with: .color(ConsoleInk.ink))
+                ctx.fill(name.lit, with: .color(ConsoleInk.signal))
+            }
+            .frame(width: name.w * pitch, height: height)
+            if !Self.version.isEmpty {
+                Canvas { ctx, _ in ctx.fill(ver.dots, with: .color(ConsoleInk.signal)) }
+                    .frame(width: ver.w * small, height: (6 + Self.dot) * small)
+            }
+        }
         .accessibilityElement()
-        .accessibilityLabel("DotStudio")
+        .accessibilityLabel(Self.version.isEmpty ? "DotStudio" : "DotStudio \(Self.version)")
         .accessibilityAddTraits(.isHeader)
     }
 }
@@ -1064,17 +1098,15 @@ private struct HubToolbarSpace: ToolbarContent {
     }
 }
 
-/// Before macOS 26 (no per-item glass there, so `hubBareToolbarItem` has nothing to hide): the
-/// unified title bar draws its own grey material behind the header strip. Console paints it the
-/// chassis instead, so the strip reads as one surface with the window. macOS 26 keeps its own
-/// scroll-edge treatment.
+/// The unified title bar draws its own material behind the header strip — and on macOS 26+ fades
+/// it in whenever the pointer enters the title bar (owner, 2026-11-27: "it fills in … can you
+/// disable that?"). Console paints the strip the chassis, always, on every macOS: one surface with
+/// the window, nothing to fill in on hover.
 private struct HubToolbarBackground: ViewModifier {
     let console: Bool
 
     func body(content: Content) -> some View {
-        if #available(macOS 26, *) {
-            content
-        } else if console {
+        if console {
             content
                 .toolbarBackground(ConsoleInk.chassis, for: .windowToolbar)
                 .toolbarBackground(.visible, for: .windowToolbar)
