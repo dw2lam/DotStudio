@@ -187,7 +187,7 @@ private struct GalleryPage: View {
         .onAppear { prewarmStills() }
         .onChange(of: model.library.presets.count) { prewarmStills() }
         .coordinateSpace(name: FilterBar.space)
-        .softScrollEdges()
+        .pageScrollEdges(hidden: console)
         .motion(Motion.smooth, value: filter)
         .motion(Motion.smooth, value: query)
     }

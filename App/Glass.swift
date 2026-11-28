@@ -132,6 +132,17 @@ extension View {
         if #available(macOS 26, *) { self.scrollEdgeEffectStyle(.soft, for: .top) } else { self }
     }
 
+    /// The page's top edge: soft (macOS 26+) — or, with `hidden`, no edge effect at all. Console
+    /// hides it: its header strip is solid chassis, and macOS's soft edge drew a frosted
+    /// full-width band under it — over the pinned filter row, and fading in when the pointer
+    /// entered the title bar (owner, 2026-11-27: "it fills in like this bar").
+    @ViewBuilder
+    func pageScrollEdges(hidden: Bool) -> some View {
+        if #available(macOS 26, *) {
+            if hidden { self.scrollEdgeEffectHidden(true, for: .all) } else { self.scrollEdgeEffectStyle(.soft, for: .top) }
+        } else { self }
+    }
+
     /// No edge effects on a scroll view nested in another (a sideways strip of chips): it
     /// inherits the page's soft top edge, which would draw a frosted band behind the strip.
     @ViewBuilder
