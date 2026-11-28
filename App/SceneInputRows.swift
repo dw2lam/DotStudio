@@ -121,24 +121,8 @@ struct SignalPickerMenu: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: height / 2, style: .continuous)
         let current = currentTitle
-        Menu {
-            Picker(title, selection: picked) {
-                Text("Not connected").tag("")
-                if let sg = suggest, let b = builtIns.first(where: { $0.id == sg }) {
-                    Section("Suggested") { Text(b.name).tag(b.id + "#suggested") }
-                }
-                Section("Built in") {
-                    ForEach(builtIns, id: \.id) { b in Text(b.name).tag(b.id) }
-                }
-                if !mine.isEmpty {
-                    Section("Your signals") {
-                        ForEach(mine) { s in Text(s.enabled ? s.name : "\(s.name) (off)").tag(s.key) }
-                    }
-                }
-                if current == "Missing signal" { Text("Missing signal").tag(selection) }
-            }
-            .pickerStyle(.inline)
-            .labelsHidden()
+        DropdownMenu(title: "\(title) signal") {
+            entries(current: current)
         } label: {
             if console {
                 ConsoleMenuKeyLabel(text: current, dim: selection.isEmpty)
@@ -173,6 +157,25 @@ struct SignalPickerMenu: View {
             .frame(maxWidth: .infinity, minHeight: height)
             .background(shape.fill(Color.primary.opacity(0.078)))
             .contentShape(shape)
+    }
+
+    /// The picker's options, the chosen one checked: Not connected, the suggested built-in, the
+    /// built-ins, the user's own signals (and the missing one, while it's chosen).
+    @MenuBuilder
+    func entries(current: String) -> [MenuEntry] {
+        let picked = picked
+        let choice = { (title: String, tag: String) -> MenuEntry in
+            MenuEntry.choice(title, selected: picked.wrappedValue == tag) { picked.wrappedValue = tag }
+        }
+        choice("Not connected", "")
+        if let sg = suggest, let b = builtIns.first(where: { $0.id == sg }) {
+            MenuEntry.section("Suggested") { choice(b.name, b.id + "#suggested") }
+        }
+        MenuEntry.section("Built in") { builtIns.map { b in choice(b.name, b.id) } }
+        if !mine.isEmpty {
+            MenuEntry.section("Your signals") { mine.map { s in choice(s.enabled ? s.name : "\(s.name) (off)", s.key) } }
+        }
+        if current == "Missing signal" { choice("Missing signal", selection) }
     }
 
     /// The Suggested entry is the same built-in: store its plain id.

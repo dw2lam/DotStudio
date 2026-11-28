@@ -293,7 +293,7 @@ enum UIShots {
                 var m = st.model.library.musicSettings; m.setDisplay(mode)
                 if mode == .fullScreen { m.fullLayout = .stage }
                 st.model.library.music = m
-            }, view: { _ in AnyView(MenuPreview { MusicDisplayMenuItems() }) }))
+            }, view: { st in AnyView(MenuPreview { NativeMenuItems(MusicDisplayMenu.entries(st.model)) }) }))
         }
         // The Wallpaper card synced while the screensaver rotates a playlist.
         s.append(Screen(name: "dest-wallpaper-synced", frame: .window, prepare: { st in
@@ -359,8 +359,8 @@ enum UIShots {
             st.model.setScreensaverStyle(st.night, on: lg)
         }, view: { st in
             AnyView(MenuPreview {
-                DisplayStylesMenuItems(displays: DisplayRoster.shared.displays,
-                                       pins: st.model.library.displayStyles ?? [:], set: { _, _ in }, clearAll: {})
+                NativeMenuItems(DisplayStylesMenu.entries(st.model, displays: DisplayRoster.shared.displays,
+                                                          pins: st.model.library.displayStyles ?? [:], set: { _, _ in }, clearAll: {}))
             })
         }))
         s.append(Screen(name: "tile-menu-displays", frame: .fit(width: 320), prepare: { st in
@@ -837,6 +837,121 @@ enum UIShots {
                 .background(.regularMaterial))
         }))
         s += themeLayerScreens()
+        s += dropdownScreens()
+        return s
+    }
+
+    /// Retro's dropdowns (ConsoleMenu.swift) as they open — each built from the same items its
+    /// control shows, a row highlighted as under the pointer, submenus open beside their row.
+    /// Menus never draw offscreen, so this is the panel itself (DOTSTUDIO_UI_ONLY=dropdown-).
+    private static func dropdownScreens() -> [Screen] {
+        var s: [Screen] = []
+        /// The row of `entries` whose title starts with `prefix`.
+        func row(_ entries: [MenuEntry], _ prefix: String) -> Int? {
+            ConsoleMenuState.flatten(entries).firstIndex { $0.entry?.title.hasPrefix(prefix) == true }
+        }
+        func shot(_ name: String, width: CGFloat = 360, prepare: @escaping (Stage) -> Void = { _ in },
+                  minWidth: CGFloat = 0, highlight: String? = nil, submenu: String? = nil, submenuHighlight: String? = nil,
+                  _ entries: @escaping (Stage) -> [MenuEntry]) {
+            s.append(Screen(name: "dropdown-\(name)", frame: .fit(width: width), prepare: prepare, view: { st in
+                let e = entries(st)
+                let sub = submenu.flatMap { row(e, $0) }
+                var subEntries: [MenuEntry] = []
+                if let sub, case .submenu(let items)? = ConsoleMenuState.flatten(e)[sub].entry?.kind { subEntries = items }
+                return AnyView(ConsoleMenuPreview(entries: e, minWidth: minWidth, highlight: highlight.flatMap { row(e, $0) },
+                                                  submenu: sub, submenuHighlight: submenuHighlight.flatMap { row(subEntries, $0) }))
+            }))
+        }
+        let deckKey: CGFloat = 300   // about a deck key's width at 1280 × 800
+        let lg = DisplayRoster.demoDisplay
+
+        // The Screensaver deck
+        shot("playlist", prepare: { $0.lineup($0.playlist) }, minWidth: deckKey, highlight: "Shuffle") { st in
+            DeckMenus.playlist(st.model, lineup: st.model.screensaverLineup) {}
+        }
+        shot("playlist-single", minWidth: deckKey, highlight: "Edit") { st in
+            DeckMenus.playlist(st.model, lineup: st.model.screensaverLineup) {}
+        }
+        shot("night", prepare: { $0.lineup([$0.hero], night: $0.night) }, minWidth: deckKey) { st in
+            DeckMenus.night(st.model, current: st.model.screensaverLineup.night)
+        }
+        shot("when", prepare: { st in
+            SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.firstScene)
+        }, minWidth: deckKey, highlight: "Edit") { st in
+            WhenKey.entries(st.model) {}
+        }
+        for (mode, tag) in [(MusicSpec.Display.fullScreen, "full"), (.corner, "corner")] {
+            shot("music-\(tag)", prepare: { st in
+                var m = st.model.library.musicSettings; m.setDisplay(mode)
+                if mode == .fullScreen { m.fullLayout = .stage }
+                st.model.library.music = m
+            }, minWidth: deckKey, highlight: mode == .corner ? "Corner" : "Full") { st in MusicDisplayMenu.entries(st.model) }
+        }
+        shot("displays", width: 760, prepare: { st in
+            DisplayRoster.shared.setDemo(true)
+            st.model.setScreensaverStyle(st.night, on: lg)
+        }, minWidth: deckKey, submenu: "LG", submenuHighlight: "Same as Other") { st in
+            DeckMenus.screensaverDisplays(st.model, displays: DisplayRoster.shared.displays)
+        }
+
+        // The Wallpaper deck
+        shot("wallpaper-style", prepare: { WallpaperSlot.shared.set($0.wallpaper) }, minWidth: deckKey, highlight: "Same as") { st in
+            DeckMenus.wallpaperStyle(st.model, synced: false, current: WallpaperSlot.shared.styleID, sync: {}, pick: { _ in })
+        }
+        shot("wallpaper-displays-synced", prepare: { st in
+            DisplayRoster.shared.setDemo(true)
+            st.model.setScreensaverStyle(st.night, on: lg)
+            WallpaperController.shared.update { $0.enabled = true; $0.followsScreensaver = true }
+            WallpaperSlot.shared.set(st.model.nowPlayingID ?? st.hero)
+        }, minWidth: deckKey) { st in
+            DeckMenus.wallpaperDisplays(st.model, slot: WallpaperSlot.shared, displays: DisplayRoster.shared.displays, synced: true)
+        }
+
+        // The header's New key, the hover bar's "…" / "Set as…"
+        shot("new", width: 560, submenu: "New Scene", submenuHighlight: "") { st in LibraryMenus.new(st.model) }
+        shot("tile-more", width: 600, prepare: { st in
+            DisplayRoster.shared.setDemo(true)
+            st.model.setScreensaverStyle(st.firstScene, on: lg)
+            WallpaperSlot.shared.set(st.wallpaper)
+        }, submenu: "Set as Screensaver on", submenuHighlight: "LG") { st in
+            let p = st.model.preset(st.firstScene) ?? Preset(name: "?")
+            return TileMenus.more(st.model, preset: p, badges: TileBadges(onScreensaver: false), lineup: st.model.screensaverLineup,
+                                  wallpaper: WallpaperSlot.shared, roster: DisplayRoster.shared,
+                                  includeDestinations: true, includeStyle: true)
+        }
+
+        // The editor: its ••• key, the wallpaper key under the preview, a layer's •••, a pop-up key
+        shot("editor-more", highlight: "Delete") { st in
+            EditorMenus.more(st.model, id: st.scene, wallpaper: WallpaperSlot.shared) {}
+        }
+        shot("editor-wallpaper", prepare: { st in
+            WallpaperController.shared.update { $0.enabled = true; $0.followsScreensaver = true }
+            WallpaperSlot.shared.set(st.hero)
+        }, highlight: "Same as") { st in
+            EditorMenus.wallpaper(id: st.scene, wallpaper: WallpaperSlot.shared, controller: WallpaperController.shared,
+                                  synced: true, isOurs: false)
+        }
+        shot("effect", highlight: "Duplicate") { _ in EffectRow.menu(isDefault: true, reset: {}, duplicate: {}, remove: {}) }
+        shot("popup-frame-rate", minWidth: 176, highlight: "60") { _ in
+            MenuEntry.choices([("Auto", 0)] + WallpaperBudget.ladder.map { Int($0) }.reversed().map { ("\($0) fps", $0) },
+                              selection: .constant(30))
+        }
+        shot("signal", prepare: { st in
+            SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.firstScene)
+        }, minWidth: 176) { st in
+            SignalPickerMenu(title: "Level", selection: .constant(""), signals: st.model.library.signals ?? [],
+                             suggest: BuiltInSignals.all.first?.id).entries(current: "Not connected")
+        }
+
+        // The When rules editor's pop-ups (inside its popover), and a Settings pop-up
+        shot("rule-signal", prepare: { st in
+            SignalsDemo.apply(st.model, signals: true, hero: st.hero, other: st.firstScene)
+        }) { st in RuleMenus.signals(st.model.library) { _ in } }
+        shot("rule-time", highlight: "by day") { _ in RuleMenus.timeOfDay { _ in } }
+        shot("settings-corner", minWidth: 120) { st in
+            MenuEntry.choices(MusicSpec.Corner.allCases.map { ($0.label, $0) },
+                              selection: .constant(st.model.library.musicSettings.corner))
+        }
         return s
     }
 

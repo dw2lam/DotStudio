@@ -256,42 +256,34 @@ struct DisplayLineup: Equatable {
 /// "Same as Other Displays" and every style (Scenes / Looks, like the Night and Style menus).
 /// Unplugged displays that still have a style of their own are listed after, so it can be
 /// cleared.
-struct DisplayStylesMenuItems: View {
-    @EnvironmentObject var model: AppModel
-    let displays: [DisplayInfo]
-    /// The destination's pins (connected or not).
-    let pins: [String: DisplayPin]
-    /// A line at the top (the wallpaper while it follows the screensaver), if any.
-    var note: String? = nil
-    let set: (UUID?, DisplayInfo) -> Void
-    let clearAll: () -> Void
-
-    var body: some View {
+enum DisplayStylesMenu {
+    /// - pins: the destination's pins (connected or not).
+    /// - note: a line at the top (the wallpaper while it follows the screensaver), if any.
+    @MenuBuilder
+    static func entries(_ model: AppModel, displays: [DisplayInfo], pins: [String: DisplayPin], note: String? = nil,
+                        set: @escaping (UUID?, DisplayInfo) -> Void, clearAll: @escaping () -> Void) -> [MenuEntry] {
         let live = pins.filter { model.preset($0.value.presetID) != nil }
         let connected = Set(displays.map(\.key))
-        if let note { Text(note) }
-        Button { Motion.run { clearAll() } } label: {
-            let none = !live.keys.contains(where: connected.contains)
-            if none { Label("Same on All Displays", systemImage: "checkmark") } else { Text("Same on All Displays") }
+        if let note { MenuEntry.note(note) }
+        MenuEntry.button("Same on All Displays", checked: !live.keys.contains(where: connected.contains)) {
+            Motion.run { clearAll() }
         }
-        Divider()
-        ForEach(displays) { d in
+        MenuEntry.divider
+        displays.map { d in
             let own = live[d.key].flatMap { model.preset($0.presetID) }
-            Menu(menuName("\(d.name): \(own?.name ?? "Same as Others")", limit: 44)) {
-                Button { Motion.run { set(nil, d) } } label: {
-                    if own == nil { Label("Same as Other Displays", systemImage: "checkmark") } else { Text("Same as Other Displays") }
-                }
-                Divider()
-                StyleMenuItems(current: own?.id) { set($0, d) }
+            return MenuEntry.submenu(menuName("\(d.name): \(own?.name ?? "Same as Others")", limit: 44)) {
+                MenuEntry.button("Same as Other Displays", checked: own == nil) { Motion.run { set(nil, d) } }
+                MenuEntry.divider
+                StyleMenu.entries(model, current: own?.id) { set($0, d) }
             }
         }
         let away = live.filter { !connected.contains($0.key) }.sorted { ($0.value.name ?? "") < ($1.value.name ?? "") }
         if !away.isEmpty {
-            Section("Not Connected") {
-                ForEach(away, id: \.key) { key, pin in
+            MenuEntry.section("Not Connected") {
+                away.map { key, pin in
                     let info = DisplayInfo(key: key, name: pin.name ?? "Display", isBuiltIn: false,
                                            shortName: pin.name ?? "Display")
-                    Button("Forget \(menuName(pin.name ?? "Display", limit: 24)): \(menuName(model.preset(pin.presetID)?.name ?? "", limit: 24))") {
+                    return MenuEntry.button("Forget \(menuName(pin.name ?? "Display", limit: 24)): \(menuName(model.preset(pin.presetID)?.name ?? "", limit: 24))") {
                         set(nil, info)
                     }
                 }
@@ -366,20 +358,24 @@ enum DisplayChoices {
     }
 }
 
+extension DisplayChoices {
+    /// A submenu's items: "All Displays", a divider, then each display (checked where it plays).
+    static func entries(_ choices: [DisplayChoice]) -> [MenuEntry] {
+        var out: [MenuEntry] = []
+        for (i, c) in choices.enumerated() {
+            out.append(.button(menuName(c.title, limit: 40), checked: c.checked, enabled: c.enabled, c.action))
+            if i == 0 { out.append(.divider) }
+        }
+        return out
+    }
+}
+
 /// One of those submenus in a SwiftUI menu (the tile's context menu).
 struct DisplayChoiceMenu: View {
     let title: String
     let choices: [DisplayChoice]
 
     var body: some View {
-        Menu(title) {
-            ForEach(Array(choices.enumerated()), id: \.offset) { i, c in
-                Button(action: c.action) {
-                    if c.checked { Label(menuName(c.title, limit: 40), systemImage: "checkmark") } else { Text(menuName(c.title, limit: 40)) }
-                }
-                .disabled(!c.enabled)
-                if i == 0 { Divider() }
-            }
-        }
+        Menu(title) { NativeMenuItems(DisplayChoices.entries(choices)) }
     }
 }

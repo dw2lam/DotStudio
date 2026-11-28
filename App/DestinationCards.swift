@@ -795,22 +795,9 @@ struct ScreensaverCard: View {
     private var playlistKey: some View {
         let n = lineup.playlist.count
         let styles = n == 1 ? "1 style" : "\(n) styles"
-        let every = intervalLabel(model.rotation.intervalMinutes, short: true)
-        return Menu {
-            Button("Edit Playlist\u{2026}") { DispatchQueue.main.async { editingPlaylist = true } }
-            if lineup.rotates {
-                Section("Change Every") {
-                    ForEach(intervalOptions, id: \.self) { m in
-                        Button { model.setRotationInterval(m) } label: {
-                            let t = intervalLabel(m, short: false)
-                            if m == model.rotation.intervalMinutes { Label(t, systemImage: "checkmark") } else { Text(t) }
-                        }
-                    }
-                }
-                Toggle("Shuffle", isOn: Binding(get: { model.rotation.shuffle }, set: { model.setShuffle($0) }))
-            } else {
-                Text("Add styles to rotate between them")
-            }
+        let every = DeckMenus.intervalLabel(model.rotation.intervalMinutes, short: true)
+        return DropdownMenu(title: "Playlist") {
+            DeckMenus.playlist(model, lineup: lineup) { DispatchQueue.main.async { editingPlaylist = true } }
         } label: {
             PanelKeyLabel(symbol: "square.stack", title: "Playlist",
                           values: lineup.rotates ? ["\(styles) · \(every)", styles, "\(n)"] : [styles],
@@ -830,12 +817,8 @@ struct ScreensaverCard: View {
     /// Night · style name (dimmed while off).
     private var nightKey: some View {
         let night = lineup.night.flatMap(model.preset)
-        return Menu {
-            Button { Motion.run { model.setNightEnabled(false) } } label: {
-                if night == nil { Label("Off", systemImage: "checkmark") } else { Text("Off") }
-            }
-            Divider()
-            StyleMenuItems(current: night?.id) { id in model.setNight(id) }
+        return DropdownMenu(title: "Different style at night") {
+            DeckMenus.night(model, current: night?.id)
         } label: {
             PanelKeyLabel(symbol: "moon.stars", title: "Night",
                           values: [night?.name ?? "Off"], indicator: .menuLED(night != nil))
@@ -850,8 +833,8 @@ struct ScreensaverCard: View {
     /// Music · Off / Corner / Full Screen — "Show what's playing", with the mode's options.
     private var musicKey: some View {
         let mode = model.library.musicSettings.displayMode
-        return Menu {
-            MusicDisplayMenuItems()
+        return DropdownMenu(title: "Show what's playing") {
+            MusicDisplayMenu.entries(model)
         } label: {
             PanelKeyLabel(symbol: "music.note", title: "Music", values: [mode.label],
                           indicator: .menuLED(mode != .off))
@@ -867,10 +850,8 @@ struct ScreensaverCard: View {
     private var displaysKey: some View {
         let pins = model.library.displayStyles ?? [:]
         let (values, on) = displayKeyValues(displays: roster.displays, pins: pins, model: model)
-        return Menu {
-            DisplayStylesMenuItems(displays: roster.displays, pins: pins,
-                                   set: { id, d in model.setScreensaverStyle(id, on: d) },
-                                   clearAll: { model.clearScreensaverPins() })
+        return DropdownMenu(title: "Style on each display") {
+            DeckMenus.screensaverDisplays(model, displays: roster.displays)
         } label: {
             PanelKeyLabel(symbol: "display.2", title: "Displays", values: values, indicator: .menuLED(on))
         }
@@ -879,15 +860,74 @@ struct ScreensaverCard: View {
         .accessibilityLabel("Style on each display")
         .accessibilityValue(values[0])
     }
+}
 
-    private var intervalOptions: [Double] {
+/// The decks' menus, built once as items (MenuEntry, ConsoleMenu.swift) and shown by their
+/// keys — natively in Classic, as the Retro dropdown in Retro — and by UIShots' captures.
+enum DeckMenus {
+    /// Playlist: Edit Playlist…, then — while it rotates — Change Every and Shuffle.
+    @MenuBuilder
+    static func playlist(_ model: AppModel, lineup: ScreensaverLineup, edit: @escaping () -> Void) -> [MenuEntry] {
+        MenuEntry.button("Edit Playlist\u{2026}", edit)
+        if lineup.rotates {
+            MenuEntry.section("Change Every") {
+                intervalOptions(model).map { m in
+                    MenuEntry.button(intervalLabel(m, short: false), checked: m == model.rotation.intervalMinutes) {
+                        model.setRotationInterval(m)
+                    }
+                }
+            }
+            MenuEntry.toggle("Shuffle", isOn: model.rotation.shuffle) { model.setShuffle($0) }
+        } else {
+            MenuEntry.note("Add styles to rotate between them")
+        }
+    }
+
+    /// Night: Off, then every style.
+    @MenuBuilder
+    static func night(_ model: AppModel, current: UUID?) -> [MenuEntry] {
+        MenuEntry.button("Off", checked: current == nil) { Motion.run { model.setNightEnabled(false) } }
+        MenuEntry.divider
+        StyleMenu.entries(model, current: current) { id in model.setNight(id) }
+    }
+
+    /// The Screensaver deck's Displays menu (DisplayStyles.swift).
+    static func screensaverDisplays(_ model: AppModel, displays: [DisplayInfo]) -> [MenuEntry] {
+        DisplayStylesMenu.entries(model, displays: displays, pins: model.library.displayStyles ?? [:],
+                                  set: { id, d in model.setScreensaverStyle(id, on: d) },
+                                  clearAll: { model.clearScreensaverPins() })
+    }
+
+    /// The Wallpaper deck's Style menu: Same as Screensaver, then every style.
+    @MenuBuilder
+    static func wallpaperStyle(_ model: AppModel, synced: Bool, current: UUID?,
+                               sync: @escaping () -> Void, pick: @escaping (UUID) -> Void) -> [MenuEntry] {
+        MenuEntry.button("Same as Screensaver", checked: synced, symbol: "link", sync)
+        MenuEntry.divider
+        StyleMenu.entries(model, current: synced ? nil : current, onPick: pick)
+    }
+
+    /// The Wallpaper deck's Displays menu. Synced, it's the screensaver's per-display styles
+    /// (what each display's wallpaper shows): "Same on All" and "Same as Other Displays" clear
+    /// those; picking a style gives that display a wallpaper of its own (and ends sync, the
+    /// others keeping what they show — WallpaperController.setDisplayStyle).
+    static func wallpaperDisplays(_ model: AppModel, slot: WallpaperSlot, displays: [DisplayInfo], synced: Bool) -> [MenuEntry] {
+        DisplayStylesMenu.entries(model, displays: displays, pins: synced ? model.screensaverPins : slot.pins,
+                                  note: synced ? "Following the screensaver on each display" : nil,
+                                  set: { id, d in
+                                      if synced && id == nil { model.setScreensaverStyle(nil, on: d) } else { slot.set(id, on: d) }
+                                  },
+                                  clearAll: { synced ? model.clearScreensaverPins() : slot.clearPins() })
+    }
+
+    static func intervalOptions(_ model: AppModel) -> [Double] {
         var opts: [Double] = [1, 5, 15, 30, 60]
         let cur = model.rotation.intervalMinutes
         if !opts.contains(cur) { opts.append(cur); opts.sort() }
         return opts
     }
 
-    private func intervalLabel(_ m: Double, short: Bool) -> String {
+    static func intervalLabel(_ m: Double, short: Bool) -> String {
         if m >= 60, m.truncatingRemainder(dividingBy: 60) == 0 {
             return m == 60 ? (short ? "1 hr" : "Hour") : "\(Int(m / 60)) \(short ? "hr" : "Hours")"
         }
@@ -1022,50 +1062,43 @@ private struct NowPlayingLine: View {
 /// The menu's items: Off / Corner / Full Screen, then the current mode's options in titled
 /// sections. Pickers are written over each option enum's `allCases`, so a new case (a Full
 /// Screen layout, a card size) shows up here by itself.
-struct MusicDisplayMenuItems: View {
-    @EnvironmentObject var model: AppModel
-
-    var body: some View {
+enum MusicDisplayMenu {
+    @MenuBuilder
+    static func entries(_ model: AppModel) -> [MenuEntry] {
         let spec = model.library.musicSettings
-        ForEach(MusicSpec.Display.allCases) { d in
-            choice(d.label, d == spec.displayMode) { Motion.run { model.setMusicDisplay(d) } }
+        MusicSpec.Display.allCases.map { d in
+            MenuEntry.button(d.label, checked: d == spec.displayMode) { Motion.run { model.setMusicDisplay(d) } }
         }
         switch spec.displayMode {
         case .fullScreen:
-            Divider()
-            Section("Layout") {
-                ForEach(MusicSpec.FullLayout.allCases) { l in
-                    choice(l.label, l == spec.layout) { model.updateMusic { $0.fullLayout = l } }
+            MenuEntry.divider
+            MenuEntry.section("Layout") {
+                MusicSpec.FullLayout.allCases.map { l in
+                    MenuEntry.button(l.label, checked: l == spec.layout) { model.updateMusic { $0.fullLayout = l } }
                 }
             }
             // Cover's artwork is the whole screen: nothing is behind it (as in Settings).
             if spec.layout.usesBackdrop {
-                Section("Behind the Music") {
-                    ForEach(MusicSpec.Backdrop.allCases) { b in
-                        choice(b.label, b == spec.backdrop) { model.updateMusic { $0.fullBackdrop = b } }
+                MenuEntry.section("Behind the Music") {
+                    MusicSpec.Backdrop.allCases.map { b in
+                        MenuEntry.button(b.label, checked: b == spec.backdrop) { model.updateMusic { $0.fullBackdrop = b } }
                     }
                 }
             }
         case .corner:
-            Divider()
-            Section("Corner") {
-                ForEach(MusicSpec.Corner.allCases) { c in
-                    choice(c.label, c == spec.corner) { model.updateMusic { $0.cardCorner = c } }
+            MenuEntry.divider
+            MenuEntry.section("Corner") {
+                MusicSpec.Corner.allCases.map { c in
+                    MenuEntry.button(c.label, checked: c == spec.corner) { model.updateMusic { $0.cardCorner = c } }
                 }
             }
-            Section("Size") {
-                ForEach(MusicSpec.CardSize.allCases) { s in
-                    choice(s.label, s == spec.cardSizePreference) { model.updateMusic { $0.cardSize = s } }
+            MenuEntry.section("Size") {
+                MusicSpec.CardSize.allCases.map { s in
+                    MenuEntry.button(s.label, checked: s == spec.cardSizePreference) { model.updateMusic { $0.cardSize = s } }
                 }
             }
         case .off:
-            EmptyView()
-        }
-    }
-
-    private func choice(_ title: String, _ on: Bool, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            if on { Label(title, systemImage: "checkmark") } else { Text(title) }
+            [MenuEntry]()
         }
     }
 }
@@ -1920,25 +1953,15 @@ struct PlaylistEditor: View {
     }
 }
 
-/// Every style as menu items, grouped Scenes / Looks, the current one checkmarked.
-struct StyleMenuItems: View {
-    @EnvironmentObject var model: AppModel
-    let current: UUID?
-    let onPick: (UUID) -> Void
-
-    var body: some View {
+enum StyleMenu {
+    /// Every style as menu items, grouped Scenes / Looks, the current one checkmarked.
+    static func entries(_ model: AppModel, current: UUID?, onPick: @escaping (UUID) -> Void) -> [MenuEntry] {
         let scenes = model.library.presets.filter(\.isScene)
         let looks = model.library.presets.filter { !$0.isScene }
-        Section("Scenes") { ForEach(scenes) { p in item(p) } }
-        Section("Looks") { ForEach(looks) { p in item(p) } }
-    }
-
-    @ViewBuilder private func item(_ p: Preset) -> some View {
-        Button {
-            Motion.run { onPick(p.id) }
-        } label: {
-            if p.id == current { Label(p.name, systemImage: "checkmark") } else { Text(p.name) }
+        func item(_ p: Preset) -> MenuEntry {
+            .button(p.name, checked: p.id == current) { Motion.run { onPick(p.id) } }
         }
+        return [.section("Scenes") { scenes.map(item) }, .section("Looks") { looks.map(item) }]
     }
 }
 // MARK: - Wallpaper
@@ -2065,12 +2088,9 @@ struct WallpaperCard: View {
     /// Style · its name: "Same as Screensaver" first, then every style.
     private var styleKey: some View {
         let value = synced ? ["Same as Screensaver", "Synced"] : [style?.name ?? "Choose"]
-        return Menu {
-            Button { setSynced(true) } label: {
-                Label("Same as Screensaver", systemImage: synced ? "checkmark" : "link")
-            }
-            Divider()
-            StyleMenuItems(current: synced ? nil : style?.id) { slot.set($0) }
+        return DropdownMenu(title: "Wallpaper style") {
+            DeckMenus.wallpaperStyle(model, synced: synced, current: style?.id,
+                                     sync: { setSynced(true) }, pick: { slot.set($0) })
         } label: {
             // Beside the transport the key is narrower: before its value shortens or
             // truncates, the word "Style" folds away (the icon still names the key).
@@ -2097,17 +2117,8 @@ struct WallpaperCard: View {
         // Synced, each display shows what its screensaver shows: the screensaver's pins.
         let (values, on) = displayKeyValues(displays: roster.displays,
                                             pins: synced ? (model.library.displayStyles ?? [:]) : slot.pins, model: model)
-        return Menu {
-            // Synced, the menu is the screensaver's per-display styles (what each display's
-            // wallpaper shows): "Same on All" and "Same as Other Displays" clear those; picking
-            // a style gives that display a wallpaper of its own (and ends sync, the others
-            // keeping what they show — WallpaperController.setDisplayStyle).
-            DisplayStylesMenuItems(displays: roster.displays, pins: synced ? model.screensaverPins : slot.pins,
-                                   note: synced ? "Following the screensaver on each display" : nil,
-                                   set: { id, d in
-                                       if synced && id == nil { model.setScreensaverStyle(nil, on: d) } else { slot.set(id, on: d) }
-                                   },
-                                   clearAll: { synced ? model.clearScreensaverPins() : slot.clearPins() })
+        return DropdownMenu(title: "Wallpaper on each display") {
+            DeckMenus.wallpaperDisplays(model, slot: slot, displays: roster.displays, synced: synced)
         } label: {
             ViewThatFits(in: .horizontal) {
                 ForEach(values, id: \.self) { v in

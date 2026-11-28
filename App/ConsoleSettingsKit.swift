@@ -67,8 +67,8 @@ private struct SettingsLinkLook: ViewModifier {
     }
 }
 
-/// A pop-up choice as a Console key: the chosen title and a chevron on a grey key, the same
-/// checkmarked list inside (a Menu, so it stays an AppKit menu — no measuring around it).
+/// A pop-up choice as a Console key: the chosen title and a chevron on a grey key; its options
+/// open as the Retro dropdown (ConsoleMenu.swift), the chosen one checked.
 /// For Settings rows that would otherwise show a stock pop-up (macOS 26 draws those as glass
 /// outside a grouped Form).
 struct ConsoleMenuPicker<Value: Hashable>: View {
@@ -77,12 +77,8 @@ struct ConsoleMenuPicker<Value: Hashable>: View {
     let options: [(title: String, value: Value)]
 
     var body: some View {
-        Menu {
-            Picker(title, selection: $selection) {
-                ForEach(options.indices, id: \.self) { i in Text(options[i].title).tag(options[i].value) }
-            }
-            .pickerStyle(.inline)
-            .labelsHidden()
+        ConsoleMenuButton(title: title) {
+            MenuEntry.choices(options, selection: $selection)
         } label: {
             HStack(spacing: Space.xs) {
                 Text(options.first { $0.value == selection }?.title ?? "")
@@ -93,11 +89,10 @@ struct ConsoleMenuPicker<Value: Hashable>: View {
                     .foregroundStyle(ConsoleInk.legend)
             }
         }
-        .menuStyle(.button)
         .buttonStyle(.keycap)
-        .menuIndicator(.hidden)
         .fixedSize()
         .accessibilityLabel(title)
+        .accessibilityValue(options.first { $0.value == selection }?.title ?? "")
     }
 }
 

@@ -50,16 +50,8 @@ struct WhenKey: View {
         let active = model.activeRule
         let values: [String] = active.map { [RuleText.short($0, in: model.library), "On"] }
             ?? (rules.isEmpty ? ["Off"] : [rules.count == 1 ? "1 rule" : "\(rules.count) rules", "\(rules.count)"])
-        return Menu {
-            Button("Edit When Rules\u{2026}") { DispatchQueue.main.async { editing = true } }
-            if !rules.isEmpty {
-                Section("Rules") {
-                    ForEach(rules) { r in
-                        Toggle(RuleText.short(r, in: model.library) + " \u{2192} " + playName(r),
-                               isOn: Binding(get: { r.enabled }, set: { model.setRuleEnabled(r.id, $0) }))
-                    }
-                }
-            }
+        return DropdownMenu(title: "When rules") {
+            Self.entries(model) { DispatchQueue.main.async { editing = true } }
         } label: {
             PanelKeyLabel(symbol: "arrow.triangle.branch", title: "When", values: values, indicator: .menuLED(active != nil))
         }
@@ -74,7 +66,22 @@ struct WhenKey: View {
         }
     }
 
-    private func playName(_ r: PlayRule) -> String {
+    /// The key's menu: Edit When Rules…, then each rule as a switch.
+    @MenuBuilder
+    static func entries(_ model: AppModel, edit: @escaping () -> Void) -> [MenuEntry] {
+        let rules = model.library.rules ?? []
+        MenuEntry.button("Edit When Rules\u{2026}", edit)
+        if !rules.isEmpty {
+            MenuEntry.section("Rules") {
+                rules.map { r in
+                    MenuEntry.toggle(RuleText.short(r, in: model.library) + " \u{2192} " + playName(r, model),
+                                     isOn: r.enabled) { model.setRuleEnabled(r.id, $0) }
+                }
+            }
+        }
+    }
+
+    private static func playName(_ r: PlayRule, _ model: AppModel) -> String {
         let names = r.play.compactMap { model.preset($0)?.name }
         return names.count <= 1 ? (names.first ?? "—") : "\(names.count) styles"
     }
@@ -310,30 +317,20 @@ struct RuleSentenceEditor: View {
         VStack(alignment: .leading, spacing: layout.controlGap) {
             FlowLayout(spacing: layout.controlGap, lineSpacing: layout.controlGap, alignment: .leading) {
                 Text("When").textRole(console ? .consoleBody : .body)
-                Menu {
-                    Section("Built in") {
-                        ForEach(BuiltInSignals.all, id: \.id) { b in
-                            Button(b.name) { pick(b.id) }
-                        }
-                    }
-                    let mine = lib.signals ?? []
-                    if !mine.isEmpty {
-                        Section("Yours") { ForEach(mine) { s in Button(s.name) { pick(s.key) } } }
-                    }
+                DropdownMenu(title: "Signal") {
+                    RuleMenus.signals(lib) { pick($0) }
                 } label: { RuleMenuLabel(title: info?.name ?? "Signal") }
                 .modifier(RuleMenuStyle())
                 .fixedSize()
                 valueControls(info)
-                Menu {
-                    Button("any time") { draft.timeOfDay = nil }
-                    Button("by day") { draft.timeOfDay = "day" }
-                    Button("only at night") { draft.timeOfDay = "night" }
+                DropdownMenu(title: "Time of day") {
+                    RuleMenus.timeOfDay { draft.timeOfDay = $0 }
                 } label: { RuleMenuLabel(title: timeLabel) }
                 .modifier(RuleMenuStyle())
                 .fixedSize()
                 Text("play").textRole(console ? .consoleBody : .body)
-                Menu {
-                    StyleMenuItems(current: draft.style) { draft.style = $0 }
+                DropdownMenu(title: "Style") {
+                    StyleMenu.entries(model, current: draft.style) { draft.style = $0 }
                 } label: { RuleMenuLabel(title: draft.style.flatMap { model.preset($0)?.name } ?? "Style") }
                 .modifier(RuleMenuStyle())
                 .fixedSize()
@@ -392,9 +389,9 @@ struct RuleSentenceEditor: View {
     private func valueControls(_ info: (name: String, type: SignalValueType, unit: String?, range: ClosedRange<Double>?, options: [String]?)?) -> some View {
         switch info?.type ?? .number {
         case .number:
-            Menu {
-                Button("is above") { draft.op = .gt }
-                Button("is below") { draft.op = .lt }
+            DropdownMenu(title: "Comparison") {
+                MenuEntry.button("is above") { draft.op = .gt }
+                MenuEntry.button("is below") { draft.op = .lt }
             } label: { RuleMenuLabel(title: draft.op == .lt ? "is below" : "is above") }
             .modifier(RuleMenuStyle())
             .fixedSize()
@@ -405,21 +402,19 @@ struct RuleSentenceEditor: View {
                 if let u = info?.unit, !u.isEmpty { Text(u).textRole(console ? .consoleBody : .body).foregroundStyle(.secondary) }
             }
         case .bool:
-            Menu {
-                Button("is yes") { draft.yes = true }
-                Button("is no") { draft.yes = false }
+            DropdownMenu(title: "Value") {
+                MenuEntry.button("is yes") { draft.yes = true }
+                MenuEntry.button("is no") { draft.yes = false }
             } label: { RuleMenuLabel(title: draft.yes ? "is yes" : "is no") }
             .modifier(RuleMenuStyle())
             .fixedSize()
         case .string:
             if let opts = info?.options {
-                Menu {
-                    ForEach(opts, id: \.self) { o in
-                        Toggle(RuleText.word(o), isOn: Binding(
-                            get: { draft.words.contains(o) },
-                            set: { on in
-                                if on { draft.words.insert(o) } else if draft.words.count > 1 { draft.words.remove(o) }
-                            }))
+                DropdownMenu(title: "Values") {
+                    opts.map { o in
+                        MenuEntry.toggle(RuleText.word(o), isOn: draft.words.contains(o)) { on in
+                            if on { draft.words.insert(o) } else if draft.words.count > 1 { draft.words.remove(o) }
+                        }
                     }
                 } label: { RuleMenuLabel(title: draft.words.count > 1 ? "is one of" : "is") }
                 .modifier(RuleMenuStyle())
@@ -437,6 +432,29 @@ struct RuleSentenceEditor: View {
 }
 
 // MARK: - Console pieces
+
+/// The rule editor's menus as items (MenuEntry): its pop-ups in either look, and UIShots.
+enum RuleMenus {
+    /// When ▸ the signal: the built-ins, then the user's own.
+    @MenuBuilder
+    static func signals(_ lib: Library, pick: @escaping (String) -> Void) -> [MenuEntry] {
+        MenuEntry.section("Built in") {
+            BuiltInSignals.all.map { b in MenuEntry.button(b.name) { pick(b.id) } }
+        }
+        let mine = lib.signals ?? []
+        if !mine.isEmpty {
+            MenuEntry.section("Yours") { mine.map { s in MenuEntry.button(s.name) { pick(s.key) } } }
+        }
+    }
+
+    /// …any time / by day / only at night.
+    @MenuBuilder
+    static func timeOfDay(_ set: @escaping (String?) -> Void) -> [MenuEntry] {
+        MenuEntry.button("any time") { set(nil) }
+        MenuEntry.button("by day") { set("day") }
+        MenuEntry.button("only at night") { set("night") }
+    }
+}
 
 /// Console: the popover on the panel colour with the Console inks (Classic: the popover's own).
 private struct WhenConsolePanel: ViewModifier {
