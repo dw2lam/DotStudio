@@ -1,11 +1,11 @@
 # Changelog
 
-## 1.7.0 — Retro
+## 1.7.0 — Middle-Aged Engineering
 
-![Retro, assembled](https://dotstudio.davidlam.online/media/whatsnew/1.7.0.webp)
+![Middle-Aged Engineering, assembled](https://dotstudio.davidlam.online/media/whatsnew/1.7.0.webp)
 
 ### New
-- **Retro, the new look.** DotStudio now looks and feels like a small piece of hardware:
+- **Middle-Aged Engineering, the new look.** DotStudio now looks and feels like a small piece of hardware:
   aluminium dials with coloured caps, slim keys that press down, green switches, and panels
   set out like a console. It's the new default; Classic is one click away in
   Settings › General › Theme.

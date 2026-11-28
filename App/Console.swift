@@ -28,7 +28,7 @@ import AppKit
 enum Appearance: String, CaseIterable, Identifiable {
     case classic, console
     var id: String { rawValue }
-    var title: String { self == .classic ? "Classic" : "Retro" }
+    var title: String { self == .classic ? "Classic" : "Middle-Aged Engineering" }  // "Retro" until 2026-11-28 (owner: the site's joke, in the app too)
     static let key = "appearance"
     /// The theme until someone picks one: Retro since the 2026-11 redesign (owner: "switch to
     /// the new theme by default"). A saved choice — Classic included — is always kept.

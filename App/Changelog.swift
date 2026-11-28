@@ -536,7 +536,7 @@ extension WhatsNew {
 
         // Media lines: kept on the release, never an item; mapped to a bundled film or nothing
         if let r170 = bundled.release(for: "1.7.0") {
-            check(r170.media == Changelog.Media(alt: "Retro, assembled",
+            check(r170.media == Changelog.Media(alt: "Middle-Aged Engineering, assembled",
                                                 url: "https://dotstudio.davidlam.online/media/whatsnew/1.7.0.webp"),
                   "1.7.0's media line parses (alt + URL)")
             func texts(_ items: [Changelog.Item]) -> [String] { items.flatMap { [$0.text] + texts($0.children) } }
