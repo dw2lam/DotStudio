@@ -593,28 +593,28 @@ private struct FilterBar: View {
         .pageColumn(layout)
         .padding(.vertical, Self.verticalInset)
         .background {
-            // Once pinned, an opaque strip of the window's own colour (and a hairline under it)
-            // keeps the chips legible over the tiles scrolling beneath — no blur, so nothing
-            // is re-sampled per scroll frame. Driven by the bar's own position, so no parent
-            // re-render. It spans the whole window, not just the page column.
+            // An opaque strip of the window's own colour behind the pinned row keeps the chips
+            // legible over the tiles scrolling beneath — no blur, so nothing is re-sampled per
+            // scroll frame; driven by the bar's own geometry, so no parent re-render.
             GeometryReader { g in
-                let y = g.frame(in: .named(FilterBar.space)).minY
-                let pinned = min(max((150 - y) / 70, 0), 1)   // fully there once under the toolbar
-                // Console: the strip stops half way down the row, so its edge is always hidden
-                // behind the filter box (a panel of its own): the tiles slide under the box, and
-                // nothing reads as a bar slicing the Scenes box (owner, 2026-11-27). Classic keeps
-                // the full strip and its divider.
-                if pinned > 0 {
-                    // Console: no hairline — the strip is the chassis, one surface with the
-                    // header above it, so pinning doesn't read as a second bar (the filter box is
-                    // its own panel); Classic keeps its divider.
-                    (console ? ConsoleInk.chassis : Color(nsColor: .windowBackgroundColor))
-                        .overlay(alignment: .bottom) {
-                            if !console { Divider() }
-                        }
-                        .padding(.top, -(Space.xxl + Space.s))   // up under the toolbar
-                        .padding(.bottom, console ? g.size.height / 2 : 0)
-                        .opacity(pinned)
+                if console {
+                    // Console: just the row's own top half, always — its edges stay behind the
+                    // filter box at every scroll position, so nothing paints over the cards above
+                    // as the row comes up (owner, 2026-11-27), and pinned, the tiles slide under
+                    // the box. The solid header covers what scrolls above it.
+                    ConsoleInk.chassis
+                        .padding(.bottom, g.size.height / 2)
+                } else {
+                    // Classic: once pinned, an opaque strip of the window's own colour (and a
+                    // divider under it) up under the toolbar keeps the chips legible over the tiles.
+                    let y = g.frame(in: .named(FilterBar.space)).minY
+                    let pinned = min(max((150 - y) / 70, 0), 1)   // fully there once under the toolbar
+                    if pinned > 0 {
+                        Color(nsColor: .windowBackgroundColor)
+                            .overlay(alignment: .bottom) { Divider() }
+                            .padding(.top, -(Space.xxl + Space.s))   // up under the toolbar
+                            .opacity(pinned)
+                    }
                 }
             }
             .allowsHitTesting(false)
