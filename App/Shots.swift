@@ -437,6 +437,13 @@ enum UIShots {
         s.append(Screen(name: "editor-film-field", frame: .window, prepare: { st in
             if let p = st.model.library.presets.first(where: { $0.name == "Field" }) { st.edit(p.id) }
         }, view: main))
+        // Golden Hour's editor with Follow the Sun on (live sky): the website's live-sky band
+        s.append(Screen(name: "editor-golden-hour-live", frame: .window, prepare: { st in
+            guard let i = st.model.library.presets.firstIndex(where: { $0.name == "Golden Hour" }),
+                  !st.model.library.presets[i].effects.isEmpty else { return }
+            st.model.library.presets[i].effects[0].params["live"] = 1
+            st.edit(st.model.library.presets[i].id)
+        }, view: main))
         // The Themes strip: Lava Lamp in Blue, and in Multicolour (SceneThemes.swift)
         for theme in ["blue", "multicolour"] {
             s.append(Screen(name: "editor-theme-\(theme)", frame: .window, prepare: { st in
@@ -692,6 +699,21 @@ enum UIShots {
                 if scenario == .off { m.setDisplay(.off) }
                 if tag == "-full" { m.setDisplay(.fullScreen) }
                 if scenario == .off || tag == "-full" { st.model.library.music = m }
+            }, view: { _ in AnyView(SettingsSectionPreview { MusicSettingsSlot() }) }))
+        }
+        // Settings › Music as the website's music band shows each picture: Corner at Large, and
+        // Full Screen in each layout (Album Art behind) — capture only
+        let siteMusic: [(String, (inout MusicSpec) -> Void)] = [
+            ("corner-large", { $0.setDisplay(.corner); $0.cardSize = .large }),
+            ("full-album", { $0.setDisplay(.fullScreen); $0.fullLayout = .album }),
+            ("full-stage", { $0.setDisplay(.fullScreen); $0.fullLayout = .stage }),
+            ("full-cover", { $0.setDisplay(.fullScreen); $0.fullLayout = .cover }),
+        ]
+        for (tag, set) in siteMusic {
+            s.append(Screen(name: "settings-music-site-\(tag)", frame: .fit(width: 640, minHeight: 300), prepare: { st in
+                MusicDemo.apply(.playing)
+                var m = MusicSpec(); set(&m)
+                st.model.library.music = m
             }, view: { _ in AnyView(SettingsSectionPreview { MusicSettingsSlot() }) }))
         }
         // …with menu-bar mode off: closing the window quits, and the note says so
