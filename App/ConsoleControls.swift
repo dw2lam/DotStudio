@@ -358,7 +358,12 @@ struct ConsoleDialGrid: Layout {
         let most = min(maxColumns, n)
         guard let width, width.isFinite else { return most }
         let w = need(subviews)
-        let fit = (1...most).reversed().first { CGFloat($0) * w + CGFloat($0 - 1) * spacing <= width + 0.5 } ?? 1
+        // (spelled out: Xcode 26's type checker gave up on this as one closure expression)
+        var fit = 1
+        for c in stride(from: most, through: 1, by: -1) {
+            let used: CGFloat = CGFloat(c) * w + CGFloat(c - 1) * spacing
+            if used <= width + 0.5 { fit = c; break }
+        }
         let rows = (n + fit - 1) / fit
         return (n + rows - 1) / rows
     }
