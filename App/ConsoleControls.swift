@@ -14,8 +14,9 @@
 //    • ConsoleDialGrid     — a bank of dials in balanced equal columns, up to four a row.
 //    • InspectorSwitch       — an inset switch: a recessed well with a small key that slides over;
 //                            orange while on.
-//    • ConsoleMenuKeyLabel — a pop-up key's face (value + ⌃⌄), for a Menu's label.
-//    • ConsolePopupKey     — a pop-up key with the stock checkmarked list behind it.
+//    • ConsoleMenuKeyLabel — a pop-up key's face (value + ⌃⌄), for a dropdown's label.
+//    • ConsolePopupKey     — a pop-up key that opens its options as the Retro dropdown
+//                            (ConsoleMenu.swift).
 //    • ConsoleColorWell    — a colour swatch with its name; opens the system colour panel. Not
 //                            an NSColorWell: no AppKit control inside the inspector's list.
 //    • InspectorSegments     — a segmented choice as a row of keys (the chosen one latched, lit).
@@ -464,12 +465,16 @@ struct InspectorSwitch: View {
 
 // MARK: - Pop-up key
 
-/// A pop-up key's face — the value in mono and the up-down chevrons — to be a Menu's label.
+/// A pop-up key's face — the value in mono and the up-down chevrons — to be a dropdown's label
+/// (ConsoleMenuButton: lit, as under the pointer, while its menu is open).
 struct ConsoleMenuKeyLabel: View {
     let text: String
     var dim = false
-    @State private var hovering = false
+    @State private var pointer = false
+    @Environment(\.panelKeyHot) private var open
     @ScaledLength(relativeTo: .caption) private var minHeight: CGFloat = 30
+
+    private var hovering: Bool { pointer || open }
 
     var body: some View {
         HStack(spacing: Space.xs) {
@@ -488,11 +493,12 @@ struct ConsoleMenuKeyLabel: View {
         .frame(maxWidth: .infinity, minHeight: minHeight)
         .consoleKeyFace(hovering: hovering)
         .contentShape(Rectangle())
-        .onHover { hovering = $0 }
+        .onHover { pointer = $0 }
     }
 }
 
-/// A pop-up key over the stock checkmarked list.
+/// A pop-up key over the options as the Retro dropdown (the chosen one checked), as wide as
+/// the key.
 struct ConsolePopupKey<Value: Hashable>: View {
     let title: String
     @Binding var selection: Value
@@ -500,18 +506,12 @@ struct ConsolePopupKey<Value: Hashable>: View {
 
     var body: some View {
         let current = options.first { $0.value == selection }?.title ?? ""
-        Menu {
-            Picker(title, selection: $selection) {
-                ForEach(options.indices, id: \.self) { i in Text(options[i].title).tag(options[i].value) }
-            }
-            .pickerStyle(.inline)
-            .labelsHidden()
+        ConsoleMenuButton(title: title) {
+            MenuEntry.choices(options, selection: $selection)
         } label: {
             ConsoleMenuKeyLabel(text: current)
         }
-        .menuStyle(.button)
         .buttonStyle(.plain)
-        .menuIndicator(.hidden)
         .frame(maxWidth: .infinity)
         .help("\(title): \(current)")
         .accessibilityLabel(title)

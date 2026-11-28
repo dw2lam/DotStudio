@@ -370,9 +370,14 @@ struct WallpaperSettingsSection: View {
                 })
     }
 
+    /// "None" (while nothing is chosen), then every style.
+    private var styleOptions: [(title: String, value: UUID?)] {
+        (wallpaper.settings.presetID.flatMap(model.preset) == nil ? [("None", nil)] : [])
+            + model.library.presets.map { (menuName($0.name), UUID?.some($0.id)) }
+    }
+
     @ViewBuilder private var styleChoices: some View {
-        if wallpaper.settings.presetID.flatMap(model.preset) == nil { Text("None").tag(UUID?.none) }
-        ForEach(model.library.presets) { p in Text(menuName(p.name)).tag(UUID?.some(p.id)) }
+        ForEach(Array(styleOptions.enumerated()), id: \.offset) { _, o in Text(o.title).tag(o.value) }
     }
 
     /// The stock pop-up while its 13-pt title matches the row labels; from .xxLarge (where the
@@ -380,11 +385,9 @@ struct WallpaperSettingsSection: View {
     /// text size, with the same checkmarked list inside.
     @ViewBuilder private var stylePicker: some View {
         if console {
-            // Console: a key showing the style, the same checkmarked list inside.
-            Menu {
-                Picker("Style", selection: styleSelection) { styleChoices }
-                    .pickerStyle(.inline)
-                    .labelsHidden()
+            // Console: a key showing the style; the same list as the Retro dropdown.
+            ConsoleMenuButton(title: "Style") {
+                MenuEntry.choices(styleOptions, selection: styleSelection)
             } label: {
                 HStack(spacing: Space.xs) {
                     Text(menuName(wallpaper.settings.presetID.flatMap(model.preset)?.name ?? "None"))
@@ -395,9 +398,7 @@ struct WallpaperSettingsSection: View {
                         .foregroundStyle(ConsoleInk.legend)
                 }
             }
-            .menuStyle(.button)
             .buttonStyle(.keycap)
-            .menuIndicator(.hidden)
             .fixedSize()
         } else if typeSize < SettingsMetrics.scaledControlsFrom {
             Picker("Style", selection: styleSelection) { styleChoices }

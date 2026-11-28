@@ -678,6 +678,9 @@ private struct TileActionBar: View {
     @Environment(\.console) private var console
     @ObservedObject private var wallpaper = WallpaperSlot.shared
     @ObservedObject private var roster = DisplayRoster.shared
+    @Environment(\.dynamicTypeSize) private var typeSize
+    /// Retro: where the "…" dropdown hangs from (the whole bar).
+    @StateObject private var barAnchor = MenuAnchor()
     let preset: Preset
     let badges: TileBadges
     let lineup: ScreensaverLineup
@@ -687,10 +690,6 @@ private struct TileActionBar: View {
     /// …and it's on screen: not when every connected display plays a style of its own (then
     /// Play as Screensaver gives the one display back to it).
     private var isPlayingAlone: Bool { isOnly && !badges.lineupOffScreen }
-
-    /// Both destinations play this style: it's the whole screensaver playlist and the
-    /// wallpaper follows the screensaver.
-    private var isBoth: Bool { isPlayingAlone && WallpaperController.shared.followsScreensaver && wallpaper.styleID != nil }
 
     var body: some View {
         let _ = Perf.body("TileActionBar")
@@ -707,6 +706,7 @@ private struct TileActionBar: View {
             bar { destinationButtons; moreMenu(includeDestinations: false) }
             bar { setAsMenu }
         }
+        .background { if console { MenuAnchorView(anchor: barAnchor).accessibilityHidden(true) } }
     }
 
     @ViewBuilder private var setAsLabel: some View {
@@ -791,56 +791,81 @@ private struct TileActionBar: View {
         .accessibilityLabel("More")
     }
 
+    /// Classic: the AppKit menu at the pointer; Retro: the dropdown under the bar's end (where
+    /// "…" and "Set as…" sit), from the anchor on the whole bar — not on a button inside the
+    /// ViewThatFits, which measures (and drops) its variants.
     private func popUpMore(includeDestinations: Bool, includeStyle: Bool = true) {
-        var items: [ActionMenu.Item] = []
+        let items = moreEntries(includeDestinations: includeDestinations, includeStyle: includeStyle)
+        if console {
+            ConsoleMenu.present(items, title: "More", from: barAnchor, edge: .trailing, typeSize: typeSize)
+        } else {
+            ActionMenu.popUp(items)
+        }
+    }
+
+    private func moreEntries(includeDestinations: Bool, includeStyle: Bool) -> [MenuEntry] {
+        TileMenus.more(model, preset: preset, badges: badges, lineup: lineup, wallpaper: wallpaper, roster: roster,
+                       includeDestinations: includeDestinations, includeStyle: includeStyle)
+    }
+}
+
+/// The hover bar's "…" (and "Set as…") menu as items — Classic's AppKit menu (ActionMenu),
+/// Retro's dropdown, UIShots' capture.
+enum TileMenus {
+    static func more(_ model: AppModel, preset: Preset, badges: TileBadges, lineup: ScreensaverLineup,
+                     wallpaper: WallpaperSlot, roster: DisplayRoster,
+                     includeDestinations: Bool, includeStyle: Bool) -> [MenuEntry] {
         let id = preset.id
+        // The playlist is just this style (it can't be removed) — and it's on screen: not when
+        // every connected display plays a style of its own (then Play as Screensaver gives the
+        // one display back to it). Both: the wallpaper follows the screensaver too.
+        let isOnly = lineup.playlist == [id]
+        let isPlayingAlone = isOnly && !badges.lineupOffScreen
+        let isBoth = isPlayingAlone && WallpaperController.shared.followsScreensaver && wallpaper.styleID != nil
+        var items: [MenuEntry] = []
         if includeDestinations {
-            items.append(.init("Set as Screensaver", enabled: !isPlayingAlone, checked: isPlayingAlone) { [model] in
+            items.append(.button("Set as Screensaver", checked: isPlayingAlone, enabled: !isPlayingAlone) {
                 Motion.run { model.playAsScreensaver(id) }
             })
             if wallpaper.isAvailable {
-                items.append(.init(badges.wallpaper ? "Stop Wallpaper" : "Set as Wallpaper") { [wallpaper] in
+                items.append(.button(badges.wallpaper ? "Stop Wallpaper" : "Set as Wallpaper") {
                     Motion.run { wallpaper.toggle(id) }
                 })
             }
         }
         if wallpaper.isAvailable {
             // Screensaver + wallpaper in sync (the top section's Sync).
-            items.append(.init("Set as Both", enabled: !isBoth, checked: isBoth) { [model] in
+            items.append(.button("Set as Both", checked: isBoth, enabled: !isBoth) {
                 Motion.run(Motion.sync) {
                     model.playAsScreensaver(id)
                     WallpaperController.shared.setFollowsScreensaver(true)
                 }
             })
         }
-        items.append(.separator)
-        items.append(.init(badges.onScreensaver ? "Remove from Screensaver Playlist" : "Add to Screensaver Playlist",
-                           enabled: !isOnly) { [model] in Motion.run { model.togglePlaylist(id) } })
-        items.append(.separator)
+        items.append(.divider)
+        items.append(.button(badges.onScreensaver ? "Remove from Screensaver Playlist" : "Add to Screensaver Playlist",
+                             enabled: !isOnly) { Motion.run { model.togglePlaylist(id) } })
+        items.append(.divider)
         // Several displays: which ones play it (DisplayStyles.swift).
         let displays = roster.displays
         if roster.showsControls(model.screensaverPins, wallpaper.pins, alive: { model.preset($0) != nil }) {
             items.append(.submenu("Set as Screensaver on",
-                                  ActionMenu.items(DisplayChoices.screensaver(id, model: model, displays: displays))))
+                                  items: DisplayChoices.entries(DisplayChoices.screensaver(id, model: model, displays: displays))))
             if wallpaper.isAvailable {
                 items.append(.submenu("Set as Wallpaper on",
-                                      ActionMenu.items(DisplayChoices.wallpaper(id, model: model, slot: wallpaper,
-                                                                                displays: displays))))
+                                      items: DisplayChoices.entries(DisplayChoices.wallpaper(id, model: model, slot: wallpaper,
+                                                                                            displays: displays))))
             }
-            if includeStyle { items.append(.separator) }
+            if includeStyle { items.append(.divider) }
         }
         if includeStyle {
-            items.append(.init("Preview Full Screen") { preview() })
-            items.append(.init("Edit") { [model] in model.edit(id) })
+            items.append(.button("Preview Full Screen") {
+                ScreensaverPreviewController.shared.present(preset: preset, source: model.library.source, store: model.store)
+            })
+            items.append(.button("Edit") { model.edit(id) })
         }
-        ActionMenu.popUp(items)
+        return items
     }
-
-    private func preview() {
-        ScreensaverPreviewController.shared.present(
-            preset: preset, source: model.library.source, store: model.store)
-    }
-
 }
 
 /// One destination in the hover bar: icon + word, in the accent colour with a checkmark
@@ -1251,43 +1276,16 @@ struct GeoPoint: Equatable {
     var lon: Double
 }
 
-/// An AppKit menu popped up at the pointer from a SwiftUI button (TileActionBar's "…").
+/// An AppKit menu popped up at the pointer from a SwiftUI button (TileActionBar's "…" in
+/// Classic), built from the same items (MenuEntry) Retro's dropdown shows.
 enum ActionMenu {
-    struct Item {
-        let title: String
-        var enabled = true
-        var checked = false
-        let action: (() -> Void)?
-        /// A submenu's items (`action` is nil).
-        var children: [Item]?
-        init(_ title: String, enabled: Bool = true, checked: Bool = false, action: @escaping () -> Void) {
-            self.title = title
-            self.enabled = enabled
-            self.checked = checked
-            self.action = action
-        }
-        private init(title: String, children: [Item]?) { self.title = title; action = nil; self.children = children }
-        static let separator = Item(title: "", children: nil)
-        static func submenu(_ title: String, _ items: [Item]) -> Item { Item(title: title, children: items) }
-    }
-
-    /// "All Displays", a separator, then each display (DisplayChoices).
-    static func items(_ choices: [DisplayChoice]) -> [Item] {
-        var out: [Item] = []
-        for (i, c) in choices.enumerated() {
-            out.append(Item(menuName(c.title, limit: 40), enabled: c.enabled, checked: c.checked, action: c.action))
-            if i == 0 { out.append(.separator) }
-        }
-        return out
-    }
-
     private final class Target: NSObject {
         let action: () -> Void
         init(_ action: @escaping () -> Void) { self.action = action }
         @objc func run() { action() }
     }
 
-    static func popUp(_ items: [Item]) {
+    static func popUp(_ items: [MenuEntry]) {
         var targets: [Target] = []
         let menu = build(items, targets: &targets)
         // The targets outlive the menu's tracking (an item's action can arrive after popUp
@@ -1299,24 +1297,42 @@ enum ActionMenu {
 
     private static var live: [Target] = []
 
-    private static func build(_ items: [Item], targets: inout [Target]) -> NSMenu {
+    private static func build(_ items: [MenuEntry], targets: inout [Target]) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        for item in items {
-            if let children = item.children {
-                let mi = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
-                mi.submenu = build(children, targets: &targets)
-                menu.addItem(mi)
-                continue
-            }
-            guard let action = item.action else { menu.addItem(.separator()); continue }
+        func add(_ title: String, checked: Bool, enabled: Bool, _ action: @escaping () -> Void) {
             let t = Target(action)
             targets.append(t)
-            let mi = NSMenuItem(title: item.title, action: #selector(Target.run), keyEquivalent: "")
+            let mi = NSMenuItem(title: title, action: #selector(Target.run), keyEquivalent: "")
             mi.target = t
-            mi.isEnabled = item.enabled
-            mi.state = item.checked ? .on : .off
+            mi.isEnabled = enabled
+            mi.state = checked ? .on : .off
             menu.addItem(mi)
+        }
+        for item in items {
+            switch item.kind {
+            case .submenu(let children):
+                let mi = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
+                mi.submenu = build(children, targets: &targets)
+                mi.isEnabled = item.enabled
+                menu.addItem(mi)
+            case .action(let run):
+                add(item.title, checked: item.checked, enabled: item.enabled, run)
+            case .toggle(let on, let set):
+                add(item.title, checked: on, enabled: item.enabled) { set(!on) }
+            case .choice(let on, let pick):
+                add(item.title, checked: on, enabled: item.enabled, pick)
+            case .section(let title, let children):
+                if menu.numberOfItems > 0 { menu.addItem(.separator()) }
+                if let title { menu.addItem(.sectionHeader(title: title)) }
+                for c in build(children, targets: &targets).items { c.menu?.removeItem(c); menu.addItem(c) }
+            case .divider:
+                menu.addItem(.separator())
+            case .note:
+                let mi = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
+                mi.isEnabled = false
+                menu.addItem(mi)
+            }
         }
         return menu
     }

@@ -627,12 +627,20 @@ struct EffectRow: View {
                 .opacity(effect.enabled ? 1 : 0.45)
             }
         }
-        .contextMenu {
-            Button("Reset to Defaults") { reset() }.disabled(isDefault)
-            Button("Duplicate") { onDuplicate() }
-            Divider()
-            Button("Remove", role: .destructive) { onRemove() }
-        }
+        .contextMenu { NativeMenuItems(menuEntries) }   // right-click: the stock context menu, either look
+    }
+
+    /// The layer's menu (its ••• key in both looks, and its context menu).
+    private var menuEntries: [MenuEntry] {
+        Self.menu(isDefault: isDefault, reset: { reset() }, duplicate: onDuplicate, remove: onRemove)
+    }
+
+    static func menu(isDefault: Bool, reset: @escaping () -> Void, duplicate: @escaping () -> Void,
+                     remove: @escaping () -> Void) -> [MenuEntry] {
+        [.button("Reset to Defaults", enabled: !isDefault, reset),
+         .button("Duplicate", duplicate),
+         .divider,
+         .button("Remove", destructive: true, remove)]
     }
 
     private var header: some View {
@@ -670,11 +678,7 @@ struct EffectRow: View {
             .onTapGesture { toggleExpanded() }
 
             Menu {
-                Button("Reset to Defaults") { reset() }
-                    .disabled(isDefault)
-                Button("Duplicate") { onDuplicate() }
-                Divider()
-                Button("Remove", role: .destructive) { onRemove() }
+                NativeMenuItems(menuEntries)
             } label: {
                 // A plain-styled menu draws its own label, so the glyph follows the text
                 // size (a borderless-button menu keeps a fixed 13 pt glyph).
@@ -743,22 +747,14 @@ struct EffectRow: View {
             .contentShape(Rectangle())
             .onTapGesture { toggleExpanded() }
 
-            Menu {
-                Button("Reset to Defaults") { reset() }
-                    .disabled(isDefault)
-                Button("Duplicate") { onDuplicate() }
-                Divider()
-                Button("Remove", role: .destructive) { onRemove() }
-            } label: {
+            ConsoleMenuButton(title: "\(name) options", edge: .trailing) { menuEntries } label: {
                 Image(systemName: "ellipsis")
                     .textRole(.consoleBodySmall)
                     .foregroundStyle(ConsoleInk.legend)
                     .frame(width: glyphColumn, height: glyphColumn)
                     .contentShape(Rectangle())
             }
-            .menuStyle(.button)
             .buttonStyle(.plain)
-            .menuIndicator(.hidden)
             .fixedSize()
             .help("Reset, duplicate or remove \(name)")
             .accessibilityLabel("\(name) options")

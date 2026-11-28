@@ -262,10 +262,8 @@ struct EditorView: View {
                 .buttonStyle(.iconKeycap)
                 .help("Full-screen preview — move the mouse or press any key to exit")
                 .accessibilityLabel("Preview")
-                Menu { moreMenu } label: { HeaderMenuKey() }
-                    .menuStyle(.button)
+                ConsoleMenuButton(title: "More", edge: .trailing) { moreEntries } label: { HeaderMenuKey() }
                     .buttonStyle(.plain)
-                    .menuIndicator(.hidden)
                     .fixedSize()
                     .help("Duplicate, export, or delete this style")
                     .accessibilityLabel("More")
@@ -274,22 +272,9 @@ struct EditorView: View {
         .consoleBareToolbarItem()
     }
 
-    /// The ••• menu (both appearances).
-    @ViewBuilder private var moreMenu: some View {
-        Button("Duplicate") { model.duplicate(id).map { model.edit($0) } }
-        Button("Export Style…") { model.exportPreset(id) }
-        Divider()
-        if wallpaper.isAvailable {
-            if wallpaper.styleID == id {
-                Button("Stop Wallpaper") { wallpaper.stop() }
-            } else {
-                Button("Set as Wallpaper") { wallpaper.set(id) }
-            }
-        }
-        Button("Save Image…") { model.exportSelectedAsImage(id) }
-        Button("Set as Desktop Picture (Still)") { model.setSelectedAsWallpaper(id) }
-        Divider()
-        Button("Delete…", role: .destructive) { confirmDelete = true }
+    /// The ••• menu (both appearances: Classic's toolbar menu, Retro's header key).
+    private var moreEntries: [MenuEntry] {
+        EditorMenus.more(model, id: id, wallpaper: wallpaper) { confirmDelete = true }
     }
 
     @ToolbarContentBuilder
@@ -311,11 +296,46 @@ struct EditorView: View {
             .help("Full-screen preview — move the mouse or press any key to exit")
 
             Menu {
-                moreMenu
+                NativeMenuItems(moreEntries)
             } label: {
                 Label("More", systemImage: "ellipsis")
             }
             .help("Duplicate, export, or delete this style")
+        }
+    }
+}
+
+/// The editor's menus as items (MenuEntry), for both looks and UIShots' captures.
+enum EditorMenus {
+    @MenuBuilder
+    static func more(_ model: AppModel, id: UUID, wallpaper: WallpaperSlot, delete: @escaping () -> Void) -> [MenuEntry] {
+        MenuEntry.button("Duplicate") { model.duplicate(id).map { model.edit($0) } }
+        MenuEntry.button("Export Style…") { model.exportPreset(id) }
+        MenuEntry.divider
+        if wallpaper.isAvailable {
+            if wallpaper.styleID == id {
+                MenuEntry.button("Stop Wallpaper") { wallpaper.stop() }
+            } else {
+                MenuEntry.button("Set as Wallpaper") { wallpaper.set(id) }
+            }
+        }
+        MenuEntry.button("Save Image…") { model.exportSelectedAsImage(id) }
+        MenuEntry.button("Set as Desktop Picture (Still)") { model.setSelectedAsWallpaper(id) }
+        MenuEntry.divider
+        MenuEntry.button("Delete…", destructive: true, delete)
+    }
+
+    /// The wallpaper key's menu under the preview (DestinationBar).
+    @MenuBuilder
+    static func wallpaper(id: UUID, wallpaper: WallpaperSlot, controller: WallpaperController,
+                          synced: Bool, isOurs: Bool) -> [MenuEntry] {
+        MenuEntry.button(isOurs ? "Stop Wallpaper" : "Set as Wallpaper") {
+            Motion.run { if isOurs { wallpaper.stop() } else { wallpaper.set(id) } }
+        }
+        MenuEntry.toggle("Same as Screensaver", isOn: synced) { on in Motion.run { controller.setFollowsScreensaver(on) } }
+        if synced {
+            MenuEntry.divider
+            MenuEntry.button("Stop Wallpaper") { Motion.run { wallpaper.stop() } }
         }
     }
 }
@@ -382,30 +402,20 @@ private struct DestinationBar: View {
         let synced = controller.isActive && controller.followsScreensaver
         let isOurs = !synced && wallpaper.styleID == id
         if synced {
-            GlassMenuPill(title: "Wallpaper: Same as Screensaver", systemImage: "link", lit: true) {
-                wallpaperMenu(synced: true, isOurs: false)
-            }
+            GlassMenuPill(title: "Wallpaper: Same as Screensaver", systemImage: "link", lit: true,
+                          entries: wallpaperMenu(synced: true, isOurs: false))
             .help("The wallpaper plays whatever the screensaver shows — set this style instead, or stop it")
         } else {
             let title = isOurs ? "Stop Wallpaper" : "Set as Wallpaper"
             GlassMenuPill(title: title, systemImage: "photo.artframe", lit: isOurs,
-                          primary: { Motion.run { wallpaper.toggle(id) } }) {
-                wallpaperMenu(synced: false, isOurs: isOurs)
-            }
+                          primary: { Motion.run { wallpaper.toggle(id) } },
+                          entries: wallpaperMenu(synced: false, isOurs: isOurs))
             .help("\(title) — or, from the arrow, Same as Screensaver")
         }
     }
 
-    @ViewBuilder private func wallpaperMenu(synced: Bool, isOurs: Bool) -> some View {
-        Button(isOurs ? "Stop Wallpaper" : "Set as Wallpaper") {
-            Motion.run { if isOurs { wallpaper.stop() } else { wallpaper.set(id) } }
-        }
-        Toggle("Same as Screensaver", isOn: Binding(get: { synced },
-                                                    set: { on in Motion.run { controller.setFollowsScreensaver(on) } }))
-        if synced {
-            Divider()
-            Button("Stop Wallpaper") { Motion.run { wallpaper.stop() } }
-        }
+    private func wallpaperMenu(synced: Bool, isOurs: Bool) -> [MenuEntry] {
+        EditorMenus.wallpaper(id: id, wallpaper: wallpaper, controller: controller, synced: synced, isOurs: isOurs)
     }
 }
 
@@ -415,13 +425,13 @@ private struct DestinationBar: View {
 /// plain over it, so the title is role-sized like its neighbours' — a stock pull-down's
 /// title is AppKit's and never follows the text size.
 /// Console: a keycap (`ConsoleSplitKey`), blue when `lit`.
-private struct GlassMenuPill<Items: View>: View {
+private struct GlassMenuPill: View {
     let title: String
     let systemImage: String
     /// Console: this style is on the wallpaper (or the wallpaper follows the screensaver).
     var lit = false
     var primary: (() -> Void)? = nil
-    @ViewBuilder var items: Items
+    let entries: [MenuEntry]
     @Environment(\.console) private var console
     @ScaledLength(relativeTo: .body) private var chevronWidth: CGFloat = Space.grid(7)   // 28
 
@@ -487,7 +497,7 @@ private struct GlassMenuPill<Items: View>: View {
 
     /// A plain-styled menu draws its own (role-sized) label.
     private func menu<L: View>(@ViewBuilder label: () -> L) -> some View {
-        Menu { items } label: { label() }
+        Menu { NativeMenuItems(entries) } label: { label() }
             .menuStyle(.button)
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
@@ -499,18 +509,18 @@ private struct GlassMenuPill<Items: View>: View {
     /// a Console keycap with travel — blue while the wallpaper plays this style (or follows the
     /// screensaver), as the design's "playing behind your windows" colour.
     private var consoleKey: some View {
-        ConsoleSplitKey(title: title, systemImage: systemImage, lit: lit, primary: primary) { items }
+        ConsoleSplitKey(title: title, systemImage: systemImage, lit: lit, primary: primary, entries: entries)
     }
 }
 
 /// Console: the wallpaper's split key. Its face is drawn here (a Menu can't take a ButtonStyle),
 /// and each half sinks on its own press.
-private struct ConsoleSplitKey<Items: View>: View {
+private struct ConsoleSplitKey: View {
     let title: String
     let systemImage: String
     let lit: Bool
     var primary: (() -> Void)?
-    @ViewBuilder var items: Items
+    let entries: [MenuEntry]
     @State private var hovering = false
     @ScaledLength(relativeTo: .body) private var chevronWidth: CGFloat = Space.grid(7)   // 28
     @ScaledInsets(relativeTo: DestinationConsoleMetrics.style) private var padding = DestinationConsoleMetrics.padding
@@ -570,11 +580,10 @@ private struct ConsoleSplitKey<Items: View>: View {
             .contentShape(Rectangle())
     }
 
-    private func menu<L: View>(@ViewBuilder label: () -> L) -> some View {
-        Menu { items } label: { label() }
-            .menuStyle(.button)
+    /// The Retro dropdown, hanging from the key's trailing edge.
+    private func menu<L: View>(@ViewBuilder label: @escaping () -> L) -> some View {
+        ConsoleMenuButton(title: "Wallpaper", edge: .trailing) { entries } label: { label() }
             .buttonStyle(.plain)
-            .menuIndicator(.hidden)
     }
 }
 

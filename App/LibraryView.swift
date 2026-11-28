@@ -91,10 +91,12 @@ struct LibraryView: View {
         }
         .hubBareToolbarItem()
         ToolbarItem(placement: .primaryAction) {
-            newMenu
-                .menuStyle(.button)
-                .menuIndicator(.hidden)
-                .hubHeaderKey()
+            // the same items as Classic's New menu, as the Retro dropdown
+            ConsoleMenuButton(title: "New", edge: .trailing) { newEntries } label: {
+                Label("New", systemImage: "plus")
+            }
+            .help("New Look or Scene, or import a style")
+            .hubHeaderKey()
         }
         .hubBareToolbarItem()
         ToolbarItem(placement: .primaryAction) {
@@ -114,19 +116,30 @@ struct LibraryView: View {
 
     private var newMenu: some View {
         Menu {
-            Button("New Look") { model.addPreset() }
-            Menu("New Scene") {
-                ForEach(EffectKind.allCases.filter { $0.isScene && !$0.isRetired }, id: \.self) { kind in
-                    Button(kind.displayName) { model.addScene(kind) }
-                }
-            }
-            Divider()
-            Button("Add Built-in Styles") { model.addDemoPack() }
-            Button("Import Style…") { model.importPresetsViaPanel() }
+            NativeMenuItems(newEntries)
         } label: {
             Label("New", systemImage: "plus")
         }
         .help("New Look or Scene, or import a style")
+    }
+
+    private var newEntries: [MenuEntry] { LibraryMenus.new(model) }
+}
+
+enum LibraryMenus {
+    /// The header's New menu (Classic's toolbar menu; Retro's New key): a Look, a Scene of any
+    /// kind, the built-in styles, an import.
+    @MenuBuilder
+    static func new(_ model: AppModel) -> [MenuEntry] {
+        MenuEntry.button("New Look") { model.addPreset() }
+        MenuEntry.submenu("New Scene") {
+            EffectKind.allCases.filter { $0.isScene && !$0.isRetired }.map { kind in
+                MenuEntry.button(kind.displayName) { model.addScene(kind) }
+            }
+        }
+        MenuEntry.divider
+        MenuEntry.button("Add Built-in Styles") { model.addDemoPack() }
+        MenuEntry.button("Import Style…") { model.importPresetsViaPanel() }
     }
 }
 
