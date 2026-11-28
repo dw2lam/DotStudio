@@ -116,13 +116,17 @@ enum Catalog {
             ? "A scene draws its own image: put it FIRST in a style's effects; looks after it restyle it."
             : "A look restyles what's under it (the shared photo slideshow/image/video/gradient, or a scene placed before it)."
         if kind == .bounce { o["extra"] = "Bounce takes an optional logo_text: the word that bounces (else the DotStudio mark)." }
+        if kind == .adjust {
+            o["usage"] = "The style's basic grade — what the editor's Adjust key edits. Put it LAST in effects (the app keeps one Adjust layer last and shows it as that key, not as a row), at most one per style. Works on scenes and looks alike. Every param defaults to 0 = no change; only set the ones you want."
+            o["extra"] = "brightness −100…100: midtones lighter/darker (black and white stay put). contrast −100…100: around mid grey. saturation −100…100: −100 = black and white. exposure −3…3 EV, in linear light (can clip). highlights / shadows −100…100: darken or lift just the bright / dark tones. warmth −100…100: blue ↔ amber. tint −100…100: green ↔ magenta. vibrance −100…100: like saturation but mostly on muted colours. fade 0…100: matte, lifted blacks."
+        }
         return o
     }
 }
 
 extension Preset {
     /// The first enabled effect (Destinations' leadKind is app-only).
-    var leadKindAI: EffectKind? { (effects.first(where: \.enabled) ?? effects.first)?.kind }
+    var leadKindAI: EffectKind? { (effects.first { $0.enabled && !$0.kind.isEditorControl } ?? effects.first)?.kind }
 }
 
 /// A style from tool arguments. Strict: unknown kinds, unknown params and out-of-range values

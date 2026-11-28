@@ -188,6 +188,13 @@
         return float4(base.rgb * mix(1.0, v, amt), 1.0);
     }
 
+    case 81: { // ADJUST — brightness, contrast, saturation, exposure, highlights, shadows,
+               // warmth, tint, vibrance, fade (adjustGrade in Shaders.metal). All at 0: the
+               // input, untouched.
+        if (all(u.p0 == 0.0) && all(u.p1 == 0.0) && all(u.p2.xy == 0.0)) return base;
+        return float4(adjustGrade(base.rgb, u.p0, u.p1, u.p2) + bandDither(px), base.a);
+    }
+
     case 12: { // EDGE DETECTION (Sobel)
         float2 o = 1.0 / res * max(u.p0.x, 1.0);
         float gx = 0, gy = 0;

@@ -78,6 +78,7 @@ One guide per scene (`read_guide settings/<kind>`) and one for all looks (`setti
 | `risograph` | Risograph | Print & Halftone |
 | `grainWash` | Grain Wash | Color & Light |
 | `glass` | Glass | Glass & Distort |
+| `adjust` | Adjust | Color & Light |
 
 ## Custom scenes
 

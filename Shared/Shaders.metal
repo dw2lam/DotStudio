@@ -683,6 +683,59 @@ static inline float3 uniShade(int i, float3 c, float3 n0, float3 rd, float fp, f
 #include "Scenes/Bloom_funcs.h"
 #include "Scenes/Penguin_funcs.h"
 
+// ---------------------------------------------------------------- Adjust (81)
+
+// The editor's Adjust key (EffectKind.adjust): a photo editor's basic grade in one pass, on the
+// display-sRGB colour `c`. Exposure and white balance act in linear light; the tone controls on
+// Oklab lightness L (perceptual: equal steps look equal), each a curve that keeps black at black
+// and white at white, so nothing clips that wasn't clipped; saturation, vibrance and fade scale
+// Oklab chroma, which leaves L — the perceived brightness — alone.
+//   p0 = (brightness, contrast, saturation, exposure in EV)
+//   p1 = (highlights, shadows, warmth, tint)            p2 = (vibrance, fade 0…1, 0, 0)
+// All −1…1 but exposure and fade; 0 everywhere is the identity (the caller skips the pass).
+static inline float3 adjustGrade(float3 c, float4 p0, float4 p1, float4 p2) {
+    float3 lin = srgbToLinear(c) * exp2(p0.w);
+    // White balance: warmth trades blue for red, tint green for magenta, at equal luminance.
+    float3 wb = float3(exp2(0.32 * p1.z), exp2(-0.24 * p1.w), exp2(-0.32 * p1.z));
+    lin *= wb / dot(wb, float3(0.2126, 0.7152, 0.0722));
+    // linear sRGB → Oklab
+    float3 lms = float3(dot(lin, float3(0.4122214708, 0.5363325363, 0.0514459929)),
+                        dot(lin, float3(0.2119034982, 0.6806995451, 0.1073969566)),
+                        dot(lin, float3(0.0883024619, 0.2817188376, 0.6299787005)));
+    lms = pow(max(lms, 0.0), 1.0 / 3.0);
+    float  L  = dot(lms, float3(0.2104542553, 0.7936177850, -0.0040720468));
+    float2 ab = float2(dot(lms, float3(1.9779984951, -2.4285922050, 0.4505937099)),
+                       dot(lms, float3(0.0259040371, 0.7827717662, -0.8086757660)));
+    L = saturate(L);
+    // Brightness: a midtone gamma (0 and 1 fixed).
+    L = pow(L, exp2(-0.8 * p0.x));
+    // Contrast: power curves either side of mid grey (18 %: L 0.565), slope 2^c at the pivot.
+    const float P = 0.565;
+    float k = exp2(p0.y);
+    L = (L < P) ? P * pow(L / P, k) : 1.0 - (1.0 - P) * pow(max((1.0 - L) / (1.0 - P), 0.0), k);
+    // Shadows / highlights: lifts weighted by where L sits (peaks at L 1/3 and 2/3, zero at
+    // black and white), small enough to stay monotonic at either end of the range.
+    float sh = 6.75 * L * (1.0 - L) * (1.0 - L);
+    float hi = 6.75 * L * L * (1.0 - L);
+    L += 0.14 * (p1.y * sh + p1.x * hi);
+    // Fade: a matte black point and a slightly dimmer white, chroma eased off with it.
+    L = mix(L, 0.24 + 0.71 * L, p2.y);
+    // Saturation scales chroma; vibrance mostly the muted colours (weight 1 → 0 over chroma
+    // 0 … 0.2, where sRGB's primaries sit near 0.3).
+    float C = length(ab);
+    float vib = 1.0 - smoothstep(0.0, 0.2, C);
+    ab *= max(1.0 + p0.z, 0.0) * max(1.0 + p2.x * vib, 0.0) * (1.0 - 0.25 * p2.y);
+    // Oklab → linear sRGB
+    float3 q = float3(L + 0.3963377774 * ab.x + 0.2158037573 * ab.y,
+                      L - 0.1055613458 * ab.x - 0.0638541728 * ab.y,
+                      L - 0.0894841775 * ab.x - 1.2914855480 * ab.y);
+    q = q * q * q;
+    float3 o = float3(dot(q, float3( 4.0767416621, -3.3077115913,  0.2309699292)),
+                      dot(q, float3(-1.2684380046,  2.6097574011, -0.3413193965)),
+                      dot(q, float3(-0.0041960863, -0.7034186147,  1.7076147010)));
+    return linearToSrgb(saturate(o));
+}
+
 // ---------------------------------------------------------------- slideshow source
 
 // Cover-fit a photo, then zoom (kb.x ≥ 1) and pan (kb.yz in −1…1 of the travel the

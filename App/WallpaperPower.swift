@@ -737,7 +737,7 @@ extension EffectKind {
         case .pixelate, .blockify, .dither, .halftone, .dots, .threshold, .posterize, .phosphor,
              .scanlines, .vignette, .edge, .crosshatch, .contour, .voronoi, .ascii, .pixelSort,
              .chromaticShift, .bloom, .hexMosaic, .mirror, .gameboy, .neonEdges, .fisheye,
-             .toon, .thermal, .truchet, .ledPanel, .nes8bit:
+             .toon, .thermal, .truchet, .ledPanel, .nes8bit, .adjust:
             return false
         default:
             return true
