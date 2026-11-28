@@ -170,6 +170,16 @@ jobs:
             BETA="--prerelease --latest=false"
             HEAD="**Beta.** Installed copies aren't offered this update — download the DMG to try it. It updates itself to the final release when that ships.";;
           esac
+          # A hotfix re-cut under the same version (the tag moved to a fixed commit, a higher
+          # build number): the release stays published and "latest" throughout — the DMG is
+          # replaced first and the appcast last, so the feed never names a missing file, and
+          # installed copies of the earlier build are offered the new one (Sparkle compares
+          # build numbers).
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/DotStudio.dmg --clobber
+            [ -f dist/appcast.xml ] && gh release upload "$GITHUB_REF_NAME" dist/appcast.xml --clobber
+            exit 0
+          fi
           gh release create "$GITHUB_REF_NAME" $ASSETS $BETA \
             --title "DotStudio ${GITHUB_REF_NAME#v}" \
             --generate-notes \
