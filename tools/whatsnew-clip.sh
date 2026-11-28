@@ -5,7 +5,8 @@
 #   tools/whatsnew-clip.sh <version> <film.mov> [--width 720] [--fps 15] [--max-mb 2.5]
 #   tools/whatsnew-clip.sh 1.7.0 App/ThemeFilms/theme-retro-dark.mov
 #
-# Writes web/public/media/whatsnew/<version>.webp, served by the site at
+# Writes web/public/media/whatsnew/<version>.webp in the site's own (private) repo — a checkout
+# of dw2lam/dotstudio-web beside this one, or $DOTSTUDIO_SITE — served by the site at
 #   https://dotstudio.davidlam.online/media/whatsnew/<version>.webp
 # which is what the release's line in CHANGELOG.md names:
 #   ![Retro, assembled](https://dotstudio.davidlam.online/media/whatsnew/1.7.0.webp)
@@ -32,7 +33,9 @@ while (( $# )); do
   esac
 done
 [[ -f "$MOV" ]] || { echo "no such film: $MOV" >&2; exit 1; }
-OUTDIR="$ROOT/web/public/media/whatsnew"
+SITE="${DOTSTUDIO_SITE:-$ROOT/../dotstudio-web}"
+[[ -d "$SITE/web" ]] || { echo "no site checkout at $SITE (clone dw2lam/dotstudio-web there, or set DOTSTUDIO_SITE)" >&2; exit 1; }
+OUTDIR="$SITE/web/public/media/whatsnew"
 OUT="$OUTDIR/$VERSION.webp"
 mkdir -p "$OUTDIR"
 MAXBYTES=$(printf "%.0f" $(( MAXMB * 1024 * 1024 )))
@@ -63,4 +66,4 @@ done
 mv "$WORK/out.webp" "$OUT"
 DIMS=$(webpmux -info "$OUT" 2>/dev/null | awk '/Canvas size/{print $3 $4 $5}')
 FRAMES=$(webpmux -info "$OUT" 2>/dev/null | awk '/Number of frames/{print $4}')
-echo "wrote ${OUT#$ROOT/}  ($(( $(stat -f%z "$OUT") / 1024 )) KB, ${DIMS:-?}, ${FRAMES:-?} frames @ ${FPS} fps, q=$Q)"
+echo "wrote ${OUT#$SITE/}  ($(( $(stat -f%z "$OUT") / 1024 )) KB, ${DIMS:-?}, ${FRAMES:-?} frames @ ${FPS} fps, q=$Q)"
