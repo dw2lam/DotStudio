@@ -1103,6 +1103,47 @@ enum MusicDisplayMenu {
     }
 }
 
+/// The wallpaper's Music menu: Off, or the song shown the way the screensaver shows it (Corner
+/// or Full Screen — one setting for both, so the screensaver's mode's options follow, as on its
+/// Music key). Picking a mode while the screensaver's music is off turns it on for both: the
+/// wallpaper only ever mirrors it (MusicSpec.drawsOnWallpaper).
+enum WallpaperMusicMenu {
+    @MenuBuilder
+    static func entries(_ model: AppModel) -> [MenuEntry] {
+        let spec = model.library.musicSettings
+        let on = spec.drawsOnWallpaper
+        MenuEntry.button("Off", checked: !on) { model.updateMusic { $0.cardOnWallpaper = false } }
+        [MusicSpec.Display.corner, .fullScreen].map { d in
+            MenuEntry.button(d.label, checked: on && spec.displayMode == d) {
+                Motion.run {
+                    if spec.displayMode != d { model.setMusicDisplay(d) }
+                    model.updateMusic { $0.cardOnWallpaper = true }
+                }
+            }
+        }
+        if on {
+            MenuEntry.divider
+            MenuEntry.note("Shown as on the screensaver")
+            switch spec.displayMode {
+            case .fullScreen:
+                MenuEntry.section("Layout") {
+                    MusicSpec.FullLayout.allCases.map { l in
+                        MenuEntry.button(l.label, checked: l == spec.layout) { model.updateMusic { $0.fullLayout = l } }
+                    }
+                }
+            case .corner:
+                MenuEntry.section("Corner") {
+                    MusicSpec.Corner.allCases.map { c in
+                        MenuEntry.button(c.label, checked: c == spec.corner) { model.updateMusic { $0.cardCorner = c } }
+                    }
+                }
+            case .off:
+                [MenuEntry]()
+            }
+        }
+    }
+}
+
 extension AppModel {
     /// "Show music": Off / Corner / Full Screen (Library.music.display, legacy fields in step).
     func setMusicDisplay(_ d: MusicSpec.Display) {
@@ -1620,8 +1661,9 @@ private struct WallpaperTransport: View {
     }
 
     /// Console (the Stitch transport): the PLAYBACK legend, and ▶ ‖ ⏻ as three small keys in a
-    /// recessed well — Play a blue key while the wallpaper plays, Pause or Off held down while
-    /// they're the state.
+    /// recessed well — Play a blue key while the wallpaper plays, Pause an amber key held down
+    /// while it's paused (owner, 2026-11-27: blue reads "go", red "stop", green is a toggle's on —
+    /// amber is the hold), Off held down while it's off.
     private var consoleRow: some View {
         HStack(spacing: Space.xs - 2) {
             Image(systemName: "playpause")
@@ -1647,6 +1689,15 @@ private struct WallpaperTransport: View {
         .accessibilityLabel("Wallpaper playback")
     }
 
+    /// A lit key's colour: Play blue, Pause amber, Off a plain key held down.
+    private func tint(_ m: Mode) -> ConsoleKeycapStyle.Tint {
+        switch m {
+        case .play: return .blue
+        case .pause: return .yellow
+        case .off: return .plain
+        }
+    }
+
     private func consoleKey(_ m: Mode) -> some View {
         let on = m == mode
         return Button { if !on { select(m) } } label: {
@@ -1654,7 +1705,7 @@ private struct WallpaperTransport: View {
                 .scaledFont { .scaled(points: 10.5, $0, weight: .bold) }
                 .frame(width: consoleKey, height: consoleKey)
         }
-        .buttonStyle(.keycap(on && m == .play ? .blue : .plain, latched: on && m != .play,
+        .buttonStyle(.keycap(on ? tint(m) : .plain, latched: on && m != .play,
                              cornerRadius: 2, padding: EdgeInsets()))
         .disabled(m == .pause && mode == .off)
         .help(help(m))
@@ -1697,7 +1748,8 @@ private struct WallpaperTransport: View {
         return Button { if !on { select(m) } } label: {
             Image(systemName: symbol(m))
                 .scaledFont { .scaled(.footnote, $0, weight: .semibold) }
-                .foregroundStyle(on ? (m == .off ? Color.primary : Color.accentColor) : PanelInk.secondary)
+                .foregroundStyle(on ? (m == .off ? Color.primary : m == .pause ? Color.orange : Color.accentColor)
+                                    : PanelInk.secondary)
             .frame(width: (h * 1.4).rounded(), height: h)
             .contentShape(Rectangle())
         }
@@ -2011,6 +2063,7 @@ struct WallpaperCard: View {
             // Synced, the zone's own style recedes: it's following the driver.
             styleKey
                 .opacity(1 - 0.4 * progress)
+            musicKey
             if roster.showsControls(slot.pins, synced ? model.screensaverPins : [:], alive: { model.preset($0) != nil }) {
                 displaysKey
                     .opacity(1 - 0.4 * progress)
@@ -2107,6 +2160,24 @@ struct WallpaperCard: View {
               ?? "Choose a style to play behind your windows")
         .accessibilityLabel("Wallpaper style")
         .accessibilityValue(synced ? "Same as Screensaver" : (style?.name ?? "None"))
+    }
+
+    /// Music · Off / Corner / Full Screen — what's playing on the wallpaper too ("Also on the live
+    /// wallpaper", Settings › Music), shown the way the screensaver shows it.
+    private var musicKey: some View {
+        let spec = model.library.musicSettings
+        let on = spec.drawsOnWallpaper
+        return DropdownMenu(title: "Show what's playing on the wallpaper") {
+            WallpaperMusicMenu.entries(model)
+        } label: {
+            PanelKeyLabel(symbol: "music.note", title: "Music", values: [on ? spec.displayMode.label : "Off"],
+                          indicator: .menuLED(on))
+        }
+        .panelKeyMenu()
+        .help(on ? "What's playing shows on the wallpaper too — \(spec.displayMode.label.lowercased()), as on the screensaver"
+              : "Show what's playing on the wallpaper too, as on the screensaver")
+        .accessibilityLabel("Show what's playing on the wallpaper")
+        .accessibilityValue(on ? spec.displayMode.label : "Off")
     }
 
     /// Displays · "Same on all" / "LG: Golden Hour": a style of its own on any display (only with

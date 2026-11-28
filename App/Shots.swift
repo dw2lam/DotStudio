@@ -895,6 +895,10 @@ enum UIShots {
         }
 
         // The Wallpaper deck
+        shot("wallpaper-music", prepare: { st in
+            WallpaperSlot.shared.set(st.wallpaper)
+            st.model.updateMusic { $0.setDisplay(.corner); $0.cardOnWallpaper = true }
+        }, minWidth: deckKey, highlight: "Corner") { st in WallpaperMusicMenu.entries(st.model) }
         shot("wallpaper-style", prepare: { WallpaperSlot.shared.set($0.wallpaper) }, minWidth: deckKey, highlight: "Same as") { st in
             DeckMenus.wallpaperStyle(st.model, synced: false, current: WallpaperSlot.shared.styleID, sync: {}, pick: { _ in })
         }
