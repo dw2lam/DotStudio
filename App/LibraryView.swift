@@ -1006,17 +1006,19 @@ private struct HubWordmark: View {
     var body: some View {
         let pitch = height / Self.inkH
         Canvas { ctx, _ in
-            var dots = Path()
+            var dots = Path(), accent = Path()
             for (i, ch) in Self.word.enumerated() {
                 for (y, row) in (Self.rows[ch] ?? []).enumerated() {
                     for (x, c) in row.enumerated() where c == "#" {
                         let cx = (Double(i * 6 + x) + 0.3) * pitch, cy = (Double(y) + 0.3) * pitch
-                        dots.addEllipse(in: CGRect(x: cx - 0.3 * pitch, y: cy - 0.3 * pitch,
-                                                   width: 0.6 * pitch, height: 0.6 * pitch))
+                        let dot = CGRect(x: cx - 0.3 * pitch, y: cy - 0.3 * pitch, width: 0.6 * pitch, height: 0.6 * pitch)
+                        // the d's top dot is the signal orange, as on the app icon
+                        if i == 0 && y == 0 && x == 4 { accent.addEllipse(in: dot) } else { dots.addEllipse(in: dot) }
                     }
                 }
             }
             ctx.fill(dots, with: .color(ConsoleInk.ink))
+            ctx.fill(accent, with: .color(ConsoleInk.signal))
         }
         .frame(width: Self.inkW * pitch, height: height)
         .accessibilityElement()
