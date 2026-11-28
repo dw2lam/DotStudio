@@ -987,8 +987,9 @@ private struct HubWordmark: View {
     // Just the name (owner, 2026-11-26): no dot, rule or version tag — the version lives in
     // About DotStudio. Drawn in dots, as the website's wordmark (owner, 2026-11-27: "put this
     // logo instead of having regular text"): the same 5 × 7 dot grid per letter (Doto's, as
-    // web/src/site/art.tsx Wordmark), a dot 0.6 of the pitch, letters 6 pitches apart.
-    @ScaledLength(relativeTo: .body) private var height: CGFloat = 15
+    // web/src/site/art.tsx Wordmark), letters 6 pitches apart; the dots a little fuller than the
+    // website's (0.74 of the pitch, not 0.6) so they hold up at this small size.
+    @ScaledLength(relativeTo: .body) private var height: CGFloat = 18
 
     private static let rows: [Character: [String]] = [
         "d": ["....#", "....#", ".##.#", "#..##", "#...#", "#..##", ".##.#"],
@@ -1001,7 +1002,8 @@ private struct HubWordmark: View {
     private static let word = Array("dotstudio")
     /// The ink in pitches: from the d's left dot to the last o's right dot (8 letters × 6 + 4.6),
     /// top row to baseline (6.6).
-    private static let inkW = Double(word.count - 1) * 6 + 4.6, inkH = 6.6
+    private static let dot = 0.74
+    private static let inkW = Double(word.count - 1) * 6 + 4 + dot, inkH = 6 + dot
 
     var body: some View {
         let pitch = height / Self.inkH
@@ -1010,8 +1012,8 @@ private struct HubWordmark: View {
             for (i, ch) in Self.word.enumerated() {
                 for (y, row) in (Self.rows[ch] ?? []).enumerated() {
                     for (x, c) in row.enumerated() where c == "#" {
-                        let cx = (Double(i * 6 + x) + 0.3) * pitch, cy = (Double(y) + 0.3) * pitch
-                        let dot = CGRect(x: cx - 0.3 * pitch, y: cy - 0.3 * pitch, width: 0.6 * pitch, height: 0.6 * pitch)
+                        let d = Self.dot * pitch
+                        let dot = CGRect(x: Double(i * 6 + x) * pitch, y: Double(y) * pitch, width: d, height: d)
                         // the d's top dot is the signal orange, as on the app icon
                         if i == 0 && y == 0 && x == 4 { accent.addEllipse(in: dot) } else { dots.addEllipse(in: dot) }
                     }
