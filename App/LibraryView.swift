@@ -227,7 +227,9 @@ private struct GalleryPage: View {
     /// live sky, then clocks), library order within a rank.
     private func displayOrder() -> [Preset] {
         let lib = model.library.presets
-        let ranks = Dictionary(uniqueKeysWithValues: lib.map { ($0.id, LiveTraits.of($0).rank) })
+        // Not uniqueKeysWithValues: a library holding two styles with one id (a broken merge;
+        // the click probe's "dupes" scenario) must still draw the gallery, not trap.
+        let ranks = Dictionary(lib.map { ($0.id, LiveTraits.of($0).rank) }, uniquingKeysWith: { first, _ in first })
         return lib.enumerated().sorted { a, b in
             let ra = ranks[a.element.id] ?? 3, rb = ranks[b.element.id] ?? 3
             return ra != rb ? ra < rb : a.offset < b.offset    // stable: library order within a rank
