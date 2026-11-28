@@ -645,17 +645,30 @@ struct SetupSettingsSection: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.layout) private var layout
     @ObservedObject private var guide = SetupGuideModel.shared
+    /// The width the card has in the pane. The window's size class isn't enough: Settings is a
+    /// sheet, and in a small window its pane is too narrow for the picture beside the steps (the
+    /// steps squeezed to a word a line, or the card ran off both edges — owner, 2026-11-28).
+    @State private var width: CGFloat = 0
+    /// The narrowest that fits the picture beside a readable column of steps.
+    private static let sideBySideMin: CGFloat = SetupCard.sidePictureWidth + 210
 
     var body: some View {
         Section {
             SetupCard(guide: guide, coach: .shared, context: .settings, status: model.setupStatus,
-                      sideBySide: !layout.prefersStacking) {
+                      sideBySide: !layout.prefersStacking && width >= Self.sideBySideMin) {
                 // The floating guide keeps the steps beside System Settings; it opens first so
                 // System Settings comes up in front of everything else.
                 SetupGuidePanel.shared.show(model: model)
                 guide.openSystemSettings()
             }
             .padding(.vertical, Space.xs)
+            .background {
+                GeometryReader { g in
+                    Color.clear
+                        .onAppear { width = g.size.width }
+                        .onChange(of: g.size.width) { _, w in width = w }
+                }
+            }
             .onAppear {
                 guide.onStatusChange = { [weak model] _ in model?.refreshSetupStatus() }
                 guide.begin()

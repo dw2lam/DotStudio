@@ -689,6 +689,14 @@ enum UIShots {
                                 st.model.settingsPane = pane
                             }, view: { _ in AnyView(SettingsView().frame(width: 860, height: pane == .power ? 2700 : 640)) }))
         }
+        // …and at the smallest the sheet gets (an 880×600 window: 760×540, ContentView)
+        for pane in [SettingsPane.screensaver, .wallpaper, .music, .general] {
+            s.append(Screen(name: "settings-small-\(pane.rawValue)", frame: .fit(width: 760, minHeight: 540),
+                            prepare: { st in
+                                WallpaperController.shared.update { $0.presetID = st.wallpaper }
+                                st.model.settingsPane = pane
+                            }, view: { _ in AnyView(SettingsView().frame(width: 760, height: 540)) }))
+        }
         // Release notes (Changelog.swift): the What's New sheet for one update and for several
         // skipped ones; Settings › Updates in full (Release Notes, the newest marked installed),
         // and opened from "See All Updates" (scrolled to the notes)
