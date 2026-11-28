@@ -600,6 +600,10 @@ private struct FilterBar: View {
             GeometryReader { g in
                 let y = g.frame(in: .named(FilterBar.space)).minY
                 let pinned = min(max((150 - y) / 70, 0), 1)   // fully there once under the toolbar
+                // Console: the strip stops half way down the row, so its edge is always hidden
+                // behind the filter box (a panel of its own): the tiles slide under the box, and
+                // nothing reads as a bar slicing the Scenes box (owner, 2026-11-27). Classic keeps
+                // the full strip and its divider.
                 if pinned > 0 {
                     // Console: no hairline — the strip is the chassis, one surface with the
                     // header above it, so pinning doesn't read as a second bar (the filter box is
@@ -609,6 +613,7 @@ private struct FilterBar: View {
                             if !console { Divider() }
                         }
                         .padding(.top, -(Space.xxl + Space.s))   // up under the toolbar
+                        .padding(.bottom, console ? g.size.height / 2 : 0)
                         .opacity(pinned)
                 }
             }
