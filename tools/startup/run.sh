@@ -31,7 +31,7 @@ cp "$SRC"/Shared/Photos/*.jpg "$BIN/Photos/" 2>/dev/null || true
 FLAGS=()
 [[ -f "$SRC/Shared/FXPipelines.swift" ]] && FLAGS=(-D FASTSTART)
 xcrun -sdk macosx swiftc -O $FLAGS -import-objc-header "$SRC/Shared/Bridging.h" -I "$SRC/Shared" \
-  "$SRC"/Shared/*.swift "$SRC"/Shared/Scenes/*.swift "$SRC"/Shared/Music/*.swift "$SRC"/Shared/Weather/*.swift \
+  "$SRC"/Shared/*.swift "$SRC"/Shared/Scenes/*.swift "$SRC"/Shared/Music/*.swift "$SRC"/Shared/Weather/*.swift "$SRC"/Shared/Signals/*.swift \
   "$ROOT/tools/startup/main.swift" -o "$BIN/startup"
 
 STORE=$(mktemp -d /tmp/dotstudio-startup.XXXXXX)
