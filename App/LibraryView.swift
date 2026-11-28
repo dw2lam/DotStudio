@@ -985,13 +985,43 @@ extension SourceSpec {
 /// the name, and the app's real version on a small tag.
 private struct HubWordmark: View {
     // Just the name (owner, 2026-11-26): no dot, rule or version tag — the version lives in
-    // About DotStudio.
+    // About DotStudio. Drawn in dots, as the website's wordmark (owner, 2026-11-27: "put this
+    // logo instead of having regular text"): the same 5 × 7 dot grid per letter (Doto's, as
+    // web/src/site/art.tsx Wordmark), a dot 0.6 of the pitch, letters 6 pitches apart.
+    @ScaledLength(relativeTo: .body) private var height: CGFloat = 15
+
+    private static let rows: [Character: [String]] = [
+        "d": ["....#", "....#", ".##.#", "#..##", "#...#", "#..##", ".##.#"],
+        "o": [".....", ".....", ".###.", "#...#", "#...#", "#...#", ".###."],
+        "t": [".#...", ".#...", "####.", ".#...", ".#...", ".#..#", "..##."],
+        "s": [".....", ".....", ".###.", "#....", ".###.", "....#", "####."],
+        "u": [".....", ".....", "#...#", "#...#", "#...#", "#..##", ".##.#"],
+        "i": ["..#..", ".....", ".##..", "..#..", "..#..", "..#..", ".###."],
+    ]
+    private static let word = Array("dotstudio")
+    /// The ink in pitches: from the d's left dot to the last o's right dot (8 letters × 6 + 4.6),
+    /// top row to baseline (6.6).
+    private static let inkW = Double(word.count - 1) * 6 + 4.6, inkH = 6.6
+
     var body: some View {
-        Text("DotStudio")
-            .textRole(.consoleTitle)
-            .foregroundStyle(ConsoleInk.ink)
-            .fixedSize()
-            .accessibilityLabel("DotStudio")
+        let pitch = height / Self.inkH
+        Canvas { ctx, _ in
+            var dots = Path()
+            for (i, ch) in Self.word.enumerated() {
+                for (y, row) in (Self.rows[ch] ?? []).enumerated() {
+                    for (x, c) in row.enumerated() where c == "#" {
+                        let cx = (Double(i * 6 + x) + 0.3) * pitch, cy = (Double(y) + 0.3) * pitch
+                        dots.addEllipse(in: CGRect(x: cx - 0.3 * pitch, y: cy - 0.3 * pitch,
+                                                   width: 0.6 * pitch, height: 0.6 * pitch))
+                    }
+                }
+            }
+            ctx.fill(dots, with: .color(ConsoleInk.ink))
+        }
+        .frame(width: Self.inkW * pitch, height: height)
+        .accessibilityElement()
+        .accessibilityLabel("DotStudio")
+        .accessibilityAddTraits(.isHeader)
     }
 }
 
